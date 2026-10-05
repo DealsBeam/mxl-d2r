@@ -385,10 +385,13 @@ class Migrator:
           same skill and srvdofunc as D2R's table) keep their numbers.
         - town_portal (D2Sigma 155, the town portal without a scroll or book) -> D2R's own itemless town portal,
           srvdofunc 109 ("Townportal O Skill", 0x5822b0: creates object 0x3b and links it to town), with
-          rightskill 1 (it has no charclass, so the rule above misses it)."""
+          rightskill 1 (it has no charclass, so the rule above misses it).
+        - D2Sigma 160 (thundergod, armageddon_2, frigid_domain, overheat) is its Armageddon: a timed aurastate with
+          the skill's aura stats and a periodic event, the same as D2R's 124 (0x575de0); the rows use vanilla
+          Armageddon's columns."""
         caps = {"mlvl", "skcp", "skcn"}
         sigma_first, sigma_last, shift = 153, 171, 19
-        to_d2r = {155: 109}
+        to_d2r = {155: 109, 160: 124}
         for bank in ("base", ""):
             p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
             if not p.exists():

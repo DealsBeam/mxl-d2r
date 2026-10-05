@@ -22,14 +22,14 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 | 157 (-> 176) | 0x100aca50 | 25 | catapult_shot, overkill, diseased_cattle, hail_of_stones — **plugin** (barrage) |
 | 158 (-> 177) | 0x100acc50 | 74 | DeathMaul, MegademonInferno, CountessFirewall, egg_trap — **plugin** (missile row) |
 | 159 (-> 178) | 0x100aa7e0 | 15 | spiral_dance, heaven_s_fury, crucify_2, barrier_strike — **plugin** (strike burst) |
-| 160 | 0x100a97e0 | 4 | thundergod, armageddon_2, frigid_domain, overheat |
-| 161 | 0x100ad0f0 | 2 | hyena_strike, exorcism |
+| 160 (-> D2R 124) | 0x100a97e0 | 4 | thundergod, armageddon_2, frigid_domain, overheat — **data** (D2R's Armageddon) |
+| 161 (-> 180) | 0x100ad0f0 | 2 | hyena_strike, exorcism — needs Median's damage block (see below) |
 | 162 | 0x100ac7c0 | 1 | skills_667 |
 | 163, 164, 168-170 | 0x100a9ac0, 0x100ac430, 0x100aabf0, 0x100ac200, 0x100aa9e0 | 0 | unused by the data |
 | 165 | 0x100ab190 | 10 | Holy Freeze, skills_1907 |
-| 166 | 0x100abff0 | 7 | flamestrike, flamestrike_2 |
+| 166 (-> 185) | 0x100abff0 | 7 | flamestrike, flamestrike_2 — **plugin** (missile at target) |
 | 167 | 0x100ad4a0 | 1 | resurrect_2 |
-| 171 | 0x100acee0 | 1 | queen_of_blades |
+| 171 (-> 190) | 0x100acee0 | 1 | queen_of_blades — needs Median's damage block (see below) |
 
 **Replaced originals: D2R runs the vanilla behaviour for these today, which may differ from Median.**
 
@@ -114,6 +114,26 @@ target and fly to 2*target - caster; each gets 1.13c's charged-strike init funct
 charged-strike bolt, 4 = multishot) and its argument at +0x74. Not ported: `0x10041f30(game, unit)` (a D2Game call
 through `0x101f1d78`, unidentified). D2Sigma resolves D2Game/D2Common addresses as (module index, RVA) through
 `0x10042870`; module 8 is D2Game.dll (table at `0x101d4014`). Median runs on 1.13c.
+
+### 160: storm state (`0x100a97e0`)
+
+A timed aurastate for auralencalc frames carrying the skill's aura stats and stats 350/351 (skill, level), plus a
+periodic type-5 event: D2R's Armageddon/Hurricane function 124 (`0x575de0`) does the same, and the Median rows use
+vanilla Armageddon's columns (cltprgfunc1 92, srvmissilea-c controllers, Param4/6/7/8). `txt_migrate.py` maps 160 to
+124.
+
+### 166: missile at target (`0x100abff0`)
+
+One missile (srvmissilea/b/c by calc3 clamped 1-3, flags 1) starting on the skill target; refused when the target spot
+is blocked for the missile's size (D2Common 10303, mask 5; not ported) or beyond D2Common 10080's approximate
+distance (max + min/2) of 100.
+
+### 161, 171: Median's damage block
+
+Both fill a 0x70/0x6c-byte damage block themselves (Median's damage: elemental type switch on the 1.13c record's
+EType, min/max from Median's own helpers `0x100a6020`/`0x100a5ec0`, `0x10041e80`), then 161 applies it to the melee
+target and 171 to every unit in aurarangecalc chosen by aurafilter (`0x10042600`, callback `0x100bb740`). Port
+together with D2R's damage application.
 
 ### 165: aura (`0x100ab190`) — not ported yet
 

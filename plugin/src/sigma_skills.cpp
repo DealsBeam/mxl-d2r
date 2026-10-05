@@ -236,6 +236,47 @@ auto SrvDoStrikeBurst(Game* game, Unit* unit, int32_t skillId, int32_t level) no
 	return 1;
 }
 
+// D2Sigma 166 (0x100abff0) -> 185: one missile placed on the target point (flags 1, start = the skill target),
+// srvmissilea/b/c by calc3 clamped 1-3; refused beyond D2's approximate distance 100. flamestrike, flamestrike_2,
+// Echoing-Strike-style skills (7). Not ported: D2Sigma's collision test of the target spot for the missile's size
+// (D2Common 10303, mask 5); D2R's missile creation handles a blocked spot itself.
+auto SrvDoMissileAtTarget(Game* game, Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (game == nullptr || unit == nullptr) {
+		return 0;
+	}
+	const uint8_t* skill = d2r::api.getSkillRecord(d2r::DataFlag(game), skillId);
+	if (skill == nullptr) {
+		return 0;
+	}
+	int32_t pick = d2r::EvalCalc(game, unit, skill, d2r::SkCalc3, skillId, level);
+	pick = pick < 1 ? 1 : (pick > 3 ? 3 : pick);
+	const int32_t missile = At<int16_t>(skill, d2r::SkSrvMissile + pick * 2);
+	if (!ValidMissile(game, missile)) {
+		return 0;
+	}
+	d2r::api.setUnitSkillFlag(unit, 1);
+	int32_t tx = 0, ty = 0, ux = 0, uy = 0;
+	if (d2r::api.skillTargetXY(game, unit, &tx, &ty) == 0 && tx == 0 && ty == 0) {
+		return 0;
+	}
+	if (d2r::UnitXY(unit, &ux, &uy)) {  // D2Common 10080: max(|dx|,|dy|) + min(|dx|,|dy|)/2
+		const int32_t ax = tx > ux ? tx - ux : ux - tx, ay = ty > uy ? ty - uy : uy - ty;
+		if ((ay < ax ? (ay + ax * 2) / 2 : (ax + ay * 2) / 2) > 100) {
+			return 0;
+		}
+	}
+	d2r::MissileParams params;
+	std::memset(&params, 0, sizeof(params));
+	params.flags = 1;
+	params.owner = unit;
+	params.missile = missile;
+	params.x = tx;
+	params.y = ty;
+	params.skill = skillId;
+	params.skillLevel = level;
+	return d2r::api.createMissile(game, &params) != nullptr ? 1 : 0;
+}
+
 struct SlotFunction {
 	int slot;
 	SrvDoFn function;
@@ -247,6 +288,7 @@ constexpr SlotFunction Functions[] = {
 	{176, SrvDoMissileBarrage, "missile barrage (D2Sigma 157)"},
 	{177, SrvDoMissileRow, "missile row (D2Sigma 158)"},
 	{178, SrvDoStrikeBurst, "strike burst (D2Sigma 159)"},
+	{185, SrvDoMissileAtTarget, "missile at target (D2Sigma 166)"},
 };
 
 }  // namespace
