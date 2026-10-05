@@ -49,3 +49,41 @@ Median's rows from the 1.13c count upward land on the same IDs.
 ## Banks
 D2R loads `data/global/excel/base/*.txt` (Classic/LoD) and `data/global/excel/*.txt` (RotW).
 Which bank a Median (LoD-based) character uses must be confirmed in game.
+
+## Decision (2026-10-05): shift Median after D2R
+D2R's rows stay where they are; Median's new rows start after D2R's last row.
+
+## Resolver: `tools/mxl_names.py`
+Output (ignored by git): `work/named/<table>.txt`, `work/named/idmap.json`, `work/named/report.txt`.
+
+- Vanilla rows (below the 1.13c count) keep their ID and take **D2R's** name (D2R renamed some:
+  `nehlithak*` -> `nihlathak*`, Sword Mastery -> Blade Mastery, `cr_lancer8` -> `cr_lancer9`, misc labels).
+  skilldesc is the exception: D2R re-sorted it alphabetically and it is referenced by name only, so it keeps
+  the 1.13c name for Median's row.
+- **Repurposed slots:** D2R filled 1.13c's unused stat slots 183-213 with new stats (`lasthitreactframe`,
+  `item_pierce_*_immunity`, `passive_mastery_*`...). Median also uses 20 of them, so those 20 Median stats
+  move to the new-row range (IDs 368+) and D2R keeps the slots.
+- New rows: ID = D2R row count (larger bank) + offset. Names: in-game text (skill names, NameStr,
+  LevelName, descstrpos, overlay Filename), else the skill/monster/parent missile that uses the row, else
+  `mxl_<entity>_<row>`.
+- References are resolved per column (>= 90% placeholders), per cell for mixed columns (monpreset `Place`
+  mixes monsters, superuniques and monplace codes). Skill and treasure-class columns the first decoder had
+  already turned into display names are mapped back.
+
+Result: 271 reference columns, ~85,000 references rewritten, 0 unresolved, all IDs unique.
+
+| Entity | Median rows | new | new IDs start |
+|---|---|---|---|
+| itemstatcost | 511 | 172 | 368 |
+| properties | 437 | 169 | 284 |
+| states | 967 | 782 | 232 |
+| skills | 3,018 | 2,661 | 429 |
+| missiles | 5,609 | 4,925 | 742 |
+| monstats | 3,901 | 3,167 | 751 |
+| monstats2 | 1,634 | 1,025 | 623 |
+| overlay | 609 | 316 | 334 |
+| levels | 284 | 147 | 138 |
+| superuniques | 90 | 24 | 66 |
+
+Not yet remapped: the compiled formulas (`*code.txt`), which reference stats, skills and states by number.
+That is the formula codec's job, using `idmap.json`.
