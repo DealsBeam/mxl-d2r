@@ -15,11 +15,11 @@ Median XL tables fit the 32,768-row limits (largest: cubemain 7,500, missiles 5,
 
 ## Phase 1: Tools (Python CLI)
 - [x] `tools/mpq_extract.py`: all 56 Median MPQs -> `extract/mxl/` (8,528 files, 832 MB, manifest.json)
-
 - [x] `tools/casc_extract.py`: D2R 93847 baseline -> `extract/d2r/93847/` (1,072 files). See [d2r-baseline.md](d2r-baseline.md)
+- [x] `tools/mxl_names.py`: placeholder names resolved, Median rows renumbered after D2R's -> `work/named/`. See [id-mapping.md](id-mapping.md)
 
-Remaining: casc-extract, bin2txt (resolve placeholders), Sigma table schemas,
-formula codec (fn5/fn7), txt-migrate (1.13c -> D2R columns), tbl2json (`mxl:` namespace), validate/diff.
+Remaining: Sigma table schemas, formula codec (fn5/fn7, remap IDs via idmap.json),
+txt-migrate (1.13c -> D2R columns), tbl2json (`mxl:` namespace), validate/diff.
 
 ## Phase 2: Data port
 Migrate 94 standard tables, `d2rl init` / `d2rl compile`, boot with `-txt`, enable extended saves.
