@@ -19,7 +19,71 @@ storm.SFileOpenArchive.restype = wintypes.BOOL
 storm.SFileCloseArchive.argtypes = [wintypes.HANDLE]
 storm.SFileCloseArchive.restype = wintypes.BOOL
 
+# StormLib is built ANSI (STORM_UNICODE off), so TCHAR paths are char*.
+storm.SFileExtractFile.argtypes = [wintypes.HANDLE, ctypes.c_char_p, ctypes.c_char_p, wintypes.DWORD]
+storm.SFileExtractFile.restype = wintypes.BOOL
+storm.SFileGetFileInfo.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+storm.SFileGetFileInfo.restype = wintypes.BOOL
+
+
+class SFILE_FIND_DATA(ctypes.Structure):
+    _fields_ = [
+        ("cFileName", ctypes.c_char * 260),  # MAX_PATH
+        ("szPlainName", ctypes.c_char_p),
+        ("dwHashIndex", wintypes.DWORD),
+        ("dwBlockIndex", wintypes.DWORD),
+        ("dwFileSize", wintypes.DWORD),
+        ("dwFileFlags", wintypes.DWORD),
+        ("dwCompSize", wintypes.DWORD),
+        ("dwFileTimeLo", wintypes.DWORD),
+        ("dwFileTimeHi", wintypes.DWORD),
+        ("lcLocale", wintypes.DWORD),
+    ]
+
+
+storm.SFileFindFirstFile.argtypes = [wintypes.HANDLE, ctypes.c_char_p, ctypes.POINTER(SFILE_FIND_DATA), ctypes.c_char_p]
+storm.SFileFindFirstFile.restype = wintypes.HANDLE
+storm.SFileFindNextFile.argtypes = [wintypes.HANDLE, ctypes.POINTER(SFILE_FIND_DATA)]
+storm.SFileFindNextFile.restype = wintypes.BOOL
+storm.SFileFindClose.argtypes = [wintypes.HANDLE]
+storm.SFileFindClose.restype = wintypes.BOOL
+
 STREAM_FLAG_READ_ONLY = 0x100
+SFILE_INFO_NUMBER_OF_FILES = 36  # SFileInfoClass::SFileMpqNumberOfFiles
+
+
+def mpq_file_count(handle: wintypes.HANDLE) -> int:
+    n = wintypes.DWORD()
+    storm.SFileGetFileInfo(handle, SFILE_INFO_NUMBER_OF_FILES, ctypes.byref(n), 4, None)
+    return n.value
+
+
+def mpq_files(handle: wintypes.HANDLE, listfile: str | None = None) -> list[tuple[str, int]]:
+    """Names (and sizes) StormLib can resolve, from the internal (listfile) plus an optional external one."""
+    data = SFILE_FIND_DATA()
+    lf = listfile.encode("mbcs") if listfile else None
+    find = storm.SFileFindFirstFile(handle, b"*", ctypes.byref(data), lf)
+    out = []
+    if not find:
+        return out
+    seen = set()
+    try:
+        while True:
+            name = data.cFileName.decode("mbcs")
+            # Median's archives make SFileFindNextFile repeat the last entry forever instead of failing.
+            if name in seen:
+                break
+            seen.add(name)
+            out.append((name, data.dwFileSize))
+            if not storm.SFileFindNextFile(find, ctypes.byref(data)):
+                break
+    finally:
+        storm.SFileFindClose(find)
+    return out
+
+
+def extract(handle: wintypes.HANDLE, name: str, dest: str | Path) -> bool:
+    return bool(storm.SFileExtractFile(handle, name.encode("mbcs"), str(dest).encode("mbcs"), 0))
 
 
 def open_mpq(path: str | Path) -> wintypes.HANDLE:
