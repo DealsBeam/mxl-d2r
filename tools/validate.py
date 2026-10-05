@@ -343,6 +343,13 @@ class Validator:
             for r in lrows:
                 if r[lh.index("DrlgType")] == "2" and r[lh.index("Id")] not in claimed:
                     self.add("error", "levels", "DrlgType", "preset level that no lvlprest row claims", r[0], r[lh.index("Id")])
+        lm = d.table("lvlmaze")
+        if lv and lm:
+            (lh, lrows), (mh, mrows) = lv, lm
+            have = {r[mh.index("Level")] for r in mrows}
+            for r in lrows:
+                if r[lh.index("DrlgType")] == "1" and r[lh.index("Id")] not in have:
+                    self.add("error", "levels", "DrlgType", "maze level without a lvlmaze row", r[0], r[lh.index("Id")])
         # skills: class skills need a skilldesc
         sk = d.table("skills")
         if sk:

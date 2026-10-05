@@ -276,6 +276,32 @@ class Migrator:
                 self.report.append(f"\nlvlprest: {len(unclaimed)} preset levels had no preset (1.10 used preset 0); "
                                    f"added 'None' copies claiming levels {', '.join(unclaimed)}")
 
+    def claim_mazes(self) -> None:
+        """A level with DrlgType 1 (maze) needs a lvlmaze row. Median leaves a few without one (D2Sigma or unused
+        levels); D2R sizes every level of an act when the act loads and asserts, then crashes, on them. Each gets
+        a copy of the lvlmaze row of a level with the same LevelType (else the first row)."""
+        for bank in ("base", ""):
+            d = OUT / "data" / "global" / "excel" / bank
+            if not (d / "levels.txt").exists() or not (d / "lvlmaze.txt").exists():
+                continue
+            lh, lrows = read_tsv(d / "levels.txt")
+            mh, mrows = read_tsv(d / "lvlmaze.txt")
+            mi = mh.index("Level")
+            have = {r[mi] for r in mrows if is_record(r)}
+            idc, dt, ti = lh.index("Id"), lh.index("DrlgType"), lh.index("LevelType")
+            ltype = {r[idc]: r[ti] for r in lrows if is_record(r)}
+            missing = [r[idc] for r in lrows if is_record(r) and r[dt] == "1" and r[idc] not in have]
+            records = [r for r in mrows if is_record(r)]
+            for lid in missing:
+                src = next((r for r in records if ltype.get(r[mi]) == ltype[lid]), records[0])
+                row = list(src)
+                row[0], row[mi] = f"mxl_unclaimed_{lid}", lid
+                mrows.append(row)
+            write_tsv(d / "lvlmaze.txt", mh, mrows)
+            if bank == "base" and missing:
+                self.report.append(f"\nlvlmaze: {len(missing)} maze levels had no lvlmaze row; added copies of a "
+                                   f"same-LevelType row for levels {', '.join(missing)}")
+
     def fill_skilldesc(self) -> None:
         """D2R asserts when a class skill has no skilldesc (Median's hidden class skills, granted at character
         creation, have none). They point at the "attack" description, which has no skill tree page."""
@@ -561,6 +587,7 @@ def main() -> int:
     m.split_large_sets()
     m.clean_treasure_classes()
     m.claim_presets()
+    m.claim_mazes()
     m.fill_skilldesc()
     if m.dangling:
         m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]
