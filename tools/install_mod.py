@@ -21,7 +21,9 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "work" / "mod" / "data"
 DEFAULT_GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
 BUILD = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "dataversionbuild.txt"
-MXL_TILES = ROOT / "extract" / "mxl" / "data" / "global" / "tiles"
+MXL_GLOBAL = ROOT / "extract" / "mxl" / "data" / "global"
+MXL_TILES = MXL_GLOBAL / "tiles"
+D2R_FILELIST = ROOT / "extract" / "d2r" / "93847" / "filelist.txt"  # written by gfx_placeholders.py
 
 
 def main() -> int:
@@ -49,6 +51,16 @@ def main() -> int:
     # level types point at its own (e.g. tiles/mxl/quest/yshari/basewall.dt1). Note: Median's .ds1 maps still use
     # Median's object numbers; objects 573+ were renumbered (docs/txt-migrate.md) and need remapping later.
     shutil.copytree(MXL_TILES, data / "global" / "tiles")
+    # Median-only missile and overlay animations (.dcc): D2R crashes on a missing classic graphics file. Files
+    # D2R already has are left alone so its own effects keep matching their HD versions.
+    d2r_files = set(D2R_FILELIST.read_text("utf-8").splitlines()) if D2R_FILELIST.exists() else set()
+    for sub in ("missiles", "overlays"):
+        for p in (MXL_GLOBAL / sub).rglob("*"):
+            rel = p.relative_to(MXL_GLOBAL.parent.parent).as_posix().lower()  # data/global/...
+            if p.is_file() and f"data:{rel}" not in d2r_files:
+                dest = data / "global" / p.relative_to(MXL_GLOBAL)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(p, dest)
 
     # D2R (and D2RLoader's mod detection) read modinfo.json inside the folder-style MPQ; the copy at the mod
     # root follows the D2RLoader guide's layout and is harmless.
