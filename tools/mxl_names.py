@@ -88,12 +88,35 @@ MONSTATS2_COLUMNS = {("monstats", "MonStatsEx"), ("monstats2", "Id")}
 UNUSED_SLOT = re.compile(r"^(unused\d*|not used)$", re.I)
 PLACEHOLDER = re.compile(r"^([a-z]{2})(\d+)$")
 COLOR = re.compile(r"ÿc.|\[[A-Za-z]+\]")
+CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f]")
 
 
 def read_tsv(path: Path, encoding: str = "utf-8") -> tuple[list[str], list[list[str]]]:
-    with path.open(encoding=encoding, errors="replace", newline="") as f:
-        rows = list(csv.reader(f, delimiter="\t", quoting=csv.QUOTE_NONE))
-    return rows[0], rows[1:]
+    # Some .bin string fields hold leftover bytes (levels.txt EntryFile) that include line breaks, which split
+    # their row in two and shift every row after it. Rejoin a short line with the next while that gives the
+    # header's column count, and drop control characters from cells.
+    text = path.read_text(encoding, errors="replace")
+    lines = text.split("\r\n") if "\r\n" in text else text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    tabs, joined = lines[0].count("\t"), [lines[0]]
+    i = 1
+    while i < len(lines):
+        line = lines[i]
+        while line.count("\t") < tabs and i + 1 < len(lines) and line.count("\t") + lines[i + 1].count("\t") <= tabs:
+            i += 1
+            line += lines[i]
+        joined.append(line)
+        i += 1
+    rows = [[CONTROL.sub("", c) for c in line.split("\t")] for line in joined]
+    header = rows[0]
+    if "EntryFile" in header:  # the leftover bytes can also hold a tab: fold the extra cells back into EntryFile
+        e = header.index("EntryFile")
+        for r in rows[1:]:
+            extra = len(r) - len(header)
+            if extra > 0:
+                r[e:e + extra + 1] = ["".join(r[e:e + extra + 1])]
+    return header, rows[1:]
 
 
 def write_tsv(path: Path, header: list[str], rows: list[list[str]]) -> None:

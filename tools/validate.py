@@ -335,6 +335,21 @@ class Validator:
                 a, b = r[h.index("NameFirst")], r[h.index("NameLast")]
                 if a and b and not (ids.get(a, -1) < ids.get(b, -1)):
                     self.add("error", "hireling", "NameLast", "string ID not above NameFirst's", r[0] or "-", f"{a}..{b}")
+        # levels: a preset level (DrlgType 2) must be claimed by a lvlprest row's LevelId
+        lv, lp = d.table("levels"), d.table("lvlprest")
+        if lv and lp:
+            (lh, lrows), (ph, prows) = lv, lp
+            claimed = {r[ph.index("LevelId")] for r in prows}
+            for r in lrows:
+                if r[lh.index("DrlgType")] == "2" and r[lh.index("Id")] not in claimed:
+                    self.add("error", "levels", "DrlgType", "preset level that no lvlprest row claims", r[0], r[lh.index("Id")])
+        # skills: class skills need a skilldesc
+        sk = d.table("skills")
+        if sk:
+            h, rows = sk
+            for r in rows:
+                if r[h.index("charclass")] and not r[h.index("skilldesc")]:
+                    self.add("error", "skills", "skilldesc", "class skill without a skilldesc", r[0], "")
         # inventory: D2R expects two rows (resolutions) per page
         inv = d.table("inventory")
         if inv:

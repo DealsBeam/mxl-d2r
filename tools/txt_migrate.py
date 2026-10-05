@@ -251,6 +251,48 @@ class Migrator:
                 self.report.append(f"\ntreasureclassex: cleared {len(cleared)} entries D2R cannot resolve "
                                    f"(D2Sigma-generated classes or missing names): {'; '.join(cleared)}")
 
+    def claim_presets(self) -> None:
+        """A level with DrlgType 2 (preset) needs a lvlprest row whose LevelId names it. 1.10 fell back to preset 0
+        ("None") when none did, and Median relies on that for levels it no longer uses; D2R asserts and crashes
+        building the act. Each such level gets a copy of the "None" row that claims it."""
+        for bank in ("base", ""):
+            d = OUT / "data" / "global" / "excel" / bank
+            if not (d / "levels.txt").exists() or not (d / "lvlprest.txt").exists():
+                continue
+            lh, lrows = read_tsv(d / "levels.txt")
+            ph, prows = read_tsv(d / "lvlprest.txt")
+            li, di = ph.index("LevelId"), ph.index("Def")
+            claimed = {r[li] for r in prows if is_record(r)}
+            idc, dt = lh.index("Id"), lh.index("DrlgType")
+            unclaimed = [r[idc] for r in lrows if is_record(r) and r[dt] == "2" and r[idc] not in claimed]
+            none = next(r for r in prows if is_record(r))
+            n = sum(1 for r in prows if is_record(r))
+            for k, lid in enumerate(unclaimed):
+                row = list(none)
+                row[0], row[di], row[li] = f"mxl_unclaimed_{lid}", str(n + k), lid
+                prows.append(row)
+            write_tsv(d / "lvlprest.txt", ph, prows)
+            if bank == "base" and unclaimed:
+                self.report.append(f"\nlvlprest: {len(unclaimed)} preset levels had no preset (1.10 used preset 0); "
+                                   f"added 'None' copies claiming levels {', '.join(unclaimed)}")
+
+    def fill_skilldesc(self) -> None:
+        """D2R asserts when a class skill has no skilldesc (Median's hidden class skills, granted at character
+        creation, have none). They point at the "attack" description, which has no skill tree page."""
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            cc, sd = h.index("charclass"), h.index("skilldesc")
+            filled = [r[0] for r in rows if is_record(r) and r[cc] and not r[sd]]
+            for r in rows:
+                if is_record(r) and r[cc] and not r[sd]:
+                    r[sd] = "attack"
+            write_tsv(p, h, rows)
+            if bank == "base" and filled:
+                self.report.append(f"\nskills: {len(filled)} class skills had no skilldesc; set to 'attack'")
+
     def split_large_sets(self) -> None:
         """D2R allows 6 items per set; Median's "Orphan's Call" has 9. Items 7+ go to a copy of the set named
         "<set> (2)" so the tables load; the full set needs a plugin (reported)."""
@@ -518,6 +560,8 @@ def main() -> int:
         m.migrate(t)
     m.split_large_sets()
     m.clean_treasure_classes()
+    m.claim_presets()
+    m.fill_skilldesc()
     if m.dangling:
         m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]
         m.report += [f"- {t}: {n} cells" for t, n in sorted(m.dangling.items())]
