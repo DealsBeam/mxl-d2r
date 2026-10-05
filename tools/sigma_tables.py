@@ -65,7 +65,11 @@ def string_key(sid: int) -> str:
         return ""
     table, index = divmod(sid, 10000)
     keys = _string_keys[table] if table < 3 else []
-    return keys[index] if index < len(keys) else f"#{sid}"
+    if index >= len(keys):
+        return f"#{sid}"
+    key = keys[index]
+    # strings Median only looks up by ID ("x" / numeric keys) are renamed mxl_<id> by tools/tbl2json.py
+    return f"mxl_{sid}" if key in ("x", "") or key.isdigit() else key
 
 
 _ref_names: dict[str, list[str]] = {}
