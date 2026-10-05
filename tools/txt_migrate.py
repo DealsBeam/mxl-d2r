@@ -302,6 +302,41 @@ class Migrator:
                 self.report.append(f"\nlvlmaze: {len(missing)} maze levels had no lvlmaze row; added copies of a "
                                    f"same-LevelType row for levels {', '.join(missing)}")
 
+    def skill_rules(self) -> None:
+        """Interim stand-ins for skill rules D2Sigma enforced in code (until the plugin does it; docs/bugs.md):
+        - skpoints "(blvl+1>mlvl+skcp+skcn)?999:1" uses D2Sigma's cap variables, which D2R reads as 0, so every
+          point cost 999 (no allocation). Cost 1 point, with maxlvl 20 as the base cap (APPROXIMATION: Median's
+          cap also grows with "Maximum Skill Level Increased by" items).
+        - rightskill: D2Sigma's own skill picker ignored it, D2R's honours it; active class skills get 1.
+        - town_portal: srvdofunc 155 is D2Sigma's; 113 is D2R's town portal."""
+        caps = {"mlvl", "skcp", "skcn"}
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            sp, ml, cc = h.index("skpoints"), h.index("maxlvl"), h.index("charclass")
+            rs, pa, do = h.index("rightskill"), h.index("passive"), h.index("srvdofunc")
+            n_cap = n_right = 0
+            for r in rows:
+                if not is_record(r):
+                    continue
+                if caps & set(re.findall(r"[a-z]+", r[sp])):
+                    r[sp] = ""
+                    if r[ml] in ("", "0") or int(r[ml]) > 20:
+                        r[ml] = "20"
+                    n_cap += 1
+                if r[cc] and r[pa] != "1" and r[rs] in ("", "0"):
+                    r[rs] = "1"
+                    n_right += 1
+                if r[0] == "town_portal" and r[do] == "155":
+                    r[do] = "113"
+            write_tsv(p, h, rows)
+            if bank == "base":
+                self.report.append(f"\nskills (interim, D2Sigma rules): {n_cap} skpoints formulas with Median's cap "
+                                   f"variables -> 1 point, maxlvl 20; {n_right} active class skills -> rightskill 1; "
+                                   f"town_portal srvdofunc 155 -> 113")
+
     def fill_skilldesc(self) -> None:
         """D2R asserts when a class skill has no skilldesc (Median's hidden class skills, granted at character
         creation, have none). They point at the "attack" description, which has no skill tree page."""
@@ -589,6 +624,7 @@ def main() -> int:
     m.claim_presets()
     m.claim_mazes()
     m.fill_skilldesc()
+    m.skill_rules()
     if m.dangling:
         m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]
         m.report += [f"- {t}: {n} cells" for t, n in sorted(m.dangling.items())]
