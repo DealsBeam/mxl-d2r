@@ -229,7 +229,24 @@ class Migrator:
                     r[ci] = ""
                     if pi is not None:
                         r[pi] = ""
+            # D2R resolves a treasure class's items against the classes above it only, so a class that names one
+            # defined further down asserts ("Couldn't parse treasure class item"). Move each such class up to just
+            # before its first user (D2R references classes by name, so the row shift is harmless).
+            items = [i for i, c in enumerate(h) if re.fullmatch(r"Item\d+", c)]
+            moved = []
+            for _ in range(len(rows)):
+                pos = {r[0]: i for i, r in enumerate(rows) if r[0] and r[0] != "Expansion"}
+                fwd = next(((i, pos[r[c]]) for i, r in enumerate(rows) for c in items
+                            if r[c] in pos and pos[r[c]] > i), None)
+                if not fwd:
+                    break
+                user, target = fwd
+                moved.append(f"{rows[target][0]} (before {rows[user][0]})")
+                rows.insert(user, rows.pop(target))
             write_tsv(p, h, rows)
+            if bank == "base" and moved:
+                self.report.append(f"\ntreasureclassex: moved {len(moved)} classes above their first user "
+                                   f"(D2R only resolves backward references): {'; '.join(moved)}")
             if bank == "base" and cleared:
                 self.report.append(f"\ntreasureclassex: cleared {len(cleared)} entries D2R cannot resolve "
                                    f"(D2Sigma-generated classes or missing names): {'; '.join(cleared)}")
@@ -356,6 +373,12 @@ class Migrator:
             hi = mh.index("HireDesc")
             for r in mrows:
                 r[hi] = hk.get(r[hi], r[hi])
+            # hireling.bin has no type names; take D2R's for the same act (the engine groups hirelings by them)
+            dh0, dr0 = read_tsv(D2R / "base" / "hireling.txt")
+            names = {r[dh0.index("Act")]: r[0] for r in dr0 if is_record(r)}
+            ni, ai = mh.index("Hireling"), mh.index("Act")
+            for r in mrows:
+                r[ni] = r[ni] or names.get(r[ai], "")
         if table == "missiles" and "LevRange" in mh and "Range" in mh:
             # D2R merged LevRange into Range (now an expression): range + levrange * level
             ri, li = mh.index("Range"), mh.index("LevRange")

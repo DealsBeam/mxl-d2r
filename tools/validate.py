@@ -297,14 +297,17 @@ class Validator:
             for t, c in (("weapons", "code"), ("armor", "code"), ("misc", "code"), ("itemtypes", "Code"),
                          ("treasureclassex", "Treasure Class"), ("uniqueitems", "index"), ("setitems", "index")):
                 known |= d.values(t, c) or set()
+            pos = {r[0]: i for i, r in enumerate(rows) if r[0]}
             for ci, c in enumerate(h):
                 if not re.fullmatch(r"Item\d+", c):
                     continue
-                for r in rows:
+                for i, r in enumerate(rows):
                     v = r[ci].strip() if ci < len(r) else ""
                     name = v.strip('"').split(",", 1)[0]
                     if name and name not in known and not AUTO_TC.match(name):
                         self.add("error", "treasureclassex", c, "not an item, item type, treasure class, unique or set item", r[0], v)
+                    elif pos.get(name, -1) > i:
+                        self.add("error", "treasureclassex", c, "names a treasure class defined further down", r[0], v)
         # sets: at most 6 items
         si = d.table("setitems")
         if si:

@@ -439,9 +439,10 @@ def cmd_convert() -> int:
                 tree = fold(tree)
             ref.used.clear()
             text = r.render(tree)
-            if q and re.search(r"stat\('[^']*'\.\d{3,}\)", text):
+            if re.search(r"stat\('[^']*'\.\d+\)", text):
                 # broken bytecode in Median's data passes a computed value as the stat mode
-                # ("stat('strength'.320)"); D2R rejects it, so the cell becomes 0 (listed under quirks)
+                # ("stat('strength'.320)", "stat('x'.5)"); D2R only takes accr/base/mod, so the cell becomes 0
+                # (listed under quirks)
                 q.append(f"unusable stat() mode in '{text}', written as 0")
                 text = "0"
             if len(text) > MAX_FORMULA:  # give the rows it names compact names on the next naming pass
