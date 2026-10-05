@@ -15,7 +15,7 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 
 | srvdofunc | D2Sigma function | Median skills | Examples |
 |---|---|---|---|
-| 153 | 0x100ad720 | 40 | blood_skeleton, ice_elementals, fire_elementals, summon_familiars |
+| 153 (-> 172) | 0x100ad720 | 40 | blood_skeleton, ice_elementals, fire_elementals, summon_familiars — **plugin** (multi-summon) |
 | 154 | 0x100aafa0 | 3 | mysterious_companion_skill, judgementwander_2_skill |
 | 155 (-> D2R 109) | 0x100ab090 | 1 | **town_portal** (see below) |
 | 156 | 0x100aaee0 | 1 | skills_374 |
@@ -95,6 +95,16 @@ calc1 missiles (flags 0x820) from the caster towards points on a line through th
 spaced by the aim direction rotated 90° and shrunk to length² <= 3, centred on the target. Missile: srvmissilea/b/c
 by calc3 clamped to 1-3. calc2 goes to the missile's attack-bonus field (1.10 params +0x44).
 
+### 153: multi-summon (`0x100ad720`)
+
+min(calc2, petmax) pets (summon, summode, pettype at 1.10 +0xbc/+0xbf/+0xbe; petmax +0xc0), each via 1.10's
+summon-pet call. Position: TargetCorpse skills (flag bit 24 at +4) use the target corpse (no skill on 153 has it);
+otherwise, when aurarangecalc is non-zero and the skill target lies within it (squared distance), the target, else the
+caster. After each pet: `0x100683d0` (D2Hirelings.cpp, Median's minion scaling by pettype: level, stats, ~10 steps;
+**not ported**), `0x10067940` (the skill's aura/passive stats on the pet; D2R `0x55ef80`), `0x10042740` (party/AI;
+D2R `0x58d950`), `0x10049c00(owner, 0x200b, 1)` (D2Achievements.cpp counter; skipped). The plugin also sets the pet
+level with D2R's `0x55fb50` as D2R's Raise Skeleton does, until Median's scaling is ported.
+
 ## D2R side (dump of image 0x6ab3782c; RVAs relative to the image base)
 
 | What | RVA | Notes |
@@ -112,6 +122,8 @@ by calc3 clamped to 1-3. calc2 goes to the missile's attack-bonus field (1.10 pa
 | Missile count | 0x1b89a0 | (game+0x106 byte) |
 | Unit seed | 0x34a1e0 | (unit) -> unit+0x28 {lo, hi}; the RNG is inlined everywhere (lo*0x6ac690c5 + hi) |
 | Unit "skill used" flag | 0x34e790 | (unit, on): unit+0x124 bit 0x40 (1.10 unit+0xc4) |
+| Summon pet | 0x4350e0 | (game, &params) -> pet: 1.10's block with an 8-byte owner: flags +0 (1 = at x/y), owner +8, monster u16 +0x10, AI state +0x14, mode +0x18, x/y +0x1c, pettype +0x24, petmax +0x28. Registers the pet (enforces petmax) |
+| Pet setup (D2R Raise Skeleton, 0x55e440) | 0x55fb50, 0x55ef80, 0x58d950 | level from the owner (game, owner, pet, 0, level); the skill's passive/aura stats and aura state on the pet (game, owner, pet, skill, level, owner+0x12c, 0); party/AI (game, pet, 0, owner+0x130). Skills record: summon +0x110, pettype +0x112, summode +0x113, petmax +0x114 |
 | Create portal object | 0x432ce0 | (game, unit, room, x, y, destLevel, &object, objectId 0x3b, 0, 0) |
 
 **Collision:** D2R's newer skills use srvdofunc 153-171, the same numbers as D2Sigma's added functions, so Median's

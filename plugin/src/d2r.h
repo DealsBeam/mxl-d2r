@@ -23,18 +23,29 @@ inline constexpr uint64_t RvaCreateMissile = 0x5371a0;    // (game, &params) -> 
 inline constexpr uint64_t RvaMissileCount = 0x1b89a0;     // (dataFlag) -> rows in missiles.txt
 inline constexpr uint64_t RvaUnitSeed = 0x34a1e0;         // (unit) -> &seed {lo, hi}
 inline constexpr uint64_t RvaSetUnitSkillFlag = 0x34e790; // (unit, on): unit flags (+0x124) bit 0x40
+inline constexpr uint64_t RvaSummonPet = 0x4350e0;        // (game, &params) -> pet; registers it, enforces petmax
+inline constexpr uint64_t RvaSetPetLevel = 0x55fb50;      // (game, owner, pet, 0, level): level from the owner's
+inline constexpr uint64_t RvaPetSkillStats = 0x55ef80;    // (game, owner, pet, skill, level, owner+0x12c, 0):
+                                                          // passivestat/aurastat/aurastate of the skill on the pet
+inline constexpr uint64_t RvaAddPetToParty = 0x58d950;    // (game, pet, 0, owner+0x130)
 
 // --- Offsets ------------------------------------------------------------------------------------------------------
 inline constexpr int GameDataFlag = 0x106;  // byte passed to the data-table getters
 
 inline constexpr int UnitType = 0x00;  // 0 player, 1 monster, 2 object, 3 missile, 4 item, 5 tile
-inline constexpr int UnitPath = 0x38;  // dynamic path (x at +0x2, y at +0x6) or static path (x +0x10, y +0x14)
+inline constexpr int UnitPath = 0x38;
+inline constexpr int UnitArg12c = 0x12c;  // passed by D2R's summon skills to RvaPetSkillStats
+inline constexpr int UnitArg130 = 0x130;  // passed to RvaAddPetToParty  // dynamic path (x at +0x2, y at +0x6) or static path (x +0x10, y +0x14)
 
 // skills.txt record (748 bytes; tools: research/bin_layout.py skills)
 inline constexpr int SkSrvMissile = 0x66;  // int16 srvmissile, then srvmissilea/b/c at +0x68/+0x6a/+0x6c
 inline constexpr int SkSrvMissileA = 0x68;
 inline constexpr int SkPrgCalc1 = 0x58;
 inline constexpr int SkAuraRangeCalc = 0x84;
+inline constexpr int SkSummon = 0x110;      // int16 monstats row
+inline constexpr int SkPetType = 0x112;     // uint8
+inline constexpr int SkSumMode = 0x113;     // uint8 monmode, 255 none
+inline constexpr int SkPetMaxCalc = 0x114;
 inline constexpr int SkCalc1 = 0x190;
 inline constexpr int SkCalc2 = 0x194;
 inline constexpr int SkCalc3 = 0x198;
@@ -66,6 +77,24 @@ static_assert(offsetof(MissileParams, targetX) == 0x2c);
 static_assert(offsetof(MissileParams, skill) == 0x3c);
 static_assert(offsetof(MissileParams, attBonus) == 0x54);
 
+// Pet summon parameters (1.10's block with an 8-byte owner pointer).
+struct SummonParams {
+	uint32_t flags;    // 0x00: 1 = at x/y (else at the owner)
+	uint32_t pad04;
+	Unit* owner;       // 0x08
+	uint16_t monster;  // 0x10
+	uint16_t pad12;
+	int32_t aiState;   // 0x14
+	int32_t mode;      // 0x18
+	int32_t x, y;      // 0x1c
+	int32_t petType;   // 0x24
+	int32_t petMax;    // 0x28
+	int32_t pad2c;
+};
+static_assert(sizeof(SummonParams) == 0x30);
+static_assert(offsetof(SummonParams, x) == 0x1c);
+static_assert(offsetof(SummonParams, petMax) == 0x28);
+
 // --- Calls --------------------------------------------------------------------------------------------------------
 using GetSkillRecordFn = uint8_t* (*)(uint32_t dataFlag, int32_t skillId);
 using EvalSkillCalcFn = int32_t (*)(uint32_t dataFlag, Unit* unit, int32_t calc, int32_t skillId, int32_t level);
@@ -74,6 +103,11 @@ using CreateMissileFn = Unit* (*)(Game* game, MissileParams* params);
 using MissileCountFn = int32_t (*)(uint32_t dataFlag);
 using UnitSeedFn = uint32_t* (*)(Unit* unit);
 using SetUnitSkillFlagFn = void (*)(Unit* unit, int32_t on);
+using SummonPetFn = Unit* (*)(Game* game, SummonParams* params);
+using SetPetLevelFn = int64_t (*)(Game* game, Unit* owner, Unit* pet, int32_t levelOverride, int32_t skillLevel);
+using PetSkillStatsFn = int64_t (*)(Game* game, Unit* owner, Unit* pet, int32_t skillId, int32_t level, int32_t arg6,
+                                    int64_t arg7);
+using AddPetToPartyFn = void (*)(Game* game, Unit* pet, int32_t zero, int32_t ownerArg);
 
 // Bound by Bind() from the image base.
 struct Api {
@@ -84,6 +118,10 @@ struct Api {
 	MissileCountFn missileCount;
 	UnitSeedFn unitSeed;
 	SetUnitSkillFlagFn setUnitSkillFlag;
+	SummonPetFn summonPet;
+	SetPetLevelFn setPetLevel;
+	PetSkillStatsFn petSkillStats;
+	AddPetToPartyFn addPetToParty;
 };
 extern Api api;
 void Bind(uint64_t exeBase) noexcept;

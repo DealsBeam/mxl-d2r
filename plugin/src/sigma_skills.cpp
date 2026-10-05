@@ -133,6 +133,60 @@ auto SrvDoMissileBarrage(Game* game, Unit* unit, int32_t skillId, int32_t level)
 	return 1;
 }
 
+// D2Sigma 153 (0x100ad720) -> 172: several pets per cast. min(calc2, petmax) pets of the skill's summon/summode/
+// pettype; at the skill target when it lies within aurarangecalc (a squared distance) of the caster, else at the
+// caster. blood_skeleton, ice_elementals, fire_elementals, the Barbarian spirits, the totems and 35 more.
+// The pets are set up as D2R's Raise Skeleton does it (level, the skill's passive/aura stats, party). Not ported
+// yet: D2Sigma's TargetCorpse branch (no skill on this function uses it), its minion scaling (0x100683d0,
+// D2Hirelings.cpp: per-pettype rules) and its achievement counter.
+auto SrvDoMultiSummon(Game* game, Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (game == nullptr || unit == nullptr) {
+		return 0;
+	}
+	const uint8_t* skill = d2r::api.getSkillRecord(d2r::DataFlag(game), skillId);
+	if (skill == nullptr || level < 1) {
+		return 0;
+	}
+	d2r::api.setUnitSkillFlag(unit, 1);
+	int32_t x = 0, y = 0;
+	const int32_t radius = d2r::EvalCalc(game, unit, skill, d2r::SkAuraRangeCalc, skillId, level);
+	if (radius != 0) {
+		int32_t ux = 0, uy = 0, tx = 0, ty = 0;
+		if (d2r::UnitXY(unit, &ux, &uy) && d2r::api.skillTargetXY(game, unit, &tx, &ty) != 0 &&
+		    (tx - ux) * (tx - ux) + (ty - uy) * (ty - uy) <= radius) {
+			x = tx;
+			y = ty;
+		}
+	}
+	const int32_t petMax = d2r::EvalCalc(game, unit, skill, d2r::SkPetMaxCalc, skillId, level);
+	int32_t count = d2r::EvalCalc(game, unit, skill, d2r::SkCalc2, skillId, level);
+	count = count > petMax ? petMax : count;
+	const uint8_t mode = At<uint8_t>(skill, d2r::SkSumMode);
+	d2r::SummonParams params;
+	std::memset(&params, 0, sizeof(params));
+	params.flags = (x != 0 && y != 0) ? 1 : 0;
+	params.owner = unit;
+	params.monster = At<uint16_t>(skill, d2r::SkSummon);
+	params.mode = mode == 0xff ? 1 : mode;
+	params.x = x;
+	params.y = y;
+	params.petType = At<uint8_t>(skill, d2r::SkPetType);
+	params.petMax = petMax;
+	if (At<int16_t>(skill, d2r::SkSummon) < 0) {
+		return 0;
+	}
+	for (int32_t i = 0; i < count; ++i) {
+		Unit* pet = d2r::api.summonPet(game, &params);
+		if (pet == nullptr) {
+			continue;
+		}
+		d2r::api.setPetLevel(game, unit, pet, 0, level);
+		d2r::api.petSkillStats(game, unit, pet, skillId, level, At<int32_t>(unit, d2r::UnitArg12c), 0);
+		d2r::api.addPetToParty(game, pet, 0, At<int32_t>(unit, d2r::UnitArg130));
+	}
+	return 1;
+}
+
 struct SlotFunction {
 	int slot;
 	SrvDoFn function;
@@ -140,6 +194,7 @@ struct SlotFunction {
 };
 
 constexpr SlotFunction Functions[] = {
+	{172, SrvDoMultiSummon, "multi-summon (D2Sigma 153)"},
 	{176, SrvDoMissileBarrage, "missile barrage (D2Sigma 157)"},
 	{177, SrvDoMissileRow, "missile row (D2Sigma 158)"},
 };
