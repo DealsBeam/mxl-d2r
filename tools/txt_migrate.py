@@ -360,9 +360,13 @@ class Migrator:
         - srvdofunc 153-171 are D2Sigma's added skill functions, but D2R's own table (0x238ea00, 191 slots, bound
           0xbe) already uses 153-171 for its newer skills. They move to the free slots 172-190 (+19), where the
           mxl-core plugin installs D2Sigma's functions (docs/plugin-spec.md); until it does, those skills do
-          nothing instead of running an unrelated D2R function. town_portal (155) becomes 174."""
+          nothing instead of running an unrelated D2R function.
+        - town_portal (D2Sigma 155, the town portal without a scroll or book) -> D2R's own itemless town portal,
+          srvdofunc 109 ("Townportal O Skill", 0x5822b0: creates object 0x3b and links it to town), with
+          rightskill 1 (it has no charclass, so the rule above misses it)."""
         caps = {"mlvl", "skcp", "skcn"}
         sigma_first, sigma_last, shift = 153, 171, 19
+        to_d2r = {155: 109}
         for bank in ("base", ""):
             p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
             if not p.exists():
@@ -382,7 +386,11 @@ class Migrator:
                 if r[cc] and r[pa] != "1" and r[rs] in ("", "0"):
                     r[rs] = "1"
                     n_right += 1
-                if r[do].isdigit() and sigma_first <= int(r[do]) <= sigma_last:
+                if r[do].isdigit() and int(r[do]) in to_d2r:
+                    r[do] = str(to_d2r[int(r[do])])
+                    if r[pa] != "1":
+                        r[rs] = "1"
+                elif r[do].isdigit() and sigma_first <= int(r[do]) <= sigma_last:
                     r[do] = str(int(r[do]) + shift)
                     n_moved += 1
             write_tsv(p, h, rows)
