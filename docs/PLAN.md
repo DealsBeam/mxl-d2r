@@ -4,7 +4,7 @@ Target: retail D2R 3.3 + D2RLoader 1.3.1 (SDK 0.3.0, ABI 4), extended save forma
 Median XL tables fit the 32,768-row limits (largest: cubemain 7,500, missiles 5,609, monstats 3,901, skills 3,018).
 
 ## Phase 0: Setup
-- [x] Repo, private GitHub remote
+- [x] Repo, private GitHub remote (https://github.com/Nugwa628/mxl-d2r)
 - [x] Toolchain: git, gh, CMake, MSVC (VS 18), Python 3.14
 - [x] StormLib / CascLib submodules
 - [ ] Install D2R, then D2RLoader 1.3.1 into it
