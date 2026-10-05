@@ -6,6 +6,7 @@
   tbl2json.py        strings                  -> work/mod/data/local/lng/
   txt_migrate.py     D2R table layout         -> work/mod/data/global/excel/{base,}
   gfx_placeholders.py  D2R graphics for Median-only monsters (until the art port) + hd/character/monsters.json
+  skill_icons.py     Median's skill icons as D2R icon sheets (classic + HD) and skilldesc IconCel
   validate.py        D2R schema checks        -> work/mod/validate_report.md
 
 Usage: python tools/build.py   (exit code = validate.py's: 1 if there are errors)
@@ -17,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decode"], ["tbl2json.py"],
-         ["txt_migrate.py"], ["gfx_placeholders.py"], ["validate.py"]]
+         ["txt_migrate.py"], ["gfx_placeholders.py"], ["skill_icons.py"], ["validate.py"]]
 
 
 def run(step: list[str]) -> int:
