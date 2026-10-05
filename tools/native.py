@@ -102,6 +102,49 @@ casc.CascCloseFile.argtypes = [wintypes.HANDLE]
 casc.CascCloseFile.restype = wintypes.BOOL
 
 
+class CASC_FIND_DATA(ctypes.Structure):
+    _fields_ = [
+        ("szFileName", ctypes.c_char * 260),  # MAX_PATH
+        ("CKey", ctypes.c_ubyte * 16),
+        ("EKey", ctypes.c_ubyte * 16),
+        ("TagBitMask", ctypes.c_uint64),
+        ("FileSize", ctypes.c_uint64),
+        ("szPlainName", ctypes.c_char_p),
+        ("dwFileDataId", wintypes.DWORD),
+        ("dwLocaleFlags", wintypes.DWORD),
+        ("dwContentFlags", wintypes.DWORD),
+        ("dwSpanCount", wintypes.DWORD),
+        ("bFileAvailable", wintypes.DWORD),  # 1-bit bitfield in a DWORD
+        ("NameType", ctypes.c_int),
+    ]
+
+
+casc.CascFindFirstFile.argtypes = [wintypes.HANDLE, ctypes.c_char_p, ctypes.POINTER(CASC_FIND_DATA), ctypes.c_char_p]
+casc.CascFindFirstFile.restype = wintypes.HANDLE
+casc.CascFindNextFile.argtypes = [wintypes.HANDLE, ctypes.POINTER(CASC_FIND_DATA)]
+casc.CascFindNextFile.restype = ctypes.c_bool
+casc.CascFindClose.argtypes = [wintypes.HANDLE]
+casc.CascFindClose.restype = ctypes.c_bool
+
+
+def casc_files(storage: wintypes.HANDLE, mask: str = "*") -> list[tuple[str, int, bool]]:
+    """(name, size, available locally) for every named file matching mask."""
+    data = CASC_FIND_DATA()
+    find = casc.CascFindFirstFile(storage, mask.encode("mbcs"), ctypes.byref(data), None)
+    out = []
+    if not find:
+        return out
+    try:
+        while True:
+            if data.NameType == 0:  # CascNameFull
+                out.append((data.szFileName.decode("mbcs"), data.FileSize, bool(data.bFileAvailable & 1)))
+            if not casc.CascFindNextFile(find, ctypes.byref(data)):
+                break
+    finally:
+        casc.CascFindClose(find)
+    return out
+
+
 def open_casc(game_dir: str | Path) -> wintypes.HANDLE:
     handle = wintypes.HANDLE()
     if not casc.CascOpenStorage(str(game_dir).encode("mbcs"), 0, ctypes.byref(handle)):

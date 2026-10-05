@@ -10,14 +10,15 @@ Median XL tables fit the 32,768-row limits (largest: cubemain 7,500, missiles 5,
 - [x] D2R 3.3.93847 at `C:\Program Files (x86)\Diablo II Resurrected` (same build as the RuffnecKk research)
 - [x] D2RLoader 1.3.1-beta installed there (signer thumbprint matches the official one)
 - [x] CascLib reads D2R data (`data:data/global/excel/skills.txt`; base-game tables are under `excel/base/`)
-- [ ] First launch of D2RLoader.exe (owner: user)
-- [ ] Ask the Median XL team for permission (owner: user)
+- [x] D2RLoader.exe launches to the character screen (2026-10-05)
+- [x] Median XL team approved the project (2026-10-05)
 
 ## Phase 1: Tools (Python CLI)
 - [x] `tools/mpq_extract.py`: all 56 Median MPQs -> `extract/mxl/` (8,528 files, 832 MB, manifest.json)
 
-Remaining:
-casc-extract, casc-extract, bin2txt (resolve placeholders), Sigma table schemas,
+- [x] `tools/casc_extract.py`: D2R 93847 baseline -> `extract/d2r/93847/` (1,072 files). See [d2r-baseline.md](d2r-baseline.md)
+
+Remaining: casc-extract, bin2txt (resolve placeholders), Sigma table schemas,
 formula codec (fn5/fn7), txt-migrate (1.13c -> D2R columns), tbl2json (`mxl:` namespace), validate/diff.
 
 ## Phase 2: Data port
