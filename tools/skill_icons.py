@@ -5,9 +5,11 @@ skilldesc.bin record (D2SkillIcons.cpp), in themes/classic_sigma/game/skills/ico
 and icons-shared.dc6 for the rest, two frames per icon (normal, pressed). D2R reads IconCel as a frame of
 Spells/<Class>/<Xx>Skillicon (class skills) or Spells/SubMenu/Skillicon (others), also normal + pressed.
 
-D2R's HD sprites are one horizontal strip and stay under the 16384-pixel texture limit, but Median's sheets hold
-up to 316 frames. So each sheet keeps only the icons its skills use, in first-use order, IconCel is renumbered
-to that order, and HD frames shrink when needed to fit the strip (at most D2R's own 132-pixel stride).
+D2R's HD sprites are one horizontal strip under the 16384-pixel texture limit and are drawn at their own pixel
+size (no scaling to the slot), so icons stay at D2R's 130 pixels (132 stride) and a sheet holds 62 icons.
+Median's sheets hold up to 158 icons, so each sheet keeps the icons its skills use: skill tree skills first,
+then skills items or the character start grant, then monster-only skills, which share icon 0 once the sheet is
+full. IconCel is renumbered to that order.
 
 Writes into work/mod/data (after txt_migrate.py):
   global/excel/{base,}/skilldesc.txt          IconCel
@@ -42,6 +44,7 @@ TARGETS = {
     "": ("icons-shared", "skillicon", "submenu/skillicon"),
 }
 MAX_STRIP, D2R_STRIDE = 16384, 132
+MAX_ICONS = MAX_STRIP // D2R_STRIDE // 2  # 62 icons (normal + pressed) per full-size sheet
 
 
 # ---- DC6 ----------------------------------------------------------------------------------------------
@@ -178,18 +181,43 @@ def main() -> int:
     frames_of = median_frames()
     pal = palette()
     # Which icon (Median frame) each sheet needs, from the skills that use each skilldesc, in first-use order
-    sh, srows = read_tsv(OUT / "global" / "excel" / "base" / "skills.txt")
+    excel = OUT / "global" / "excel" / "base"
+    sh, srows = read_tsv(excel / "skills.txt")
     cc, sd = sh.index("charclass"), sh.index("skilldesc")
+    # A full-size HD sheet holds MAX_ICONS icons. Players see tree skills first, then skills items or the
+    # character start grant (and the basic rows Attack..Left Hand Swing); monster-only skills come last and
+    # share icon 0 when a sheet is full.
+    dh, drows = read_tsv(excel / "skilldesc.txt")
+    on_tree = {r[0] for r in drows if r[dh.index("SkillPage")] not in ("", "0")}
+    granted = set()
+    for t in ("uniqueitems", "setitems", "sets", "runes", "magicprefix", "magicsuffix", "automagic", "cubemain",
+              "gems", "weapons", "armor", "misc", "charstats", "qualityitems"):
+        if (excel / f"{t}.txt").exists():
+            granted |= {c for r in read_tsv(excel / f"{t}.txt")[1] for c in r}
     sheet_of: dict[str, str] = {}
-    for r in srows:
+    rank: dict[str, int] = {}
+    for i, r in enumerate(srows):
         if is_record(r) and r[sd] in frames_of:
             sheet_of.setdefault(r[sd], r[cc] if r[cc] in TARGETS else "")
+            prio = 0 if r[sd] in on_tree else 1 if (r[0] in granted or i < 7) else 2
+            rank[r[sd]] = min(rank.get(r[sd], 2), prio)
     order: dict[str, list[int]] = {k: [] for k in TARGETS}
+    seen: dict[str, list[int]] = {k: [] for k in TARGETS}  # icons players can see (tree, items, start)
+    for key in sorted(sheet_of, key=lambda k: rank[k]):  # stable: first use within each priority
+        f = frames_of[key] // 2 * 2
+        if f not in order[sheet_of[key]]:
+            order[sheet_of[key]].append(f)
+            if rank[key] < 2:
+                seen[sheet_of[key]].append(f)
+    # Monster-only icons go once a sheet is full; icons players see are all kept, and a sheet with more of
+    # those than fit at full size (the Amazon tree has 72) gets smaller frames instead.
+    keep = {cls: max(MAX_ICONS, len(seen[cls])) for cls in TARGETS}
+    dropped = {cls: max(len(o) - keep[cls], 0) for cls, o in order.items()}
+    order = {cls: o[:keep[cls]] for cls, o in order.items()}
+    icon_cel = {}
     for key, cls in sheet_of.items():
         f = frames_of[key] // 2 * 2
-        if f not in order[cls]:
-            order[cls].append(f)
-    icon_cel = {key: order[cls].index(frames_of[key] // 2 * 2) * 2 for key, cls in sheet_of.items()}
+        icon_cel[key] = order[cls].index(f) * 2 if f in order[cls] else 0
     for bank in ("base", ""):
         p = OUT / "global" / "excel" / bank / "skilldesc.txt"
         if p.exists():
@@ -211,7 +239,8 @@ def main() -> int:
             write_sprite(OUT / "hd" / "global" / "ui" / "spells" / f"{hd}{suffix}", images, stride, size)
         if args.preview:
             write_png(args.preview / f"{classic}.png", stride * len(images), size, strip(images, stride, size))
-        report.append(f"{sheet}: {len(order[cls])} icons ({len(picked)} frames), HD {size}px")
+        report.append(f"{sheet}: {len(order[cls])} icons ({len(picked)} frames), HD {size}px"
+                      + (f", {dropped[cls]} monster-only icons share icon 0" if dropped[cls] else ""))
     print("\n".join(report))
     return 0
 
