@@ -1,0 +1,41 @@
+# --- Never commit third-party game content (Blizzard or Median XL) ---
+# Raw extractions live outside the repo or in these ignored folders.
+/extract/
+/work/
+*.mpq
+*.dc6
+*.dcc
+*.dt1
+*.ds1
+*.cof
+*.wav
+*.bik
+*.exe
+*.dll
+*.pdb
+*.d2s
+*.d2i
+*.sprite
+*.model
+*.texture
+
+# Decompiles and RE databases
+*.gpr
+*.rep/
+*.c.bak
+/research/ghidra/
+
+# Build output
+/build/
+/out/
+CMakeUserPresets.json
+.vs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Logs
+*.log
