@@ -69,6 +69,10 @@ REPLACE = {"uniqueitems", "setitems", "sets", "magicprefix", "magicsuffix", "aut
            "cubemain", "runes", "qualityitems", "lowqualityitems", "uniqueprefix", "uniquesuffix",
            "uniqueappellation", "gamble", "monpreset", "weapons", "armor", "misc", "treasureclassex", "hireling"}
 D2R_WINS = {"sounds", "soundenviron", "skillcalc", "misscalc", "playerclass", "plrtype", "storepage"}
+# D2R's own rows only, for now: D2R's inventory has 2 rows per page (one per screen resolution) and the engine
+# asserts on anything else. Median's inventory sizes need converting to that layout (later).
+D2R_ONLY = {"inventory"}
+MAX_ITEMS_PER_SET = 6  # D2R and D2RLoader
 # (Median key column, D2R key column) where they differ: the .bin keeps the short code in the first column.
 KEY_PAIRS = {"playerclass": ("Player Class", "Code"), "storepage": ("Store Page", "Code")}
 # Median columns D2R dropped on purpose; not copied to overflow/.
@@ -176,12 +180,89 @@ class Migrator:
             return "replace"
         if table in D2R_WINS:
             return "d2r_wins"
+        if table in D2R_ONLY:
+            return "d2r_only"
         ent = self.entities.get(table)
         if ent and ent[4] and table in self.idmap:
             return "indexed"
         return "keyed"
 
     _schema = None
+
+    def clean_treasure_classes(self) -> None:
+        """Treasure class entries must name an item code, item type, treasure class, unique or set item (D2R's
+        format). Case-only mismatches are fixed; anything else (Median's sacred auto classes "sarm93"/"swea93",
+        which D2Sigma generates, or names that exist nowhere) is cleared with its Prob and reported, because D2R
+        asserts on it at load."""
+        for bank in ("base", ""):
+            d = OUT / "data" / "global" / "excel" / bank
+            p = d / "treasureclassex.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            known: dict[str, str] = {}
+            for t, c in (("weapons", "code"), ("armor", "code"), ("misc", "code"), ("itemtypes", "Code"),
+                         ("treasureclassex", "Treasure Class"), ("uniqueitems", "index"), ("setitems", "index")):
+                if (d / f"{t}.txt").exists():
+                    th, trows = read_tsv(d / f"{t}.txt")
+                    if c in th:
+                        known.update({r[th.index(c)].lower(): r[th.index(c)] for r in trows if r[th.index(c)]})
+            auto = re.compile(r"^(weap|armo|mele|bow|mag[a-z]*|rar[a-z]*)\d+$")
+            cleared = []
+            for ci, c in enumerate(h):
+                m = re.fullmatch(r"Item(\d+)", c)
+                if not m:
+                    continue
+                pi = h.index(f"Prob{m.group(1)}") if f"Prob{m.group(1)}" in h else None
+                for r in rows:
+                    v = r[ci]
+                    quoted = len(v) > 1 and v[0] == v[-1] == '"'
+                    body = v[1:-1] if quoted else v
+                    name, sep, rest = body.partition(",")
+                    if not name or auto.match(name) or name in known.values():
+                        continue
+                    if name.lower() in known:  # case-only difference
+                        body = known[name.lower()] + sep + rest
+                        r[ci] = f'"{body}"' if quoted else body
+                        continue
+                    cleared.append(f"{r[0]}: {name}")
+                    r[ci] = ""
+                    if pi is not None:
+                        r[pi] = ""
+            write_tsv(p, h, rows)
+            if bank == "base" and cleared:
+                self.report.append(f"\ntreasureclassex: cleared {len(cleared)} entries D2R cannot resolve "
+                                   f"(D2Sigma-generated classes or missing names): {'; '.join(cleared)}")
+
+    def split_large_sets(self) -> None:
+        """D2R allows 6 items per set; Median's "Orphan's Call" has 9. Items 7+ go to a copy of the set named
+        "<set> (2)" so the tables load; the full set needs a plugin (reported)."""
+        for bank in ("base", ""):
+            d = OUT / "data" / "global" / "excel" / bank
+            if not (d / "setitems.txt").exists():
+                continue
+            ih, irows = read_tsv(d / "setitems.txt")
+            sh, srows = read_tsv(d / "sets.txt")
+            si, key = ih.index("set"), sh.index("index")
+            members: dict[str, list[list[str]]] = defaultdict(list)
+            for r in irows:
+                members[r[si]].append(r)
+            for name, items in members.items():
+                if len(items) <= MAX_ITEMS_PER_SET:
+                    continue
+                for n, start in enumerate(range(MAX_ITEMS_PER_SET, len(items), MAX_ITEMS_PER_SET), 2):
+                    new = f"{name} ({n})"
+                    for r in items[start:start + MAX_ITEMS_PER_SET]:
+                        r[si] = new
+                    base_row = next(r for r in srows if r[key] == name)
+                    clone = list(base_row)
+                    clone[key] = new
+                    srows.append(clone)
+                if bank == "base":
+                    self.report.append(f"\nsets: '{name}' has {len(items)} items; D2R allows {MAX_ITEMS_PER_SET}. "
+                                       f"Items 7+ moved to '{name} (2)' (needs a plugin for the real set bonus).")
+            write_tsv(d / "setitems.txt", ih, irows)
+            write_tsv(d / "sets.txt", sh, srows)
 
     def refs_into_replaced(self, table: str, dh: list[str]) -> dict[str, tuple[str, str]]:
         """D2R columns that are references (per D2R's data guide) into a table Median replaces wholesale:
@@ -370,7 +451,9 @@ class Migrator:
                 for r in drows:
                     d_by_key.setdefault(r[di[dkey]].lower(), r)
                 m_keys = {r[mi[mkey]].lower() for r in mrows}
-                if kind == "d2r_wins":
+                if kind == "d2r_only":
+                    rows = list(drows_all)  # exactly D2R's file, "Expansion" marker rows included
+                elif kind == "d2r_wins":
                     rows = list(drows) + [convert(r, None, None) for r in mrows if r[mi[mkey]].lower() not in d_by_key]
                 else:
                     rows = [convert(r, d_by_key.get(r[mi[mkey]].lower()), None) for r in mrows]
@@ -410,6 +493,8 @@ def main() -> int:
                  "|---|---|---|---|---|---|"]
     for t in tables:
         m.migrate(t)
+    m.split_large_sets()
+    m.clean_treasure_classes()
     if m.dangling:
         m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]
         m.report += [f"- {t}: {n} cells" for t, n in sorted(m.dangling.items())]

@@ -44,3 +44,26 @@ such cells are listed in work/formulas/report.md and need a manual decision).
 - Numeric string keys stay numeric (`115` = "Axe (1)"; item `namestr` cells use them; they are unique).
 - Single-row formula columns are converted too; booleans normalised to 0/1; a stray control byte fixed.
 - `sigma_tables.py` wrote `\r\r\n` line endings; fixed.
+
+## First boot (2026-10-05): what the game asserted, and the fixes
+The first launch crashed (black screen) loading `data\global	iles\mxl\quest\yshariasewall.dt1`: Median's level
+types use Median's own tiles, which the mod did not ship. The log also listed load assertions. Fixed:
+- **Tiles:** `install_mod.py` now ships Median's `data/global/tiles` (129 .dt1, 574 .ds1).
+- **Formula limits:** D2R keeps 255 characters per formula and 32 bytes per quoted name. Generated names
+  lost the `mxl_` prefix, names formulas can reference are capped at 31, and rows named in formulas still over
+  255 get compact names (`sk1820`) through `work/shorten.json` (build.py repeats naming until stable).
+- **Formula syntax:** D2R's parser rejects bare negative literals and unbracketed ternary branches: negatives are
+  written `(0-N)`, non-trivial branches are bracketed.
+- **Median formula functions** (`mxl_*`) are written as `0` until a plugin provides them (`formula.py convert
+  --keep-mxl` writes the real calls). The 2 broken `stat('strength'.320)` cells are `0` as well.
+- **Treasure classes:** item display names inside quoted cells with modifiers (`"Gold (gld),mul=2560"`) are
+  mapped back to codes; D2R allows unique/set item names in TCs; Median's D2Sigma-generated classes
+  (`sarm93`, `swea93`) and missing names are cleared and reported; a case-only mismatch is fixed.
+- **MonStatsEx** blank means monstats2 row 0 (the first decoder wrote 0 as blank).
+- **Sets:** "Orphan's Call" has 9 items (D2R: 6); items 7+ go to "Orphan's Call (2)" until a plugin exists.
+- **Inventory:** D2R's own rows for now (2 per page, one per screen resolution).
+- The validator now checks all of these (formula/name lengths, TC entries, set sizes, MonStatsEx, mercenary
+  name ranges, inventory rows).
+
+Still expected at load (engine limits, not data errors): **more states than D2R allows** (Median 1,014; D2RLoader
+advertises 32,768, possibly only for tables built by its own compiler) and **level types beyond D2R's fixed list**.

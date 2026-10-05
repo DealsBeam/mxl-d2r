@@ -6,6 +6,7 @@
   d2rloader/metadata.json           schemaVersion 1, no "namespace" (native string loading, see docs/strings.md)
   d2rloader/config/d2rloader.toml   [d2rcore.save_format] mode = "extended" (Median's wider item/stat IDs)
   MedianXL.mpq/data/...             copy of work/mod/data (folder-style MPQ) + global/dataversionbuild.txt
+                                    + Median's classic tiles/maps (global/tiles)
 
 Only MedianXL.mpq/data is replaced on reinstall; saves live elsewhere (Saved Games) and are never touched.
 Usage: python tools/install_mod.py [--game "C:\\Program Files (x86)\\Diablo II Resurrected"] [--name MedianXL]
@@ -20,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "work" / "mod" / "data"
 DEFAULT_GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
 BUILD = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "dataversionbuild.txt"
+MXL_TILES = ROOT / "extract" / "mxl" / "data" / "global" / "tiles"
 
 
 def main() -> int:
@@ -43,6 +45,10 @@ def main() -> int:
         shutil.rmtree(data)
     shutil.copytree(SRC, data)
     shutil.copy2(BUILD, data / "global" / "dataversionbuild.txt")
+    # Classic map tiles and presets (.dt1/.ds1): D2R loads them for map layout even in HD mode, and Median's
+    # level types point at its own (e.g. tiles/mxl/quest/yshari/basewall.dt1). Note: Median's .ds1 maps still use
+    # Median's object numbers; objects 573+ were renumbered (docs/txt-migrate.md) and need remapping later.
+    shutil.copytree(MXL_TILES, data / "global" / "tiles")
 
     # D2R (and D2RLoader's mod detection) read modinfo.json inside the folder-style MPQ; the copy at the mod
     # root follows the D2RLoader guide's layout and is harmless.

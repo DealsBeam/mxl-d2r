@@ -175,6 +175,18 @@ def fold(n: Node) -> Node:
     return n
 
 
+def wrapped(t: str) -> bool:
+    """True when the outer parentheses enclose the whole text ("(a+b)" yes, "(a)+(b)" no)."""
+    if not (t.startswith("(") and t.endswith(")")):
+        return False
+    depth = 0
+    for i, ch in enumerate(t):
+        depth += (ch == "(") - (ch == ")")
+        if depth == 0 and i < len(t) - 1:
+            return False
+    return True
+
+
 def const(n: Node) -> int:
     return n.value[0] if isinstance(n.value, tuple) else n.value
 
@@ -185,8 +197,9 @@ PREC = {"?": 1, "<": 3, ">": 3, "<=": 3, ">=": 3, "==": 3, "!=": 3, "+": 4, "-":
 class Renderer:
     """Renders a tree as D2 formula text. `ref` resolves (kind, row) -> name for skill/stat/missile/state refs."""
 
-    def __init__(self, ctx: str, ref=None, unsigned_bytes: bool = False):
+    def __init__(self, ctx: str, ref=None, unsigned_bytes: bool = False, stub_mxl: bool = False):
         self.ctx = ctx
+        self.stub_mxl = stub_mxl  # write Median-only functions as 0 until a plugin provides them
         self.unsigned_bytes = unsigned_bytes  # mimic the first decoder's bug (for comparison only)
         self.codes = read_codes(CONTEXTS[ctx]["vars"])
         self.skillcodes = read_codes("skillcalc")
@@ -201,7 +214,9 @@ class Renderer:
         if n.kind == "const":
             if self.unsigned_bytes and isinstance(n.value, tuple):
                 return str(n.value[1])
-            return str(n.value[0] if isinstance(n.value, tuple) else n.value)
+            v = n.value[0] if isinstance(n.value, tuple) else n.value
+            # D2R's formula parser rejects a bare negative literal inside an expression ("min(0,-1*x)")
+            return f"(0-{-v})" if v < 0 and not self.unsigned_bytes else str(v)
         if n.kind == "var":
             return self.var(n.value)
         if n.kind == "neg":
@@ -209,8 +224,14 @@ class Renderer:
         if n.kind == "cond":
             c = self.render(n.args[0], 2)
             if n.args[0].kind in ("op", "cond"):
-                c = f"({c})" if not c.startswith("(") or not c.endswith(")") else c
-            s = f"{c}?{self.render(n.args[1], 2)}:{self.render(n.args[2], 2)}"
+                c = c if wrapped(c) else f"({c})"
+            # D2R's parser needs non-trivial ternary branches in parentheses (as Median's own text had them)
+            branches = []
+            for b in n.args[1:]:
+                t = self.render(b, 2)
+                branches.append(f"({t})" if b.kind in ("op", "cond", "neg") and not self.unsigned_bytes
+                                and not wrapped(t) else t)
+            s = f"{c}?{branches[0]}:{branches[1]}"
             return f"({s})" if parent else s
         if n.kind == "op":
             p = PREC[n.value]
@@ -219,6 +240,9 @@ class Renderer:
             return f"({s})" if parent > p else s
         idx, name = n.value
         a = n.args
+        if self.stub_mxl and name.startswith("mxl_"):
+            self.unsupported.add(name)
+            return "0"
         if name in ("skill", "miss", "stat") and a[0].kind == "const" and a[1].kind == "const":
             row, sub = const(a[0]), const(a[1])
             if name == "skill":
@@ -329,11 +353,13 @@ def name_resolver():
     missing = set()
 
     def ref(kind: str, row: int) -> str:
+        ref.used.append((tables[kind], row))
         rows = idmap[tables[kind]]
         if 0 <= row < len(rows):
             return rows[row]["name"]
         missing.add(f"{kind}{row}")
         return f"{kind}{row}"
+    ref.used = []
     return ref, missing
 
 
@@ -385,9 +411,19 @@ def find_fields(table: str, ents, starts) -> dict[str, int]:
     return fields
 
 
+SHORTEN = ROOT / "work" / "shorten.json"
+MAX_FORMULA = 255  # D2R parse fields hold 255 characters
+
+
 def cmd_convert() -> int:
+    """Exit code 3 when formulas were too long and work/shorten.json gained rows: rerun mxl_names.py (which gives
+    those rows compact names) and this command again. tools/build.py does that automatically."""
     OUT.mkdir(parents=True, exist_ok=True)
+    keep_mxl = "--keep-mxl" in sys.argv
     ref, missing = name_resolver()
+    shorten = json.loads(SHORTEN.read_text("utf-8")) if SHORTEN.exists() else {}
+    shorten_before = json.dumps(shorten, sort_keys=True)
+    too_long = []
     summary, details = [], []
     used_unsupported = collections.Counter()
     for table, (fname, ctx) in FORMULA_TABLES.items():
@@ -397,11 +433,24 @@ def cmd_convert() -> int:
         rendered, notes = [], []
         for _idx, _text, code in ents:
             q: list[str] = []
-            r = Renderer(ctx, ref)
+            r = Renderer(ctx, ref, stub_mxl=not keep_mxl)
             tree = decode(code, ctx, q)
             if q:  # malformed in Median's data: fold to what Fog actually computes
                 tree = fold(tree)
-            rendered.append(r.render(tree))
+            ref.used.clear()
+            text = r.render(tree)
+            if q and re.search(r"stat\('[^']*'\.\d{3,}\)", text):
+                # broken bytecode in Median's data passes a computed value as the stat mode
+                # ("stat('strength'.320)"); D2R rejects it, so the cell becomes 0 (listed under quirks)
+                q.append(f"unusable stat() mode in '{text}', written as 0")
+                text = "0"
+            if len(text) > MAX_FORMULA:  # give the rows it names compact names on the next naming pass
+                too_long.append((fname, _idx, len(text)))
+                for ent, row in ref.used:
+                    rows = shorten.setdefault(ent, [])
+                    if row not in rows:
+                        rows.append(row)
+            rendered.append(text)
             notes.append((sorted(r.unsupported), q))
         lines = ["index\tformula\tmxl_functions\tquirks\tfirst_decoder_text"]
         for (idx, text, _c), out, (uns, q) in zip(ents, rendered, notes):
@@ -441,9 +490,18 @@ def cmd_convert() -> int:
     report += ["", "## Details", "", *details]
     if missing:
         report += ["", f"Unresolved references: {sorted(missing)[:20]}"]
+    if too_long:
+        report += ["", f"## Formulas over {MAX_FORMULA} characters", ""]
+        report += [f"- {f}[{i}]: {n} characters" for f, i, n in too_long]
     (OUT / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
     print("\n".join(report[: 6 + len(used_unsupported) + 3]))
     print(f"... {len(details)} detail lines in {OUT / 'report.md'}")
+    if too_long:
+        print(f"{len(too_long)} formulas over {MAX_FORMULA} characters")
+    if json.dumps(shorten, sort_keys=True) != shorten_before:
+        SHORTEN.write_text(json.dumps(shorten, indent=1, sort_keys=True), encoding="utf-8")
+        print("work/shorten.json updated: rerun mxl_names.py and formula.py convert")
+        return 3
     return 0
 
 

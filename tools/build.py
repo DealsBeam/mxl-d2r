@@ -19,19 +19,33 @@ STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decod
          ["txt_migrate.py"], ["validate.py"]]
 
 
+def run(step: list[str]) -> int:
+    print(f"== {' '.join(step)}", flush=True)
+    r = subprocess.run([sys.executable, str(ROOT / "tools" / step[0]), *step[1:]], cwd=ROOT,
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    print("\n".join(f"   {line}" for line in r.stdout.strip().splitlines()[-4:]))
+    return r.returncode
+
+
 def main() -> int:
     for d in (ROOT / "work" / "named", ROOT / "work" / "mod"):
         shutil.rmtree(d, ignore_errors=True)
-    for step in STEPS:
-        print(f"== {' '.join(step)}", flush=True)
-        r = subprocess.run([sys.executable, str(ROOT / "tools" / step[0]), *step[1:]], cwd=ROOT,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        tail = r.stdout.strip().splitlines()[-4:]
-        print("\n".join(f"   {line}" for line in tail))
-        if r.returncode and step[0] != "validate.py":
-            print(f"step failed ({r.returncode})")
-            return r.returncode
-    return r.returncode
+    # Names and formulas: formula.py exits 3 when formulas exceed 255 characters and it asked for compact names
+    # (work/shorten.json); repeat until stable.
+    for _attempt in range(4):
+        rc = run(STEPS[0]) or run(STEPS[1])
+        if rc != 3:
+            break
+        shutil.rmtree(ROOT / "work" / "named", ignore_errors=True)
+    if rc:
+        print(f"step failed ({rc})")
+        return rc
+    for step in STEPS[2:]:
+        rc = run(step)
+        if rc and step[0] != "validate.py":
+            print(f"step failed ({rc})")
+            return rc
+    return rc
 
 
 if __name__ == "__main__":

@@ -31,6 +31,9 @@ BBE_FUNCS = {"min", "max", "rand", "skill", "miss", "stat", "sklvl", "sksrc", "c
 CONDITIONS = {"IsType", "IsClass", "Desecrated", "Difficulty", "MonsterTestElite", "ItemIsType", "ItemIsModType",
               "MonsterHasMod"}
 STAT_MODES = {"accr", "base", "mod"}
+MAX_FORMULA_NAME = 31
+MAX_ITEMS_PER_SET = 6
+AUTO_TC = re.compile(r"^(weap|armo|mele|bow|mag[a-z]*|rar[a-z]*)\d+$")
 SCOPE_CODES = {"Skill": "skillcalc", "Missile": "misscalc", "Monster": "moncalc"}
 TOKEN = re.compile(r"\s*(?:(?P<num>\d+)|(?P<str>'[^']*')|(?P<id>[A-Za-z_][A-Za-z0-9_]*)|(?P<op><=|>=|==|!=|[-+*/%^()?:<>,.]))")
 
@@ -160,6 +163,10 @@ class Validator:
                 break
         if depth != 0:
             self.add("error", table, column, "formula: unbalanced parentheses", row, text)
+        for k, v in tokens:
+            if k == "str" and len(v) - 2 > MAX_FORMULA_NAME:
+                self.add("error", table, column, f"name longer than {MAX_FORMULA_NAME} characters in a formula "
+                         "(D2R's parser keeps 32 bytes)", row, v)
         codes_table = SCOPE_CODES.get(scope)
         scope_codes = (self.data.values(codes_table, "code") or set()) if codes_table else set()
         d2r_codes = {c for c in self.d2r_calc.get(codes_table, set())} if codes_table else set()
@@ -250,7 +257,7 @@ class Validator:
                     self.add("error", table, col, "not an integer", rid, v)
                 elif kind == "boolean" and v not in ("0", "1"):
                     self.add("error", table, col, "not 0/1", rid, v)
-                elif kind == "text" and isinstance(typ, dict) and typ.get("dataLength") and len(v) > typ["dataLength"]:
+                elif kind in ("text", "parse") and isinstance(typ, dict) and typ.get("dataLength") and len(v) > typ["dataLength"]:
                     self.add("error", table, col, f"longer than {typ['dataLength']} characters", rid, v)
                 elif kind == "string" and v not in self.strings and v != "0":
                     # the generated string files hold every Median and D2R key, so the key is missing from
@@ -277,6 +284,73 @@ class Validator:
         names = {p.stem for p in (MOD / "global" / "excel" / ("base" if self.bank == "base" else "")).glob("*.txt")}
         for t in sorted(names):
             self.check_table(t)
+        self.engine_rules()
+
+    def engine_rules(self) -> None:
+        """Rules D2R asserts on at load time that the field schema does not express."""
+        d = self.data
+        # treasure class items: item code, item type, treasure class, unique/set item index, or an auto class
+        tc = d.table("treasureclassex")
+        if tc:
+            h, rows = tc
+            known = set()
+            for t, c in (("weapons", "code"), ("armor", "code"), ("misc", "code"), ("itemtypes", "Code"),
+                         ("treasureclassex", "Treasure Class"), ("uniqueitems", "index"), ("setitems", "index")):
+                known |= d.values(t, c) or set()
+            for ci, c in enumerate(h):
+                if not re.fullmatch(r"Item\d+", c):
+                    continue
+                for r in rows:
+                    v = r[ci].strip() if ci < len(r) else ""
+                    name = v.strip('"').split(",", 1)[0]
+                    if name and name not in known and not AUTO_TC.match(name):
+                        self.add("error", "treasureclassex", c, "not an item, item type, treasure class, unique or set item", r[0], v)
+        # sets: at most 6 items
+        si = d.table("setitems")
+        if si:
+            h, rows = si
+            counts = defaultdict(int)
+            for r in rows:
+                counts[r[h.index("set")]] += 1
+            for name, n in counts.items():
+                if n > MAX_ITEMS_PER_SET:
+                    self.add("error", "setitems", "set", f"set has {n} items (D2R allows {MAX_ITEMS_PER_SET})", name, str(n))
+        # monstats: MonStatsEx is required
+        ms = d.table("monstats")
+        if ms:
+            h, rows = ms
+            i = h.index("MonStatsEx")
+            for r in rows:
+                if not r[i].strip() and r[0] != "Expansion":
+                    self.add("error", "monstats", "MonStatsEx", "blank (a required link to monstats2)", r[0], "")
+        # hireling: the name range NameFirst..NameLast must go upwards in string IDs
+        hl = d.table("hireling")
+        if hl:
+            h, rows = hl
+            ids = self.string_ids()
+            for r in rows:
+                a, b = r[h.index("NameFirst")], r[h.index("NameLast")]
+                if a and b and not (ids.get(a, -1) < ids.get(b, -1)):
+                    self.add("error", "hireling", "NameLast", "string ID not above NameFirst's", r[0] or "-", f"{a}..{b}")
+        # inventory: D2R expects two rows (resolutions) per page
+        inv = d.table("inventory")
+        if inv:
+            h, rows = inv
+            ref = D2R / "global" / "excel" / ("base" if self.bank == "base" else "") / "inventory.txt"
+            want = (len([l for l in ref.read_text("utf-8-sig").splitlines()[1:] if l and not l.startswith("Expansion")])
+                    if ref.exists() else len(rows))
+            if len(rows) != want:
+                self.add("error", "inventory", "-", f"{len(rows)} rows; D2R's layout has {want} (2 per page)", "-", "")
+
+    _string_ids: dict | None = None
+
+    def string_ids(self) -> dict[str, int]:
+        if self._string_ids is None:
+            self._string_ids = {}
+            for p in (MOD / "local" / "lng" / "strings").glob("*.json"):
+                for e in json.loads(p.read_text("utf-8-sig")):
+                    self._string_ids.setdefault(e["Key"], e["id"])
+        return self._string_ids
 
 
 def main() -> int:

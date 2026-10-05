@@ -12,7 +12,8 @@ Rules (see docs/id-mapping.md):
     also uses that slot, the Median row moves to the new-row range and D2R keeps the slot.
   * skilldesc is referenced by name only and D2R re-sorted it, so vanilla skilldesc rows keep the 1.13c name.
   * New Median rows get IDs after D2R's last row (D2R's own additions stay intact). Their names come from
-    in-game text, else from whatever uses them, else "mxl_<entity>_<row>".
+    in-game text, else from whatever uses them, else "<entity>_<row>". Names are lowercase slugs without a
+    prefix (formula text is limited to 255 characters; idmap.json records where every name came from).
 
 Usage: python tools/mxl_names.py [--mxl ...] [--vanilla ...] [--d2r ...] [--out work/named]
 """
@@ -72,6 +73,8 @@ ENTITIES = {
     "arena":        ("ae", "arena",        "Arena",       None,    False),
     "chartemplate": ("ct", "chartemplate", "Template",    None,    False),
 }
+# Names that formulas reference by text (skill('x'), stat('x'), miss('x'), hasstate('x')).
+FORMULA_NAMES = {"skills", "itemstatcost", "missiles", "states"}
 # D2R key column when it differs from Median's (objects' first D2R column is "Class").
 D2R_KEY = {"objects": "Name", "shrines": "Name"}
 # Tables whose key repeats over several rows (one sequence = several frames); the placeholder number counts
@@ -289,8 +292,8 @@ class Resolver:
         e = self.idmap[ent][row]
         if e["name"] is not None or not label:
             return False
-        base = label if label.startswith("mxl_") else f"mxl_{slug(label)}"
-        if base == "mxl_":
+        base = slug(label)
+        if not base:
             return False
         limit = self.key_limit(ent)
         base = base[: limit - 4].rstrip("_")  # room for a "_NN" uniqueness suffix
@@ -318,16 +321,25 @@ class Resolver:
                     limit = typ["dataLength"]
             except (ImportError, OSError, ValueError):
                 pass
+            if ent in FORMULA_NAMES:
+                limit = min(limit, 31)  # D2R's formula parser keeps 32 bytes of a quoted name
             self._limits[ent] = limit
         return self._limits[ent]
 
     def bare(self, ent: str, row: int) -> str:
         n = self.name(ent, row) or ""
-        return n.removeprefix("mxl_")
+        return n
 
     def assign_names(self) -> None:
         T = self.tables
         s = self.strings
+        # Rows named in formulas that came out over 255 characters (tools/formula.py writes work/shorten.json):
+        # compact names from the placeholder prefix, e.g. sk1820, is389. Vanilla rows keep D2R's names.
+        shorten = ROOT / "work" / "shorten.json"
+        if shorten.exists():
+            for ent, rows in json.loads(shorten.read_text("utf-8")).items():
+                for row in rows:
+                    self.give(ent, row, f"{ENTITIES[ent][0]}{row}", "compact (formula length)")
         # Own text first.
         for row, label in self.skill_label.items():
             self.give("skills", row, label, "skill name")
@@ -409,9 +421,19 @@ class Resolver:
                     if ent == "cubemain":
                         e["name"], e["source"] = f"Median recipe {e['row']}", "generated"
                     else:
-                        self.give(ent, e["row"], f"mxl_{ent}_{e['row']}", "fallback")
+                        self.give(ent, e["row"], f"{ent}_{e['row']}", "fallback")
 
     # ---- rewrite ----------------------------------------------------------------------------------------
+    def tc_item(self, cell: str) -> str:
+        """Treasure class item: the first decoder wrote item display names ("Gold (gld)"), sometimes quoted with
+        a modifier ('"Gold (gld),mul=2560"', D2R's own syntax is '"gld,mul=1280"'). Map the name to its code."""
+        quoted = len(cell) > 1 and cell[0] == cell[-1] == '"'
+        body = cell[1:-1] if quoted else cell
+        name, sep, rest = body.partition(",")
+        code = self.item_display.get(name, name)
+        body = code + sep + rest
+        return f'"{body}"' if quoted else body
+
     def rewrite(self, out: Path) -> tuple[Counter, dict]:
         replaced: Counter = Counter()
         unresolved: dict[str, set] = defaultdict(set)
@@ -443,12 +465,19 @@ class Resolver:
                 r[t.col(keycol)] = self.idmap[ent][k]["name"]
                 if idcol and idcol in t.header:
                     r[t.col(idcol)] = str(self.idmap[ent][k]["id"])
+        # The first decoder wrote 0 as blank; MonStatsEx is a required link, so blank means monstats2 row 0.
+        ms = self.tables["monstats"]
+        if "MonStatsEx" in ms.header:
+            ci = ms.col("MonStatsEx")
+            for r in ms.rows:
+                if not r[ci].strip():
+                    r[ci] = self.idmap["monstats2"][0]["name"]
         tc = self.tables.get("treasureclassex")
         if tc:
             for ci, cname in enumerate(tc.header):
                 if re.fullmatch(r"Item\d+", cname):
                     for r in tc.rows:
-                        r[ci] = self.item_display.get(r[ci], r[ci])
+                        r[ci] = self.tc_item(r[ci])
         for t in self.tables.values():
             write_tsv(out / f"{t.name}.txt", t.header, t.rows)
         return replaced, unresolved
