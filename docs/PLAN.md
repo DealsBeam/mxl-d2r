@@ -20,7 +20,9 @@ Median XL tables fit the 32,768-row limits (largest: cubemain 7,500, missiles 5,
 
 - [~] Sigma table schemas: tooling + structure for all 37 tables, 14 named or partly named. See [sigma-tables.md](sigma-tables.md)
 
-Remaining: finish Sigma field names (with Phase 3 triage), formula codec (fn5/fn7, remap IDs via idmap.json),
+- [x] `tools/formula.py`: all 17,116 formulas decoded from bytecode, 11,329 table cells rewritten with D2R names. See [formulas.md](formulas.md)
+
+Remaining: finish Sigma field names (with Phase 3 triage), link skills2code once skills2 is named,
 txt-migrate (1.13c -> D2R columns), tbl2json (`mxl:` namespace), validate/diff.
 
 ## Phase 2: Data port
