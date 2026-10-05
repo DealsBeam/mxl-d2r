@@ -7,8 +7,9 @@ Output: work/mod/data/local/lng/strings/*.json and strings-legacy/*.json (comple
 
 String IDs: string.tbl index, patchstring 10000 + index, expansionstring 20000 + index (what D2Sigma's tables
 and code use). Rules:
-  * Strings Median only looks up by ID have the throwaway key "x" or their own number as key; they get the
-    unique key "mxl_<id>". strings_idkeys.json maps every Median ID to its final key.
+  * Strings Median only looks up by ID share the throwaway key "x" (or none); they get the unique key
+    "mxl_<id>". Numeric keys ("115" = "Axe (1)") are unique and used by item namestr cells, so they stay.
+    strings_idkeys.json maps every Median ID to its final key.
   * A key in several tables: patchstring wins over expansionstring over string (1.13c lookup order).
   * Keys D2R already has are overridden (every occurrence, every file); new keys are appended to NEW_KEYS_FILE
     with IDs above D2R's highest. Native loading (no D2RLoader namespace), so table cells keep plain keys.
@@ -73,7 +74,7 @@ def load_median() -> tuple[dict[int, tuple[str, str]], dict[str, int]]:
 
 
 def final_key(sid: int, key: str) -> str:
-    return f"mxl_{sid}" if key in ("x", "") or key.isdigit() else key
+    return f"mxl_{sid}" if key in ("x", "") else key  # numeric keys stay: item namestr cells use them
 
 
 def main() -> int:
@@ -101,7 +102,7 @@ def main() -> int:
     report = ["# tbl2json report", "",
               f"- Median strings: {len(by_id)} (string {sum(1 for s in by_id if s < 10000)}, patchstring "
               f"{sum(1 for s in by_id if 10000 <= s < 20000)}, expansionstring {sum(1 for s in by_id if s >= 20000)})",
-              f"- Keys given an ID-based name (\"x\", empty or numeric): {sum(1 for k in idkeys.values() if k.startswith('mxl_'))}",
+              f"- Keys given an ID-based name (\"x\" or empty): {sum(1 for k in idkeys.values() if k.startswith('mxl_'))}",
               f"- Duplicate keys resolved (patch > expansion > string): {shadowed} entries shadowed",
               f"- Agreement with the first extraction: {agree}/{len(by_id)} strings identical",
               f"- Languages: {'enUS only' if args.english_only else 'English text in all 13 languages'}"]

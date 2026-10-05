@@ -100,8 +100,9 @@ def write_tsv(path: Path, header: list[str], rows: list[list[str]]) -> None:
 
 
 def data_rows(rows: list[list[str]]) -> list[list[str]]:
-    """Vanilla 1.13c files contain an 'Expansion' separator row that is not a record."""
-    return [r for r in rows if r and r[0] and r[0] != "Expansion"]
+    """Records of a table: every row except "Expansion" separator rows. Rows with an empty key ARE records
+    (monsounds, montype, the affix tables start with one); D2R's own ID columns confirm this rule."""
+    return [r for r in rows if r and any(c for c in r) and r[0] != "Expansion"]
 
 
 def slug(text: str) -> str:
@@ -229,8 +230,8 @@ class Resolver:
         for ent, (_p, tname, keycol, _idcol, indexed) in ENTITIES.items():
             if tname not in self.tables:
                 continue
-            # Grouped tables keep empty-key rows: monseq's first group has an empty name and counts as group 0.
-            rows_of = (lambda rows: [r for r in rows if r and (not r[0] or r[0] != "Expansion")]) if ent in GROUPED else data_rows
+            # (monseq's first group has an empty name and counts as group 0, like any empty-key record)
+            rows_of = data_rows
             vrows: list[str] = []
             if tname in self.vanilla_files:
                 vh, vr = read_tsv(self.vanilla_files[tname], "latin-1")
@@ -291,12 +292,34 @@ class Resolver:
         base = label if label.startswith("mxl_") else f"mxl_{slug(label)}"
         if base == "mxl_":
             return False
+        limit = self.key_limit(ent)
+        base = base[: limit - 4].rstrip("_")  # room for a "_NN" uniqueness suffix
         name, n = base, 2
         while name.lower() in self.taken[ent]:
             name, n = f"{base}_{n}", n + 1
         self.taken[ent].add(name.lower())
         e["name"], e["source"] = name, source
         return True
+
+    _limits: dict[str, int] = {}
+
+    def key_limit(self, ent: str) -> int:
+        """Maximum length of the entity's key column in D2R (data guide schema; 31 for missiles/objects)."""
+        if ent not in self._limits:
+            limit = 47
+            try:
+                import validate
+                schema = getattr(Resolver, "_schema", None) or validate.Schema()
+                Resolver._schema = schema
+                _p, tname, key, _i, _x = ENTITIES[ent]
+                f = schema.field(tname, D2R_KEY.get(ent, key)) or schema.field(tname, key)
+                typ = (f or {}).get("type", {})
+                if isinstance(typ, dict) and typ.get("type") == "text" and typ.get("dataLength"):
+                    limit = typ["dataLength"]
+            except (ImportError, OSError, ValueError):
+                pass
+            self._limits[ent] = limit
+        return self._limits[ent]
 
     def bare(self, ent: str, row: int) -> str:
         n = self.name(ent, row) or ""

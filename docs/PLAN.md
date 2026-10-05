@@ -20,11 +20,12 @@ Median XL tables fit the 32,768-row limits (largest: cubemain 7,500, missiles 5,
 - [~] Sigma table schemas: tooling + structure for all 37 tables, 14 named or partly named. See [sigma-tables.md](sigma-tables.md)
 - [x] `tools/formula.py`: all 17,116 formulas decoded from bytecode, 11,329 table cells rewritten with D2R names. See [formulas.md](formulas.md)
 - [x] `tools/txt_migrate.py`: all tables in D2R layout, merged with D2R's rows, both banks -> `work/mod/`. See [txt-migrate.md](txt-migrate.md)
-
 - [x] `tools/tbl2json.py`: 21,268 strings -> D2R JSON (native loading, both string folders). See [strings.md](strings.md)
 
-Remaining: validate (dangling references, compile with `d2rl compile`),
-finish Sigma field names (with Phase 3 triage), link skills2code once skills2 is named.
+- [x] `tools/validate.py` + `tools/build.py`: D2R-schema validation; 2 errors left (Median's own broken formulas). See [validation.md](validation.md)
+
+Remaining: finish Sigma field names (with Phase 3 triage), link skills2code once skills2 is named.
+Next: Phase 2 (install into D2R, `d2rl compile`, first boot).
 
 ## Phase 2: Data port
 Migrate 94 standard tables, `d2rl init` / `d2rl compile`, boot with `-txt`, enable extended saves.

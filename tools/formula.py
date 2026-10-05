@@ -372,7 +372,7 @@ def find_fields(table: str, ents, starts) -> dict[str, int]:
                 if struct.unpack_from("<I", rec, o)[0] in cand[t]:
                     votes[o] += 1
         full = sorted(o for o, v in votes.items() if v == tried)
-        if tried >= 2 and full:
+        if tried >= 1 and full:
             candidates.append((tried, col, full))
     # Columns with more evidence claim their offset first; a column whose rows happen to equal another
     # column's (e.g. prgcalc2 == prgcalc1) then takes its next fully agreeing offset.

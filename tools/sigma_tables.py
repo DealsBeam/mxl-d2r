@@ -68,8 +68,8 @@ def string_key(sid: int) -> str:
     if index >= len(keys):
         return f"#{sid}"
     key = keys[index]
-    # strings Median only looks up by ID ("x" / numeric keys) are renamed mxl_<id> by tools/tbl2json.py
-    return f"mxl_{sid}" if key in ("x", "") or key.isdigit() else key
+    # strings Median only looks up by ID (key "x" or empty) are renamed mxl_<id> by tools/tbl2json.py
+    return f"mxl_{sid}" if key in ("x", "") else key
 
 
 _ref_names: dict[str, list[str]] = {}
@@ -256,7 +256,7 @@ def cmd_decode(args) -> None:
             cells = [str(i)] + ([keys[i] if i < len(keys) else ""] if "parallel" in entry else [])
             cells += [cell(r, f) for f in fields]
             lines.append("\t".join(cells))
-        (out / f"{t}.txt").write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+        (out / f"{t}.txt").write_text("\r\n".join(lines) + "\r\n", encoding="utf-8", newline="")
     print(f"{len(schema)} tables -> {out}")
 
 

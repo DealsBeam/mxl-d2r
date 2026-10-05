@@ -67,7 +67,7 @@ CONSTANTS = {"itemtypes": {"MaxSocketsLevelThreshold1": "25", "MaxSocketsLevelTh
 # so item and treasure tables are Median-only. Dangling references are for the validator to report.
 REPLACE = {"uniqueitems", "setitems", "sets", "magicprefix", "magicsuffix", "automagic", "rareprefix", "raresuffix",
            "cubemain", "runes", "qualityitems", "lowqualityitems", "uniqueprefix", "uniquesuffix",
-           "uniqueappellation", "gamble", "monpreset", "weapons", "armor", "misc", "treasureclassex"}
+           "uniqueappellation", "gamble", "monpreset", "weapons", "armor", "misc", "treasureclassex", "hireling"}
 D2R_WINS = {"sounds", "soundenviron", "skillcalc", "misscalc", "playerclass", "plrtype", "storepage"}
 # (Median key column, D2R key column) where they differ: the .bin keeps the short code in the first column.
 KEY_PAIRS = {"playerclass": ("Player Class", "Code"), "storepage": ("Store Page", "Code")}
@@ -82,16 +82,28 @@ OBSOLETE = {"*": {"Beta", "Expansion", "eol", "EOL", "OpenBetaGfx", "Source Art"
 BINS = ROOT / "extract" / "mxl" / "data" / "global" / "excel"
 
 
-def automap_level_names(mh: list[str], mrows: list[list[str]], d2r_rows: list[list[str]], dh: list[str]):
-    """automap.bin stores LevelName as a level-type number (first int of each 44-byte record), which the first
-    decoder lost. D2R's automap names are its lvltypes names reformatted: "Act 1 - Town" -> "1 Town" (33 of
-    35 match; "5 Ice" is "Act 5 - Ice Caves"). Median's new level types have no such name yet.
-    Returns (names per Median row, unmapped level-type numbers)."""
+def decode_automap(d2r_rows: list[list[str]], dh: list[str]):
+    """Median's automap straight from automap.bin. The first decoder's text does not line up with the records
+    (5,118 lines incl. 32 blank ones for 5,086 records), so it is not used. Record (44 bytes): i32 level type
+    (+12 pad), char TileName[8] @16, i8 Style @24, i8 StartSequence @25, i8 EndSequence @26, pad, i32 Cel1-4 @28.
+    The layout reproduces D2R's own first row ("1 Town", fl, 0, 1, 46, cels 0-3).
+    LevelName: D2R's automap names are its lvltypes names reformatted: "Act 1 - Town" -> "1 Town" ("5 Ice" is
+    "Act 5 - Ice Caves"). D2R's schema says level types are fixed and cannot be added, so Median's new ones
+    keep mxl_lvltype_<n> and are reported.
+    Returns (header, rows, unmapped level-type numbers)."""
     import struct
     b = (BINS / "automap.bin").read_bytes()
     n = struct.unpack_from("<I", b)[0]
     size = (len(b) - 4) // n
-    types = [struct.unpack_from("<i", b, 4 + r * size)[0] for r in range(n)]
+    types, rows = [], []
+    for r in range(n):
+        o = 4 + r * size
+        t = struct.unpack_from("<i", b, o)[0]
+        tile = b[o + 16:o + 24].split(b"\0", 1)[0].decode("latin-1")
+        style, start, end = struct.unpack_from("<bbb", b, o + 24)
+        cels = struct.unpack_from("<4i", b, o + 28)
+        types.append(t)
+        rows.append([str(t), tile, str(style), str(start), str(end), *map(str, cels)])
     known = {r[dh.index("LevelName")] for r in d2r_rows}
     lh, lrows = read_tsv(D2R / "base" / "lvltypes.txt")
     mapping = {}
@@ -104,7 +116,23 @@ def automap_level_names(mh: list[str], mrows: list[list[str]], d2r_rows: list[li
         if name in known:
             mapping[int(r[lh.index("Id")])] = name
     unmapped = sorted({t for t in types if t not in mapping})
-    return [mapping.get(t, f"mxl_lvltype_{t}") for t in types], unmapped
+    for t, row in zip(types, rows):
+        row[0] = mapping.get(t, f"mxl_lvltype_{t}")
+    header = ["LevelName", "TileName", "Style", "StartSequence", "EndSequence", "Cel1", "Cel2", "Cel3", "Cel4"]
+    return header, rows, unmapped
+
+
+def hiredesc_keys() -> dict[str, str]:
+    """hiredesc code (rs1, dm1, ...) -> string key from the Sigma table hiredescext (one string per hiredesc row).
+    D2R's hireling HireDesc column is a string key (e.g. skillname103), not a hiredesc code."""
+    codes = [l.split("\t", 1)[0] for l in (NAMED / "hiredesc.txt").read_text("utf-8").splitlines()[1:]]
+    ext = ROOT / "work" / "sigma" / "hiredescext.txt"
+    if not ext.exists():
+        return {}
+    lines = ext.read_text("utf-8").splitlines()
+    col = lines[0].split("\t").index("NameStr")
+    keys = [(l.split("\t") + [""] * (col + 1))[col] for l in lines[1:]]
+    return {c.strip(): k for c, k in zip(codes, keys) if c.strip() and k}
 KEYS = {"weapons": "code", "armor": "code", "misc": "code", "itemtypes": "Code", "treasureclassex": "Treasure Class",
         "objects": "Name"}
 ID_COMMENT_COLUMNS = {"*id", "*hcidx", "*index"}
@@ -141,6 +169,7 @@ class Migrator:
         self.report: list[str] = []
         self.dropped: dict[str, Counter] = defaultdict(Counter)
         self.overflow: dict[str, tuple[list[str], int]] = {}
+        self.dangling: dict[str, int] = defaultdict(int)
 
     def kind(self, table: str) -> str:
         if table in REPLACE:
@@ -151,6 +180,67 @@ class Migrator:
         if ent and ent[4] and table in self.idmap:
             return "indexed"
         return "keyed"
+
+    _schema = None
+
+    def refs_into_replaced(self, table: str, dh: list[str]) -> dict[str, tuple[str, str]]:
+        """D2R columns that are references (per D2R's data guide) into a table Median replaces wholesale:
+        column -> (target table, target column)."""
+        if Migrator._schema is None:
+            import validate
+            Migrator._schema = validate.Schema()
+        out = {}
+        for c in dh:
+            f = Migrator._schema.field(table, c)
+            typ = (f or {}).get("type", {})
+            if isinstance(typ, dict) and typ.get("type") == "reference" and str(typ.get("file", "")).lower() in REPLACE:
+                out[c] = (typ["file"].lower(), typ.get("field", ""))
+        return out
+
+    _median_values: dict[tuple[str, str], set[str]] = {}
+
+    def drop_dangling(self, row: list[str], dh: list[str], dead_refs: dict, table: str, row_id: int) -> list[str]:
+        """A row kept from D2R (e.g. RotW's Colossal monsters) may point into a table Median replaced; such
+        references are emptied when Median's version has no such entry."""
+        row = list(row)
+        for c, (tfile, tcol) in dead_refs.items():
+            v = row[dh.index(c)]
+            if not v:
+                continue
+            key = (tfile, tcol)
+            if key not in self._median_values:
+                h, rows = read_tsv(NAMED / f"{tfile}.txt") if (NAMED / f"{tfile}.txt").exists() else ([], [])
+                i = next((k for k, x in enumerate(h) if x.lower() == tcol.lower()), None)
+                self._median_values[key] = {r[i].rstrip() for r in rows} if i is not None else set()
+            if v not in self._median_values[key]:
+                row[dh.index(c)] = ""
+                self.dangling[table] += 1
+        return row
+
+    def typed_columns(self, table: str, dh: list[str]) -> tuple[set[str], set[str]]:
+        """(string-key columns, boolean columns) per D2R's data guide."""
+        self.refs_into_replaced(table, [])  # loads the schema
+        strings, bools = set(), set()
+        for c in dh:
+            f = Migrator._schema.field(table, c)
+            typ = (f or {}).get("type", {})
+            kind = typ.get("type") if isinstance(typ, dict) else typ
+            if kind == "string":
+                strings.add(c)
+            elif kind == "boolean":
+                bools.add(c)
+            elif kind == "int":
+                self._int_cols.setdefault(table, set()).add(c)
+        return strings, bools
+
+    _int_cols: dict[str, set[str]] = {}
+
+    @property
+    def idkeys(self) -> dict[str, str]:
+        if not hasattr(self, "_idkeys"):
+            p = OUT / "strings_idkeys.json"
+            self._idkeys = {k: v for k, v in json.loads(p.read_text("utf-8")).items() if v.startswith("mxl_")} if p.exists() else {}
+        return self._idkeys
 
     def column_map(self, table: str, mh: list[str], dh: list[str]) -> dict[str, str]:
         """D2R column -> Median column."""
@@ -176,11 +266,15 @@ class Migrator:
         mrows = [[c.rstrip() for c in r] for r in mrows]  # .bin codes are space-padded ("gps ")
         if table == "automap":
             dh0, dr0 = read_tsv(D2R / "base" / "automap.txt")
-            names, unmapped = automap_level_names(mh, mrows, [r for r in dr0 if is_record(r)], dh0)
-            for r, nm in zip(mrows, names):
-                r[mh.index("LevelName")] = nm
-            self.report.append(f"\nautomap: level-type numbers {unmapped} have no D2R automap name (Median's new "
-                               f"level types); their rows use mxl_lvltype_<n> and need engine support.\n")
+            mh, mrows, unmapped = decode_automap([r for r in dr0 if is_record(r)], dh0)
+            self.report.append(f"\nautomap: decoded from automap.bin ({len(mrows)} records). Level-type numbers "
+                               f"{unmapped} are Median's new level types; D2R's level types are fixed, so their "
+                               f"rows use mxl_lvltype_<n> and need engine support.\n")
+        if table == "hireling" and "HireDesc" in mh:
+            hk = hiredesc_keys()
+            hi = mh.index("HireDesc")
+            for r in mrows:
+                r[hi] = hk.get(r[hi], r[hi])
         if table == "missiles" and "LevRange" in mh and "Range" in mh:
             # D2R merged LevRange into Range (now an expression): range + levrange * level
             ri, li = mh.index("Range"), mh.index("LevRange")
@@ -202,17 +296,34 @@ class Migrator:
             di = {c: i for i, c in enumerate(dh)}
             consts = CONSTANTS.get(table, {})
 
+            dead_refs = self.refs_into_replaced(table, dh)
+            string_cols, bool_cols = self.typed_columns(table, dh)
+
+            def median_value(dc: str, v: str) -> str:
+                # string keys Median only had as numbers are mxl_<id> after tools/tbl2json.py
+                if dc in string_cols and v.isdigit() and v in self.idkeys:
+                    return self.idkeys[v]
+                # the first decoder wrote a few small numbers as raw control characters ("")
+                if v and dc in self._int_cols.get(table, ()) and len(v) == 1 and ord(v) < 32:
+                    return str(ord(v))
+                # D2R booleans are 0/1; 1.13c sometimes stored other non-zero flags
+                if dc in bool_cols and re.fullmatch(r"-?\d+", v) and v not in ("0", "1"):
+                    return "1"
+                return v
+
             def convert(mrow: list[str], match: list[str] | None, row_id: int | None) -> list[str]:
                 out = []
                 for dc in dh:
                     if dc in cmap:
-                        out.append(mrow[mi[cmap[dc]]])
+                        out.append(median_value(dc, mrow[mi[cmap[dc]]]))
                     elif dc in consts:
                         out.append(consts[dc])
                     elif dc.lower() in ID_COMMENT_COLUMNS and row_id is not None:
                         out.append(str(row_id))
                     elif match is not None:
-                        out.append(match[di[dc]])
+                        # D2R-only columns pointing into a table Median replaces (e.g. monstats'
+                        # TreasureClassDesecrated* -> D2R treasure classes) would dangle: leave them empty.
+                        out.append("" if dc in dead_refs else match[di[dc]])
                     else:
                         out.append("")
                 return out
@@ -231,11 +342,10 @@ class Migrator:
                 by_id = {}
                 key = self.entities[table][2]
                 grouped = table in ("monseq",)
-                if grouped:  # several Median rows per entry: keep them together, in Median order
-                    out_rows = []
-                    for r in mrows:
-                        out_rows.append(convert(r, None, None))
-                    rows = out_rows
+                if grouped:  # several Median rows per entry: Median's groups in order, then D2R's other groups
+                    rows = [convert(r, None, None) for r in mrows]
+                    median_groups = {r[mi[key]] for r in mrows}
+                    rows += [r for r in drows if r[di[key]] not in median_groups]
                 else:
                     for e, r in zip(entries, mrows):
                         by_id[e["id"]] = (e, r)
@@ -246,7 +356,7 @@ class Migrator:
                             match = d2r_by_id[i] if e["source"].startswith("vanilla") and i < len(d2r_by_id) else None
                             rows.append(convert(r, match, i))
                         elif i < len(d2r_by_id):
-                            rows.append(d2r_by_id[i])
+                            rows.append(self.drop_dangling(d2r_by_id[i], dh, dead_refs, table, i))
                         else:
                             rows.append(convert([""] * len(mh), None, i))  # gap (should not happen)
                             self.report.append(f"| {table} | {bank} | gap at ID {i} | | | |")
@@ -300,6 +410,9 @@ def main() -> int:
                  "|---|---|---|---|---|---|"]
     for t in tables:
         m.migrate(t)
+    if m.dangling:
+        m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]
+        m.report += [f"- {t}: {n} cells" for t, n in sorted(m.dangling.items())]
     m.report += ["", "## Overflow: Median values with no D2R column (kept in work/mod/overflow/<table>.txt)", ""]
     for t, (cols, n) in sorted(m.overflow.items()):
         m.report.append(f"- **{t}** ({n} rows): " + ", ".join(f"{c} ({m.dropped[t][c]})" for c in cols))

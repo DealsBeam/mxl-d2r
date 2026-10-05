@@ -87,3 +87,8 @@ Result: 271 reference columns, ~85,000 references rewritten, 0 unresolved, all I
 
 Not yet remapped: the compiled formulas (`*code.txt`), which reference stats, skills and states by number.
 That is the formula codec's job, using `idmap.json`.
+
+## Row counting (verified against D2R's own ID columns)
+Every row is a record except "Expansion" separator rows; rows with an empty key are records too (monsounds,
+montype and the affix tables start with one). `skills *Id`, `monstats *hcIdx`, `overlay *ID`, ... all match this
+rule. An earlier version skipped empty-key rows and shifted monsounds by one; fixed.

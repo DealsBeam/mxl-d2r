@@ -6,8 +6,9 @@ Tool: `tools/tbl2json.py` (reads Median's `.tbl` files directly; output in `work
   expansionstring 20000 + index (what D2Sigma's code and tables use; see docs/sigma-tables.md).
 - Text is UTF-8 inside the `.tbl` files. The parse agrees with the first extraction on 21,267/21,268 strings
   (the one difference contains a literal backslash-n that the extraction's text format cannot distinguish).
-- **ID-only strings:** 1,946 strings carry the throwaway key `x`, an empty key, or their own number. Median looks
-  them up by ID only (no table cell references them). They get the key `mxl_<id>`;
+- **ID-only strings:** 532 strings carry the throwaway key `x` (or none). Median looks them up by ID only. They
+  get the key `mxl_<id>`. The 1,414 numeric keys (`115` = "Axe (1)") are unique and used by item `namestr`
+  cells, so they stay as they are;
   `work/mod/strings_idkeys.json` maps every Median ID to its final key (for Sigma tables and plugins).
 - **Duplicate keys:** 377 entries are shadowed; patchstring wins over expansionstring over string (1.13c order).
 - **Loading:** native D2R loading (no D2RLoader namespace), so table cells keep plain keys. Output files are
