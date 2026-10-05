@@ -28,6 +28,8 @@ Remaining: finish Sigma field names (with Phase 3 triage), link skills2code once
 Next: Phase 2 (install into D2R, `d2rl compile`, first boot).
 
 ## Phase 2: Data port
+- [x] `tools/install_mod.py`: mod installed at `<game>/mods/MedianXL` (folder MPQ, own save folder, extended saves)
+- [ ] `d2rl compile MedianXL` from the developer console; first boot (owner: user)
 Migrate 94 standard tables, `d2rl init` / `d2rl compile`, boot with `-txt`, enable extended saves.
 
 ## Phase 3: Triage D2Sigma
