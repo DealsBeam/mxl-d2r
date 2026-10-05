@@ -27,6 +27,7 @@ Usage: python tools/txt_migrate.py [--table skills ...]
 import argparse
 import json
 import re
+import struct
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -301,6 +302,54 @@ class Migrator:
             if bank == "base" and missing:
                 self.report.append(f"\nlvlmaze: {len(missing)} maze levels had no lvlmaze row; added copies of a "
                                    f"same-LevelType row for levels {', '.join(missing)}")
+
+    def vendor_stock(self) -> None:
+        """Shops. Median leaves every item's vendor columns empty; D2Sigma stocks vendors from npcstores.bin, 52-byte
+        rows (fields read from the data, docs/vendors.md):
+          +0 u16 NPC (monstats row)   +4 char[4] item code (space padded)   +8 u8 always in stock (consumables)
+          +16 u8 Min  +17 u8 Max  +19 u8 MagicLvl  +24 u8 MagicMin  +25 u8 MagicMax   (equipment)
+          +40/+41 u8 flags used only by Atma, Geglash and Cain on sacred items (not a shop; not converted)
+        These become D2R's per-item columns <Vendor>Min/Max/MagicMin/MagicMax/MagicLvl; always-in-stock rows
+        get Min = Max = 1 like D2R's potions (PermStoreItem stays as Median set it)."""
+        vendor = {"charsi": "Charsi", "gheed": "Gheed", "akara": "Akara", "fara": "Fara", "lysander": "Lysander",
+                  "drognan": "Drognan", "hratli": "Hratli", "alkor": "Alkor", "ormus": "Ormus", "elzix": "Elzix",
+                  "asheara": "Asheara", "cain2": "Cain", "halbu": "Halbu", "jamella": "Jamella", "larzuk": "Larzuk",
+                  "drehya": "Anya", "malah": "Malah"}
+        data = (ROOT / "extract" / "mxl" / "data" / "global" / "excel" / "npcstores.bin").read_bytes()
+        count = struct.unpack_from("<I", data)[0]
+        mh, mrows = read_tsv(NAMED / "monstats.txt")
+        stock: dict[str, dict[str, list[str]]] = defaultdict(dict)  # item code -> column -> value
+        skipped, per_npc = Counter(), Counter()
+        for i in range(count):
+            row = data[4 + 52 * i:4 + 52 * (i + 1)]
+            npc = mrows[struct.unpack_from("<H", row)[0]][0]
+            code = row[4:8].decode("latin-1").strip()
+            prefix = vendor.get(npc)
+            if row[8]:
+                values = (1, 1, 0, 0, 0)
+            else:
+                values = (row[16], row[17], row[24], row[25], row[19])
+            if prefix is None or not any(values):
+                skipped[npc] += 1
+                continue
+            for col, v in zip(("Min", "Max", "MagicMin", "MagicMax", "MagicLvl"), values):
+                stock[code][prefix + col] = str(v)
+            per_npc[prefix] += 1
+        for bank in ("base", ""):
+            for t in ("weapons", "armor", "misc"):
+                p = OUT / "data" / "global" / "excel" / bank / f"{t}.txt"
+                if not p.exists():
+                    continue
+                h, rows = read_tsv(p)
+                ci = h.index("code")
+                for r in rows:
+                    for col, v in stock.get(r[ci], {}).items():
+                        if col in h:
+                            r[h.index(col)] = v
+                write_tsv(p, h, rows)
+        self.report.append(f"\nvendors: {sum(per_npc.values())} npcstores rows -> item vendor columns "
+                           f"({', '.join(f'{k} {v}' for k, v in sorted(per_npc.items()))}); not shops, skipped: "
+                           f"{', '.join(f'{k} {v}' for k, v in sorted(skipped.items()))}")
 
     def skill_rules(self) -> None:
         """Interim stand-ins for skill rules D2Sigma enforced in code (until the plugin does it; docs/bugs.md):
@@ -625,6 +674,7 @@ def main() -> int:
     m.claim_mazes()
     m.fill_skilldesc()
     m.skill_rules()
+    m.vendor_stock()
     if m.dangling:
         m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]
         m.report += [f"- {t}: {n} cells" for t, n in sorted(m.dangling.items())]

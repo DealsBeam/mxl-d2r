@@ -11,5 +11,5 @@ Found while play-testing the port. "Interim" fixes are data stand-ins until the 
 | 5 | Keybinds lost on exit | interim, retest | Likely the skills could not be bound (rightskill unset on 448 of 470 tree skills: D2Sigma's picker ignored it) or were not owned (#4) |
 | 6 | Town portal skill does nothing | open (srvdofunc 113 did not help) | srvdofunc 155 is D2Sigma's; set to D2R's 113. 185 skills use D2Sigma do-functions 153-171 and need the plugin |
 | 7 | NPC shows random text (e.g. "Arcane Ape") on first talk | open | The text is new Median string `ArcaneApe` (id 262189 = first new id + 10408). Not an id collision with D2R's json. Look at how D2R picks the intro/gossip string |
-| 8 | Vendors sell the wrong items (Gheed sells mystic orbs) | open | Median's shops come from D2Sigma's `npcstores` table (847 rows: NPC monstats id, item code, ...; fields not decoded yet). Convert to D2R's per-item vendor columns (`<Npc>Min/Max/MagicMin...`) |
+| 8 | Vendors sell the wrong items (Gheed sells mystic orbs) | fixed, retest | No item had vendor columns (Median stocks shops from D2Sigma's npcstores.bin). Converted: docs/vendors.md. Gheed does sell mystic orbs in Median, plus 22 equipment items |
 | 9 | Skill tooltips assert (`stringIndex1 != strdummy`) | open | Median's descriptions are built by D2Sigma (plugin work) |
