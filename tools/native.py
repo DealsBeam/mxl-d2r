@@ -86,6 +86,45 @@ def extract(handle: wintypes.HANDLE, name: str, dest: str | Path) -> bool:
     return bool(storm.SFileExtractFile(handle, name.encode("mbcs"), str(dest).encode("mbcs"), 0))
 
 
+casc = _load("CascLib")
+# CascLib is built ANSI (CASC_UNICODE off).
+casc.CascOpenStorage.argtypes = [ctypes.c_char_p, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+casc.CascOpenStorage.restype = wintypes.BOOL
+casc.CascCloseStorage.argtypes = [wintypes.HANDLE]
+casc.CascCloseStorage.restype = wintypes.BOOL
+casc.CascOpenFile.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+casc.CascOpenFile.restype = wintypes.BOOL
+casc.CascGetFileSize.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+casc.CascGetFileSize.restype = wintypes.DWORD
+casc.CascReadFile.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+casc.CascReadFile.restype = wintypes.BOOL
+casc.CascCloseFile.argtypes = [wintypes.HANDLE]
+casc.CascCloseFile.restype = wintypes.BOOL
+
+
+def open_casc(game_dir: str | Path) -> wintypes.HANDLE:
+    handle = wintypes.HANDLE()
+    if not casc.CascOpenStorage(str(game_dir).encode("mbcs"), 0, ctypes.byref(handle)):
+        raise OSError(ctypes.GetLastError(), f"CascOpenStorage failed: {game_dir}")
+    return handle
+
+
+def casc_read(storage: wintypes.HANDLE, name: str) -> bytes:
+    """Read a whole file, e.g. 'data:data/global/excel/skills.txt'."""
+    fh = wintypes.HANDLE()
+    if not casc.CascOpenFile(storage, name.encode("mbcs"), 0, 0, ctypes.byref(fh)):
+        raise FileNotFoundError(ctypes.GetLastError(), name)
+    try:
+        size = casc.CascGetFileSize(fh, None)
+        buf = ctypes.create_string_buffer(size)
+        read = wintypes.DWORD()
+        if not casc.CascReadFile(fh, buf, size, ctypes.byref(read)):
+            raise OSError(ctypes.GetLastError(), f"CascReadFile failed: {name}")
+        return buf.raw[: read.value]
+    finally:
+        casc.CascCloseFile(fh)
+
+
 def open_mpq(path: str | Path) -> wintypes.HANDLE:
     handle = wintypes.HANDLE()
     if not storm.SFileOpenArchive(str(path).encode("mbcs"), 0, STREAM_FLAG_READ_ONLY, ctypes.byref(handle)):
