@@ -82,6 +82,16 @@ D2R_KEY = {"objects": "Name", "shrines": "Name"}
 GROUPED = {"monseq"}
 # Tables whose key is the row number itself (monlvl: one row per monster level).
 NUMERIC_KEY = {"monlvl"}
+# (table, columns) D2R reads as row numbers of an entity whose IDs can shift (see docs/id-mapping.md)
+NUMERIC_REFS = {
+    ("levels", ("Depend", *(f"Vis{i}" for i in range(8)))): "levels",
+    ("lvlprest", ("LevelId",)): "levels",
+    ("lvlmaze", ("Level",)): "levels",
+    ("shrines", ("LevelMin",)): "levels",
+    ("weapons", ("missiletype",)): "missiles",
+    ("misc", ("missiletype",)): "missiles",
+    ("armor", ("missiletype",)): "missiles",
+}
 PREFIX_ENTITY = {p: e for e, (p, *_r) in ENTITIES.items() if e != "monstats2" and p}
 # Columns whose "ms" placeholders point at monstats2 rows instead of monstats rows.
 MONSTATS2_COLUMNS = {("monstats", "MonStatsEx"), ("monstats2", "Id")}
@@ -475,6 +485,23 @@ class Resolver:
                     replaced[ent] += 1
                 else:
                     unresolved[ent].add(f"{tname}.{c}={r[ci]}")
+        # Columns D2R reads as row numbers (data guide: int fields citing another table's Id/index). Median's new
+        # rows moved after D2R's, so these numbers follow the ID map; placeholders above only covered names.
+        for (tname, cols), ent in NUMERIC_REFS.items():
+            t = self.tables.get(tname)
+            if not t:
+                continue
+            for c in cols:
+                if c not in t.header:
+                    continue
+                ci = t.col(c)
+                for r in t.rows:
+                    v = r[ci].strip()
+                    if v.isdigit() and 0 < int(v) < len(self.idmap[ent]):
+                        new = str(self.idmap[ent][int(v)]["id"])
+                        if new != v:
+                            r[ci] = new
+                            replaced[f"{ent} (numeric)"] += 1
         for ent, (_p, tname, keycol, idcol, _x) in ENTITIES.items():
             if tname not in self.tables:
                 continue

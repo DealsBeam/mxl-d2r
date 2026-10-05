@@ -343,6 +343,16 @@ class Validator:
             for r in lrows:
                 if r[lh.index("DrlgType")] == "2" and r[lh.index("Id")] not in claimed:
                     self.add("error", "levels", "DrlgType", "preset level that no lvlprest row claims", r[0], r[lh.index("Id")])
+        if lv:  # Depend places a level relative to another; a loop recurses until the stack overflows
+            lh, lrows = lv
+            dep = {r[lh.index("Id")]: r[lh.index("Depend")] for r in lrows}
+            for start in dep:
+                seen, u = [], start
+                while dep.get(u, "") not in ("", "0") and u not in seen:
+                    seen.append(u)
+                    u = dep[u]
+                if u == start and seen:
+                    self.add("error", "levels", "Depend", "Depend chain loops back to this level", start, " -> ".join(seen))
         lm = d.table("lvlmaze")
         if lv and lm:
             (lh, lrows), (mh, mrows) = lv, lm
