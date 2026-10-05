@@ -18,7 +18,9 @@ Median XL tables fit the 32,768-row limits (largest: cubemain 7,500, missiles 5,
 - [x] `tools/casc_extract.py`: D2R 93847 baseline -> `extract/d2r/93847/` (1,072 files). See [d2r-baseline.md](d2r-baseline.md)
 - [x] `tools/mxl_names.py`: placeholder names resolved, Median rows renumbered after D2R's -> `work/named/`. See [id-mapping.md](id-mapping.md)
 
-Remaining: Sigma table schemas, formula codec (fn5/fn7, remap IDs via idmap.json),
+- [~] Sigma table schemas: tooling + structure for all 37 tables, 14 named or partly named. See [sigma-tables.md](sigma-tables.md)
+
+Remaining: finish Sigma field names (with Phase 3 triage), formula codec (fn5/fn7, remap IDs via idmap.json),
 txt-migrate (1.13c -> D2R columns), tbl2json (`mxl:` namespace), validate/diff.
 
 ## Phase 2: Data port

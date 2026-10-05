@@ -12,12 +12,13 @@
    {
     "off": 0,
     "type": "u16",
-    "name": "u16_0x00"
+    "name": "index"
    },
    {
     "off": 2,
     "type": "str128",
-    "name": "str128_0x02"
+    "name": "path",
+    "note": "DC6 cell file, e.g. game\\landscape\u0007rreat-summit"
    }
   ]
  },
@@ -97,7 +98,26 @@
   "rows": 5,
   "array": "0x10",
   "count": "0xd0",
-  "fields": []
+  "fields": [
+   {
+    "off": 0,
+    "type": "u16",
+    "name": "u16_0x00"
+   },
+   {
+    "off": 2,
+    "type": "u16",
+    "name": "u16_0x02",
+    "note": "0/1 flag returned for the current mercenary (FUN_100fc9d0)"
+   },
+   {
+    "off": 4,
+    "type": "i8",
+    "name": "i8_0x04",
+    "note": "used by the mercenary equip check (FUN_1007e470, D2Items.cpp)"
+   }
+  ],
+  "note": "Mercenary classes; read via FUN_100bdc70 with the hireling index from FUN_10068930."
  },
  "hireclassnames": {
   "rowsize": 2,
@@ -135,17 +155,18 @@
    {
     "off": 0,
     "type": "str32",
-    "name": "str32_0x00"
+    "name": "name"
    },
    {
     "off": 32,
-    "type": "u16",
-    "name": "u16_0x20"
+    "type": "strid",
+    "name": "title",
+    "note": "5382 checked as 'none' (FUN_100f3cb0, FUN_100f4160)"
    },
    {
     "off": 34,
-    "type": "u16",
-    "name": "u16_0x22"
+    "type": "strid",
+    "name": "text1"
    },
    {
     "off": 36,
@@ -155,17 +176,17 @@
    {
     "off": 38,
     "type": "u16",
-    "name": "u16_0x26"
+    "name": "x1"
    },
    {
     "off": 40,
     "type": "u16",
-    "name": "u16_0x28"
+    "name": "y1"
    },
    {
     "off": 42,
-    "type": "u16",
-    "name": "u16_0x2a"
+    "type": "strid",
+    "name": "text2"
    },
    {
     "off": 44,
@@ -175,17 +196,17 @@
    {
     "off": 46,
     "type": "u16",
-    "name": "u16_0x2e"
+    "name": "x2"
    },
    {
     "off": 48,
     "type": "u16",
-    "name": "u16_0x30"
+    "name": "y2"
    },
    {
     "off": 50,
-    "type": "u16",
-    "name": "u16_0x32"
+    "type": "strid",
+    "name": "text3"
    },
    {
     "off": 52,
@@ -195,17 +216,17 @@
    {
     "off": 54,
     "type": "u16",
-    "name": "u16_0x36"
+    "name": "x3"
    },
    {
     "off": 56,
     "type": "u16",
-    "name": "u16_0x38"
+    "name": "y3"
    },
    {
     "off": 58,
-    "type": "u16",
-    "name": "u16_0x3a"
+    "type": "strid",
+    "name": "text4"
    },
    {
     "off": 60,
@@ -224,8 +245,8 @@
    },
    {
     "off": 66,
-    "type": "u16",
-    "name": "u16_0x42"
+    "type": "strid",
+    "name": "text5"
    },
    {
     "off": 68,
@@ -242,7 +263,8 @@
     "type": "u16",
     "name": "u16_0x48"
    }
-  ]
+  ],
+  "note": "Help panels shown by the UI (e.g. usage_catalyst_disenchant); read via FUN_10043cd0."
  },
  "infographicsnames": {
   "rowsize": 2,
@@ -288,61 +310,101 @@
   "count": "0xf0",
   "fields": [
    {
-    "off": 0,
-    "type": "i32",
-    "name": "i32_0x00"
-   },
-   {
-    "off": 4,
-    "type": "i32",
-    "name": "i32_0x04"
+    "off": 6,
+    "type": "i16",
+    "name": "SoundNormalA",
+    "note": "sound id for normal monsters (-1 = none); played via D2Client sound function (FUN_1008c380)",
+    "ref": "sounds"
    },
    {
     "off": 8,
-    "type": "i32",
-    "name": "i32_0x08"
+    "type": "i16",
+    "name": "SoundNormalB",
+    "note": "",
+    "ref": "sounds"
+   },
+   {
+    "off": 10,
+    "type": "i16",
+    "name": "SoundEliteA",
+    "note": "used when the monster has type flag 2 or 8 (champion/unique)",
+    "ref": "sounds"
    },
    {
     "off": 12,
-    "type": "i32",
-    "name": "i32_0x0c"
+    "type": "i16",
+    "name": "SoundEliteB",
+    "note": "",
+    "ref": "sounds"
    },
    {
-    "off": 16,
-    "type": "i32",
-    "name": "i32_0x10"
+    "off": 14,
+    "type": "u8",
+    "name": "u8_0x0e",
+    "note": "compared with a unit field by FUN_100bf6c0 before the two calls below (FUN_1008c2f0)"
    },
    {
-    "off": 20,
-    "type": "i32",
-    "name": "i32_0x14"
+    "off": 15,
+    "type": "i16",
+    "name": "u16_0x0f",
+    "note": "-1 = none; passed to FUN_1008b070 (FUN_1008c2f0, D2Monsters.cpp)"
    },
    {
-    "off": 24,
-    "type": "i32",
-    "name": "i32_0x18"
+    "off": 17,
+    "type": "i16",
+    "name": "u16_0x11",
+    "note": "-1 = none; passed to FUN_1008b070"
    },
    {
-    "off": 28,
-    "type": "i32",
-    "name": "i32_0x1c"
+    "off": 19,
+    "type": "u16",
+    "name": "u16_0x13",
+    "note": "returned to the lifebar and mercenary UI (D2Lifebars.cpp, ui/Mercenary.cpp)"
+   },
+   {
+    "off": 21,
+    "type": "i16",
+    "name": "Achievement",
+    "note": "non-zero marks an achievement-relevant monster (D2Achievements.cpp)"
+   },
+   {
+    "off": 31,
+    "type": "u8",
+    "name": "u8_0x1f",
+    "note": "passed alongside the sound calls"
    },
    {
     "off": 32,
-    "type": "i32",
-    "name": "i32_0x20"
+    "type": "u8",
+    "name": "u8_0x20",
+    "note": "FUN_100bf430 returns true when 0"
    },
    {
-    "off": 36,
+    "off": 33,
     "type": "i32",
-    "name": "i32_0x24"
+    "name": "CurrencyType",
+    "note": "currency granted on kill (D2Currency.cpp FUN_1005b620); 0 = none"
    },
    {
-    "off": 40,
+    "off": 37,
     "type": "i32",
-    "name": "i32_0x28"
+    "name": "CurrencyAmount",
+    "note": ""
+   },
+   {
+    "off": 41,
+    "type": "u8",
+    "name": "CurrencyUnowned",
+    "note": "0 = credited to the killer's player, else to no specific owner"
+   },
+   {
+    "off": 42,
+    "type": "i16",
+    "name": "u16_0x2a",
+    "note": "returned (min 0) by FUN_10068930 (D2Hirelings.cpp)"
    }
-  ]
+  ],
+  "note": "Extends monstats row for row (3,895 of 3,901 rows). Read via FUN_100be200 (D2Monsters.cpp, D2Lifebars.cpp, D2Currency.cpp, D2Hirelings.cpp, D2Achievements.cpp, ui/Mercenary.cpp)."
  },
  "monumodexp": {
   "rowsize": 2,
@@ -973,7 +1035,32 @@
   "parallel": "objects",
   "array": "0x58",
   "count": "0x10c",
-  "fields": []
+  "fields": [
+   {
+    "off": 4,
+    "type": "u16",
+    "name": "u16_0x04"
+   },
+   {
+    "off": 6,
+    "type": "i32",
+    "name": "CostCurrency",
+    "note": "operating the object costs currency when both cost fields are > 0"
+   },
+   {
+    "off": 10,
+    "type": "i32",
+    "name": "CostAmount",
+    "note": "passed to FUN_1005b750 (D2Currency)"
+   },
+   {
+    "off": 14,
+    "type": "u8",
+    "name": "CostUnowned",
+    "note": "0 = charge the operating player"
+   }
+  ],
+  "note": "Extends objects row for row; only one row is set. Read in D2ObjectFn.cpp (FUN_10096c30) before an object's operate function runs."
  },
  "objpreset": {
   "rowsize": 4,
@@ -1048,7 +1135,32 @@
   "rows": 10,
   "array": "0x68",
   "count": "0x11c",
-  "fields": []
+  "fields": [
+   {
+    "off": 0,
+    "type": "u8",
+    "name": "u8_0x00",
+    "note": "returned per quality by FUN_1007e0f0 (D2ItemGeneration.cpp)"
+   },
+   {
+    "off": 1,
+    "type": "u8",
+    "name": "u8_0x01",
+    "note": "checked in the runeword code (D2Runeword.cpp FUN_100a2ae0)"
+   },
+   {
+    "off": 2,
+    "type": "u8",
+    "name": "u8_0x02"
+   },
+   {
+    "off": 4,
+    "type": "u8",
+    "name": "u8_0x04",
+    "note": "selects the roll path in FUN_1007e240 (D2ItemGeneration.cpp)"
+   }
+  ],
+  "note": "One row per item quality 0..9 (low, normal, superior, magic, set, rare, unique, crafted, ...). Read via FUN_1007e400."
  },
  "requirementnames": {
   "rowsize": 2,
@@ -1317,15 +1429,34 @@
   "fields": [
    {
     "off": 0,
-    "type": "i32",
-    "name": "i32_0x00"
+    "type": "u8",
+    "name": "class",
+    "note": "matched against the player's class"
+   },
+   {
+    "off": 1,
+    "type": "u8",
+    "name": "tab"
+   },
+   {
+    "off": 2,
+    "type": "strid",
+    "name": "name",
+    "note": "tab title"
    },
    {
     "off": 4,
-    "type": "i32",
-    "name": "i32_0x04"
+    "type": "u16",
+    "name": "x",
+    "note": "screen position (added to half the panel width)"
+   },
+   {
+    "off": 6,
+    "type": "u16",
+    "name": "y"
    }
-  ]
+  ],
+  "note": "Skill tree tabs (ui/SkillTree.cpp FUN_101120e0)."
  },
  "skilltree": {
   "rowsize": 4,
