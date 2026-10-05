@@ -303,6 +303,27 @@ class Migrator:
                 self.report.append(f"\nlvlmaze: {len(missing)} maze levels had no lvlmaze row; added copies of a "
                                    f"same-LevelType row for levels {', '.join(missing)}")
 
+    def item_spells(self) -> None:
+        """misc.txt pSpell (what using an item does). D2R maps pSpell 0-19 to its handlers (0x236fe30) and ignores
+        20+; D2Sigma added its own. Median's healing/mana/rejuvenation potions use D2Sigma's 22, a timed potion
+        (state for len frames adding stat1-stat3), which is exactly D2R's 3. Median's other values (12-21: quest
+        items, cube items, mystic orbs) still need the plugin (docs/bugs.md)."""
+        to_d2r = {"22": "3"}
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "misc.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            ps = h.index("pSpell")
+            n = 0
+            for r in rows:
+                if is_record(r) and r[ps] in to_d2r:
+                    r[ps] = to_d2r[r[ps]]
+                    n += 1
+            write_tsv(p, h, rows)
+            if bank == "base":
+                self.report.append(f"\nmisc pSpell: {n} items with D2Sigma's timed potion (22) -> D2R's 3")
+
     def vendor_stock(self) -> None:
         """Shops. Median leaves every item's vendor columns empty; D2Sigma stocks vendors from npcstores.bin, 52-byte
         rows (fields read from the data, docs/vendors.md):
@@ -691,6 +712,7 @@ def main() -> int:
     m.fill_skilldesc()
     m.skill_rules()
     m.vendor_stock()
+    m.item_spells()
     if m.dangling:
         m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]
         m.report += [f"- {t}: {n} cells" for t, n in sorted(m.dangling.items())]
