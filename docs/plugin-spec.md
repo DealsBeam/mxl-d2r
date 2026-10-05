@@ -183,5 +183,22 @@ Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R bas
   (docs/formulas.md).
 - Skill tree rules (`ui/SkillTree.cpp`): devotions lock each other, "pick up to three masteries".
 - Skill descriptions (`D2SkillDesc.cpp`).
-- Engine limits: states (1,014 > MAX_STATES), level types (Median 36-51).
+- Engine limits: states (below), level types (Median 36-51).
+
+## States limit (engine; in progress)
+
+D2R: MAX_STATES 511, MAX_STATE_BLOCKS 16 (data load `0x3074d0` asserts `size <= 0x1ff` and `< 0x200`, then keeps
+going with blocks = (count + 31) >> 5; Median: 1,014 states = 32 blocks). Data-side tables are sized from the live
+count, but each unit's state bits live inline in its extended stat list (unit+0x88): two arrays of `blocks` dwords at
++0xaf0 (current states, then "changed" flags at +0xaf0 + blocks*4), with room for 16 blocks each (+0xaf0..+0xb70;
+fields follow at +0xb70/+0xb78, see the copy routine `0x2f0d80`). With 32 blocks the "changed" array starts at +0xb70,
+so **every state change by any unit writes into the following fields**: memory corruption, independent of which
+state. Accessors: check `0x2f6220`, set/clear `0x2f7ea0` (3 accesses), array pointer `0x2f6370`, copy `0x2f0d80`
+(32 dwords spelled out). Pools: plain stat lists `0x2a9a430` (element 0x90), `0x2a9a4d0` (element 0x2b00; used by
+`0x2f65d0`/`0x2f9eb0`, to confirm as the extended list).
+
+Data cannot fix it: Median's own data references 639 of its 782 added states (skills aurastate/passivestate/
+auratargetstate/State1-3, misc state/cstate, states overlays), so even compacted it needs 871 > 512. Plan: move both
+arrays to a larger area (enlarge the pool element, redirect the four accessors and any inlined copies, check network
+state sync and saves for fixed 16-block assumptions).
 - Atma/Geglash sacred-item service (npcstores +40/+41, docs/vendors.md).
