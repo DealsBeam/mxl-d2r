@@ -187,6 +187,55 @@ auto SrvDoMultiSummon(Game* game, Unit* unit, int32_t skillId, int32_t level) no
 	return 1;
 }
 
+// D2Sigma 159 (0x100aa7e0) -> 178: a strike that bursts into missiles, built like D2R's Charged Strike (0x5562b0).
+// The skill's target (if any) takes the melee hit; then calc1 missiles (srvmissilea/b/c by calc2, clamped 1-3) start
+// at the skill target and fly on past it, each initialised as a charged-strike bolt with its index (flags 0x21).
+// spiral_dance, heaven_s_fury, crucify_2, barrier_strike and 11 more. Not ported: D2Sigma's call 0x10041f30
+// (game, unit) through D2Game (unidentified).
+auto SrvDoStrikeBurst(Game* game, Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (game == nullptr || unit == nullptr) {
+		return 0;
+	}
+	d2r::api.setUnitSkillFlag(unit, 1);
+	const uint8_t* skill = d2r::api.getSkillRecord(d2r::DataFlag(game), skillId);
+	if (skill == nullptr) {
+		return 0;
+	}
+	int32_t ux = 0, uy = 0;
+	d2r::UnitXY(unit, &ux, &uy);
+	if (Unit* target = d2r::api.skillTargetUnit(game, unit)) {
+		d2r::api.applyMeleeHit(game, unit, target, 0, 1);
+	}
+	int32_t tx = 0, ty = 0;
+	if (d2r::api.skillTargetXY(game, unit, &tx, &ty) == 0) {
+		return 0;
+	}
+	const int32_t count = d2r::EvalCalc(game, unit, skill, d2r::SkCalc1, skillId, level);
+	int32_t pick = d2r::EvalCalc(game, unit, skill, d2r::SkCalc2, skillId, level);
+	pick = pick < 1 ? 1 : (pick > 3 ? 3 : pick);
+	const int32_t missile = At<int16_t>(skill, d2r::SkSrvMissile + pick * 2);
+	if (!ValidMissile(game, missile)) {
+		return 0;
+	}
+	d2r::MissileParams params;
+	std::memset(&params, 0, sizeof(params));
+	params.flags = 0x21;
+	params.owner = unit;
+	params.missile = missile;
+	params.x = tx;
+	params.y = ty;
+	params.targetX = tx * 2 - ux;
+	params.targetY = ty * 2 - uy;
+	params.skill = skillId;
+	params.skillLevel = level;
+	params.initKind = 1;
+	for (int32_t i = 0; i < count; ++i) {
+		params.initArg = i;
+		d2r::api.createMissile(game, &params);
+	}
+	return 1;
+}
+
 struct SlotFunction {
 	int slot;
 	SrvDoFn function;
@@ -197,6 +246,7 @@ constexpr SlotFunction Functions[] = {
 	{172, SrvDoMultiSummon, "multi-summon (D2Sigma 153)"},
 	{176, SrvDoMissileBarrage, "missile barrage (D2Sigma 157)"},
 	{177, SrvDoMissileRow, "missile row (D2Sigma 158)"},
+	{178, SrvDoStrikeBurst, "strike burst (D2Sigma 159)"},
 };
 
 }  // namespace

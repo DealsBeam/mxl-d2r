@@ -23,6 +23,8 @@ inline constexpr uint64_t RvaCreateMissile = 0x5371a0;    // (game, &params) -> 
 inline constexpr uint64_t RvaMissileCount = 0x1b89a0;     // (dataFlag) -> rows in missiles.txt
 inline constexpr uint64_t RvaUnitSeed = 0x34a1e0;         // (unit) -> &seed {lo, hi}
 inline constexpr uint64_t RvaSetUnitSkillFlag = 0x34e790; // (unit, on): unit flags (+0x124) bit 0x40
+inline constexpr uint64_t RvaSkillTargetUnit = 0x48fe20;  // (game, unit) -> the skill's target unit or null
+inline constexpr uint64_t RvaApplyMeleeHit = 0x44b2b0;    // (game, attacker, target, 0, 1): the queued melee hit
 inline constexpr uint64_t RvaSummonPet = 0x4350e0;        // (game, &params) -> pet; registers it, enforces petmax
 inline constexpr uint64_t RvaSetPetLevel = 0x55fb50;      // (game, owner, pet, 0, level): level from the owner's
 inline constexpr uint64_t RvaPetSkillStats = 0x55ef80;    // (game, owner, pet, skill, level, owner+0x12c, 0):
@@ -69,13 +71,17 @@ struct MissileParams {
 	int32_t frame;           // 0x4c
 	int32_t activateFrame;   // 0x50
 	int32_t attBonus;        // 0x54 (1.10 +0x44)
-	uint8_t rest[0xa0 - 0x58];
+	uint8_t unk58[0x70 - 0x58];
+	int32_t initKind;        // 0x70: replaces 1.10's init function pointer (1 = charged-strike bolt, 4 = multishot)
+	int32_t initArg;         // 0x74: e.g. the missile's index
+	uint8_t rest[0xa0 - 0x78];
 };
 static_assert(sizeof(MissileParams) == 0xa0);
 static_assert(offsetof(MissileParams, missile) == 0x20);
 static_assert(offsetof(MissileParams, targetX) == 0x2c);
 static_assert(offsetof(MissileParams, skill) == 0x3c);
 static_assert(offsetof(MissileParams, attBonus) == 0x54);
+static_assert(offsetof(MissileParams, initKind) == 0x70);
 
 // Pet summon parameters (1.10's block with an 8-byte owner pointer).
 struct SummonParams {
@@ -103,6 +109,8 @@ using CreateMissileFn = Unit* (*)(Game* game, MissileParams* params);
 using MissileCountFn = int32_t (*)(uint32_t dataFlag);
 using UnitSeedFn = uint32_t* (*)(Unit* unit);
 using SetUnitSkillFlagFn = void (*)(Unit* unit, int32_t on);
+using SkillTargetUnitFn = Unit* (*)(Game* game, Unit* unit);
+using ApplyMeleeHitFn = void (*)(Game* game, Unit* attacker, Unit* target, int32_t bonus, int8_t extra);
 using SummonPetFn = Unit* (*)(Game* game, SummonParams* params);
 using SetPetLevelFn = int64_t (*)(Game* game, Unit* owner, Unit* pet, int32_t levelOverride, int32_t skillLevel);
 using PetSkillStatsFn = int64_t (*)(Game* game, Unit* owner, Unit* pet, int32_t skillId, int32_t level, int32_t arg6,
@@ -118,6 +126,8 @@ struct Api {
 	MissileCountFn missileCount;
 	UnitSeedFn unitSeed;
 	SetUnitSkillFlagFn setUnitSkillFlag;
+	SkillTargetUnitFn skillTargetUnit;
+	ApplyMeleeHitFn applyMeleeHit;
 	SummonPetFn summonPet;
 	SetPetLevelFn setPetLevel;
 	PetSkillStatsFn petSkillStats;

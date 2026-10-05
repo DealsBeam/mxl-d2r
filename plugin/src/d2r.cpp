@@ -12,6 +12,8 @@ void Bind(uint64_t exeBase) noexcept {
 	api.missileCount = reinterpret_cast<MissileCountFn>(exeBase + RvaMissileCount);
 	api.unitSeed = reinterpret_cast<UnitSeedFn>(exeBase + RvaUnitSeed);
 	api.setUnitSkillFlag = reinterpret_cast<SetUnitSkillFlagFn>(exeBase + RvaSetUnitSkillFlag);
+	api.skillTargetUnit = reinterpret_cast<SkillTargetUnitFn>(exeBase + RvaSkillTargetUnit);
+	api.applyMeleeHit = reinterpret_cast<ApplyMeleeHitFn>(exeBase + RvaApplyMeleeHit);
 	api.summonPet = reinterpret_cast<SummonPetFn>(exeBase + RvaSummonPet);
 	api.setPetLevel = reinterpret_cast<SetPetLevelFn>(exeBase + RvaSetPetLevel);
 	api.petSkillStats = reinterpret_cast<PetSkillStatsFn>(exeBase + RvaPetSkillStats);

@@ -21,7 +21,7 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 | 156 | 0x100aaee0 | 1 | skills_374 |
 | 157 (-> 176) | 0x100aca50 | 25 | catapult_shot, overkill, diseased_cattle, hail_of_stones — **plugin** (barrage) |
 | 158 (-> 177) | 0x100acc50 | 74 | DeathMaul, MegademonInferno, CountessFirewall, egg_trap — **plugin** (missile row) |
-| 159 | 0x100aa7e0 | 15 | spiral_dance, heaven_s_fury, crucify_2, barrier_strike |
+| 159 (-> 178) | 0x100aa7e0 | 15 | spiral_dance, heaven_s_fury, crucify_2, barrier_strike — **plugin** (strike burst) |
 | 160 | 0x100a97e0 | 4 | thundergod, armageddon_2, frigid_domain, overheat |
 | 161 | 0x100ad0f0 | 2 | hyena_strike, exorcism |
 | 162 | 0x100ac7c0 | 1 | skills_667 |
@@ -105,6 +105,24 @@ caster. After each pet: `0x100683d0` (D2Hirelings.cpp, Median's minion scaling b
 D2R `0x58d950`), `0x10049c00(owner, 0x200b, 1)` (D2Achievements.cpp counter; skipped). The plugin also sets the pet
 level with D2R's `0x55fb50` as D2R's Raise Skeleton does, until Median's scaling is ported.
 
+### 159: strike burst (`0x100aa7e0`)
+
+Like vanilla Charged Strike (D2R `0x5562b0`): the skill target unit, if any, takes the queued melee hit (1.13c pointer
+`0x101f1b04`; D2R `0x44b2b0`); calc1 missiles (srvmissilea/b/c by calc2 clamped 1-3, flags 0x21) start at the skill
+target and fly to 2*target - caster; each gets 1.13c's charged-strike init function (`D2Game+0x41f50`, through
+`0x101f1a40`) with its index. D2R replaced the init-function pointer with a kind code at params +0x70 (1 =
+charged-strike bolt, 4 = multishot) and its argument at +0x74. Not ported: `0x10041f30(game, unit)` (a D2Game call
+through `0x101f1d78`, unidentified). D2Sigma resolves D2Game/D2Common addresses as (module index, RVA) through
+`0x10042870`; module 8 is D2Game.dll (table at `0x101d4014`). Median runs on 1.13c.
+
+### 165: aura (`0x100ab190`) — not ported yet
+
+Median's own aura pulse built from C++ callbacks: aura stats onto units with aurastate (1.13c +0x80), auratargetstate
+(+0x82), units in aurarangecalc (+0x64) chosen by aurafilter (+0x50) through `0x10042600` with callback `0x100bbbe0`.
+D2R's generic stat aura is srvdofunc 65, but Median's auras use aurafilter 1 where vanilla uses e.g. 73731, and
+D2Sigma's callback does its own target selection: a plain remap to 65 could put an enemy aura (Holy Freeze) on the
+caster's party. Needs the callback's rules first.
+
 ## D2R side (dump of image 0x6ab3782c; RVAs relative to the image base)
 
 | What | RVA | Notes |
@@ -122,6 +140,9 @@ level with D2R's `0x55fb50` as D2R's Raise Skeleton does, until Median's scaling
 | Missile count | 0x1b89a0 | (game+0x106 byte) |
 | Unit seed | 0x34a1e0 | (unit) -> unit+0x28 {lo, hi}; the RNG is inlined everywhere (lo*0x6ac690c5 + hi) |
 | Unit "skill used" flag | 0x34e790 | (unit, on): unit+0x124 bit 0x40 (1.10 unit+0xc4) |
+| Skill target unit | 0x48fe20 | (game, unit) |
+| Apply queued melee hit | 0x44b2b0 | (game, attacker, target, 0, 1) (SUnitDmg.cpp) |
+| Item spells (misc pSpell) | 0x236fe30 | 20 entries {check, use, flag}: check handlers at 0x1d3ea30 (11), use handlers at 0x1d3ea90 (16); pSpell 20+ does nothing |
 | Summon pet | 0x4350e0 | (game, &params) -> pet: 1.10's block with an 8-byte owner: flags +0 (1 = at x/y), owner +8, monster u16 +0x10, AI state +0x14, mode +0x18, x/y +0x1c, pettype +0x24, petmax +0x28. Registers the pet (enforces petmax) |
 | Pet setup (D2R Raise Skeleton, 0x55e440) | 0x55fb50, 0x55ef80, 0x58d950 | level from the owner (game, owner, pet, 0, level); the skill's passive/aura stats and aura state on the pet (game, owner, pet, skill, level, owner+0x12c, 0); party/AI (game, pet, 0, owner+0x130). Skills record: summon +0x110, pettype +0x112, summode +0x113, petmax +0x114 |
 | Create portal object | 0x432ce0 | (game, unit, room, x, y, destLevel, &object, objectId 0x3b, 0, 0) |
