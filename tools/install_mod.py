@@ -23,7 +23,8 @@ DEFAULT_GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
 BUILD = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "dataversionbuild.txt"
 MXL_GLOBAL = ROOT / "extract" / "mxl" / "data" / "global"
 MXL_TILES = MXL_GLOBAL / "tiles"
-D2R_FILELIST = ROOT / "extract" / "d2r" / "93847" / "filelist.txt"  # written by gfx_placeholders.py
+PLUGIN = ROOT / "build" / "plugin" / "Release" / "mxl-core.dll"
+D2R_FILELIST =ROOT / "extract" / "d2r" / "93847" / "filelist.txt"  # written by gfx_placeholders.py
 
 
 def main() -> int:
@@ -73,9 +74,15 @@ def main() -> int:
     (d2rl / "patches").mkdir(exist_ok=True)
     meta = {"schemaVersion": 1,
             "metadata": {"name": "Median XL (D2R port)", "modVersion": "0.1.0-dev", "author": "mxl-d2r",
-                         "description": "Work-in-progress port of Median XL to D2R. Data only; plugins pending.",
+                         "description": "Work-in-progress port of Median XL to D2R.",
                          "website": ""}}
     (d2rl / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    # The mxl-core plugin (plugin/, built by tools/build_plugin.ps1) loads only with this mod (mod-scoped)
+    if PLUGIN.exists():
+        shutil.copy2(PLUGIN, d2rl / "plugins" / PLUGIN.name)
+        print(f"plugin {PLUGIN.name} ({PLUGIN.stat().st_size // 1024} KB)")
+    else:
+        print(f"no plugin at {PLUGIN} (run tools/build_plugin.ps1); installing data only")
     toml = d2rl / "config" / "d2rloader.toml"
     if not toml.exists():  # never overwrite a config someone edited
         toml.write_text('[d2rcore.save_format]\nmode = "extended"\n', encoding="utf-8")
