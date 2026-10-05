@@ -1,0 +1,169 @@
+// D2Sigma's added skill server functions (skills.txt srvdofunc), rebuilt on D2R's game functions.
+//
+// D2Sigma numbers them 153-171; D2R already uses those, so tools/txt_migrate.py moves Median's skills to 172-190
+// (+19) and this file fills those empty slots of D2R's srvdofunc table. Each function follows the disassembly of the
+// D2Sigma original named in its comment (docs/plugin-spec.md); 1.10 record offsets are translated to D2R's.
+#include "sigma_skills.h"
+
+#include "d2r.h"
+
+#include <cstdio>
+#include <cstring>
+
+namespace {
+
+using d2r::At;
+using d2r::Game;
+using d2r::Unit;
+
+// D2R calls srvdofunc entries as (game, unit, skillId, skillLevel) and treats non-zero as success.
+using SrvDoFn = int64_t (*)(Game* game, Unit* unit, int32_t skillId, int32_t level);
+
+auto ValidMissile(Game* game, int32_t missile) noexcept -> bool {
+	return missile >= 0 && missile < d2r::api.missileCount(d2r::DataFlag(game));
+}
+
+// D2Sigma 158 (0x100acc50) -> 176+1 = 177: a row of missiles. calc1 missiles fly from the caster towards points on a
+// line through the target, perpendicular to the aim; calc3 (clamped to 1-3) picks srvmissilea/b/c and calc2 fills the
+// missile's attack bonus. DeathMaul, MegademonInferno, CountessFirewall, egg_trap and 70 more.
+auto SrvDoMissileRow(Game* game, Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (game == nullptr || unit == nullptr) {
+		return 0;
+	}
+	const uint8_t* skill = d2r::api.getSkillRecord(d2r::DataFlag(game), skillId);
+	if (skill == nullptr) {
+		return 0;
+	}
+	d2r::api.setUnitSkillFlag(unit, 1);
+	int32_t tx = 0, ty = 0;
+	if (d2r::api.skillTargetXY(game, unit, &tx, &ty) == 0) {
+		return 1;
+	}
+	const int32_t count = d2r::EvalCalc(game, unit, skill, d2r::SkCalc1, skillId, level);
+	int32_t ux = 0, uy = 0;
+	d2r::UnitXY(unit, &ux, &uy);
+	int32_t dx = tx - ux, dy = ty - uy;
+	int32_t d2 = dx * dx + dy * dy;
+	if (d2 < 4) {  // as D2Sigma: scale short aims up (its second term is 2*dx, not dx*dx)
+		dx <<= 2;
+		dy <<= 2;
+		d2 = dy * dy + dx * 2;
+	}
+	int32_t stepX = d2 >= 16 ? dy : dy * 2;   // perpendicular to (dx, dy)
+	int32_t stepY = -(d2 >= 16 ? dx : dx * 2);
+	while (stepX * stepX + stepY * stepY > 3) {
+		stepX /= 2;
+		stepY /= 2;
+	}
+	int32_t pick = d2r::EvalCalc(game, unit, skill, d2r::SkCalc3, skillId, level);
+	pick = pick < 1 ? 1 : (pick > 3 ? 3 : pick);
+	const int32_t missile = At<int16_t>(skill, d2r::SkSrvMissile + pick * 2);
+	if (!ValidMissile(game, missile)) {
+		return 0;
+	}
+	d2r::MissileParams params;
+	std::memset(&params, 0, sizeof(params));
+	params.flags = 0x820;
+	params.owner = unit;
+	params.origin = unit;
+	params.missile = missile;
+	params.skill = skillId;
+	params.skillLevel = level;
+	params.attBonus = d2r::EvalCalc(game, unit, skill, d2r::SkCalc2, skillId, level);
+	int32_t x = tx - stepX * count / 2;
+	int32_t y = ty - stepY * count / 2;
+	for (int32_t i = 0; i < count; ++i) {
+		params.targetX = x;
+		params.targetY = y;
+		d2r::api.createMissile(game, &params);
+		x += stepX;
+		y += stepY;
+	}
+	return 1;
+}
+
+// D2Sigma 157 (0x100aca50) -> 176: a barrage. prgcalc1 missiles of srvmissilea, each aimed at a random point within
+// aurarangecalc of the target (points closer than 2 to the caster are skipped); with one missile or a radius
+// below 2, a single missile at the target. catapult_shot, overkill, hail_of_stones and 22 more.
+auto SrvDoMissileBarrage(Game* game, Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (game == nullptr || unit == nullptr) {
+		return 0;
+	}
+	const uint8_t* skill = d2r::api.getSkillRecord(d2r::DataFlag(game), skillId);
+	if (skill == nullptr || level < 1) {
+		return 0;
+	}
+	const int32_t missile = At<int16_t>(skill, d2r::SkSrvMissileA);
+	const int32_t count = d2r::EvalCalc(game, unit, skill, d2r::SkPrgCalc1, skillId, level);
+	const int32_t radius = d2r::EvalCalc(game, unit, skill, d2r::SkAuraRangeCalc, skillId, level);
+	if (missile == -1 || count <= 0 || !ValidMissile(game, missile)) {
+		return 0;
+	}
+	int32_t tx = 0, ty = 0;
+	if (d2r::api.skillTargetXY(game, unit, &tx, &ty) == 0) {
+		return 0;
+	}
+	uint32_t* seed = d2r::api.unitSeed(unit);  // D2Sigma reseeds the caster: lo = next roll, hi = 666
+	d2r::Roll(seed);
+	seed[1] = 0x29a;
+	d2r::MissileParams params;
+	std::memset(&params, 0, sizeof(params));
+	params.flags = 0x420;
+	params.owner = unit;
+	params.origin = unit;
+	params.missile = missile;
+	params.skill = skillId;
+	params.skillLevel = level;
+	if (count <= 1 || radius < 2) {
+		params.targetX = tx;
+		params.targetY = ty;
+		return d2r::api.createMissile(game, &params) != nullptr ? 1 : 0;
+	}
+	for (int32_t i = 0; i < count; ++i) {
+		params.targetX = d2r::RandomBelow(seed, radius * 2) - radius + tx;
+		params.targetY = d2r::RandomBelow(seed, radius * 2) - radius + ty;
+		int32_t ux = 0, uy = 0;
+		if (d2r::UnitXY(unit, &ux, &uy)) {
+			const int32_t ex = params.targetX - ux, ey = params.targetY - uy;
+			if (ex * ex + ey * ey >= 4) {
+				d2r::api.createMissile(game, &params);
+			}
+		}
+	}
+	return 1;
+}
+
+struct SlotFunction {
+	int slot;
+	SrvDoFn function;
+	const char* name;
+};
+
+constexpr SlotFunction Functions[] = {
+	{176, SrvDoMissileBarrage, "missile barrage (D2Sigma 157)"},
+	{177, SrvDoMissileRow, "missile row (D2Sigma 158)"},
+};
+
+}  // namespace
+
+auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> int {
+	d2r::Bind(context->exeBase);
+	static constexpr uint8_t Empty[8] = {};
+	int installed = 0;
+	size_t used = 0;
+	for (const SlotFunction& f : Functions) {
+		const uint64_t rva = d2r::SrvDoTable + static_cast<uint64_t>(f.slot) * 8;
+		const bool ok = context->PatchWriteU64(rva, Empty, sizeof(Empty), reinterpret_cast<uint64_t>(f.function));
+		installed += ok ? 1 : 0;
+		if (used < reportSize) {
+			const int n = std::snprintf(report + used, reportSize - used, "%s srvdofunc %d %s%s", used ? ";" : "",
+			                            f.slot, f.name, ok ? "" : " FAILED");
+			used += n > 0 ? static_cast<size_t>(n) : 0;
+		}
+	}
+	return installed;
+}
+
+auto SigmaSkillCount() noexcept -> int {
+	return static_cast<int>(sizeof(Functions) / sizeof(Functions[0]));
+}

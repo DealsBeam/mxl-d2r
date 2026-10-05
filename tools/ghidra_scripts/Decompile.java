@@ -1,4 +1,4 @@
-// Decompile functions (by RVA or address) into ../ghidra/decomp/<rva>.c and print where they went.
+// Decompile functions (by RVA or address) into ../ghidra/decomp[/<program>]/<rva>.c and print where they went.
 // Args: rva [rva...]   (hex, e.g. 0x3dd710; values >= the image base are taken as addresses)
 //@category mxl
 import ghidra.app.decompiler.DecompInterface;
@@ -13,8 +13,12 @@ public class Decompile extends GhidraScript {
     @Override
     protected void run() throws Exception {
         long base = currentProgram.getImageBase().getOffset();
-        File outDir = new File(currentProgram.getExecutablePath()).getParentFile();
-        outDir = new File(outDir, "decomp");
+        // ../ghidra/decomp for the D2R dump, ../ghidra/decomp/<program> for other programs (D2Sigma.dll)
+        File outDir = new File(new File(currentProgram.getExecutablePath()).getParentFile(), "decomp");
+        if (!currentProgram.getName().startsWith("D2RLoader")) {
+            outDir = new File(new File(new File(currentProgram.getExecutablePath()).getParentFile(), "ghidra"),
+                              "decomp/" + currentProgram.getName());
+        }
         outDir.mkdirs();
         DecompInterface di = new DecompInterface();
         di.openProgram(currentProgram);

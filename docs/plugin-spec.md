@@ -19,8 +19,8 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 | 154 | 0x100aafa0 | 3 | mysterious_companion_skill, judgementwander_2_skill |
 | 155 (-> D2R 109) | 0x100ab090 | 1 | **town_portal** (see below) |
 | 156 | 0x100aaee0 | 1 | skills_374 |
-| 157 | 0x100aca50 | 25 | catapult_shot, overkill, diseased_cattle, hail_of_stones |
-| 158 | 0x100acc50 | 74 | DeathMaul, MegademonInferno, CountessFirewall, egg_trap |
+| 157 (-> 176) | 0x100aca50 | 25 | catapult_shot, overkill, diseased_cattle, hail_of_stones — **plugin** (barrage) |
+| 158 (-> 177) | 0x100acc50 | 74 | DeathMaul, MegademonInferno, CountessFirewall, egg_trap — **plugin** (missile row) |
 | 159 | 0x100aa7e0 | 15 | spiral_dance, heaven_s_fury, crucify_2, barrier_strike |
 | 160 | 0x100a97e0 | 4 | thundergod, armageddon_2, frigid_domain, overheat |
 | 161 | 0x100ad0f0 | 2 | hyena_strike, exorcism |
@@ -74,6 +74,27 @@ the portal-creation routine `0x432ce0` (`D2Game\src\Items\ItemMode.cpp`), and `0
 town-side portal. `txt_migrate.py` maps town_portal to 109 (and sets rightskill 1). D2Sigma's extra
 `player+0xc4 |= 0x40` flag is not reproduced (unknown purpose; revisit if portals behave differently).
 
+### Reading D2Sigma
+
+D2Sigma is built with whole-program optimisation: its functions take arguments in registers (ECX game, EDX unit,
+stack skill id and level) and the decompiler loses track of them, so the functions are read from the disassembly
+(`tools/ghidra_query.ps1 Disasm.java -Project D2Sigma <address>`; the D2Sigma project is `..\ghidra\sigma`). It
+calls the vanilla 1.10 D2Common by ordinal: 10786 evaluates a skill formula (unit, calc, skill, level), 10769 is the
+squared distance (x1, y1, x2, y2). 1.10 skill-record offsets: calc1-4 +0x138-0x144, prgcalc1 +0x38, aurarangecalc
++0x64, srvmissile +0x46 (a/b/c +0x48/+0x4a/+0x4c), petmax +0xc0.
+
+### 157: barrage (`0x100aca50`)
+
+prgcalc1 missiles of srvmissilea (flags 0x420), each aimed at a random point within aurarangecalc of the skill
+target (rolled twice on the caster's seed, which is first reseeded: lo = next roll, hi = 0x29a); points within
+squared distance 4 of the caster are skipped. One missile, or a radius below 2: a single missile at the target.
+
+### 158: missile row (`0x100acc50`)
+
+calc1 missiles (flags 0x820) from the caster towards points on a line through the target, perpendicular to the aim,
+spaced by the aim direction rotated 90° and shrunk to length² <= 3, centred on the target. Missile: srvmissilea/b/c
+by calc3 clamped to 1-3. calc2 goes to the missile's attack-bonus field (1.10 params +0x44).
+
 ## D2R side (dump of image 0x6ab3782c; RVAs relative to the image base)
 
 | What | RVA | Notes |
@@ -84,6 +105,13 @@ town-side portal. `txt_migrate.py` maps town_portal to 109 (and sets rightskill 
 | Skill record flags | +0x24..+0x28 | e.g. +0x24 bit0 decquant, bit1 lob; +0x25 bit0 InTown; +0x28 bit5 usemanaondo, bit7 rightskill (mapped from skills.bin vs skills.txt) |
 | D2R scroll/book skills (113) | 0x584b60 | only sends packet 0x3f (skill id) to the client (`0x47f520`); the scroll/book use goes through the item code |
 | D2R itemless town portal (109) | 0x5822b0 | skill record lookup `0x97790`, then `0x46fa70` (make portal) and `0x470ae0` (link town side) |
+| Skill record | 0x97790 | (game+0x106 byte, skillId); records are 748 bytes: srvmissile a/b/c +0x68/+0x6a/+0x6c, prgcalc1 +0x58, aurarangecalc +0x84, calc1-4 +0x190-0x19c, Param1-8 +0x1b8.. (`research/bin_layout.py skills`) |
+| Evaluate skill formula | 0x3b5160 | (game+0x106 byte, unit, calc, skillId, level) |
+| Skill target position | 0x432b70 | (game, unit, &x, &y); unit position: path at unit+0x38, x/y u16 at +0x2/+0x6 (players, monsters, missiles) or int at +0x10/+0x14 |
+| Create missile | 0x5371a0 | (game, &params); params are 1.10's block with 8-byte pointers: flags +0, owner +8, origin +0x10, target +0x18, missile +0x20, x/y +0x24, target x/y +0x2c, skill +0x3c, level +0x40, attack bonus +0x54 (see D2R Multiple Shot, 0x557840) |
+| Missile count | 0x1b89a0 | (game+0x106 byte) |
+| Unit seed | 0x34a1e0 | (unit) -> unit+0x28 {lo, hi}; the RNG is inlined everywhere (lo*0x6ac690c5 + hi) |
+| Unit "skill used" flag | 0x34e790 | (unit, on): unit+0x124 bit 0x40 (1.10 unit+0xc4) |
 | Create portal object | 0x432ce0 | (game, unit, room, x, y, destLevel, &object, objectId 0x3b, 0, 0) |
 
 **Collision:** D2R's newer skills use srvdofunc 153-171, the same numbers as D2Sigma's added functions, so Median's
