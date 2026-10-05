@@ -17,7 +17,7 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 |---|---|---|---|
 | 153 | 0x100ad720 | 40 | blood_skeleton, ice_elementals, fire_elementals, summon_familiars |
 | 154 | 0x100aafa0 | 3 | mysterious_companion_skill, judgementwander_2_skill |
-| 155 | 0x100ab090 | 1 | **town_portal** (see below) |
+| 155 (-> 174) | 0x100ab090 | 1 | **town_portal** (see below) |
 | 156 | 0x100aaee0 | 1 | skills_374 |
 | 157 | 0x100aca50 | 25 | catapult_shot, overkill, diseased_cattle, hail_of_stones |
 | 158 | 0x100acc50 | 74 | DeathMaul, MegademonInferno, CountessFirewall, egg_trap |
@@ -68,6 +68,24 @@ return 0;
 It does the town-portal work without the scroll/book item the original function 113 ("Book of Townportal")
 needs, which is why setting srvdofunc 113 did not help (bug #6). To do: name `Ordinal_10786` (which module and
 function), `FUN_10097a80` and `FUN_10049c00`, then find D2R's portal-creation function and call it the same way.
+
+## D2R side (dump of image 0x6ab3782c; RVAs relative to the image base)
+
+| What | RVA | Notes |
+|---|---|---|
+| Server skill dispatcher | 0x43acb0 | `D2Game\src\Skills\Skills.cpp`; reads `srvdofunc` (u16 at skill record +0x4e), rejects > 0xbe, calls the table entry if non-null with (game, unit, skillId, skillLevel) |
+| srvdofunc table | 0x238ea00 | 191 slots of 8-byte pointers (.data). D2R fills 0-171; **172-190 are free** |
+| srvstfunc table | 0x238e710 | indexed by `srvstfunc` (u16 at +0x4c) |
+| Skill record flags | +0x24..+0x28 | e.g. +0x24 bit0 decquant, bit1 lob; +0x25 bit0 InTown; +0x28 bit5 usemanaondo, bit7 rightskill (mapped from skills.bin vs skills.txt) |
+| D2R town portal (113) | 0x584b60 | only sends packet 0x3f (skill id) to the client (`0x47f520`); the portal itself is made elsewhere (open question) |
+
+**Collision:** D2R's newer skills use srvdofunc 153-171, the same numbers as D2Sigma's added functions, so Median's
+skills ran unrelated D2R functions. `txt_migrate.py` now moves D2Sigma's 153-171 to the free 172-190 (+19);
+town_portal is 174. The plugin writes its functions into those slots (a data write into .data, guarded by the
+expected value 0).
+
+Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R base max 97) and cltstfunc 82
+(D2R base max 55).
 
 ## Still to specify
 

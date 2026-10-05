@@ -357,8 +357,12 @@ class Migrator:
           point cost 999 (no allocation). Cost 1 point, with maxlvl 20 as the base cap (APPROXIMATION: Median's
           cap also grows with "Maximum Skill Level Increased by" items).
         - rightskill: D2Sigma's own skill picker ignored it, D2R's honours it; active class skills get 1.
-        - town_portal: srvdofunc 155 is D2Sigma's; 113 is D2R's town portal."""
+        - srvdofunc 153-171 are D2Sigma's added skill functions, but D2R's own table (0x238ea00, 191 slots, bound
+          0xbe) already uses 153-171 for its newer skills. They move to the free slots 172-190 (+19), where the
+          mxl-core plugin installs D2Sigma's functions (docs/plugin-spec.md); until it does, those skills do
+          nothing instead of running an unrelated D2R function. town_portal (155) becomes 174."""
         caps = {"mlvl", "skcp", "skcn"}
+        sigma_first, sigma_last, shift = 153, 171, 19
         for bank in ("base", ""):
             p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
             if not p.exists():
@@ -366,7 +370,7 @@ class Migrator:
             h, rows = read_tsv(p)
             sp, ml, cc = h.index("skpoints"), h.index("maxlvl"), h.index("charclass")
             rs, pa, do = h.index("rightskill"), h.index("passive"), h.index("srvdofunc")
-            n_cap = n_right = 0
+            n_cap = n_right = n_moved = 0
             for r in rows:
                 if not is_record(r):
                     continue
@@ -378,13 +382,14 @@ class Migrator:
                 if r[cc] and r[pa] != "1" and r[rs] in ("", "0"):
                     r[rs] = "1"
                     n_right += 1
-                if r[0] == "town_portal" and r[do] == "155":
-                    r[do] = "113"
+                if r[do].isdigit() and sigma_first <= int(r[do]) <= sigma_last:
+                    r[do] = str(int(r[do]) + shift)
+                    n_moved += 1
             write_tsv(p, h, rows)
             if bank == "base":
                 self.report.append(f"\nskills (interim, D2Sigma rules): {n_cap} skpoints formulas with Median's cap "
                                    f"variables -> 1 point, maxlvl 20; {n_right} active class skills -> rightskill 1; "
-                                   f"town_portal srvdofunc 155 -> 113")
+                                   f"{n_moved} skills with D2Sigma srvdofunc {sigma_first}-{sigma_last} -> +{shift}")
 
     def fill_skilldesc(self) -> None:
         """D2R asserts when a class skill has no skilldesc (Median's hidden class skills, granted at character
