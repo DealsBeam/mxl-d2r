@@ -1,4 +1,5 @@
-// Disassembly of the functions at the given RVAs (or addresses), one instruction per line.
+// Disassembly of the functions at the given RVAs (or addresses), one instruction per line. Functions the analysis
+// did not find are defined on the fly (the project is opened read-only, so nothing is saved).
 // Args: rva [rva...]   Output: "ASM <rva>: <instruction>"
 //@category mxl
 import ghidra.app.script.GhidraScript;
@@ -14,6 +15,10 @@ public class Disasm extends GhidraScript {
             long v = Long.decode(arg);
             Address a = toAddr(v >= base ? v : base + v);
             Function f = getFunctionContaining(a);
+            if (f == null) {  // only reached through a pointer table: disassemble and define it (not saved; -readOnly)
+                disassemble(a);
+                f = createFunction(a, null);
+            }
             if (f == null) { println("no function at " + a); continue; }
             println(String.format("FUNC %s@0x%x", f.getName(), f.getEntryPoint().getOffset() - base));
             for (Instruction ins : currentProgram.getListing().getInstructions(f.getBody(), true)) {

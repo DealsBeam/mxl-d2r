@@ -11,7 +11,10 @@ and code use). Rules:
     "mxl_<id>". Numeric keys ("115" = "Axe (1)") are unique and used by item namestr cells, so they stay.
     strings_idkeys.json maps every Median ID to its final key.
   * A key in several tables: patchstring wins over expansionstring over string (1.13c lookup order).
-  * Keys D2R already has are overridden (every occurrence, every file); new keys are appended to NEW_KEYS_FILE
+  * Keys D2R already has are overridden (every occurrence, every file) unless the two texts' printf
+    placeholders differ: D2R formats some strings itself (e.g. sysmsg7-9, the "was slain by" fragments it
+    joins to names and then passes through sprintf), so a Median "%s" there reads a missing argument and
+    crashes the game. Those keys keep D2R's text (listed in strings_report.md). New keys are appended to NEW_KEYS_FILE
     with IDs above D2R's highest. Native loading (no D2RLoader namespace), so table cells keep plain keys.
   * Median ships English only. By default its text fills every language (otherwise other clients would show
     vanilla wording that contradicts Median); --english-only changes enUS alone.
@@ -20,6 +23,7 @@ Usage: python tools/tbl2json.py [--english-only]
 """
 import argparse
 import json
+import re
 import struct
 import sys
 from pathlib import Path
@@ -58,6 +62,14 @@ def read_tbl(path: Path) -> list[tuple[str, str]]:
         _used, _idx, _h, key_off, str_off, _len = struct.unpack_from("<BHIIIH", b, node)
         out.append((cstr(key_off), cstr(str_off)))
     return out
+
+
+PLACEHOLDER = re.compile(r"%(?:\d+\$)?[-+ #0]*(?:\d+|\*)?(?:\.\d+)?(?:hh|h|ll|l|I64|z)?[a-zA-Z%]")
+
+
+def placeholders(text: str) -> list[str]:
+    """printf conversions in order ("%%" is literal), e.g. "%+d%% to %s" -> ["d", "s"]."""
+    return [m.group()[-1] for m in PLACEHOLDER.finditer(text or "") if m.group() != "%%"]
 
 
 def load_median() -> tuple[dict[int, tuple[str, str]], dict[str, int]]:
@@ -119,11 +131,14 @@ def main() -> int:
                 new_ids[k] = max_id + 1 + len(new_ids)
     for folder, files in folders.items():
         d2r_keys = {e["Key"] for recs in files.values() for e in recs}
-        overridden = set()
+        overridden, kept = set(), {}
         for recs in files.values():
             for e in recs:
                 if e["Key"] in texts:
                     t = texts[e["Key"]]
+                    if placeholders(t) != placeholders(e.get("enUS", "")):
+                        kept[e["Key"]] = (e.get("enUS", ""), t)
+                        continue
                     for lang in (["enUS"] if args.english_only else LANGS):
                         if lang in e:
                             e[lang] = t
@@ -141,7 +156,9 @@ def main() -> int:
             text = json.dumps(recs, ensure_ascii=False, indent=2).replace("\n", "\r\n")
             (dest / name).write_text("﻿" + text, encoding="utf-8", newline="")
         report.append(f"- {folder}: {len(files)} files, {len(overridden)} D2R keys overridden, {len(new)} new keys "
-                      f"(in {NEW_KEYS_FILE})")
+                      f"(in {NEW_KEYS_FILE}), {len(kept)} kept D2R's text (placeholders differ)")
+        if folder == "strings":
+            report += [f"  - `{k}`: D2R {d!r} / Median {m!r}" for k, (d, m) in sorted(kept.items())]
     report.append(f"- New-key IDs {max_id + 1}..{max_id + len(new_ids)}, shared by both folders")
 
     (OUT / "strings_idkeys.json").write_text(json.dumps({str(k): v for k, v in sorted(idkeys.items())}, indent=0),
