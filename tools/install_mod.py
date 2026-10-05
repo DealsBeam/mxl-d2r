@@ -1,7 +1,8 @@
 """Install the generated mod into D2R's mods folder as a D2RLoader-ready folder mod.
 
 <game>/mods/MedianXL/
-  modinfo.json                      {"name": "MedianXL", "savepath": "MedianXL/"}  (own save folder)
+  MedianXL.mpq/modinfo.json         {"name": "MedianXL", "savepath": "MedianXL/"}  (own save folder; D2R reads it
+                                    inside the folder MPQ; a copy also sits at the mod root)
   d2rloader/metadata.json           schemaVersion 1, no "namespace" (native string loading, see docs/strings.md)
   d2rloader/config/d2rloader.toml   [d2rcore.save_format] mode = "extended" (Median's wider item/stat IDs)
   MedianXL.mpq/data/...             copy of work/mod/data (folder-style MPQ) + global/dataversionbuild.txt
@@ -43,8 +44,11 @@ def main() -> int:
     shutil.copytree(SRC, data)
     shutil.copy2(BUILD, data / "global" / "dataversionbuild.txt")
 
-    (mod / "modinfo.json").write_text(json.dumps({"name": args.name, "savepath": f"{args.name}/"}, indent=2),
-                                      encoding="utf-8")
+    # D2R (and D2RLoader's mod detection) read modinfo.json inside the folder-style MPQ; the copy at the mod
+    # root follows the D2RLoader guide's layout and is harmless.
+    modinfo = json.dumps({"name": args.name, "savepath": f"{args.name}/"}, indent=2)
+    for target in (mpq / "modinfo.json", mod / "modinfo.json"):
+        target.write_text(modinfo, encoding="utf-8")
     d2rl = mod / "d2rloader"
     (d2rl / "config").mkdir(parents=True, exist_ok=True)
     (d2rl / "plugins").mkdir(exist_ok=True)
