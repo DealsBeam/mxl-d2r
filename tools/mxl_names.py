@@ -49,8 +49,37 @@ ENTITIES = {
     "misc":         ("mi", "misc",         "name",        None,    False),
     "cubemain":     ("cm", "cubemain",     "description", None,    False),
     "monplace":     ("me", "monplace",     "code",        None,    False),
+    "objects":      ("",   "objects",      "Name",        "Id",    True),
+    "monai":        ("ma", "monai",        "AI",          None,    True),
+    "pettype":      ("pt", "pettype",      "pet type",    "idx",   True),
+    "monprop":      ("mp", "monprop",      "Id",          None,    True),
+    "monsounds":    ("mo", "monsounds",    "Id",          None,    True),
+    "montype":      ("mt", "montype",      "type",        None,    True),
+    "monumod":      ("mu", "monumod",      "uniquemod",   "id",    True),
+    "monseq":       ("mq", "monseq",       "sequence",    None,    True),
+    "monlvl":       ("mv", "monlvl",       "Level",       None,    True),
+    "lvlprest":     ("lp", "lvlprest",     "Name",        "Def",   True),
+    "lvlmaze":      ("lm", "lvlmaze",      "Name",        None,    True),
+    "lvlsub":       ("ls", "lvlsub",       "Name",        None,    True),
+    "lvltypes":     ("lt", "lvltypes",     "Name",        "Id",    True),
+    "lvlwarp":      ("lw", "lvlwarp",      "Name",        "Id",    True),
+    "objgroup":     ("og", "objgroup",     "GroupName",   None,    True),
+    "shrines":      ("sr", "shrines",      "Shrine Type", None,    True),
+    "belts":        ("bl", "belts",        "name",        None,    True),
+    "difficultylevels": ("dl", "difficultylevels", "Name", None,   True),
+    "inventory":    ("iv", "inventory",    "class",       None,    True),
+    "itemratio":    ("ir", "itemratio",    "Function",    None,    True),
+    "arena":        ("ae", "arena",        "Arena",       None,    False),
+    "chartemplate": ("ct", "chartemplate", "Template",    None,    False),
 }
-PREFIX_ENTITY = {p: e for e, (p, *_r) in ENTITIES.items() if e != "monstats2"}
+# D2R key column when it differs from Median's (objects' first D2R column is "Class").
+D2R_KEY = {"objects": "Name", "shrines": "Name"}
+# Tables whose key repeats over several rows (one sequence = several frames); the placeholder number counts
+# distinct keys, not rows.
+GROUPED = {"monseq"}
+# Tables whose key is the row number itself (monlvl: one row per monster level).
+NUMERIC_KEY = {"monlvl"}
+PREFIX_ENTITY = {p: e for e, (p, *_r) in ENTITIES.items() if e != "monstats2" and p}
 # Columns whose "ms" placeholders point at monstats2 rows instead of monstats rows.
 MONSTATS2_COLUMNS = {("monstats", "MonStatsEx"), ("monstats2", "Id")}
 UNUSED_SLOT = re.compile(r"^(unused\d*|not used)$", re.I)
@@ -198,20 +227,36 @@ class Resolver:
     def assign_ids(self, refs: dict[str, Counter]) -> list[str]:
         notes = []
         for ent, (_p, tname, keycol, _idcol, indexed) in ENTITIES.items():
+            if tname not in self.tables:
+                continue
+            # Grouped tables keep empty-key rows: monseq's first group has an empty name and counts as group 0.
+            rows_of = (lambda rows: [r for r in rows if r and (not r[0] or r[0] != "Expansion")]) if ent in GROUPED else data_rows
             vrows: list[str] = []
             if tname in self.vanilla_files:
                 vh, vr = read_tsv(self.vanilla_files[tname], "latin-1")
                 vk = vh.index(keycol) if keycol in vh else 0
-                vrows = [r[vk] for r in data_rows(vr)]
+                vrows = [r[vk] for r in rows_of(vr)]
             banks = []
             for bank in (self.d2r / f"{tname}.txt", self.d2r / "base" / f"{tname}.txt"):
                 if bank.exists():
-                    banks.append([r[0] for r in data_rows(read_tsv(bank, "utf-8-sig")[1])])
+                    dh, dr = read_tsv(bank, "utf-8-sig")
+                    dk = dh.index(D2R_KEY[ent]) if ent in D2R_KEY and D2R_KEY[ent] in dh else 0
+                    banks.append([r[dk] for r in rows_of(dr)])
+            if ent in GROUPED:  # one entry per distinct key, in order of first appearance
+                vrows = list(dict.fromkeys(vrows))
+                banks = [list(dict.fromkeys(b)) for b in banks]
             d2r_rows = max(banks, key=len) if banks else []  # RotW is the larger bank; IDs stay valid in both
+            if not vrows and tname not in self.vanilla_files:
+                vrows = d2r_rows  # no 1.13c reference file: D2R's rows stand in for the vanilla ones
             self.taken[ent] = {n.lower() for b in banks for n in b} | {n.lower() for n in vrows}
 
+            count = len(self.tables[tname].rows)
+            if ent in GROUPED:
+                key_vals = self.tables[tname].column(keycol)
+                nums = [int(m.group(2)) for v in key_vals if (m := PLACEHOLDER.match(v.strip()))]
+                count = max(nums) + 1 if nums else len(dict.fromkeys(key_vals))
             entries, new_rows, moved = [], [], []
-            for i in range(len(self.tables[tname].rows)):
+            for i in range(count):
                 e = {"row": i, "id": i, "name": None, "source": None}
                 if i < len(vrows):
                     vname = vrows[i]
@@ -315,9 +360,28 @@ class Resolver:
         for i, v in enumerate(T["monstats"].column("MonStatsEx")):
             if (r := self.cell_row("monstats2", v)) is not None:
                 self.give("monstats2", r, self.bare("monstats", i), "monstats.MonStatsEx")
+        # Monster-side tables (monprop, monsounds, montype, monai, ...): the first monster that uses them;
+        # pet types: the first skill that summons them.
+        for (tname, col), (col_ent, _k) in self.columns.items():
+            if tname not in ("monstats", "skills") or col_ent in ("*", "skills", "missiles", "states", "itemstatcost",
+                                                                  "skilldesc", "monstats", "monstats2", "properties"):
+                continue
+            owner = "monstats" if tname == "monstats" else "skills"
+            for i, v in enumerate(T[tname].column(col)):
+                if (r := self.cell_row(col_ent, v)) is not None and self.name(owner, i):
+                    self.give(col_ent, r, f"{self.bare(owner, i)}_{slug(col)}", f"{tname}.{col}")
+        # Objects kept their own names; level presets are named after their map file.
+        for i, v in enumerate(T["objects"].column("Name")):
+            self.give("objects", i, v, "Name")
+        for i, v in enumerate(T["lvlprest"].column("File1")):
+            self.give("lvlprest", i, Path(v.replace("\\", "/")).stem if v and v != "0" else "", "File1")
+        for ent in NUMERIC_KEY:
+            for e in self.idmap[ent]:
+                if e["name"] is None:
+                    e["name"], e["source"] = str(e["row"]), "row number"
         # Whatever is left.
         for ent in ENTITIES:
-            for e in self.idmap[ent]:
+            for e in self.idmap.get(ent, []):
                 if e["name"] is None:
                     if ent == "cubemain":
                         e["name"], e["source"] = f"Median recipe {e['row']}", "generated"
@@ -344,11 +408,18 @@ class Resolver:
                 else:
                     unresolved[ent].add(f"{tname}.{c}={r[ci]}")
         for ent, (_p, tname, keycol, idcol, _x) in ENTITIES.items():
+            if tname not in self.tables:
+                continue
             t = self.tables[tname]
             for i, r in enumerate(t.rows):
-                r[t.col(keycol)] = self.idmap[ent][i]["name"]
+                k = i
+                if ent in GROUPED:  # key cell names the group, not the row
+                    k = self.cell_row(ent, r[t.col(keycol)])
+                    if k is None:
+                        continue
+                r[t.col(keycol)] = self.idmap[ent][k]["name"]
                 if idcol and idcol in t.header:
-                    r[t.col(idcol)] = str(self.idmap[ent][i]["id"])
+                    r[t.col(idcol)] = str(self.idmap[ent][k]["id"])
         tc = self.tables.get("treasureclassex")
         if tc:
             for ci, cname in enumerate(tc.header):
