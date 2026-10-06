@@ -216,9 +216,9 @@ so Median's rows ran those. 110-129 are free.
 
 | D2Sigma | Function | Median skills | Pairs with | Port |
 |---|---|---|---|---|
-| 97 | 0x100a7690 | 74 | server 158 (missile row) | moved to 110 (empty: no client effect) |
+| 97 | 0x100a7690 | 74 | server 158 (missile row) | **110, 0.23.0**: D2Sigma's evaluates aurarangecalc and three calcs, reads the target and returns 0 without creating anything; ported as a function returning 0 |
 | 98 | 0x100a84b0 | 15: whirlpool, torment, spiral_dance, crucify_2, ravage, mana_pulse, ... | server 159 (strike burst) | **111, mxl-core 0.22.0**: cltmissilea/b/c by calc3 (1-3) on the target, skipped beyond distance 100 |
-| 99 | 0x100a7cb0 | 7: flamestrike, dragon_jaws, havoc | server 166 (missile at target) | moved to 112 (empty) |
+| 99 | 0x100a7cb0 | 7: flamestrike, dragon_jaws, havoc | server 166 (missile at target) | **112, 0.23.0**: calc1 client missiles, cltmissilea/b/c by calc2 (1-3), on the skill's target point (`0x214c80`) aimed past it, flags 0x21, index as init argument (initKind 1). calc1 is empty on flamestrike/dragon_jaws, so they draw no client missile in Median either |
 
 D2R client pieces used: data flag `0x34a0e0` (unit), skill target `0x9a570` (unit), client missile `0x1b7760`
 (&params, 0; same parameter block as the server's `0x5371a0`), record cltmissile +0x13e, a/b/c +0x140/+0x142/+0x144.

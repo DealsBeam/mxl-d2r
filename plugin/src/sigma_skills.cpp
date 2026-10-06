@@ -314,11 +314,14 @@ constexpr uint64_t CltDoTable = 0x235f7d0;
 constexpr uint64_t RvaUnitDataFlag = 0x34a0e0;     // (unit) -> data flag byte, as client functions read it
 constexpr uint64_t RvaClientTarget = 0x9a570;      // (unit) -> the unit's skill target (client)
 constexpr uint64_t RvaClientMissile = 0x1b7760;    // (&params, 0): client missile, D2R's client Charged Strike
+constexpr uint64_t RvaClientTargetXY = 0x214c80;   // (unit, &x, &y) -> non-zero: the skill's target point (client)
 constexpr int SkCltMissile = 0x13e;                // int16 cltmissile, then cltmissilea/b/c at +0x140/+0x142/+0x144
 
 using UnitDataFlagFn = uint8_t (*)(Unit* unit);
 using ClientTargetFn = Unit* (*)(Unit* unit);
 using ClientMissileFn = Unit* (*)(d2r::MissileParams* params, int32_t zero);
+using ClientTargetXYFn = int32_t (*)(Unit* unit, int32_t* x, int32_t* y);
+ClientTargetXYFn g_clientTargetXY = nullptr;
 UnitDataFlagFn g_unitDataFlag = nullptr;
 ClientTargetFn g_clientTarget = nullptr;
 ClientMissileFn g_clientMissile = nullptr;
@@ -366,6 +369,55 @@ auto CltDoStrikeBurst(Unit* unit, int32_t skillId, int32_t level) noexcept -> in
 	return 1;
 }
 
+// D2Sigma client 97 (0x100a7690), paired with the missile row (158): evaluates aurarangecalc and three calcs, reads
+// the target and returns 0, creating nothing (the row's missiles come from the server). Kept as a function so the
+// dispatcher takes the same "returned 0" path rather than the empty-slot one.
+auto CltDoMissileRow(Unit* /*unit*/, int32_t /*skillId*/, int32_t /*level*/) noexcept -> int64_t {
+	return 0;
+}
+
+// D2Sigma client 99 (0x100a7cb0), paired with the missile at target (166): calc1 client missiles, cltmissilea/b/c by
+// calc2 (clamped 1-3), each placed on the skill's target point and aimed past it (2 * target - caster), flags 0x21,
+// the index as init argument with D2Client's charged-strike style init (D2R initKind 1). flamestrike, dragon_jaws, ...
+auto CltDoMissileAtTarget(Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (unit == nullptr || g_clientMissile == nullptr || g_clientTargetXY == nullptr) {
+		return 0;
+	}
+	const uint32_t dataFlag = g_unitDataFlag(unit);
+	const uint8_t* skill = d2r::api.getSkillRecord(dataFlag, skillId);
+	if (skill == nullptr) {
+		return 0;
+	}
+	int32_t pick = d2r::api.evalSkillCalc(dataFlag, unit, At<int32_t>(skill, d2r::SkCalc2), skillId, level);
+	pick = pick < 1 ? 1 : (pick > 3 ? 3 : pick);
+	const int32_t missile = At<int16_t>(skill, SkCltMissile + pick * 2);
+	if (missile < 0 || missile >= d2r::api.missileCount(dataFlag)) {
+		return 0;
+	}
+	int32_t ux = 0, uy = 0, tx = 0, ty = 0;
+	if (!d2r::UnitXY(unit, &ux, &uy) || g_clientTargetXY(unit, &tx, &ty) == 0 || (tx == 0 && ty == 0)) {
+		return 0;
+	}
+	const int32_t count = d2r::api.evalSkillCalc(dataFlag, unit, At<int32_t>(skill, d2r::SkCalc1), skillId, level);
+	d2r::MissileParams params;
+	std::memset(&params, 0, sizeof(params));
+	params.flags = 0x21;
+	params.owner = unit;
+	params.missile = missile;
+	params.x = tx;
+	params.y = ty;
+	params.targetX = tx * 2 - ux;
+	params.targetY = ty * 2 - uy;
+	params.skill = skillId;
+	params.skillLevel = level;
+	params.initKind = 1;
+	for (int32_t i = 0; i < count; ++i) {
+		params.initArg = i;
+		g_clientMissile(&params, 0);
+	}
+	return 1;
+}
+
 using CltDoFn = int64_t (*)(Unit* unit, int32_t skill, int32_t level);
 struct ClientSlot {
 	int slot;
@@ -373,7 +425,9 @@ struct ClientSlot {
 	const char* name;
 };
 constexpr ClientSlot ClientFunctions[] = {
+	{110, CltDoMissileRow, "client missile row (D2Sigma client 97)"},
 	{111, CltDoStrikeBurst, "client strike burst (D2Sigma client 98)"},
+	{112, CltDoMissileAtTarget, "client missile at target (D2Sigma client 99)"},
 };
 
 }  // namespace
@@ -401,6 +455,7 @@ auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t
 	g_unitDataFlag = reinterpret_cast<UnitDataFlagFn>(context->exeBase + RvaUnitDataFlag);
 	g_clientTarget = reinterpret_cast<ClientTargetFn>(context->exeBase + RvaClientTarget);
 	g_clientMissile = reinterpret_cast<ClientMissileFn>(context->exeBase + RvaClientMissile);
+	g_clientTargetXY = reinterpret_cast<ClientTargetXYFn>(context->exeBase + RvaClientTargetXY);
 	for (const ClientSlot& f : ClientFunctions) {
 		const uint64_t rva = CltDoTable + static_cast<uint64_t>(f.slot) * 8;
 		const bool ok = context->PatchWriteU64(rva, Empty, sizeof(Empty), reinterpret_cast<uint64_t>(f.function));
