@@ -947,7 +947,10 @@ class Migrator:
             c9, c10 = h.index("calc9"), h.index("calc10")
             rs, pa, do = h.index("rightskill"), h.index("passive"), h.index("srvdofunc")
             arc, cdo = h.index("aurarangecalc"), h.index("cltdofunc")
-            clt_moved = {"97": "110", "98": "111", "99": "112"}  # D2Sigma client 97-99 -> free D2R client slots
+            # D2Sigma's client functions -> D2R's: 97-99 to the plugin's free slots; replaced vanilla ones to the D2R
+            # function that does what D2Sigma's does (15: Charged Strike fan = D2R 19; 11: spray = D2R 15; 95: like 98)
+            # or to the plugin (22: wall -> 113). 31 (Raise Skeleton) and 94 (doomknight2) keep D2R's.
+            clt_moved = {"97": "110", "98": "111", "99": "112", "15": "19", "11": "15", "95": "111", "22": "113"}
             n_cap = n_right = n_moved = n_ranged = 0
             for r in rows:
                 if not is_record(r):

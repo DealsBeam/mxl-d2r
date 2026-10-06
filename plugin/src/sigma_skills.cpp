@@ -14,6 +14,7 @@
 #include "auras.h"
 
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 
 namespace {
@@ -418,6 +419,56 @@ auto CltDoMissileAtTarget(Unit* unit, int32_t skillId, int32_t level) noexcept -
 	return 1;
 }
 
+// D2Sigma client 22 (0x100a7fa0; D2R's 22 is now an Amazon chain-lightning client): two cltmissilea placed on the
+// skill's target point, moved within aurarangecalc of the caster (as the teleport clamps), flying out perpendicular
+// to the cast direction, like the server's fire wall. parasite_2, parasite_3, rock_shock. Not ported: D2Sigma's
+// collision test of the spot for the missile's size (D2Common 10303, mask 5) and its town check.
+auto CltDoWall(Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (unit == nullptr || g_clientMissile == nullptr || g_clientTargetXY == nullptr) {
+		return 0;
+	}
+	const uint32_t dataFlag = g_unitDataFlag(unit);
+	const uint8_t* skill = d2r::api.getSkillRecord(dataFlag, skillId);
+	if (skill == nullptr) {
+		return 0;
+	}
+	const int32_t missile = At<int16_t>(skill, SkCltMissile + 2);
+	if (missile < 0 || missile >= d2r::api.missileCount(dataFlag)) {
+		return 0;
+	}
+	int32_t ux = 0, uy = 0, tx = 0, ty = 0;
+	if (!d2r::UnitXY(unit, &ux, &uy) || g_clientTargetXY(unit, &tx, &ty) == 0 || (tx == 0 && ty == 0)) {
+		return 0;
+	}
+	const int32_t range =
+		d2r::api.evalSkillCalc(dataFlag, unit, At<int32_t>(skill, d2r::SkAuraRangeCalc), skillId, level);
+	if (range != 0) {
+		const double dx = tx - ux, dy = ty - uy;
+		const double distance = std::sqrt(dx * dx + dy * dy);
+		const double limit = range < 0 ? -range : range;
+		if (distance >= limit && distance > 0.0) {
+			tx = ux + static_cast<int32_t>(dx * limit / distance);
+			ty = uy + static_cast<int32_t>(dy * limit / distance);
+		}
+	}
+	d2r::MissileParams params;
+	std::memset(&params, 0, sizeof(params));
+	params.flags = 0x21;
+	params.owner = unit;
+	params.missile = missile;
+	params.x = tx;
+	params.y = ty;
+	params.skill = skillId;
+	params.skillLevel = level;
+	params.targetX = tx + (ty - uy);
+	params.targetY = ty - (tx - ux);
+	g_clientMissile(&params, 0);
+	params.targetX = tx - (ty - uy);
+	params.targetY = ty + (tx - ux);
+	g_clientMissile(&params, 0);
+	return 1;
+}
+
 using CltDoFn = int64_t (*)(Unit* unit, int32_t skill, int32_t level);
 struct ClientSlot {
 	int slot;
@@ -428,6 +479,7 @@ constexpr ClientSlot ClientFunctions[] = {
 	{110, CltDoMissileRow, "client missile row (D2Sigma client 97)"},
 	{111, CltDoStrikeBurst, "client strike burst (D2Sigma client 98)"},
 	{112, CltDoMissileAtTarget, "client missile at target (D2Sigma client 99)"},
+	{113, CltDoWall, "client wall (D2Sigma client 22)"},
 };
 
 }  // namespace

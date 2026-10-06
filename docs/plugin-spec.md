@@ -209,8 +209,7 @@ caster's party. Needs the callback's rules first.
 ## Client skill functions (skills.txt `cltdofunc`)
 
 D2Sigma's client table is at **0x101df428** (4-byte pointers; entries other than D2Sigma's are filled with D2Client's
-at start-up). D2Sigma's own entries: replaced vanilla 11, 15, 22, 31, 93, 94, 95 (not compared yet) and added
-96-99. D2R's table is **0x235f7d0** (8-byte pointers, bound 130 at `0x235f7c4`, dispatcher `0x216d20` calls
+at start-up). D2Sigma's own entries: replaced vanilla 11, 15, 22, 31, 93, 94, 95 and added 96-99. D2R's table is **0x235f7d0** (8-byte pointers, bound 130 at `0x235f7c4`, dispatcher `0x216d20` calls
 (unit, skill, level)); D2R 3.x uses 96-109 for its own skills (97 Volcano, 98 Sigil Death Explosion, 99 Ring of Fire),
 so Median's rows ran those. 110-129 are free.
 
@@ -219,6 +218,18 @@ so Median's rows ran those. 110-129 are free.
 | 97 | 0x100a7690 | 74 | server 158 (missile row) | **110, 0.23.0**: D2Sigma's evaluates aurarangecalc and three calcs, reads the target and returns 0 without creating anything; ported as a function returning 0 |
 | 98 | 0x100a84b0 | 15: whirlpool, torment, spiral_dance, crucify_2, ravage, mana_pulse, ... | server 159 (strike burst) | **111, mxl-core 0.22.0**: cltmissilea/b/c by calc3 (1-3) on the target, skipped beyond distance 100 |
 | 99 | 0x100a7cb0 | 7: flamestrike, dragon_jaws, havoc | server 166 (missile at target) | **112, 0.23.0**: calc1 client missiles, cltmissilea/b/c by calc2 (1-3), on the skill's target point (`0x214c80`) aimed past it, flags 0x21, index as init argument (initKind 1). calc1 is empty on flamestrike/dragon_jaws, so they draw no client missile in Median either |
+
+Replaced vanilla client functions (mxl-core 0.24.0), compared with D2R's:
+
+| D2Sigma | Function | Median skills | D2Sigma does | Port |
+|---|---|---|---|---|
+| 11 | 0x100a8910 | flamefront_15 | random spray (±20) of the picked missile around the target | data -> D2R 15 (`0x2b3750`, the same spray) |
+| 15 | 0x100a7920 | vampiric_strike, batstrike_2, deathgaze, skills_2759 | Charged-Strike fan: calc1 missiles on the target aimed past it, index as init argument | data -> D2R 19 (`0x2ae540`, client Charged Strike: the same) |
+| 22 | 0x100a7fa0 | parasite_2, parasite_3, rock_shock | wall: two cltmissilea on the target point (clamped to aurarangecalc) flying out perpendicular | **plugin 113** (`CltDoWall`); D2R's 22 is now an Amazon chain-lightning client. Not ported: the spot's collision test, town check |
+| 31 | 0x100a7780 | Raise Skeleton, Raise Skeletal Mage | cltmissilea/b/c by calc2 on the corpse | keeps D2R 31 (`0x2b0ac0`): calc2 is empty, so both pick cltmissilea |
+| 93 | 0x100a86d0 | none | | |
+| 94 | 0x100a7ad0 | doomknight2_skill | Charged-Strike fan by calc2/calc1 (calc1 empty: draws nothing) | keeps D2R 94 (vanilla Doom Knight missile) |
+| 95 | 0x100a82a0 | necromage_skill | same as 98 | data -> plugin 111 |
 
 D2R client pieces used: data flag `0x34a0e0` (unit), skill target `0x9a570` (unit), client missile `0x1b7760`
 (&params, 0; same parameter block as the server's `0x5371a0`), record cltmissile +0x13e, a/b/c +0x140/+0x142/+0x144.
