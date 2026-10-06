@@ -52,10 +52,11 @@ def main() -> int:
     # level types point at its own (e.g. tiles/mxl/quest/yshari/basewall.dt1). Note: Median's .ds1 maps still use
     # Median's object numbers; objects 573+ were renumbered (docs/txt-migrate.md) and need remapping later.
     shutil.copytree(MXL_TILES, data / "global" / "tiles")
-    # Median-only missile and overlay animations (.dcc): D2R crashes on a missing classic graphics file. Files
-    # D2R already has are left alone so its own effects keep matching their HD versions.
+    # Median-only missile and overlay animations (.dcc): D2R crashes on a missing classic graphics file. Median-only
+    # inventory pictures (items/*.dc6, the invfile/uniqueinvfile/setinvfile names): classic mode (G) draws items from
+    # them. Files D2R already has are left alone so its own effects and items keep matching their HD versions.
     d2r_files = set(D2R_FILELIST.read_text("utf-8").splitlines()) if D2R_FILELIST.exists() else set()
-    for sub in ("missiles", "overlays"):
+    for sub in ("missiles", "overlays", "items"):
         for p in (MXL_GLOBAL / sub).rglob("*"):
             rel = p.relative_to(MXL_GLOBAL.parent.parent).as_posix().lower()  # data/global/...
             if p.is_file() and f"data:{rel}" not in d2r_files:

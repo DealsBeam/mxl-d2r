@@ -42,6 +42,21 @@ mxl-core, mxl-skills, mxl-items, mxl-monsters, mxl-npc, mxl-ui. Every hook check
 ## Phase 5: Graphics
 First test whether legacy-graphics mode loads modded DCC/DC6. Then decide per asset.
 
+Status (2026-10-06):
+- Installed for classic mode (install_mod.py, Median-only files; ones D2R has stay D2R's): map tiles/presets
+  (`global/tiles`, also needed in HD), missile and overlay animations (265 + 107 .dcc), item pictures (542 .dc6).
+  Every item picture name the item tables use exists (D2R's or Median's). 11 missile CelFiles and 15 overlay
+  files exist nowhere (several are vanilla's own dead rows: nul, gore20, pentacle; Median's: extra/icestormimpactvar3,
+  extra/spikefiendmamamissile, extra/auraresistcoldcast, extra/firesmoke.dcc, extra/lifedrain.dcc, extra/genericsplash,
+  'expansion|baaldeathghostie01'): classic mode may fail on those if they ever spawn.
+- Test pending: does classic mode (G) draw these from the mod (docs/testing.md)?
+- Next: monsters (383 MB). gfx_placeholders.py swaps Median's 254 unknown monster codes to D2R donors because the
+  classic COF is read even in HD (timing). Shipping Median's monster COF/DCC would let monsters keep their own codes
+  (Median's animation timing; classic art), with monsters.json still mapping each to a donor HD model; needs a check
+  that HD models play with Median's frame counts, and Median's animdata.d2 entries. Then HD art: items.json /
+  missiles.json look-alikes today (item_hd.py, missile_hd.py); converting Median's DC6/DCC to HD .sprite is the
+  way to real HD pictures. Skill tree backgrounds and tab titles (bug #3) are art too.
+
 ## Phase 6: Test and release
 Smoke tests, saves/reload, TCP/IP, `d2rl pack`.
 
