@@ -58,6 +58,9 @@ constexpr int SkCalc1 = 0x190;                    // skills calc1-4 at +0x190
 constexpr int SkCalc3 = 0x198;
 constexpr int StatLife = 6;
 constexpr int StatMaxLife = 7;
+constexpr int StatLastRevived = 88;               // Median: monster class last revived (param LastRevivedParam)
+constexpr int LastRevivedParam = 0x200f;
+constexpr int ReviveSlot = 58;                    // d2r::SrvDoTable
 constexpr int SkSummode = 0x113;                  // byte, -1 none
 constexpr int SkParam1 = 0x1b8;
 // D2R's missile record is 1.13c's moved on by 0x24 from +0x24 (D2Sigma reads Param4 at +0x44, SrvCalc1 at +0x80, ...)
@@ -354,6 +357,55 @@ auto HitSummon(Game* game, Unit* missile, Unit* /*target*/) noexcept -> int64_t 
 	return 1;
 }
 
+// D2Sigma 73 (0x1008f490) -> slot 65: a monster spawned where the missile is, in monster mode sHitPar2 (0-15, else
+// 1; Habeas Corpus uses 12, DD: a corpse). The monster: Param4 set -> the class the owner last revived (stat 88,
+// param 0x200f, written by D2Sigma's resurrect, here by ReviveRecording), else sHitPar1. 1.13c D2Game 0x6fc67cf0 ->
+// 0x6fc66f70 (as hit 41). Nothing revived yet (stat 0) spawns nothing; D2Sigma would spawn monstats row 0.
+// habeas_corpus (1)
+auto HitSpawnCorpse(Game* game, Unit* missile, Unit* /*target*/) noexcept -> int64_t {
+	if (game == nullptr || missile == nullptr) {
+		return 0;
+	}
+	const uint8_t* record = RecordOf(game, missile);
+	Unit* owner = g_owner(game, missile);
+	if (record == nullptr) {
+		return 0;
+	}
+	int32_t monster = At<int32_t>(record, MsHitPar1);
+	if (At<int32_t>(record, MsParam4) != 0) {
+		monster = owner != nullptr ? g_getStat(owner, StatLastRevived, LastRevivedParam) : 0;
+	}
+	int32_t mode = At<int32_t>(record, MsHitPar2);
+	if (mode < 0 || mode > 15) {
+		mode = 1;
+	}
+	int32_t x = 0, y = 0;
+	void* room = g_unitRoom(missile);
+	if (monster <= 0 || room == nullptr || !d2r::UnitXY(missile, &x, &y)) {
+		return 1;
+	}
+	room = g_roomAt(room, x, y);
+	if (room != nullptr && g_spawnMonster(game, room, x, y, monster, mode, -1, 0) == nullptr) {
+		g_spawnMonster(game, room, x, y, monster, mode, 4, 0);
+	}
+	return 1;
+}
+
+// Server skill function 58 (D2R's Revive, which Median's resurrect_2 runs: D2Sigma 167, 0x100ad4a0) also notes the
+// revived monster's class on the caster (stat 88, param 0x200f) for hit 73, as D2Sigma's resurrect does.
+SrvDoFn g_revive = nullptr;
+auto ReviveRecording(Game* game, Unit* unit, int32_t skill, int32_t level) noexcept -> int64_t {
+	Unit* corpse = game != nullptr && unit != nullptr ? d2r::api.skillTargetUnit(game, unit) : nullptr;
+	const int32_t monster = corpse != nullptr && At<int32_t>(corpse, d2r::UnitType) == 1
+	                            ? g_unitClass(corpse, "mxl-core missile_hits.cpp", __LINE__)
+	                            : -1;
+	const int64_t result = g_revive(game, unit, skill, level);
+	if (monster > 0) {
+		g_setStat(unit, StatLastRevived, monster, LastRevivedParam);
+	}
+	return result;
+}
+
 // D2Sigma 34 (0x1008df40) -> slot 67: the unit hit, when it is the owner's ally (1.13c D2Game 0x6fd00570, D2R
 // 0x492790 the other way round), gets calc1 % of its maximum life back (the missile skill's calc1 at its level;
 // 100 or more: full life). Life is stat 6 and maximum life 7, both in 256ths. (6)
@@ -557,6 +609,7 @@ constexpr HitSlot Hits[] = {
 	{62, HitSpawnAtTarget, "missile at owner's target (D2Sigma hit 62)"},
 	{63, HitOwnerState, "owner state (D2Sigma hit 71)"},
 	{64, HitCastSkill, "cast skill (D2Sigma hit 72)"},
+	{65, HitSpawnCorpse, "monster/corpse at the missile (D2Sigma hit 73)"},
 	{66, HitNova, "nova (D2Sigma hit 77)"},
 	{67, HitHealAlly, "heal ally (D2Sigma hit 34)"},
 	{68, HitSummon, "summon (D2Sigma hit 41)"},
@@ -614,9 +667,20 @@ auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t
 			used += n > 0 ? static_cast<size_t>(n) : 0;
 		}
 	}
+	// Revive: wrapped in place (the slot holds D2R's own function).
+	const uint64_t reviveRva = d2r::SrvDoTable + ReviveSlot * 8;
+	const uint64_t revive = *reinterpret_cast<const volatile uint64_t*>(g_exeBase + reviveRva);
+	g_revive = reinterpret_cast<SrvDoFn>(revive);
+	const bool reviveOk = revive != 0 && context->PatchWriteU64(reviveRva, &revive, sizeof(revive),
+	                                                            reinterpret_cast<uint64_t>(&ReviveRecording));
+	installed += reviveOk ? 1 : 0;
+	if (used < reportSize) {
+		std::snprintf(report + used, reportSize - used, "%s srvdo %d revive records stat 88%s", used ? ";" : "",
+		              ReviveSlot, reviveOk ? "" : " FAILED");
+	}
 	return installed;
 }
 
 auto MissileHitCount() noexcept -> int {
-	return static_cast<int>(sizeof(Hits) / sizeof(Hits[0]) + sizeof(CltHits) / sizeof(CltHits[0]));
+	return static_cast<int>(sizeof(Hits) / sizeof(Hits[0]) + sizeof(CltHits) / sizeof(CltHits[0])) + 1;
 }
