@@ -7,6 +7,7 @@
 
 #include "d2r.h"
 #include "pet_scaling.h"
+#include "auras.h"
 
 #include <cstdio>
 #include <cstring>
@@ -290,6 +291,7 @@ constexpr SlotFunction Functions[] = {
 	{176, SrvDoMissileBarrage, "missile barrage (D2Sigma 157)"},
 	{177, SrvDoMissileRow, "missile row (D2Sigma 158)"},
 	{178, SrvDoStrikeBurst, "strike burst (D2Sigma 159)"},
+	{184, SrvDoAura, "aura with layered stats (D2Sigma 165)"},
 	{185, SrvDoMissileAtTarget, "missile at target (D2Sigma 166)"},
 };
 
@@ -298,6 +300,7 @@ constexpr SlotFunction Functions[] = {
 auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> int {
 	d2r::Bind(context->exeBase);
 	InstallPetScaling(context->exeBase);
+	InstallAuras(context->exeBase);
 	static constexpr uint8_t Empty[8] = {};
 	int installed = 0;
 	size_t used = 0;

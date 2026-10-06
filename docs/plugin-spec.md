@@ -26,7 +26,7 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 | 161 (-> D2R 121) | 0x100ad0f0 | 2 | hyena_strike, exorcism — **data** (D2R's Rabies, see below) |
 | 162 | 0x100ac7c0 | 1 | skills_667 |
 | 163, 164, 168-170 | 0x100a9ac0, 0x100ac430, 0x100aabf0, 0x100ac200, 0x100aa9e0 | 0 | unused by the data |
-| 165 | 0x100ab190 | 10 | Holy Freeze, skills_1907 |
+| 165 (-> 184) | 0x100ab190 | 10 | Holy Freeze, skills_1907, item auras (Penumbra, Majesty, ...) — **plugin** (aura with layers) |
 | 166 (-> 185) | 0x100abff0 | 7 | flamestrike, flamestrike_2 — **plugin** (missile at target) |
 | 167 | 0x100ad4a0 | 1 | resurrect_2 |
 | 171 (-> 190) | 0x100acee0 | 1 | queen_of_blades — needs Median's damage block (see below) |
@@ -155,7 +155,7 @@ the melee hit. Only the missile choice differs: D2Sigma takes srvmissilea/b/c by
 (`0x571700`) by a state/stat rule of its own, else srvmissilea. Mapped in data; hyena_strike's srvmissilec
 (when Median stat 191 > 0) is lost.
 
-**165 (auras, still open):** `0x100ab190` is vanilla's aura routine (aurastate on the caster, auratargetstate on
+**165 (auras; ported, see above):** `0x100ab190` is vanilla's aura routine (aurastate on the caster, auratargetstate on
 units found by aurarangecalc/aurafilter through D2Game's finder, callback `0x100bbbe0`), plus one Median addition:
 each aurastat carries a layer from D2Sigma's skills2 (first six dwords per row), e.g. aurastat `state` with layer 940
 (a Median state) or `item_skillonattack` with a packed skill/level. 6 of the 10 skills use layers, so D2R's aura 65
@@ -166,7 +166,15 @@ EType, min/max from Median's own helpers `0x100a6020`/`0x100a5ec0`, `0x10041e80`
 target and 171 to every unit in aurarangecalc chosen by aurafilter (`0x10042600`, callback `0x100bb740`). Port
 together with D2R's damage application.
 
-### 165: aura (`0x100ab190`) — not ported yet
+### 165: aura (`0x100ab190`) — mxl-core 0.16.0, slot 184 (`auras.cpp`)
+
+Ported as D2R's aura (srvdofunc 65, `0x563d90`) followed by a rewrite of the caster's aura stat lists
+(`0x2f5b80` (unit, state, 0) for aurastate and auratargetstate; `0x2f7c00` (dataFlag, list, stat, value, layer)):
+each layered aurastat gets its own aurastatcalc (D2R record +0x88 + 4k; aurastat ids +0x74) at its layer, layer 0 of
+that stat the last unlayered value or 0. Layers come from `mxl_auras.h` (txt_migrate aura_tables: skills2 dwords 0-5,
+`state` layers -> migrated states, Encode 2/3 -> (skill << 6) | level with the migrated skill, +skill/synergy stats ->
+migrated skill). Targets other than the caster keep D2R's layer-0 stats (no layered Median aura has a range).
+The notes below are the original analysis.
 
 Median's own aura pulse built from C++ callbacks: aura stats onto units with aurastate (1.13c +0x80), auratargetstate
 (+0x82), units in aurarangecalc (+0x64) chosen by aurafilter (+0x50) through `0x10042600` with callback `0x100bbbe0`.
