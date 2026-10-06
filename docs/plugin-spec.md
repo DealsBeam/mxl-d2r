@@ -453,8 +453,9 @@ change before the first chunk exists.
 **Fix (mxl-core 0.6.0, `states_fix.cpp`):** element 0x2c00 (constructor immediate, live pool field, creation memset);
 both arrays move to the new tail, current states at +0x2b00 and "changed" flags at +0x2b00 + blocks*4 (room for 64
 blocks in all); displacements patched in the check (`0x2f6220`), set/clear (`0x2f7ea0`, 3), array pointer
-(`0x2f6370`), "changed" pointer (`0x2f62d0`, dword index 0x2bc -> 0xac0) and the copy routine's 64 accesses
-(`0x2f0d80`, which now copies the 32-block state array and leaves the "changed" flags). 72 sites (+1 data), checked
+(`0x2f6370`), "changed" pointer (`0x2f62d0`, dword index 0x2bc -> 0xac0) (the copy routine `0x2f0d80` is NOT patched: its only caller `0x2f65d0` copies from a stack template
+whose +0xaf0..+0xb70 it zeroes; redirecting the reads took 0x80 bytes of other stack data as states, bug #21;
+the creation memset, grown to 0x2c00, zeroes the new tail). 8 sites (+1 data; 0.6.0-0.33.2 had 72), checked
 byte for byte, one D2RLoader transaction, skipped if the pool already has chunks. Callers of the array pointers
 (`0x336440`, `0x3356c0`, `0x336330`) size their loops from the live block count. Open: the client/server state
 packets' state-id width (if narrower than 10 bits, states above it misbehave in multiplayer independently of this fix);
