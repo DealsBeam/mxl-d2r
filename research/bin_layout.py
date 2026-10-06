@@ -23,6 +23,8 @@ def index(table, key):
 mis, mon = index("missiles", "Missile"), index("monstats", "Id")
 REFS = {c: mis for c in h if re.match(r"(srv|clt)missile[abc]?$", c)}
 REFS.update(summon=mon)
+sts = index("states", "state")
+REFS.update({c: sts for c in ("aurastate", "auratargetstate", "passivestate")})
 fmts = {"<i": 4, "<h": 2, "<H": 2, "<b": 1, "<B": 1}
 for ci, col in enumerate(h):
     if want and col not in want:
