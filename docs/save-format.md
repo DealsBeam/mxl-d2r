@@ -7,7 +7,10 @@ up first (`Saved Games/Diablo II Resurrected/mxl-manual-backups/`) and edit only
 - Signature 0xaa55aa55, version 0x69 at +4, file size at +8, checksum at +0xc (rotate-left-1 + byte sum over the
   file with the checksum zeroed).
 - Class at +0x18, level (display) at +0x1b, name at +0x12b.
-- D2RLoader's sidecar `<name>.d2rl` repeats the save's checksum (+0x34) and size (+0x38): update both after an edit.
+- D2RLoader's sidecar `<name>.d2rl`: `D2RL`, u16 version 2, u16 header size 0x2c, u32 body length at +0x08,
+  SHA-256 of the body (+0x2c to the end) at +0x0c. The body repeats the save's checksum (+0x34) and size (+0x38) and
+  holds a SHA-256 of the whole `.d2s` at +0x3c. After an edit update all four (checksum, size, save hash, then the
+  body hash); a mismatch makes the character silently disappear from character select.
 
 ## Character stats ("gf")
 16-bit stat id, then the value in itemstatcost **CSvBits** (Median: strength-statpts 11, newskills 9, level 8,

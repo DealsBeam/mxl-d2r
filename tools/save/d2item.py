@@ -75,7 +75,7 @@ def read_item(b,pos):
     if not it['simple']:
         it['id']=r.n(32); it['ilvl']=r.n(7); q=it['quality']=r.n(4)
         if r.bit(): it['pic']=r.n(3)
-        if r.bit(): it['autoaffix']=r.n(11)
+        if r.bit(): it['autoaffix']=r.n(16)  # D2R 3.3: 16 bits
         if q==1: it['lowq']=r.n(3)
         elif q==3: it['sup']=r.n(3)
         elif q==4: it['prefix']=r.n(11); it['suffix']=r.n(11)
