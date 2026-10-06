@@ -1,4 +1,4 @@
-﻿// mxl-core: D2RLoader plugin carrying the D2Sigma behaviour that data alone cannot express (docs/plugin.md).
+// mxl-core: D2RLoader plugin carrying the D2Sigma behaviour that data alone cannot express (docs/plugin.md).
 //
 // It loads with the MedianXL mod, logs the game build it runs on and adds the console command "mxl". Engine
 // changes are tied to one game image (RVAs from the dump of the D2R image D2RLoader runs, tools/dump_image.py), so
@@ -15,6 +15,7 @@
 #include "level_types.h"
 #include "calc_codes.h"
 #include "item_spells.h"
+#include "missile_hits.h"
 
 #include <windows.h>
 
@@ -23,7 +24,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.24.0";
+constexpr const char* PluginVersion = "0.25.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -33,6 +34,8 @@ char g_statesReport[160] = "off: not the expected game image";
 char g_levelTypesReport[160] = "off: not the expected game image";
 char g_calcReport[160] = "off: not the expected game image";
 char g_itemSpellsReport[160] = "off: not the expected game image";
+char g_missileHitsReport[512] = "";
+int g_missileHitsInstalled = 0;
 
 constexpr D2RL::PluginInfo Info {
 	.infoSize    = D2RL::PluginInfoSize,
@@ -79,6 +82,9 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	command->plugin->WriteConsoleMessage(line);
 	std::snprintf(line, sizeof(line), "item spells %s", g_itemSpellsReport);
 	command->plugin->WriteConsoleMessage(line);
+	std::snprintf(line, sizeof(line), "missile hits %d/%d:%s", g_missileHitsInstalled, MissileHitCount(),
+	              g_missileHitsReport[0] ? g_missileHitsReport : " none");
+	command->plugin->WriteConsoleMessage(line);
 	return D2RL::ConsoleCommandResult::Handled;
 }
 
@@ -114,6 +120,10 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		context->LogInfo(line);
 		InstallItemSpells(context, g_itemSpellsReport, sizeof(g_itemSpellsReport));
 		std::snprintf(line, sizeof(line), "mxl-core: item spells %s", g_itemSpellsReport);
+		context->LogInfo(line);
+		g_missileHitsInstalled = InstallMissileHits(context, g_missileHitsReport, sizeof(g_missileHitsReport));
+		std::snprintf(line, sizeof(line), "mxl-core: %d/%d missile hits:%s", g_missileHitsInstalled, MissileHitCount(),
+		              g_missileHitsReport);
 		context->LogInfo(line);
 	}
 	return context->RegisterConsoleCommand("mxl", MxlCommand, "Median XL core plugin status.");

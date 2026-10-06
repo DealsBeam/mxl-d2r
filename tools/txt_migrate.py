@@ -679,6 +679,44 @@ class Migrator:
             groups.append((i, *(lower.get(k.lower()) for k in keys)))
         return groups
 
+    # D2Sigma's missile hit functions (server table 0x101dc7c8) that are its own: added 61-77, and 34/41/42 whose
+    # numbers D2R 3.x gave to its own missiles. D2R's server hit table (0x2391030) is bounded at 71 with 61-70 empty;
+    # they move there, the plugin fills the ones it has ported (docs/plugin-spec.md, Missile functions).
+    SRV_HIT_MOVED = {"34": "67", "41": "68", "42": "70", "61": "61", "62": "62", "69": "69", "71": "63", "72": "64",
+                     "73": "65", "77": "66"}
+    # D2Sigma's client hit 5-7: D2R's 6/7 are empty, its 5 is Echoing Strike's; Median's 5 moves to the empty 20.
+    CLT_HIT_MOVED = {"5": "20"}
+
+    def missile_functions(self) -> None:
+        """Median's missiles on D2Sigma's own hit functions move to the slots above; for hit 72 (the owner casts the
+        skill sHitPar1, D2Sigma 0x1008d400) sHitPar1 is a Median skill row, translated to the migrated id."""
+        skill_ids = self.median_ids("skills")
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "missiles.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            d_h, d_rows = read_tsv(D2R / bank / "missiles.txt") if (D2R / bank / "missiles.txt").exists() else ([], [])
+            d2r_own = {r[0] for r in d_rows if r} if d_h else set()
+            sh, ch, p1 = h.index("pSrvHitFunc"), h.index("pCltHitFunc"), h.index("sHitPar1")
+            moved = skills = 0
+            for r in rows:
+                if not is_record(r) or r[0] in d2r_own:
+                    continue
+                if r[sh] == "72" and r[p1].isdigit():
+                    r[p1] = str(skill_ids.get(int(r[p1]), int(r[p1])))
+                    skills += 1
+                if r[sh] in self.SRV_HIT_MOVED:
+                    r[sh] = self.SRV_HIT_MOVED[r[sh]]
+                    moved += 1
+                if r[ch] in self.CLT_HIT_MOVED:
+                    r[ch] = self.CLT_HIT_MOVED[r[ch]]
+                    moved += 1
+            write_tsv(p, h, rows)
+            if bank == "":
+                self.report.append(f"\nmissiles: {moved} hit functions moved to D2R's free slots; "
+                                   f"{skills} hit-72 skill parameters translated")
+
     def remap_property_params(self) -> None:
         """Median's item properties give skill (and monster) parameters as Median row numbers, but D2R keeps its
         own rows at their IDs and Median's from that point move (skills 357+ by 72: idmap.json). Rewrite numeric
@@ -1356,6 +1394,7 @@ def main() -> int:
     m.item_spells()
     m.help_tooltips()
     m.remap_property_params()
+    m.missile_functions()
     m.item_spell_tables()
     m.pet_tables()
     m.aura_tables()

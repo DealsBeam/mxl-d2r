@@ -236,14 +236,23 @@ D2R client pieces used: data flag `0x34a0e0` (unit), skill target `0x9a570` (uni
 
 ## Missile functions
 
-D2Sigma's missile do-tables start at **0x101dc4b0** (client, 72 entries) and 0x101dc5d0 (server); start-up fills
-the vanilla entries, D2Sigma's own are client 19 (0x100892f0), 69, 70 and server 4, 15 (0x10089930), 38. Client 19
-/ server 15 are vanilla Frozen Orb's spawner (every Param1 frames a SubMissile1 in the missile's direction, then turn
-by Param2 of 64), which D2R's `0x1a8880` / `0x459380` do the same way; Median runs 1,017 server-15 / 1,110 client-19
-missiles on them (whirlpool's spawners among them). Not compared: server 4 (phalanx), client 69 (phalanx_2; D2R
-uses 69/70 and server 38 for its own missiles), hit functions (`D2MslHitFuncs.cpp`; whirlpool's hit 29/30 follow
-vanilla Frozen Orb's ring semantics, sHitPar1 = ring size). D2R tables: server do `0x2390e80` (index = record
-+0x2c), client do `0x2358430`.
+D2Sigma's missile tables (filled at start-up with the vanilla D2Client/D2Game functions, its own entries left in):
+client do **0x101dc4b0** (72), server do 0x101dc5d0, client hit **0x101dc6c8** (64), server hit **0x101dc7c8**. D2R's:
+server do `0x2390e80` (index = record +0x2c), client do `0x2358430`, server hit **`0x2391030`** (record +0x2e,
+bound 71 at `0x2391404`, dispatcher `0x464ac0`: (game, missile, target or null); 61-70 empty), client hit
+**`0x2358710`** (record +0x2a, bound 81 at `0x2358a64`). The 1.13 D2Game that D2Sigma calls into is decompiled in
+`mxl_extracted/3_ghidra/D2Game.dll.c` (and a Ghidra project of the launcher's copy, `ghidra_query.ps1 -Project D2Game`).
+
+| Function | D2Sigma | Median missiles | Port |
+|---|---|---|---|
+| client do 19 / server do 15 | 0x100892f0 / 0x10089930 | 1,110 / 1,017 (Frozen Orb style spawners) | same as D2R's (`0x1a8880` / `0x459380`) |
+| server do 4, client do 69 | 0x10089cc0, 0x10089660 | phalanx (2) | not yet (D2R's 69 is corpse explosion's) |
+| server hit 21 | 0x1008cb20 | 57 | same as D2R's (`0x45ef10`: auratargetstate + aurastats on the target); D2Sigma adds skills2 layers, which none of these 57 missiles' skills use |
+| server hit 72 -> **64** | 0x1008d400 | 55 (egg_trap, wintertide, phoenix_wave, ...) | **0.25.0**: the owner casts skill sHitPar1 (Median row, translated) at level sHitPar2 / the missile's level on the unit hit or the missile's spot, through D2R's event-skill caster `0x589930` (1.13c `0x6fd114f0`) |
+| server hit 61 -> **61** | 0x1008d2d0 | 3 | **0.25.0**: the owner runs server skill function sHitPar1 (D2Sigma numbering, translated) for the record's Skill (else the missile's) at the missile's level |
+| server hit 69 -> 69, 77 -> 66, 71 -> 63, 30, 62 -> 62, 73 -> 65, 40 | 0x1008eeb0, 0x1008d960, 0x1008e6f0, 0x1008d220, 0x1008dd70, 0x1008f490, 0x1008cfa0 | 21, 14, 12, 8, 2, 1, 2 | not yet (moved slots are empty: the missile hits without the extra effect) |
+| server hit 34 -> 67, 41 -> 68, 42 -> 70 | 0x1008df40, 0x1008f210, 0x1008e9a0 | 6, 14, 1 | not yet; moved off D2R's echoing strike / miasma / blade warp functions |
+| client hit 5 -> 20, 6, 7 | 0x1008c660, 0x1008c970, 0x1008c770 | 1, 2, 14 | not yet (5 moved off D2R's echoing strike) |
 
 ## D2R side (dump of image 0x6ab3782c; RVAs relative to the image base)
 
