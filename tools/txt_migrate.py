@@ -713,6 +713,10 @@ class Migrator:
                      "73": "65", "77": "66"}
     # D2Sigma's client hit 5-7: D2R's 6/7 are empty, its 5 is Echoing Strike's; Median's 5 moves to the empty 20.
     CLT_HIT_MOVED = {"5": "20"}
+    # D2Sigma's missile do 4 (server 0x10089cc0) / client do 69 (0x10089660), phalanx: D2R's 4 and 69 are its own,
+    # so they move to the empty server slot 46 and the client slot 14 no missile uses (plugin missile_hits.cpp).
+    SRV_DO_MOVED = {"4": "46"}
+    CLT_DO_MOVED = {"69": "14"}
 
     def missile_functions(self) -> None:
         """Median's missiles on D2Sigma's own hit functions move to the slots above; for hit 72 (the owner casts the
@@ -746,6 +750,7 @@ class Migrator:
             d_h, d_rows = read_tsv(D2R / bank / "missiles.txt") if (D2R / bank / "missiles.txt").exists() else ([], [])
             d2r_own = {r[0] for r in d_rows if r} if d_h else set()
             sh, ch, p1 = h.index("pSrvHitFunc"), h.index("pCltHitFunc"), h.index("sHitPar1")
+            sd, cd = h.index("pSrvDoFunc"), h.index("pCltDoFunc")
             moved = skills = 0
             for r in rows:
                 if not is_record(r) or r[0] in d2r_own:
@@ -770,9 +775,15 @@ class Migrator:
                 if r[ch] in self.CLT_HIT_MOVED:
                     r[ch] = self.CLT_HIT_MOVED[r[ch]]
                     moved += 1
+                if r[sd] in self.SRV_DO_MOVED:
+                    r[sd] = self.SRV_DO_MOVED[r[sd]]
+                    moved += 1
+                if r[cd] in self.CLT_DO_MOVED:
+                    r[cd] = self.CLT_DO_MOVED[r[cd]]
+                    moved += 1
             write_tsv(p, h, rows)
             if bank == "":
-                self.report.append(f"\nmissiles: {moved} hit functions moved to D2R's free slots; "
+                self.report.append(f"\nmissiles: {moved} hit/do functions moved to D2R's free slots; "
                                    f"{skills} hit-71/72 rows translated")
         # Hit 41 (D2Sigma 0x1008f210) spawns the monstats row its skill's calc1 gives; those formulas name Median
         # rows (e.g. "ulvl+2387"). Numbers whose monstats row moved are rewritten; others ("ulvl==140") stay.

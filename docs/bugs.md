@@ -6,7 +6,7 @@ Found while play-testing the port. "Interim" fixes are data stand-ins until the 
 |---|---|---|---|
 | 1 | Skill icons missing | fixed | IconCel lives at skilldesc.bin +0x16 (D2SkillIcons.cpp); `tools/skill_icons.py` |
 | 2 | Skill icons small | fixed | D2R draws icons at sprite size; sheets capped at 62 icons at 130 px (Amazon 118 px) |
-| 3 | Skill tree only had 3 tabs | fixed (experiment worked) | `tools/ui_layouts.py` 8-tab layout. Still missing: tab names/art, Median's tab rules (devotion locks, "pick up to three") |
+| 3 | Skill tree only had 3 tabs | fixed (experiment worked) | `tools/ui_layouts.py` 8-tab layout. Still missing: tab names/art, Median's tab rules (devotion locks, "pick up to three"). Tab names: D2R's panel fills per-class text for 3 tabs only (`textTab0-2`; the image has no textTab3+), and Median's tab titles are not text (its StrSklTree strings are empty; the titles are drawn in its tree art): left for Phase 5 with the per-class tree backgrounds (`skillBackgroundFile`) |
 | 4 | Can't allocate skill points | works in game; real caps to test | skpoints used D2Sigma's cap variables (`mlvl`, `skcp`, `skcn`) -> cost 999. Now Median's real caps: per-skill base + Specialization + lock rules in skpoints; item "+max level of skill" bonuses (skcp) still 0 |
 | 5 | Keybinds lost on exit | interim, retest | Likely the skills could not be bound (rightskill unset on 448 of 470 tree skills: D2Sigma's picker ignored it) or were not owned (#4) |
 | 6 | Town portal skill does nothing | fix to test | srvdofunc 155 is D2Sigma's itemless portal; 113 needs a scroll/book. Now D2R's itemless portal 109 ("Townportal O Skill") + rightskill 1 (docs/plugin-spec.md). The other D2Sigma do-functions moved to 172-190 for the plugin |

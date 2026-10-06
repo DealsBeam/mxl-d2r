@@ -20,6 +20,14 @@ using d2r::Game;
 using d2r::Unit;
 
 constexpr uint64_t SrvHitTable = 0x2391030;
+constexpr uint64_t MissileSrvDoTable = 0x2390e80;       // server missile "do" (record +0x2c), no bound; 46-54 empty
+constexpr uint64_t MissileCltDoTable = 0x2358430;       // client missile "do" (record +0x28), 77 slots; 14 unused
+constexpr int PhalanxSrvSlot = 46;
+constexpr int PhalanxCltSlot = 14;
+constexpr uint64_t RvaMissileElapsed = 0x3bb0f0;  // (missile) -> frames gone: total (data +0x10) - remaining
+constexpr uint64_t RvaMissileRemaining = 0x3bb1e0; // (missile) -> frames left: ceil(data +0x14 (float) / step)
+constexpr int MissileDataPtr = 0x10;              // unit -> missile data
+constexpr int MissileDataStep = 0x30;             // 1.13c data +0x28 (D2Common 11018 / 10637): Fire Wall's counter
 constexpr uint64_t CltHitTable = 0x2358710;       // client hit functions (record +0x2a), bound 81 at 0x2358a64
 constexpr uint64_t RvaClientOwner = 0x9a7b0;      // (missile) -> its owner on the client
 constexpr uint64_t RvaClientTarget = 0x9a570;     // (unit) -> its skill target on the client
@@ -54,6 +62,14 @@ constexpr int MsHitSubMissile1 = 0x46;            // int16
 constexpr int MsCltHitSubMissile1 = 0x4e;         // int16 (D2R's client hit 2, 0x1ac8f0)
 constexpr int MsCHitPar1 = 0x90;
 constexpr int MsCHitPar2 = 0x94;
+constexpr int MsParam1 = 0x5c;
+constexpr int MsParam2 = 0x60;
+constexpr int MsParam3 = 0x64;
+constexpr int MsCltParam1 = 0x7c;
+constexpr int MsCltParam2 = 0x80;
+constexpr int MsCltParam3 = 0x84;
+constexpr int MsSubMissile1 = 0x3a;               // int16
+constexpr int MsCltSubMissile1 = 0x40;            // int16
 constexpr int SkCalc1 = 0x190;                    // skills calc1-4 at +0x190
 constexpr int SkCalc3 = 0x198;
 constexpr int StatLife = 6;
@@ -130,6 +146,8 @@ SetStatFn g_setStat = nullptr;
 UnitRoomFn g_unitRoom = nullptr;
 RoomAtFn g_roomAt = nullptr;
 SpawnMonsterFn g_spawnMonster = nullptr;
+MissileIntFn g_elapsed = nullptr;
+MissileIntFn g_remaining = nullptr;
 uint64_t g_exeBase = 0;
 
 auto RecordOf(Game* game, Unit* missile) noexcept -> const uint8_t* {
@@ -228,8 +246,8 @@ auto HitNova(Game* game, Unit* missile, Unit* /*target*/) noexcept -> int64_t {
 	if (owner == nullptr || record == nullptr) {
 		return 1;
 	}
-	if (const auto* data = At<const uint8_t*>(missile, 0x10); data != nullptr && At<int16_t>(data, 0x10) != 0) {
-		return 2;  // range left (missile data +0x10, set by D2R 0x3bdbc0)
+	if (g_remaining(missile) > 0) {
+		return 2;  // range left (D2Common 10737; D2R 0x3bb1e0: missile data +0x14 / step, +0x10 is the total)
 	}
 	const int32_t sub = At<int16_t>(record, MsHitSubMissile1);
 	const int32_t skill = g_missileSkill(missile);
@@ -588,6 +606,89 @@ auto CltHitAtTarget(Unit* missile, Unit* /*target*/) noexcept -> int64_t {
 	return 1;
 }
 
+// D2Sigma missile do 4 (server 0x10089cc0, client 69 0x10089660) -> server slot 46, client slot 14: phalanx. Every
+// Param1 frames (client: CltParam1) the missile drops SubMissile1 (CltSubMissile1) aimed along direction step & 63
+// (missile data +0x30, which Fire Wall's skill function sets), range Param3 (CltParam3) else the skill's calc3,
+// flags 0x8002; the step then turns by Param2 (CltParam2). Then it moves as do 1. D2Sigma aims with D2Game's
+// 64-direction table; here the nova table (same directions, radius 30), the tiles having no velocity. The client
+// runs several part-frames per frame, so it drops on reaching each multiple of CltParam1. (phalanx_missile,
+// phalanx_2_missile)
+auto PhalanxStep(Unit* missile) noexcept -> int32_t* {
+	auto* data = At<uint8_t*>(missile, MissileDataPtr);
+	return data != nullptr ? reinterpret_cast<int32_t*>(data + MissileDataStep) : nullptr;
+}
+
+auto PhalanxParams(Unit* owner, Unit* missile, int32_t sub, int32_t skill, int32_t level, int32_t range,
+                   int32_t* step, int32_t turn) noexcept -> d2r::MissileParams {
+	const int32_t dir = *step & 63;
+	d2r::MissileParams params{};
+	params.flags = 0x8002;
+	params.owner = owner;
+	params.origin = missile;
+	params.missile = sub;
+	params.targetX = NovaDX[dir];
+	params.targetY = NovaDY(dir);
+	params.skill = skill;
+	params.skillLevel = level;
+	params.range = range;
+	*step = (turn + dir) & 63;
+	return params;
+}
+
+using MissileDoFn = int64_t (*)(Game* game, Unit* missile);
+MissileDoFn g_srvMove = nullptr;
+auto DoPhalanx(Game* game, Unit* missile) noexcept -> int64_t {
+	const uint8_t* record = game != nullptr && missile != nullptr ? RecordOf(game, missile) : nullptr;
+	Unit* owner = record != nullptr ? g_owner(game, missile) : nullptr;
+	int32_t* step = missile != nullptr ? PhalanxStep(missile) : nullptr;
+	if (owner != nullptr && step != nullptr) {
+		const int32_t period = std::max(1, At<int32_t>(record, MsParam1));
+		if (g_elapsed(missile) % period < 1) {
+			const int32_t skill = g_missileSkill(missile);
+			const int32_t level = g_missileLevel(missile);
+			int32_t range = At<int32_t>(record, MsParam3);
+			if (range < 1) {
+				const uint8_t* skillRecord = skill > 0 ? d2r::api.getSkillRecord(d2r::DataFlag(game), skill) : nullptr;
+				range = skillRecord != nullptr ? std::max(1, d2r::EvalCalc(game, owner, skillRecord, SkCalc3, skill, level)) : 1;
+			}
+			const int32_t sub = At<int16_t>(record, MsSubMissile1);
+			if (sub > 0) {
+				d2r::MissileParams params =
+				    PhalanxParams(owner, missile, sub, skill, level, range, step, At<int32_t>(record, MsParam2));
+				d2r::api.createMissile(game, &params);
+			}
+		}
+	}
+	return g_srvMove(game, missile);
+}
+
+using CltDoFn = int64_t (*)(Unit* missile, float frames);
+CltDoFn g_cltMove = nullptr;
+auto CltDoPhalanx(Unit* missile, float frames) noexcept -> int64_t {
+	ClientHit hit{};
+	const int32_t before = missile != nullptr ? g_elapsed(missile) : 0;
+	const int64_t result = g_cltMove(missile, frames);
+	int32_t* step = missile != nullptr ? PhalanxStep(missile) : nullptr;
+	if (step == nullptr || !ClientHitOf(missile, &hit)) {
+		return result;
+	}
+	const int32_t after = g_elapsed(missile);
+	const int32_t period = std::max(1, At<int32_t>(hit.record, MsCltParam1));
+	const int32_t sub = At<int16_t>(hit.record, MsCltSubMissile1);
+	int32_t range = At<int32_t>(hit.record, MsCltParam3);
+	if (range < 1) {
+		range = std::max(1, ClientSkillCalc(hit, SkCalc3));
+	}
+	for (int32_t frame = before; frame < after && sub > 0; ++frame) {
+		if (frame % period == 0) {
+			d2r::MissileParams params = PhalanxParams(hit.owner, missile, sub, hit.skill, hit.level, range, step,
+			                                          At<int32_t>(hit.record, MsCltParam2));
+			g_clientMissile(&params, 0);
+		}
+	}
+	return result;
+}
+
 using HitFn = int64_t (*)(Game* game, Unit* missile, Unit* target);
 using CltHitFn = int64_t (*)(Unit* missile, Unit* target);
 struct HitSlot {
@@ -640,6 +741,8 @@ auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t
 	g_unitRoom = reinterpret_cast<UnitRoomFn>(g_exeBase + RvaUnitRoom);
 	g_roomAt = reinterpret_cast<RoomAtFn>(g_exeBase + RvaRoomAt);
 	g_spawnMonster = reinterpret_cast<SpawnMonsterFn>(g_exeBase + RvaSpawnMonster);
+	g_elapsed = reinterpret_cast<MissileIntFn>(g_exeBase + RvaMissileElapsed);
+	g_remaining = reinterpret_cast<MissileIntFn>(g_exeBase + RvaMissileRemaining);
 	g_clientOwner = reinterpret_cast<ClientUnitFn>(g_exeBase + RvaClientOwner);
 	g_clientTarget = reinterpret_cast<ClientUnitFn>(g_exeBase + RvaClientTarget);
 	g_clientMissile = reinterpret_cast<ClientMissileFn>(g_exeBase + RvaClientMissile);
@@ -667,6 +770,22 @@ auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t
 			used += n > 0 ? static_cast<size_t>(n) : 0;
 		}
 	}
+	// Phalanx: server do slot 46 (empty) moving as do 1; client do slot 14 (no missile uses it) moving as client do 1.
+	g_srvMove = *reinterpret_cast<MissileDoFn*>(g_exeBase + MissileSrvDoTable + 8);
+	g_cltMove = *reinterpret_cast<CltDoFn*>(g_exeBase + MissileCltDoTable + 8);
+	const uint64_t cltSlot = MissileCltDoTable + PhalanxCltSlot * 8;
+	const uint64_t cltOld = *reinterpret_cast<const volatile uint64_t*>(g_exeBase + cltSlot);
+	const bool phalanxOk =
+	    g_srvMove != nullptr && g_cltMove != nullptr &&
+	    context->PatchWriteU64(MissileSrvDoTable + PhalanxSrvSlot * 8, Empty, sizeof(Empty),
+	                           reinterpret_cast<uint64_t>(&DoPhalanx)) &&
+	    context->PatchWriteU64(cltSlot, &cltOld, sizeof(cltOld), reinterpret_cast<uint64_t>(&CltDoPhalanx));
+	installed += phalanxOk ? 1 : 0;
+	if (used < reportSize) {
+		const int n = std::snprintf(report + used, reportSize - used, "%s srvdo %d / cltdo %d phalanx (D2Sigma do 4 / 69)%s",
+		                            used ? ";" : "", PhalanxSrvSlot, PhalanxCltSlot, phalanxOk ? "" : " FAILED");
+		used += n > 0 ? static_cast<size_t>(n) : 0;
+	}
 	// Revive: wrapped in place (the slot holds D2R's own function).
 	const uint64_t reviveRva = d2r::SrvDoTable + ReviveSlot * 8;
 	const uint64_t revive = *reinterpret_cast<const volatile uint64_t*>(g_exeBase + reviveRva);
@@ -682,5 +801,5 @@ auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t
 }
 
 auto MissileHitCount() noexcept -> int {
-	return static_cast<int>(sizeof(Hits) / sizeof(Hits[0]) + sizeof(CltHits) / sizeof(CltHits[0])) + 1;
+	return static_cast<int>(sizeof(Hits) / sizeof(Hits[0]) + sizeof(CltHits) / sizeof(CltHits[0])) + 2;
 }
