@@ -190,7 +190,7 @@ the cursor; the click on another item then runs the use handler with (game, play
 | 13 | 0x1007f910 | 58: arcane shards/crystal, catalysts | client sends a request (misc +0xb6) to the server | refused |
 | 14 | 0x1007eff0 | 22 mystic dyes | target weapon/armour: stat 183 = calc1 + 1 (1-21) | plugin |
 | 15 | 0x1007ebb0 | Perfect Ruby, askari_call | | refused |
-| 16 | 0x1007f720 | 40 keys (dimensional_link, key_of_lies, ...) | portal to level calc1 (act check from the levels record +0x26; calc2 picks the portal kind, calc3 blocks) | refused |
+| 16 | 0x1007f720 | 40 keys, riftstones, summoning scrolls | portal to level calc1; misc2 +0x26 = difficulty + 1 (0 any); calc2 0: red portal (0x10097870: object 60 or the level's own, plus the return portal), else one-way portal object 586 (0x100976d0); once per level and game (DRLG level +0x230 bit 4); calc3 non-zero: the use "fails", so the item is kept | plugin (0.13.0) |
 | 17 | 0x1007faf0 | cherry | | refused |
 | 18 | 0x1007f300 | 103 gc01-gc103 | cube-related (looks for `box `) | refused |
 | 19 | 0x1007f8d0 | toa ("Not used") | | refused |
@@ -221,6 +221,15 @@ else an included type must match (with its quality, if set); the item holds fewe
 = row); the item's level requirement (D2Common 11015) + the orb's <= the player's level. Apply: on the item's stat
 list with flags 0x40 (created if missing) add item_levelreq, apply the six properties (D2Common 10665) stat 289 times
 (at least once), add 1 to stat 290 at the row's layer; the orb is used up.
+
+**Keys** (pSpell 16). calc1 gives a Median level number (`(stat(...)>0)?0:215`), translated by `LevelIds` (Median
+levels from 1 on moved by +1). mxl-core opens the portal like D2R's cube "Red Portal" output (`0x5da800`): free spot
+`0x517f90` (game, room, xy, 3, 0x400, &room, 5, 100), portal routine `0x432ce0` with object 60 (or one_way_portal,
+600) and last argument 1 (allowed outside town too), `0x34e9d0` (portal, level byte); the routine also places the
+return portal (`0x435dd0`). Limits from D2R: the destination must be in the player's current act (`0x3e2b5c8`
+(dataFlag, level) -> act; checked first so the key is kept) and its id at most 255 (portal links are bytes: the 12
+summoning scrolls to Median levels 263-280 are refused). "Once per game" uses D2R's per-game counter map
+(`0x5d88b0` on game+0x1aac8, the cube Red Portal's), key 0x6d780000 + level.
 
 ## Still to specify
 

@@ -17,7 +17,13 @@
 //      six properties (times stat 289, at least once) to the item's magic stat list (flags 0x40), and counts the
 //      orb in stat 290.
 //   14 dyes (0x1007eff0): sets the dye colour stat (Median 183) to calc1 + 1 (1-21) on a weapon or armour.
-// Not yet (refused, so the item is kept): 12, 13, 15-19, 21 (arcane shards, keys, cube items, ...).
+//   16 keys / summoning scrolls / riftstones (0x1007f720): a portal next to the player to level calc1 (a Median
+//      level number, translated by LevelIds), once per level and game. D2Sigma: calc2 0 -> red portal (object 60,
+//      0x10097870), else Median's one-way portal (0x100976d0); misc2 +0x26 limits the item to one difficulty;
+//      calc3 non-zero keeps the item (not consumed by D2Sigma; here the client decides, see testing.md). Opened with
+//      D2R's portal routine 0x432ce0 the way D2R's cube "Red Portal" output does (0x5da800), which also places the
+//      return portal; D2R only links levels of the same act and stores the destination in a byte (levels <= 255).
+// Not yet (refused, so the item is kept): 12, 13, 15, 17-19, 21 (arcane shards, cube items, ...).
 #include "item_spells.h"
 
 #include "d2r.h"
@@ -53,6 +59,22 @@ constexpr uint64_t ItemByte55Rva = 0x36cfe0;     // (item) -> item data +0x55
 constexpr uint64_t ItemByte54Rva = 0x36ca10;     // (item) -> item data +0x54
 constexpr uint64_t UnitPositionRva = 0x34a110;   // (unit) -> packed position
 constexpr uint64_t UnitStatsChangedRva = 0x34dbe0;  // (unit, 1)
+constexpr uint64_t EvalItemCalcRva = 0x3b4880;   // (dataFlag, player, item, calc) -> value of an items.txt formula
+constexpr uint64_t UnitRoomRva = 0x34b440;       // (unit) -> room
+constexpr uint64_t RoomLevelIdRva = 0x2efc10;    // (room) -> level id
+constexpr uint64_t LevelActRva = 0x3e2b5c8;      // (dataFlag, level id) -> act
+constexpr uint64_t UnitXYRva = 0x34a040;         // (unit, int32 xy[2])
+constexpr uint64_t FreeSpotRva = 0x517f90;       // (game, room, xy[2], 3, 0x400, &room, 5, 100): free spot near xy
+constexpr uint64_t CreatePortalRva = 0x432ce0;   // (game, unit, room, x, y, destLevel, &object, objectId, 0, 1)
+constexpr uint64_t SetPortalLevelRva = 0x34e9d0; // (object, level byte)
+constexpr uint64_t GameCounterRva = 0x5d88b0;    // (game + 0x1aac8, &key) -> int* (per-game counters of the cube's
+                                                 // Red Portal, keyed by recipe)
+constexpr uint64_t UnitMessageRva = 0x491960;    // (player, message, player): 0x15 = "can't do that"
+constexpr int GameDifficulty = 0x104;            // byte: 0 normal, 1 nightmare, 2 hell
+constexpr int GameCounters = 0x1aac8;
+constexpr int ItCalc1 = 0xa4;                    // items record: calc1-calc3 (compiled formulas), as 1.13c
+constexpr int32_t ObjectRedPortal = 60;
+constexpr int32_t CounterKeyBase = 0x6d780000;   // per-game counter key for "portal to level n opened": base + n
 
 constexpr int ItPSpell = 0x94;  // items record: pSpell (int32), as 1.13c
 constexpr int ItCode = 0x80;    // items record: code (4 chars), as 1.13c
@@ -84,6 +106,18 @@ using UnitIdFn = int32_t (*)(d2r::Unit* unit);
 using ItemByteFn = uint8_t (*)(d2r::Unit* item);
 using UnitPositionFn = uint32_t (*)(d2r::Unit* unit);
 using UnitStatsChangedFn = void (*)(d2r::Unit* unit, int32_t on);
+using EvalItemCalcFn = int32_t (*)(uint32_t dataFlag, d2r::Unit* player, d2r::Unit* item, int32_t calc);
+using UnitRoomFn = void* (*)(d2r::Unit* unit);
+using RoomLevelIdFn = int32_t (*)(void* room);
+using LevelActFn = uint8_t (*)(uint32_t dataFlag, int32_t level);
+using UnitXYFn = void (*)(d2r::Unit* unit, int32_t* xy);
+using FreeSpotFn = void (*)(d2r::Game* game, void* room, int32_t* xy, int32_t size, int32_t flags, void** outRoom,
+                            int64_t mode, int32_t range);
+using CreatePortalFn = int32_t (*)(d2r::Game* game, d2r::Unit* unit, void* room, int32_t x, int32_t y, int32_t level,
+                                   d2r::Unit** object, int32_t objectId, int32_t findSpot, int32_t anywhere);
+using SetPortalLevelFn = void (*)(d2r::Unit* object, uint32_t level);
+using GameCounterFn = int32_t* (*)(void* counters, const int32_t* key);
+using UnitMessageFn = void (*)(d2r::Unit* player, int32_t message, d2r::Unit* subject);
 
 DispatchFn g_useOriginal = nullptr;
 DispatchFn g_checkOriginal = nullptr;
@@ -102,13 +136,27 @@ ItemByteFn g_itemByte55 = nullptr;
 ItemByteFn g_itemByte54 = nullptr;
 UnitPositionFn g_unitPosition = nullptr;
 UnitStatsChangedFn g_unitStatsChanged = nullptr;
+EvalItemCalcFn g_evalItemCalc = nullptr;
+UnitRoomFn g_unitRoom = nullptr;
+RoomLevelIdFn g_roomLevelId = nullptr;
+LevelActFn g_levelAct = nullptr;
+UnitXYFn g_unitXY = nullptr;
+FreeSpotFn g_freeSpot = nullptr;
+CreatePortalFn g_createPortal = nullptr;
+SetPortalLevelFn g_setPortalLevel = nullptr;
+GameCounterFn g_gameCounter = nullptr;
+UnitMessageFn g_unitMessage = nullptr;
+
+auto ItemRecordOf(d2r::Game* game, d2r::Unit* item) noexcept -> const uint8_t* {
+	return g_itemRecord(d2r::DataFlag(game), g_unitClass(item, "mxl-core item_spells", 0));
+}
 
 // The D2Sigma item behind a PluginSpell item, or null for every other item.
 auto SigmaItemOf(d2r::Game* game, d2r::Unit* item) noexcept -> const mxl_items::SigmaItem* {
 	if (item == nullptr || d2r::At<int32_t>(item, d2r::UnitType) != 4) {
 		return nullptr;
 	}
-	const uint8_t* record = g_itemRecord(d2r::DataFlag(game), g_unitClass(item, "mxl-core item_spells", 0));
+	const uint8_t* record = ItemRecordOf(game, item);
 	if (record == nullptr || d2r::At<int32_t>(record, ItPSpell) != mxl_items::PluginSpell) {
 		return nullptr;
 	}
@@ -206,19 +254,74 @@ void ApplyDye(const mxl_items::SigmaItem& entry, d2r::Game* game, d2r::Unit* pla
 	SendItem(game, player, target);
 }
 
+// D2Sigma 0x1007f720: the destination of a key (its calc1, a Median level number) or 0 when it may not open one
+// here: wrong difficulty, no such level, a level D2R cannot link (other act, id above 255) or already opened.
+auto KeyLevel(const mxl_items::SigmaItem& entry, d2r::Game* game, d2r::Unit* player, d2r::Unit* item) noexcept
+	-> int32_t {
+	if (entry.difficulty != 0 && entry.difficulty - 1 != d2r::At<uint8_t>(game, GameDifficulty)) {
+		return 0;
+	}
+	const uint8_t* record = ItemRecordOf(game, item);
+	const uint32_t dataFlag = d2r::DataFlag(game);
+	const int32_t median = g_evalItemCalc(dataFlag, player, item, d2r::At<int32_t>(record, ItCalc1));
+	if (median <= 0 || median >= static_cast<int32_t>(std::size(mxl_items::LevelIds))) {
+		return 0;
+	}
+	const int32_t level = mxl_items::LevelIds[median];
+	void* room = g_unitRoom(player);
+	if (level <= 0 || level > 255 || room == nullptr ||
+	    g_levelAct(dataFlag, level) != g_levelAct(dataFlag, g_roomLevelId(room))) {
+		return 0;
+	}
+	const int32_t key = CounterKeyBase + level;
+	if (*g_gameCounter(reinterpret_cast<uint8_t*>(game) + GameCounters, &key) > 0) {
+		return 0;
+	}
+	return level;
+}
+
+// A portal next to the player, as D2R's cube "Red Portal" output (0x5da800) opens one.
+auto OpenKeyPortal(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, int32_t level) noexcept -> bool {
+	const uint8_t* record = ItemRecordOf(game, item);
+	const int32_t kind = g_evalItemCalc(d2r::DataFlag(game), player, item, d2r::At<int32_t>(record, ItCalc1 + 4));
+	void* room = g_unitRoom(player);
+	int32_t xy[2] = {};
+	g_unitXY(player, xy);
+	void* spot = nullptr;
+	g_freeSpot(game, room, xy, 3, 0x400, &spot, 5, 100);
+	d2r::Unit* portal = nullptr;
+	if (spot == nullptr || g_createPortal(game, player, spot, xy[0], xy[1], level, &portal,
+	                                      kind != 0 ? mxl_items::ObjectOneWayPortal : ObjectRedPortal, 0, 1) == 0) {
+		return false;
+	}
+	if (portal != nullptr) {
+		g_setPortalLevel(portal, static_cast<uint32_t>(level) & 0xff);
+	}
+	const int32_t key = CounterKeyBase + level;
+	*g_gameCounter(reinterpret_cast<uint8_t*>(game) + GameCounters, &key) += 1;
+	return true;
+}
+
+auto IsOtherItem(d2r::Unit* target, d2r::Unit* item) noexcept -> bool {
+	return target != nullptr && target != item && d2r::At<int32_t>(target, d2r::UnitType) == 4;
+}
+
 auto CheckDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Unit* target) noexcept -> uint64_t {
 	const mxl_items::SigmaItem* entry = SigmaItemOf(game, item);
 	if (entry == nullptr) {
 		return g_checkOriginal(game, player, item, target);
 	}
-	if (target == nullptr || target == item || d2r::At<int32_t>(target, d2r::UnitType) != 4) {
-		return 0;
-	}
 	switch (entry->spell) {
 	case 20:
-		return CanApplyOrb(*entry, player, target) ? 1 : 0;
+		return IsOtherItem(target, item) && CanApplyOrb(*entry, player, target) ? 1 : 0;
 	case 14:
-		return CanDye(target) ? 1 : 0;
+		return IsOtherItem(target, item) && CanDye(target) ? 1 : 0;
+	case 16:
+		if (KeyLevel(*entry, game, player, item) != 0) {
+			return 1;
+		}
+		g_unitMessage(player, 0x15, player);
+		return 0;
 	default:
 		return 0;  // not implemented: refuse, so the item is not used up
 	}
@@ -229,18 +332,21 @@ auto UseDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Unit*
 	if (entry == nullptr) {
 		return g_useOriginal(game, player, item, target);
 	}
-	if (target == nullptr || target == item || d2r::At<int32_t>(target, d2r::UnitType) != 4) {
-		return 0;
-	}
 	switch (entry->spell) {
 	case 20:
-		if (CanApplyOrb(*entry, player, target)) {
+		if (IsOtherItem(target, item) && CanApplyOrb(*entry, player, target)) {
 			ApplyOrb(*entry, game, player, target);
 		}
 		break;
 	case 14:
-		if (CanDye(target)) {
+		if (IsOtherItem(target, item) && CanDye(target)) {
 			ApplyDye(*entry, game, player, target);
+		}
+		break;
+	case 16:
+		if (const int32_t level = KeyLevel(*entry, game, player, item);
+		    level == 0 || !OpenKeyPortal(game, player, item, level)) {
+			g_unitMessage(player, 0x15, player);
 		}
 		break;
 	default:
@@ -268,12 +374,22 @@ auto InstallItemSpells(const D2RL::PluginContext* context, char* report, size_t 
 	g_itemByte54 = reinterpret_cast<ItemByteFn>(base + ItemByte54Rva);
 	g_unitPosition = reinterpret_cast<UnitPositionFn>(base + UnitPositionRva);
 	g_unitStatsChanged = reinterpret_cast<UnitStatsChangedFn>(base + UnitStatsChangedRva);
+	g_evalItemCalc = reinterpret_cast<EvalItemCalcFn>(base + EvalItemCalcRva);
+	g_unitRoom = reinterpret_cast<UnitRoomFn>(base + UnitRoomRva);
+	g_roomLevelId = reinterpret_cast<RoomLevelIdFn>(base + RoomLevelIdRva);
+	g_levelAct = reinterpret_cast<LevelActFn>(base + LevelActRva);
+	g_unitXY = reinterpret_cast<UnitXYFn>(base + UnitXYRva);
+	g_freeSpot = reinterpret_cast<FreeSpotFn>(base + FreeSpotRva);
+	g_createPortal = reinterpret_cast<CreatePortalFn>(base + CreatePortalRva);
+	g_setPortalLevel = reinterpret_cast<SetPortalLevelFn>(base + SetPortalLevelRva);
+	g_gameCounter = reinterpret_cast<GameCounterFn>(base + GameCounterRva);
+	g_unitMessage = reinterpret_cast<UnitMessageFn>(base + UnitMessageRva);
 	const bool ok =
 		context->InstallInlineHook(CheckDispatchRva, CheckDispatchEntry, sizeof(CheckDispatchEntry), CheckDispatch,
 	                               &g_checkOriginal) &&
 		context->InstallInlineHook(UseDispatchRva, UseDispatchEntry, sizeof(UseDispatchEntry), UseDispatch, &g_useOriginal);
 	std::snprintf(report, reportSize,
-	              ok ? "on: %zu items on pSpell %d; mystic orbs (%zu rows), dyes; others refused for now"
+	              ok ? "on: %zu items on pSpell %d; mystic orbs (%zu rows), dyes, keys; others refused for now"
 	                 : "off: item spell hooks failed (%zu items on pSpell %d, %zu orb rows)",
 	              std::size(mxl_items::Items), mxl_items::PluginSpell, std::size(mxl_items::Orbs));
 	return ok;
