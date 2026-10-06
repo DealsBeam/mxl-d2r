@@ -197,6 +197,21 @@ state. Accessors: check `0x2f6220`, set/clear `0x2f7ea0` (3 accesses), array poi
 (32 dwords spelled out). Pools: plain stat lists `0x2a9a430` (element 0x90), `0x2a9a4d0` (element 0x2b00; used by
 `0x2f65d0`/`0x2f9eb0`, to confirm as the extended list).
 
+Allocation: pool `0x2a9a4d0` (element 0x2b00, 0x200 per chunk; static constructor `0x3eb60`) serves extended stat
+lists only: `0x2f65d0` takes one and zero-fills 0x2b00 bytes, `0x2f9eb0` returns it when +0x1c < 0 (the "extended"
+marker the state functions test). A chunk records its element size when created (`0x1230260`), so the size must
+change before the first chunk exists.
+
+**Fix (mxl-core 0.6.0, `states_fix.cpp`):** element 0x2c00 (constructor immediate, live pool field, creation memset);
+both arrays move to the new tail, current states at +0x2b00 and "changed" flags at +0x2b00 + blocks*4 (room for 64
+blocks in all); displacements patched in the check (`0x2f6220`), set/clear (`0x2f7ea0`, 3), array pointer
+(`0x2f6370`), "changed" pointer (`0x2f62d0`, dword index 0x2bc -> 0xac0) and the copy routine's 64 accesses
+(`0x2f0d80`, which now copies the 32-block state array and leaves the "changed" flags). 72 sites (+1 data), checked
+byte for byte, one D2RLoader transaction, skipped if the pool already has chunks. Callers of the array pointers
+(`0x336440`, `0x3356c0`, `0x336330`) size their loops from the live block count. Open: the client/server state
+packets' state-id width (if narrower than 10 bits, states above it misbehave in multiplayer independently of this fix);
+the startup assertions remain (harmless).
+
 Data cannot fix it: Median's own data references 639 of its 782 added states (skills aurastate/passivestate/
 auratargetstate/State1-3, misc state/cstate, states overlays), so even compacted it needs 871 > 512. Plan: move both
 arrays to a larger area (enlarge the pool element, redirect the four accessors and any inlined copies, check network
