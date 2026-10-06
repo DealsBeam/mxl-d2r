@@ -1,8 +1,8 @@
 // D2Sigma's own missile hit functions (D2MslHitFuncs.cpp; server table 0x101dc7c8). Its added ones (61-77) and the
 // three whose numbers D2R 3.x reused (34, 41, 42) are moved by txt_migrate (SRV_HIT_MOVED) into D2R's empty server
 // hit slots 61-70 (table 0x2391030, bound 71 at 0x2391404; dispatcher 0x464ac0 calls (game, missile, target unit
-// or null), and the plugin fills the ones ported here. Not yet ported: 34, 41, 42, 62, 69, 71, 73, 77 (their slots
-// stay empty: the missile hits without the extra effect).
+// or null), and the plugin fills the ones ported here. 69 runs D2R's own hit 1 (data only). Not yet ported: 34, 41,
+// 42, 62, 71, 73 (their slots stay empty: the missile hits without the extra effect).
 #include "missile_hits.h"
 
 #include "d2r.h"
@@ -27,6 +27,8 @@ constexpr uint64_t RvaEventSkill = 0x589930;      // (game, caster, skill, level
 constexpr int MsHitPar1 = 0x70;
 constexpr int MsHitPar2 = 0x74;
 constexpr int MsSkill = 0x1b6;                    // int16
+constexpr int MsHitSubMissile1 = 0x46;            // int16
+constexpr int SkCalc3 = 0x198;                    // skills calc1-4 at +0x190
 
 using MissileOwnerFn = Unit* (*)(Game* game, Unit* missile);
 using UnitClassFn = int32_t (*)(Unit* unit, const char* file, int32_t line);
@@ -115,6 +117,69 @@ auto HitRunSkillFunction(Game* game, Unit* missile, Unit* /*target*/) noexcept -
 	return 1;
 }
 
+// D2Sigma's 64 directions (D2Sigma 0x1018b140..0x1018b23f, two tables): a circle of radius 30, counter-clockwise
+// from +x.
+constexpr int8_t NovaDX[64] = {30, 29, 29, 28, 27, 26, 24, 23, 21, 19, 16, 14, 11, 8, 5, 2, 0, -2, -5, -8, -11, -14,
+                               -16, -19, -21, -23, -24, -26, -27, -28, -29, -29, -30, -29, -29, -28, -27, -26, -24,
+                               -23, -21, -19, -16, -14, -11, -8, -5, -2, 0, 2, 5, 8, 11, 14, 16, 19, 21, 23, 24, 26,
+                               27, 28, 29, 29};
+constexpr auto NovaDY(int i) noexcept -> int8_t {
+	return NovaDX[(i + 48) % 64];  // the second table is the first a quarter turn on
+}
+
+// D2Sigma 77 (0x1008d960) -> slot 66: when the missile's range has run out, HitSubMissile1 flies out from it in
+// every sHitPar1-th of the 64 directions (64: one, straight along +x), for sHitPar2 frames (else the skill's calc3,
+// at least 1), with the missile's skill and level, then the missile ends (returns 3). With range left it does
+// nothing (2), like vanilla's spawn-on-hit (1.13c 0x6fc5c850, D2Common 10737). frigid_nova, frigid_domain,
+// coronation, hurricane_2, hammertime, ... (14). Not ported: D2Common 10637/10019 after each create (the direction
+// stored on the new missile again); the sub-missiles here are straight-line or Frozen Orb style ones that take it
+// from the target point.
+auto HitNova(Game* game, Unit* missile, Unit* /*target*/) noexcept -> int64_t {
+	if (game == nullptr || missile == nullptr) {
+		return 1;
+	}
+	Unit* owner = g_owner(game, missile);
+	const uint8_t* record = RecordOf(game, missile);
+	if (owner == nullptr || record == nullptr) {
+		return 1;
+	}
+	if (const auto* data = At<const uint8_t*>(missile, 0x10); data != nullptr && At<int16_t>(data, 0x10) != 0) {
+		return 2;  // range left (missile data +0x10, set by D2R 0x3bdbc0)
+	}
+	const int32_t sub = At<int16_t>(record, MsHitSubMissile1);
+	const int32_t skill = g_missileSkill(missile);
+	const int32_t level = g_missileLevel(missile);
+	if (sub <= 0) {
+		return 3;
+	}
+	int32_t range = At<int32_t>(record, MsHitPar2);
+	if (range < 1) {
+		const uint8_t* skillRecord = skill > 0 ? d2r::api.getSkillRecord(d2r::DataFlag(game), skill) : nullptr;
+		range = skillRecord != nullptr ? d2r::EvalCalc(game, owner, skillRecord, SkCalc3, skill, level) : 1;
+		if (range < 1) {
+			range = 1;
+		}
+	}
+	int32_t step = At<int32_t>(record, MsHitPar1);
+	if (step < 1) {
+		step = 1;  // D2Sigma would loop forever on 0
+	}
+	for (int i = 0; i < 64; i += step) {
+		d2r::MissileParams params{};
+		params.flags = 0x8002;  // 2: target = start + offset; 0x8000: range from the params
+		params.owner = owner;
+		params.origin = missile;
+		params.missile = sub;
+		params.targetX = NovaDX[i];
+		params.targetY = NovaDY(i);
+		params.skill = skill;
+		params.skillLevel = level;
+		params.range = range;
+		d2r::api.createMissile(game, &params);
+	}
+	return 3;
+}
+
 using HitFn = int64_t (*)(Game* game, Unit* missile, Unit* target);
 struct HitSlot {
 	int slot;
@@ -124,6 +189,7 @@ struct HitSlot {
 constexpr HitSlot Hits[] = {
 	{61, HitRunSkillFunction, "run skill function (D2Sigma hit 61)"},
 	{64, HitCastSkill, "cast skill (D2Sigma hit 72)"},
+	{66, HitNova, "nova (D2Sigma hit 77)"},
 };
 
 }  // namespace

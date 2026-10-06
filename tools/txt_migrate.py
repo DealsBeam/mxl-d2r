@@ -682,7 +682,9 @@ class Migrator:
     # D2Sigma's missile hit functions (server table 0x101dc7c8) that are its own: added 61-77, and 34/41/42 whose
     # numbers D2R 3.x gave to its own missiles. D2R's server hit table (0x2391030) is bounded at 71 with 61-70 empty;
     # they move there, the plugin fills the ones it has ported (docs/plugin-spec.md, Missile functions).
-    SRV_HIT_MOVED = {"34": "67", "41": "68", "42": "70", "61": "61", "62": "62", "69": "69", "71": "63", "72": "64",
+    # 69 (0x1008eeb0) is vanilla hit 1 (explosion: missile damage | HitFlags/ResultFlags to every unit within
+    # sHitPar1, D2R 0x45bc40) with weapon damage recomputed at the hit and an optional to-hit roll; it runs D2R's 1.
+    SRV_HIT_MOVED = {"34": "67", "41": "68", "42": "70", "61": "61", "62": "62", "69": "1", "71": "63", "72": "64",
                      "73": "65", "77": "66"}
     # D2Sigma's client hit 5-7: D2R's 6/7 are empty, its 5 is Echoing Strike's; Median's 5 moves to the empty 20.
     CLT_HIT_MOVED = {"5": "20"}

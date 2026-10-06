@@ -72,7 +72,9 @@ struct MissileParams {
 	int32_t frame;           // 0x4c
 	int32_t activateFrame;   // 0x50
 	int32_t attBonus;        // 0x54 (1.10 +0x44)
-	uint8_t unk58[0x70 - 0x58];
+	int32_t unk58;           // 0x58
+	int32_t range;           // 0x5c (1.10 +0x4c): used with flag 0x8000
+	uint8_t unk60[0x70 - 0x60];
 	int32_t initKind;        // 0x70: replaces 1.10's init function pointer (1 = charged-strike bolt, 4 = multishot)
 	int32_t initArg;         // 0x74: e.g. the missile's index
 	uint8_t rest[0xa0 - 0x78];
@@ -82,6 +84,7 @@ static_assert(offsetof(MissileParams, missile) == 0x20);
 static_assert(offsetof(MissileParams, targetX) == 0x2c);
 static_assert(offsetof(MissileParams, skill) == 0x3c);
 static_assert(offsetof(MissileParams, attBonus) == 0x54);
+static_assert(offsetof(MissileParams, range) == 0x5c);
 static_assert(offsetof(MissileParams, initKind) == 0x70);
 
 // Pet summon parameters (1.10's block with an 8-byte owner pointer).
