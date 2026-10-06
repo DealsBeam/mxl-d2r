@@ -27,7 +27,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.33.1";
+constexpr const char* PluginVersion = "0.33.2";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -63,7 +63,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana), separated by spaces, commas or lines.
+// items missiles mana itemstat), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
 void ReadOffList() noexcept {
@@ -170,6 +170,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: level types %s", g_levelTypesReport);
 		context->LogInfo(line);
+		SetItemFunctionsOff(Off("itemstat"));
 		if (Off("calc")) {
 			std::snprintf(g_calcReport, sizeof(g_calcReport), "%s", OffNote);
 		} else {

@@ -95,6 +95,7 @@ using UnitClassFn = int32_t (*)(void* unit, const char* file, int32_t line);
 UnitInventoryFn g_unitInventory = nullptr;
 BodyLocItemFn g_bodyLocItem = nullptr;
 UnitClassFn g_unitClass = nullptr;
+bool g_itemFunctionsOff = false;
 UnitRoomFn g_unitRoom = nullptr;
 RoomLevelIdFn g_roomLevelId = nullptr;
 
@@ -170,6 +171,9 @@ auto FormulaFunction(uint64_t dataFlag, void* unit, int32_t proxySkill) noexcept
 		return static_cast<uint64_t>(static_cast<int64_t>(get(unit, a, c)));
 	}
 	case 3: {
+		if (g_itemFunctionsOff) {
+			return 0;
+		}
 		if (a < 1 || a > 12 || b < 0) {
 			return 0;
 		}
@@ -178,6 +182,9 @@ auto FormulaFunction(uint64_t dataFlag, void* unit, int32_t proxySkill) noexcept
 		return item != nullptr ? static_cast<uint64_t>(static_cast<int64_t>(g_getUnitStat(item, b, 0))) : 0;
 	}
 	case 4: {
+		if (g_itemFunctionsOff) {
+			return 0;
+		}
 		if (d2r::At<int32_t>(unit, d2r::UnitType) != 0) {
 			return 0;
 		}
@@ -284,6 +291,10 @@ auto MissCode(uint64_t dataFlag, void* missile, void* owner, uint64_t code, int3
 }
 
 }  // namespace
+
+void SetItemFunctionsOff(bool off) noexcept {
+	g_itemFunctionsOff = off;
+}
 
 auto InstallCalcCodes(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	d2r::Bind(context->exeBase);
