@@ -5,7 +5,7 @@
 
 namespace mxl_auras {
 
-// Median auras (D2Sigma srvdofunc 165) whose aurastats carry a layer: skill id, then per aurastat
+// Median skills (D2Sigma srvdofunc 165, 18, 124) whose aurastats carry a layer: skill id, then per aurastat
 // (itemstatcost id or -1, layer as migrated id).
 struct Slot {
 	int32_t stat;
@@ -16,6 +16,12 @@ struct LayeredAura {
 	Slot slots[6];
 };
 inline constexpr LayeredAura Auras[] = {
+    {485, {{220, 4}, {98, 977}, {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}}},  // frigid_nova
+    {598, {{339, 0}, {340, 0}, {338, 0}, {373, 0}, {20, 0}, {282, 47685}}},  // brace_for_impact
+    {1368, {{220, 5}, {98, 978}, {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}}},  // sk1296
+    {1417, {{195, 38356}, {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}}},  // lunar_assault_2
+    {1524, {{223, 10}, {74, 0}, {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}}},  // land_of_the_dead
+    {1551, {{97, 3041}, {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}}},  // lionheart_2
     {1979, {{98, 987}, {282, 47858}, {-1, 0}, {-1, 0}, {-1, 0}, {-1, 0}}},  // skills_1907
     {2029, {{220, 1}, {221, 1}, {86, 0}, {74, 0}, {98, 961}, {98, 962}}},  // skills_1957
     {2045, {{223, 5}, {223, 4}, {223, 3}, {223, 2}, {223, 1}, {223, 0}}},  // skills_1973

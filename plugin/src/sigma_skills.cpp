@@ -8,6 +8,7 @@
 #include "d2r.h"
 #include "pet_scaling.h"
 #include "area_damage.h"
+#include "teleport.h"
 #include "auras.h"
 
 #include <cstdio>
@@ -289,6 +290,9 @@ struct SlotFunction {
 
 constexpr SlotFunction Functions[] = {
 	{172, SrvDoMultiSummon, "multi-summon (D2Sigma 153)"},
+	{173, SrvDoRangedTeleport, "teleport with a range (D2Sigma 27)"},
+	{174, SrvDoLayeredBuff, "self buff with layered stats (D2Sigma 18)"},
+	{175, SrvDoLayeredStorm, "storm with layered stats (D2Sigma 124)"},
 	{176, SrvDoMissileBarrage, "missile barrage (D2Sigma 157)"},
 	{177, SrvDoMissileRow, "missile row (D2Sigma 158)"},
 	{178, SrvDoStrikeBurst, "strike burst (D2Sigma 159)"},
@@ -304,6 +308,7 @@ auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t
 	InstallPetScaling(context->exeBase);
 	InstallAuras(context->exeBase);
 	InstallAreaDamage(context->exeBase);
+	InstallTeleport(context->exeBase);
 	static constexpr uint8_t Empty[8] = {};
 	int installed = 0;
 	size_t used = 0;

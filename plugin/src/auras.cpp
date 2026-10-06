@@ -1,4 +1,6 @@
-// D2Sigma's aura function (srvdofunc 165, D2SkillDo.cpp 0x100ab190) -> slot 184.
+// D2Sigma's aura function (srvdofunc 165, D2SkillDo.cpp 0x100ab190) -> slot 184, and its versions of the self buff
+// (18, 0x100ab710) -> slot 174 and the timed storm (124, 0x100a9510) -> slot 175, which add the same per-aurastat layer
+// to D2R's functions 18 (0x553e60) and 124 (0x575de0). Only the Median skills that use a layer move to 174/175.
 //
 // D2Sigma's version is vanilla's aura routine: the aurastats (calcs evaluated) go onto the caster under aurastate and
 // onto the units its finder picks (aurarangecalc, aurafilter) under auratargetstate, refreshed on every aura pulse.
@@ -21,6 +23,8 @@
 namespace {
 
 constexpr uint64_t D2RAuraRva = 0x563d90;       // D2R srvdofunc 65 (game, unit, skill, level)
+constexpr uint64_t D2RBuffRva = 0x553e60;       // D2R srvdofunc 18, self buff (Frozen Armor)
+constexpr uint64_t D2RStormRva = 0x575de0;      // D2R srvdofunc 124, timed storm (Hurricane, Armageddon)
 constexpr uint64_t StatListByStateRva = 0x2f5b80;  // (unit, state, 0) -> the unit's stat list for that state
 constexpr uint64_t StatListSetRva = 0x2f7c00;   // (dataFlag, list, stat, value, layer)
 constexpr int SkAuraStat = 0x74;                // 6 x int16 aurastat1-6
@@ -28,11 +32,13 @@ constexpr int SkAuraStatCalc = 0x88;            // 6 x int32 compiled aurastatca
 constexpr int SkAuraState = 0xa0;
 constexpr int SkAuraTargetState = 0xa2;
 
-using AuraFn = void (*)(d2r::Game* game, d2r::Unit* unit, int32_t skill, int32_t level);
+using AuraFn = int64_t (*)(d2r::Game* game, d2r::Unit* unit, int32_t skill, int32_t level);
 using StatListByStateFn = void* (*)(d2r::Unit* unit, int32_t state, uint32_t flags);
 using StatListSetFn = void (*)(uint32_t dataFlag, void* list, int32_t stat, int32_t value, int32_t layer);
 
 AuraFn g_d2rAura = nullptr;
+AuraFn g_d2rBuff = nullptr;
+AuraFn g_d2rStorm = nullptr;
 StatListByStateFn g_statListByState = nullptr;
 StatListSetFn g_statListSet = nullptr;
 
@@ -72,18 +78,13 @@ void ApplyLayers(const mxl_auras::LayeredAura& aura, uint32_t dataFlag, void* li
 	}
 }
 
-}  // namespace
-
-auto SrvDoAura(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
-	if (game == nullptr || unit == nullptr || g_d2rAura == nullptr) {
-		return 0;
-	}
-	g_d2rAura(game, unit, skillId, level);
+// The caster's stat lists for aurastate and auratargetstate: each layered aurastat at its layer.
+void RewriteLayers(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t level) noexcept {
 	const mxl_auras::LayeredAura* aura = LayeredAuraOf(skillId);
 	const uint32_t dataFlag = d2r::DataFlag(game);
 	const uint8_t* skill = d2r::api.getSkillRecord(dataFlag, skillId);
 	if (aura == nullptr || skill == nullptr) {
-		return 1;
+		return;
 	}
 	int32_t values[6] = {};
 	for (int k = 0; k < 6; ++k) {
@@ -101,11 +102,40 @@ auto SrvDoAura(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t level)
 			ApplyLayers(*aura, dataFlag, list, values);
 		}
 	}
-	return 1;
+}
+
+auto RunThenLayer(AuraFn d2rFunction, d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t level) noexcept
+	-> int64_t {
+	if (game == nullptr || unit == nullptr || d2rFunction == nullptr) {
+		return 0;
+	}
+	// D2R's aura (65) returns nothing; its buff (18) and storm (124) return whether they started
+	const int64_t result = d2rFunction == g_d2rAura ? (d2rFunction(game, unit, skillId, level), 1) :
+	                                                  d2rFunction(game, unit, skillId, level);
+	if (result != 0) {
+		RewriteLayers(game, unit, skillId, level);
+	}
+	return result;
+}
+
+}  // namespace
+
+auto SrvDoAura(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	return RunThenLayer(g_d2rAura, game, unit, skillId, level);
+}
+
+auto SrvDoLayeredBuff(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	return RunThenLayer(g_d2rBuff, game, unit, skillId, level);
+}
+
+auto SrvDoLayeredStorm(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	return RunThenLayer(g_d2rStorm, game, unit, skillId, level);
 }
 
 void InstallAuras(uint64_t exeBase) noexcept {
 	g_d2rAura = reinterpret_cast<AuraFn>(exeBase + D2RAuraRva);
+	g_d2rBuff = reinterpret_cast<AuraFn>(exeBase + D2RBuffRva);
+	g_d2rStorm = reinterpret_cast<AuraFn>(exeBase + D2RStormRva);
 	g_statListByState = reinterpret_cast<StatListByStateFn>(exeBase + StatListByStateRva);
 	g_statListSet = reinterpret_cast<StatListSetFn>(exeBase + StatListSetRva);
 }

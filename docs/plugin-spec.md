@@ -31,26 +31,27 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 | 167 | 0x100ad4a0 | 1 | resurrect_2 |
 | 171 (-> 190) | 0x100acee0 | 1 | queen_of_blades — **plugin** (area damage, see below) |
 
-**Replaced originals: D2R runs the vanilla behaviour for these today, which may differ from Median.**
+**Replaced originals: D2Sigma's own versions of vanilla functions.** Compared with D2R's (mxl-core 0.18.0): most
+are vanilla's routine re-implemented, the Median additions being the skills2 layers (as in 165) and a range limit.
 
-| srvdofunc | D2Sigma function | Median skills | Examples |
-|---|---|---|---|
-| 11 | 0x100aa610 | 57 | bladestorm, retaliate, backstab |
-| 16 | 0x100adb60 | 0 | |
-| 18 | 0x100ab710 | 122 | Fire Ball, CatapultPlague, RogueMissile |
-| 24 | 0x100ab400 | 17 | Fire Wall, Charged Bolt Sentry |
-| 27 | 0x100ad9d0 | 53 | Teleport, jitan_s_gate |
-| 41 | 0x100a9290 | 4 | vampiric_strike, deathgaze |
-| 54 | 0x100aa050 | 1 | queen_of_blades_2 |
-| 68 | 0x100a9f50 | 39 | Shout, lightning_shield |
-| 73 | 0x100aa120 | 2 | hammer_of_zerae, power_shift |
-| 77 | 0x100abb40 | 2 | Leap |
-| 78 | 0x100abd10 | 1 | Leap Attack |
-| 112 | 0x100ac550 | 1 | MonCurseCast |
-| 114 | 0x100ad460 | 9 | jinn, blade_spirits |
-| 120 | 0x100aa320 | 1 | takedown |
-| 122 | 0x100ab920 | 0 | |
-| 124 | 0x100a9510 | 38 | Hurricane, war_spirit |
+| srvdofunc | D2Sigma function | Median skills | Examples | Port |
+|---|---|---|---|---|
+| 11 | 0x100aa610 | 57 | bladestorm, retaliate, backstab | same as D2R (0x5562b0): melee, then calc1 missiles (flags 0x21) |
+| 16 | 0x100adb60 | 0 | | unused |
+| 18 | 0x100ab710 | 122 | Fire Ball, CatapultPlague, RogueMissile | self buff: D2R 0x553e60 + layers; the 6 rows with layers -> **slot 174** |
+| 24 | 0x100ab400 | 17 | Fire Wall, Charged Bolt Sentry | D2R 0x553950 (D2R also caps active walls); D2Sigma clamps the spot to aurarangecalc (only burning_veil sets one: not ported) |
+| 27 | 0x100ad9d0 | 53 | Teleport, jitan_s_gate | D2R 0x554c40 + distance limit aurarangecalc (-1 refuses) for players -> **slot 173** (47 rows with a range) |
+| 41 | 0x100a9290 | 4 | vampiric_strike, deathgaze | not compared (4 skills) |
+| 54 | 0x100aa050 | 1 | queen_of_blades_2 | not compared (queen_of_blades_2) |
+| 68 | 0x100a9f50 | 39 | Shout, lightning_shield | same as D2R (0x567500): nova + buff; layers unused by its rows |
+| 73 | 0x100aa120 | 2 | hammer_of_zerae, power_shift | not compared (2 skills) |
+| 77 | 0x100abb40 | 2 | Leap | aurarangecalc like vanilla Leap |
+| 78 | 0x100abd10 | 1 | Leap Attack | not compared (Leap Attack) |
+| 112 | 0x100ac550 | 1 | MonCurseCast | not compared (MonCurseCast) |
+| 114 | 0x100ad460 | 9 | jinn, blade_spirits | calls the original (Raven) |
+| 120 | 0x100aa320 | 1 | takedown | not compared (takedown) |
+| 122 | 0x100ab920 | 0 | | unused |
+| 124 | 0x100a9510 | 38 | Hurricane, war_spirit | storm: D2R 0x575de0 + layers; land_of_the_dead -> **slot 175** |
 
 ### 155: town portal (`FUN_100ab090`)
 
