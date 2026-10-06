@@ -403,11 +403,18 @@ high one, which mxl-core then writes (0.19.0; the 12 summoning scrolls to levels
   arguments are constants) becomes a hidden proxy skill `mxf_N` (57; Param1 = function, Param2..4 = migrated
   arguments; work/formulas/proxies.txt) and the call `skill('mxf_N'.mxfn)`: D2R's skill() evaluates calc code
   `mxfn` (skillcalc row 164) for that skill id, and the plugin answers hasstate (`0x3351b0`) and statlayer (mode
-  0/1/2 = D2R `0x2f5020`/`0x2f48c0`/`0x2f5c60`, as D2R's stat()). itemstat (bodyloc 1/4/5: helmet, gloves; 6 calls in
-  hidden passives skills_2062/2063/2066/2069/3001) and tabpoints (skills_1473) answer 0 until D2R's body-location
-  item lookup is found. Earlier notes: `hasstate`, `tabpoints`, `statlayer`, `itemstat`, items `skilllevel`, missiles `stat`
+  0/1/2 = D2R `0x2f5020`/`0x2f48c0`/`0x2f5c60`, as D2R's stat()). **0.31.0:** itemstat (D2Sigma table `0x101df3a8`
+  entry 13, `0x100a68c0`: the stat on the item in body location 1-12, D2Common 11139; D2R `0x3886d0(inventory,
+  bodyloc)` with the inventory from `0x34a360`; 6 calls in hidden passives skills_2062/2063/2066/2069/3001) and
+  tabpoints (entry 10, `0x100a6a70` -> D2Skills.cpp `0x100aefe0`: sum of base levels, D2Common 10306 with no bonus,
+  of the class skills, D2Common 10044, whose skilldesc SkillPage is the tab; skills_1473) - the class/page lists are
+  generated into plugin/src/mxl_tabs.h by txt_migrate tab_tables, base levels from D2R's calc code 41. Earlier notes: `hasstate`, `tabpoints`, `statlayer`, `itemstat`, items `skilllevel`, missiles `stat`
   (docs/formulas.md).
-- Skill tree rules (`ui/SkillTree.cpp`): devotions lock each other, "pick up to three masteries".
+- Skill tree rules: **in data, nothing for the plugin.** `ui/SkillTree.cpp` is only layout (panels, arrows, sockets).
+  The rules live in each skill's cap formula (skcn, written into skpoints): devotions lock each other
+  (`skill('<other devotion>'.blvl)*-666` / `-500`), and each mastery is locked once the hidden counter
+  `skills_1091` (one per class: 1180, 1273, 1359, 1457, 1543, 1619; aurastatcalc1 `clc1+clc2+clc3`) passes 2 unless
+  it already has points, and until its unlock item stat (skills_1835/1836 passives) is present.
 - Skill descriptions (`D2SkillDesc.cpp`).
 - Engine limits: states (below), level types (below).
 

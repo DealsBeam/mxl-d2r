@@ -23,8 +23,10 @@
 //   mxfn       D2Sigma's formula functions, called through hidden proxy skills (tools/formula.py, txt_migrate.py):
 //              the formula reads skill('mxf_N'.mxfn) and mxf_N's Param1..4 hold the function and its arguments.
 //              1 hasstate(state): the unit has the state; 2 statlayer(stat, mode, layer): the stat at that layer,
-//              mode 0 total / 1 base / 2 the third D2R getter, as D2R's own stat(); 3 itemstat and 4 tabpoints: 0
-//              for now
+//              mode 0 total / 1 base / 2 the third D2R getter, as D2R's own stat(); 3 itemstat(bodyloc, stat): the
+//              stat on the item in that body location (1-12; 0x100a68c0, D2Common 11139 -> D2R 0x3886d0 on the
+//              inventory 0x34a360); 4 tabpoints(tab): the summed base levels of the player's class skills on Median
+//              skill page tab (0x100aefe0; mxl_tabs.h, base level from D2R's code 41)
 //
 // Missile formulas: D2R's missile code switch 0x3b9dc0 (dataFlag, missile, owner, code, missileId, level) is hooked the
 // same way for D2Sigma's two missile codes (0x10088fd0, codes 43-44):
@@ -37,6 +39,7 @@
 
 #include "d2r.h"
 #include "mxl_ids.h"
+#include "mxl_tabs.h"
 #include "pet_scaling.h"
 
 #include <cstdint>
@@ -65,6 +68,9 @@ constexpr int MsSkill = 0x1b6;  // int16 in the missiles record
 constexpr uint64_t D2RCodeBlvl = 41;           // D2R's own "blvl" row
 constexpr uint64_t UnitRoomRva = 0x34b440;     // (unit) -> room
 constexpr uint64_t RoomLevelIdRva = 0x2efc10;  // (room) -> level id
+constexpr uint64_t UnitInventoryRva = 0x34a360;  // (unit, file, line) -> inventory
+constexpr uint64_t BodyLocItemRva = 0x3886d0;    // (inventory, bodyloc 0-12) -> item or null
+constexpr uint64_t UnitClassRva = 0x349860;      // (unit, file, line) -> class id
 // MOV [RSP+0x10],RBX / MOV [RSP+0x18],RBP / MOV [RSP+0x20],RSI
 constexpr uint8_t CalcCodeEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c,
                                      0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20};
@@ -83,6 +89,12 @@ GetUnitStatFn g_getUnitStat = nullptr;
 GetUnitStatFn g_getUnitBaseStat = nullptr;
 GetUnitStatFn g_getUnitStatMode2 = nullptr;
 HasStateFn g_hasState = nullptr;
+using UnitInventoryFn = void* (*)(void* unit, const char* file, int32_t line);
+using BodyLocItemFn = void* (*)(void* inventory, uint32_t bodyLoc);
+using UnitClassFn = int32_t (*)(void* unit, const char* file, int32_t line);
+UnitInventoryFn g_unitInventory = nullptr;
+BodyLocItemFn g_bodyLocItem = nullptr;
+UnitClassFn g_unitClass = nullptr;
 UnitRoomFn g_unitRoom = nullptr;
 RoomLevelIdFn g_roomLevelId = nullptr;
 
@@ -156,6 +168,27 @@ auto FormulaFunction(uint64_t dataFlag, void* unit, int32_t proxySkill) noexcept
 		}
 		const GetUnitStatFn get = b == 1 ? g_getUnitBaseStat : b == 2 ? g_getUnitStatMode2 : g_getUnitStat;
 		return static_cast<uint64_t>(static_cast<int64_t>(get(unit, a, c)));
+	}
+	case 3: {
+		if (a < 1 || a > 12 || b < 0) {
+			return 0;
+		}
+		void* inventory = g_unitInventory(unit, "mxl-core calc_codes.cpp", __LINE__);
+		void* item = inventory != nullptr ? g_bodyLocItem(inventory, static_cast<uint32_t>(a)) : nullptr;
+		return item != nullptr ? static_cast<uint64_t>(static_cast<int64_t>(g_getUnitStat(item, b, 0))) : 0;
+	}
+	case 4: {
+		if (d2r::At<int32_t>(unit, d2r::UnitType) != 0) {
+			return 0;
+		}
+		const int32_t playerClass = g_unitClass(unit, "mxl-core calc_codes.cpp", __LINE__);
+		int64_t sum = 0;
+		for (const mxl_tabs::TabSkill& s : mxl_tabs::Skills) {
+			if (s.playerClass == playerClass && s.page == a) {
+				sum += static_cast<int32_t>(g_original(dataFlag, unit, D2RCodeBlvl, s.skill, 1));
+			}
+		}
+		return static_cast<uint64_t>(sum);
 	}
 	default: return 0;
 	}
@@ -258,11 +291,14 @@ auto InstallCalcCodes(const D2RL::PluginContext* context, char* report, size_t r
 	g_getUnitBaseStat = reinterpret_cast<GetUnitStatFn>(context->exeBase + GetUnitBaseStatRva);
 	g_getUnitStatMode2 = reinterpret_cast<GetUnitStatFn>(context->exeBase + GetUnitStatMode2Rva);
 	g_hasState = reinterpret_cast<HasStateFn>(context->exeBase + HasStateRva);
+	g_unitInventory = reinterpret_cast<UnitInventoryFn>(context->exeBase + UnitInventoryRva);
+	g_bodyLocItem = reinterpret_cast<BodyLocItemFn>(context->exeBase + BodyLocItemRva);
+	g_unitClass = reinterpret_cast<UnitClassFn>(context->exeBase + UnitClassRva);
 	g_unitRoom = reinterpret_cast<UnitRoomFn>(context->exeBase + UnitRoomRva);
 	g_roomLevelId = reinterpret_cast<RoomLevelIdFn>(context->exeBase + RoomLevelIdRva);
 	const bool ok = context->InstallInlineHook(CalcCodeRva, CalcCodeEntry, sizeof(CalcCodeEntry), CalcCode, &g_original) &&
 	                context->InstallInlineHook(MissCodeRva, MissCodeEntry, sizeof(MissCodeEntry), MissCode, &g_missOriginal);
-	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe, mnhp, mnar, mxfn (hasstate, statlayer); missiles msyn, blvl (rows %d..)" : "off: calc code hook failed (rows %d..)",
+	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe, mnhp, mnar, mxfn (hasstate, statlayer, itemstat, tabpoints); missiles msyn, blvl (rows %d..)" : "off: calc code hook failed (rows %d..)",
 	              mxl_ids::FirstCalcCode);
 	return ok;
 }
