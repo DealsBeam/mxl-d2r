@@ -292,8 +292,8 @@ levels from 1 on moved by +1). mxl-core opens the portal like D2R's cube "Red Po
 `0x517f90` (game, room, xy, 3, 0x400, &room, 5, 100), portal routine `0x432ce0` with object 60 (or one_way_portal,
 600) and last argument 1 (allowed outside town too), `0x34e9d0` (portal, level byte); the routine also places the
 return portal (`0x435dd0`). Limits from D2R: the destination must be in the player's current act (`0x3e2b5c8`
-(dataFlag, level) -> act; checked first so the key is kept) and its id at most 255 (portal links are bytes: the 12
-summoning scrolls to Median levels 263-280 are refused). "Once per game" uses D2R's per-game counter map
+(dataFlag, level) -> act; checked first so the key is kept). Destinations are 16 bits in D2R (object data +0x08 low, +0x78 high, read by `0x34ad40`); the byte setter clears the
+high one, which mxl-core then writes (0.19.0; the 12 summoning scrolls to levels 263-280 open). "Once per game" uses D2R's per-game counter map
 (`0x5d88b0` on game+0x1aac8, the cube Red Portal's), key 0x6d780000 + level.
 
 ## Still to specify

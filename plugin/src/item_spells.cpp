@@ -22,7 +22,7 @@
 //      0x10097870), else Median's one-way portal (0x100976d0); misc2 +0x26 limits the item to one difficulty;
 //      calc3 non-zero keeps the item (pSpell PluginSpellKeep, below). Opened with
 //      D2R's portal routine 0x432ce0 the way D2R's cube "Red Portal" output does (0x5da800), which also places the
-//      return portal; D2R only links levels of the same act and stores the destination in a byte (levels <= 255).
+//      return portal; D2R only links levels of the same act. Destinations above 255 get their high byte written here.
 //   18 containers (gem/rune clusters, 0x1006f240): right-click takes every item the container holds (its misc.bin
 //      ultracode) from the inventory and cube, and from the stash in town, adding `amount` to its count stat each,
 //      up to its maximum. Items are removed the way D2R removes a used-up tome (0x4712a0).
@@ -73,7 +73,9 @@ constexpr uint64_t LevelActRva = 0x3e2b5c8;      // (dataFlag, level id) -> act
 constexpr uint64_t UnitXYRva = 0x34a040;         // (unit, int32 xy[2])
 constexpr uint64_t FreeSpotRva = 0x517f90;       // (game, room, xy[2], 3, 0x400, &room, 5, 100): free spot near xy
 constexpr uint64_t CreatePortalRva = 0x432ce0;   // (game, unit, room, x, y, destLevel, &object, objectId, 0, 1)
-constexpr uint64_t SetPortalLevelRva = 0x34e9d0; // (object, level byte)
+constexpr uint64_t SetPortalLevelRva = 0x34e9d0; // (object, level byte); clears the high byte
+constexpr int UnitObjectData = 0x10;             // object unit -> object data
+constexpr int ObjPortalLevelHigh = 0x78;         // portal destination, high byte (low byte at +0x08)
 constexpr uint64_t GameCounterRva = 0x5d88b0;    // (game + 0x1aac8, &key) -> int* (per-game counters of the cube's
                                                  // Red Portal, keyed by recipe)
 constexpr uint64_t UnitMessageRva = 0x491960;    // (player, message, player): 0x15 = "can't do that"
@@ -297,7 +299,7 @@ void ApplyDye(const mxl_items::SigmaItem& entry, d2r::Game* game, d2r::Unit* pla
 }
 
 // D2Sigma 0x1007f720: the destination of a key (its calc1, a Median level number) or 0 when it may not open one
-// here: wrong difficulty, no such level, a level D2R cannot link (other act, id above 255) or already opened.
+// here: wrong difficulty, no such level, a level D2R cannot link (another act) or already opened.
 auto KeyLevel(const mxl_items::SigmaItem& entry, d2r::Game* game, d2r::Unit* player, d2r::Unit* item) noexcept
 	-> int32_t {
 	if (entry.difficulty != 0 && entry.difficulty - 1 != d2r::At<uint8_t>(game, GameDifficulty)) {
@@ -311,7 +313,7 @@ auto KeyLevel(const mxl_items::SigmaItem& entry, d2r::Game* game, d2r::Unit* pla
 	}
 	const int32_t level = mxl_items::LevelIds[median];
 	void* room = g_unitRoom(player);
-	if (level <= 0 || level > 255 || room == nullptr ||
+	if (level <= 0 || level > 0xffff || room == nullptr ||
 	    g_levelAct(dataFlag, level) != g_levelAct(dataFlag, g_roomLevelId(room))) {
 		return 0;
 	}
@@ -338,6 +340,11 @@ auto OpenKeyPortal(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, int32_t 
 	}
 	if (portal != nullptr) {
 		g_setPortalLevel(portal, static_cast<uint32_t>(level) & 0xff);
+		// D2R keeps a portal's destination in 16 bits, low byte at object data +0x08, high byte at +0x78 (getter
+		// 0x34ad40, the object packet 0x51 sends both); the byte setter clears the high one, so it is written here.
+		if (uint8_t* data = d2r::At<uint8_t*>(portal, UnitObjectData)) {
+			data[ObjPortalLevelHigh] = static_cast<uint8_t>(level >> 8);
+		}
 	}
 	const int32_t key = CounterKeyBase + level;
 	*g_gameCounter(reinterpret_cast<uint8_t*>(game) + GameCounters, &key) += 1;

@@ -1041,6 +1041,26 @@ class Migrator:
                 self.report.append(f"\nskilldesc (D2R line types): {n_syn} synergy headers given the skill's name; "
                                    f"{n_drop} lines D2R can't draw dropped (mostly D2Sigma's code-built type 77)")
 
+    def clean_cube_outputs(self) -> None:
+        """The decoded cubemain (mxl_extracted/2_txt) has `""` for empty output b/c cells and `""ow Portal` for the
+        special output "Cow Portal" (5 recipes, which then opened nothing). Written as empty / Cow Portal; other quoted
+        cells ("item,mod,...") are D2R's own convention and stay."""
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "cubemain.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            cols = [i for i, c in enumerate(h) if c.lower().startswith("output")]
+            fixed = 0
+            for r in rows:
+                for i in cols:
+                    if i < len(r) and r[i] in ('""', '""ow Portal'):
+                        r[i] = "Cow Portal" if r[i] == '""ow Portal' else ""
+                        fixed += 1
+            write_tsv(p, h, rows)
+            if bank == "":
+                self.report.append(f"\ncubemain: {fixed} output cells with stray quotes fixed (Cow Portal, empty)")
+
     def split_large_sets(self) -> None:
         """D2R allows 6 items per set; Median's "Orphan's Call" has 9. Items 7+ go to a copy of the set named
         "<set> (2)" so the tables load; the full set needs a plugin (reported)."""
@@ -1312,6 +1332,7 @@ def main() -> int:
     m.claim_mazes()
     m.fill_skilldesc()
     m.skilldesc_lines()
+    m.clean_cube_outputs()
     m.skill_rules()
     m.vendor_stock()
     m.item_spells()
