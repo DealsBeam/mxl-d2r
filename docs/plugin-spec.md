@@ -192,8 +192,8 @@ Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R bas
   (base-level linear on Param pairs, `0x100a5c40`: blvl>0 ? a+(blvl-1)*b : (z ? a : 0); blvl from D2R's own code 41),
   `bd12`-`bd78`/`bdz1`-`bdz7` (base-level diminishing, `0x100a5be0`: a + (110*blvl/(blvl+6))*(b-a)/100), `wdm`
   (SrcDam*100/128; D2R SrcDam +0x24d, Param1 +0x1b8) and `area` (room -> level id; D2R `0x2efc10(0x34b440(unit))`;
-  Median's level ids are unchanged by the migration). Still 0: `skcd` (case 73: `0x100b0ed0` = the 1.13c delay formula
-  (D2R localdelay, a compiled field not yet located) minus the unit's stat 309 for the skill), `bmax`, `maxe`, `mnhp`/`mnar` (Median's minion scaling, `0x10067c60`/`0x10067bd0`), `pdmn`, `pdmx`, `mode` (unit+0x10 in 1.13c)
+  Median's level ids are unchanged by the migration) and `skcd` (case 73, `0x100b0ed0`: the delay formula, D2R's
+  compiled localdelay at record +0x238, minus the unit's stat 309 for the skill). Still 0: `bmax`, `maxe`, `mnhp`/`mnar` (Median's minion scaling, `0x10067c60`/`0x10067bd0`), `pdmn`, `pdmx`, `mode` (unit+0x10 in 1.13c)
   (cases in `0x100a6340`, jump table `0x100a67b0`). Open as before:
   `wdm`, `skcd`, `aura`, `bl12..`, `area`, ... (docs/validation.md lists counts).
 - Formula functions: `hasstate`, `tabpoints`, `statlayer`, `itemstat`, items `skilllevel`, missiles `stat`

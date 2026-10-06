@@ -53,5 +53,6 @@ inline constexpr int32_t StatSyn4 = 426;  // Median 397
 inline constexpr int32_t StatSyn5 = 428;  // Median 399
 inline constexpr int32_t StatSyn6 = 429;  // Median 400
 inline constexpr int32_t StatSkillCapBonus = 478;  // Median 449, skcp
+inline constexpr int32_t StatCooldownReduction = 309;  // Median 309, skcd
 
 }  // namespace mxl_ids

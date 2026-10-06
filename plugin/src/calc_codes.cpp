@@ -15,7 +15,9 @@
 //   bdz1-bdz7  (cases 82-85, 97-100, 0x100a5be0)
 //   wdm        the skill's weapon damage percent, SrcDam*100/128 (case 86)
 //   area       the unit's current level id (case 106, 0x100bdf40: room -> level -> id)
-// Not yet: skcd (the localdelay formula minus a per-skill cooldown stat), maxe/bmax (max-level checks), mnhp/mnar
+//   skcd       the skill's cooldown: its localdelay formula (D2R record +0x238) minus the unit's cooldown-reduction
+//              stat for that skill (case 73, 0x100b0ed0, Median stat 309)
+// Not yet: maxe/bmax (max-level checks), mnhp/mnar
 // (Median's minion scaling), mode, pdmn/pdmx, mlvl/skcn (written into skpoints instead).
 #include "calc_codes.h"
 
@@ -34,6 +36,7 @@ constexpr int SkAuraState = 0xa0;              // int16 in the skills record
 constexpr int SkPassiveState = 0xb4;
 constexpr int SkParam1 = 0x1b8;                // int32 Param1..Param8, 4 bytes apart
 constexpr int SkSrcDam = 0x24d;                // uint8
+constexpr int SkLocalDelayCalc = 0x238;        // compiled localdelay formula (-1 none)
 constexpr uint64_t D2RCodeBlvl = 41;           // D2R's own "blvl" row
 constexpr uint64_t UnitRoomRva = 0x34b440;     // (unit) -> room
 constexpr uint64_t RoomLevelIdRva = 0x2efc10;  // (room) -> level id
@@ -120,6 +123,18 @@ auto CalcCode(uint64_t dataFlag, void* unit, uint64_t code, int32_t skillId, uin
 	case mxl_ids::Calc_bdz3: return BaseLevelProgression(dataFlag, unit, code, skillId, level, 3, true, true);
 	case mxl_ids::Calc_bdz5: return BaseLevelProgression(dataFlag, unit, code, skillId, level, 5, true, true);
 	case mxl_ids::Calc_bdz7: return BaseLevelProgression(dataFlag, unit, code, skillId, level, 7, true, true);
+	case mxl_ids::Calc_skcd: {
+		const uint8_t* skill = d2r::api.getSkillRecord(static_cast<uint32_t>(dataFlag & 0xff), skillId);
+		if (skill == nullptr || unit == nullptr) {
+			return 0;
+		}
+		const int32_t delay = d2r::api.evalSkillCalc(static_cast<uint32_t>(dataFlag & 0xff),
+		                                             static_cast<d2r::Unit*>(unit),
+		                                             d2r::At<int32_t>(skill, SkLocalDelayCalc), skillId,
+		                                             static_cast<int32_t>(level));
+		const int32_t reduction = g_getUnitStat(unit, mxl_ids::StatCooldownReduction, skillId);
+		return static_cast<uint64_t>(static_cast<int64_t>(reduction != 0 ? delay - reduction : delay));
+	}
 	case mxl_ids::Calc_wdm: {
 		const uint8_t* skill = d2r::api.getSkillRecord(static_cast<uint32_t>(dataFlag & 0xff), skillId);
 		return skill == nullptr ? 0 : static_cast<uint64_t>(d2r::At<uint8_t>(skill, SkSrcDam) * 100 / 128);
@@ -141,7 +156,7 @@ auto InstallCalcCodes(const D2RL::PluginContext* context, char* report, size_t r
 	g_unitRoom = reinterpret_cast<UnitRoomFn>(context->exeBase + UnitRoomRva);
 	g_roomLevelId = reinterpret_cast<RoomLevelIdFn>(context->exeBase + RoomLevelIdRva);
 	const bool ok = context->InstallInlineHook(CalcCodeRva, CalcCodeEntry, sizeof(CalcCodeEntry), CalcCode, &g_original);
-	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area (rows %d..)" : "off: calc code hook failed (rows %d..)",
+	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd (rows %d..)" : "off: calc code hook failed (rows %d..)",
 	              mxl_ids::FirstCalcCode);
 	return ok;
 }

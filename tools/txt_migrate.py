@@ -372,6 +372,7 @@ class Migrator:
                   f"inline constexpr int32_t StatSyn5 = {stat(399)};  // Median 399",
                   f"inline constexpr int32_t StatSyn6 = {stat(400)};  // Median 400",
                   f"inline constexpr int32_t StatSkillCapBonus = {stat(449)};  // Median 449, skcp",
+                  f"inline constexpr int32_t StatCooldownReduction = {stat(309)};  // Median 309, skcd",
                   "", "}  // namespace mxl_ids", ""]
         (ROOT / "plugin" / "src" / "mxl_ids.h").write_text("\n".join(lines), encoding="utf-8")
 
