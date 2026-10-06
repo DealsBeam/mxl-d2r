@@ -364,6 +364,9 @@ class Migrator:
                  f"inline constexpr int32_t FirstCalcCode = {first};"]
         for i, code in enumerate(codes):
             lines.append(f"inline constexpr int32_t Calc_{code} = {first + i};")
+        miss = [r[0].strip() for r in read_tsv(OUT / "data" / "global" / "excel" / "base" / "misscalc.txt")[1] if r]
+        lines += ["", "// misscalc.txt rows of D2Sigma's missile calc codes (the same in both banks)."]
+        lines += [f"inline constexpr int32_t MissCalc_{c} = {miss.index(c)};" for c in ("msyn", "blvl")]
         lines += ["", "// Stats those codes read (Median itemstatcost row -> migrated id).",
                   f"inline constexpr int32_t StatSyn1 = {stat(383)};  // Median 383",
                   f"inline constexpr int32_t StatSyn2 = {stat(393)};  // Median 393",
@@ -373,6 +376,7 @@ class Migrator:
                   f"inline constexpr int32_t StatSyn6 = {stat(400)};  // Median 400",
                   f"inline constexpr int32_t StatSkillCapBonus = {stat(449)};  // Median 449, skcp",
                   f"inline constexpr int32_t StatCooldownReduction = {stat(309)};  // Median 309, skcd",
+                  f"inline constexpr int32_t StatMissileSyn = {stat(382)};  // Median 382, missile msyn",
                   "", "}  // namespace mxl_ids", ""]
         (ROOT / "plugin" / "src" / "mxl_ids.h").write_text("\n".join(lines), encoding="utf-8")
 

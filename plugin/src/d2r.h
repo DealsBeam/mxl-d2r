@@ -20,6 +20,7 @@ inline constexpr uint64_t RvaGetSkillRecord = 0x97790;    // (dataFlag, skillId)
 inline constexpr uint64_t RvaEvalSkillCalc = 0x3b5160;    // (dataFlag, unit, calc, skillId, level) -> value
 inline constexpr uint64_t RvaSkillTargetXY = 0x432b70;    // (game, unit, &x, &y) -> both non-zero
 inline constexpr uint64_t RvaCreateMissile = 0x5371a0;    // (game, &params) -> missile unit
+inline constexpr uint64_t RvaMissileRecord = 0x166040;    // (dataFlag, missileId) -> missiles record or null
 inline constexpr uint64_t RvaMissileCount = 0x1b89a0;     // (dataFlag) -> rows in missiles.txt
 inline constexpr uint64_t RvaUnitSeed = 0x34a1e0;         // (unit) -> &seed {lo, hi}
 inline constexpr uint64_t RvaSetUnitSkillFlag = 0x34e790; // (unit, on): unit flags (+0x124) bit 0x40
@@ -106,6 +107,7 @@ using GetSkillRecordFn = uint8_t* (*)(uint32_t dataFlag, int32_t skillId);
 using EvalSkillCalcFn = int32_t (*)(uint32_t dataFlag, Unit* unit, int32_t calc, int32_t skillId, int32_t level);
 using SkillTargetXYFn = int32_t (*)(Game* game, Unit* unit, int32_t* x, int32_t* y);
 using CreateMissileFn = Unit* (*)(Game* game, MissileParams* params);
+using MissileRecordFn = const uint8_t* (*)(uint32_t dataFlag, int32_t missileId);
 using MissileCountFn = int32_t (*)(uint32_t dataFlag);
 using UnitSeedFn = uint32_t* (*)(Unit* unit);
 using SetUnitSkillFlagFn = void (*)(Unit* unit, int32_t on);
@@ -123,6 +125,7 @@ struct Api {
 	EvalSkillCalcFn evalSkillCalc;
 	SkillTargetXYFn skillTargetXY;
 	CreateMissileFn createMissile;
+	MissileRecordFn missileRecord;
 	MissileCountFn missileCount;
 	UnitSeedFn unitSeed;
 	SetUnitSkillFlagFn setUnitSkillFlag;

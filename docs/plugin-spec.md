@@ -199,6 +199,12 @@ Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R bas
   `pdmn`/`pdmx` (2 skills; `0x100a6260`/`0x100a6180`, skills2-based damage), `mnhp`/`mnar` (Median's minion scaling, `0x10067c60`/`0x10067bd0`), `pdmn`, `pdmx`, `mode` (unit+0x10 in 1.13c)
   (cases in `0x100a6340`, jump table `0x100a67b0`). Open as before:
   `wdm`, `skcd`, `aura`, `bl12..`, `area`, ... (docs/validation.md lists counts).
+- Missile calc codes (mxl-core 0.10.0): Median's misscalc adds `msyn` (43) and `blvl` (44) after D2R's 42
+  (`0x10088fd0`; misscalc.txt rows 47/48 in both banks). `msyn` = the owner's stat 382 with the missile's skill
+  (1.13c missile +0x194; D2R `Skill` +0x1b6) as parameter; `blvl` = that skill's base level on the owner, capped by
+  `0x100bdff0` (1 for units other than players/hirelings; the plugin caps every non-player at 1). Hooked on D2R's
+  missile code switch `0x3b9dc0(dataFlag, missile, owner, code, missileId, level)` (missile formulas: `0x3b4a90`,
+  callback `0x3b5540`).
 - Formula functions: `hasstate`, `tabpoints`, `statlayer`, `itemstat`, items `skilllevel`, missiles `stat`
   (docs/formulas.md).
 - Skill tree rules (`ui/SkillTree.cpp`): devotions lock each other, "pick up to three masteries".

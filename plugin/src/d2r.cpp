@@ -9,6 +9,7 @@ void Bind(uint64_t exeBase) noexcept {
 	api.evalSkillCalc = reinterpret_cast<EvalSkillCalcFn>(exeBase + RvaEvalSkillCalc);
 	api.skillTargetXY = reinterpret_cast<SkillTargetXYFn>(exeBase + RvaSkillTargetXY);
 	api.createMissile = reinterpret_cast<CreateMissileFn>(exeBase + RvaCreateMissile);
+	api.missileRecord = reinterpret_cast<MissileRecordFn>(exeBase + RvaMissileRecord);
 	api.missileCount = reinterpret_cast<MissileCountFn>(exeBase + RvaMissileCount);
 	api.unitSeed = reinterpret_cast<UnitSeedFn>(exeBase + RvaUnitSeed);
 	api.setUnitSkillFlag = reinterpret_cast<SetUnitSkillFlagFn>(exeBase + RvaSetUnitSkillFlag);

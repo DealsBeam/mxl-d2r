@@ -20,6 +20,12 @@
 //   bmax       the skill's current maximum base level: max(0, min(mlvl + skcn + skcp, clvl + 1 - reqlevel)) (case 88,
 //              0x100a6e00); mlvl and skcn come from calc9/calc10, where tools/txt_migrate.py stores them
 //   maxe       1 when the skill's base level (> 0) equals bmax (case 92)
+//
+// Missile formulas: D2R's missile code switch 0x3b9dc0 (dataFlag, missile, owner, code, missileId, level) is hooked the
+// same way for D2Sigma's two missile codes (0x10088fd0, codes 43-44):
+//   msyn       the owner's synergy stat with the missile's skill as parameter (Median stat 382)
+//   blvl       the base level of the missile's skill on the owner (players uncapped; other owners at most 1, as
+//              D2Sigma's cap 0x100bdff0 gives 1 to units that are not players or hirelings)
 // Not yet: (max-level checks), mnhp/mnar
 // (Median's minion scaling), mode, pdmn/pdmx, mlvl/skcn (written into skpoints instead).
 #include "calc_codes.h"
@@ -44,6 +50,10 @@ constexpr int SkCalc9 = 0x1b0;                 // mlvl (written by txt_migrate.p
 constexpr int SkCalc10 = 0x1b4;                // skcn
 constexpr int SkReqLevel = 0x214;              // uint16
 constexpr int32_t StatLevel = 12;
+constexpr uint64_t MissCodeRva = 0x3b9dc0;
+// MOV [RSP+0x8],RBX / MOV [RSP+0x18],RBP / PUSH RSI / PUSH RDI / PUSH R14
+constexpr uint8_t MissCodeEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x56, 0x57, 0x41, 0x56};
+constexpr int MsSkill = 0x1b6;  // int16 in the missiles record
 constexpr uint64_t D2RCodeBlvl = 41;           // D2R's own "blvl" row
 constexpr uint64_t UnitRoomRva = 0x34b440;     // (unit) -> room
 constexpr uint64_t RoomLevelIdRva = 0x2efc10;  // (room) -> level id
@@ -58,6 +68,9 @@ using UnitRoomFn = void* (*)(void* unit);
 using RoomLevelIdFn = int32_t (*)(void* room);
 
 CalcCodeFn g_original = nullptr;
+using MissCodeFn = uint64_t (*)(uint64_t dataFlag, void* missile, void* owner, uint64_t code, int32_t missileId,
+                                uint32_t level) noexcept;
+MissCodeFn g_missOriginal = nullptr;
 GetUnitStatFn g_getUnitStat = nullptr;
 HasStateFn g_hasState = nullptr;
 UnitRoomFn g_unitRoom = nullptr;
@@ -175,6 +188,30 @@ auto CalcCode(uint64_t dataFlag, void* unit, uint64_t code, int32_t skillId, uin
 	}
 }
 
+auto MissCode(uint64_t dataFlag, void* missile, void* owner, uint64_t code, int32_t missileId,
+              uint32_t level) noexcept -> uint64_t {
+	const int32_t c = static_cast<int32_t>(code & 0xff);
+	if (c != mxl_ids::MissCalc_msyn && c != mxl_ids::MissCalc_blvl) {
+		return g_missOriginal(dataFlag, missile, owner, code, missileId, level);
+	}
+	if (owner == nullptr) {
+		return 0;
+	}
+	const uint8_t* rec = d2r::api.missileRecord(static_cast<uint32_t>(dataFlag & 0xff), missileId);
+	const int32_t skill = rec == nullptr ? -1 : d2r::At<int16_t>(rec, MsSkill);
+	if (skill < 0) {
+		return 0;
+	}
+	if (c == mxl_ids::MissCalc_msyn) {
+		return LayerStat(owner, mxl_ids::StatMissileSyn, skill);
+	}
+	int32_t blvl = static_cast<int32_t>(g_original(dataFlag, owner, D2RCodeBlvl, skill, level));
+	if (d2r::At<int32_t>(owner, d2r::UnitType) != 0 && blvl > 1) {
+		blvl = 1;
+	}
+	return static_cast<uint64_t>(static_cast<int64_t>(blvl));
+}
+
 }  // namespace
 
 auto InstallCalcCodes(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
@@ -183,8 +220,9 @@ auto InstallCalcCodes(const D2RL::PluginContext* context, char* report, size_t r
 	g_hasState = reinterpret_cast<HasStateFn>(context->exeBase + HasStateRva);
 	g_unitRoom = reinterpret_cast<UnitRoomFn>(context->exeBase + UnitRoomRva);
 	g_roomLevelId = reinterpret_cast<RoomLevelIdFn>(context->exeBase + RoomLevelIdRva);
-	const bool ok = context->InstallInlineHook(CalcCodeRva, CalcCodeEntry, sizeof(CalcCodeEntry), CalcCode, &g_original);
-	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe (rows %d..)" : "off: calc code hook failed (rows %d..)",
+	const bool ok = context->InstallInlineHook(CalcCodeRva, CalcCodeEntry, sizeof(CalcCodeEntry), CalcCode, &g_original) &&
+	                context->InstallInlineHook(MissCodeRva, MissCodeEntry, sizeof(MissCodeEntry), MissCode, &g_missOriginal);
+	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe; missiles msyn, blvl (rows %d..)" : "off: calc code hook failed (rows %d..)",
 	              mxl_ids::FirstCalcCode);
 	return ok;
 }

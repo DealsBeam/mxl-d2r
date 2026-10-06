@@ -45,6 +45,10 @@ inline constexpr int32_t Calc_pdmx = 161;
 inline constexpr int32_t Calc_mode = 162;
 inline constexpr int32_t Calc_skcn = 163;
 
+// misscalc.txt rows of D2Sigma's missile calc codes (the same in both banks).
+inline constexpr int32_t MissCalc_msyn = 47;
+inline constexpr int32_t MissCalc_blvl = 48;
+
 // Stats those codes read (Median itemstatcost row -> migrated id).
 inline constexpr int32_t StatSyn1 = 412;  // Median 383
 inline constexpr int32_t StatSyn2 = 422;  // Median 393
@@ -54,5 +58,6 @@ inline constexpr int32_t StatSyn5 = 428;  // Median 399
 inline constexpr int32_t StatSyn6 = 429;  // Median 400
 inline constexpr int32_t StatSkillCapBonus = 478;  // Median 449, skcp
 inline constexpr int32_t StatCooldownReduction = 309;  // Median 309, skcd
+inline constexpr int32_t StatMissileSyn = 411;  // Median 382, missile msyn
 
 }  // namespace mxl_ids
