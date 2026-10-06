@@ -425,8 +425,13 @@ names (table `0x1cfe110`, 0x10 bytes each; unmatched rows assert "ii < NUM_LEVEL
 each type's row range in a 36-entry array at `0x2a9a8e0` (8 bytes each, followed by another object at `0x2a9aa00`).
 The automap tile lookup `0x32bdf0(levelType, tileType, style, sequence)` reads that array unchecked.
 **mxl-core 0.7.0** hooks the lookup: types >= 36 answer -1 ("no automap tile"), so Median's areas have no automap
-tiles instead of reading past the array. Full support: relocate the name table (+16 names) and the range array (52
-entries), raise the loader's bound 0x24 -> 0x34.
+tiles instead of reading past the array. **mxl-core 0.33.0:** no relocation needed. The loader files Median's rows
+(LevelName `mxl_lvltype_<n>`, unmatched, so type 0 after a soft assert) but keeps all rows in file order in its vector
+(`0x2a9a8c8` data, +8 count; 0x20 bytes: +0 type, +4 tile type, +8 style (0xff any), +9/+0xa start/end sequence
+(start 0xff any), +0xc four cels, +0x1c cel count). txt_migrate `automap_tables` writes each Median type's row range
+(975 rows, types 36-44 and 51; 45-50 have none) to plugin/src/mxl_automap.h, and the lookup hook searches them with
+D2R's rules, picking among several cels with the automap seed (`0x2372a40`, x 0x6ac690c5 + carry). If the loaded
+row count differs from the generated table (5086), types >= 36 keep answering -1.
 
 ## States limit (engine; in progress)
 
