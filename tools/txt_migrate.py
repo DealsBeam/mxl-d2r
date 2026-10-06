@@ -1139,6 +1139,48 @@ class Migrator:
         self.report.append(f"\nsounds: {copied} Median rows took a vanilla file's D2R audio columns, "
                            f"{custom} play Median's own audio (silent until it is ported)")
 
+    def skill_costs(self) -> None:
+        """Median's mana costs live in skills2 formulas (tools/formula.py export_skill_costs), not in skills.txt's
+        mana/lvlmana, so the port's skills cost nothing beyond minmana. D2R's mana/lvlmana are 16-bit numbers and its
+        cost is D2Sigma's ((level - 1) * lvlmana + mana) << manashift, so constant formulas ("300", "(0-9)") are
+        written in. Not covered: 17 lvlmana formulas (pet-count costs of summons) and D2Sigma's lvlmana scaling by
+        stat 228 (Median's mana cost %) - both need the plugin."""
+        named = [row[0] for row in read_tsv(NAMED / "skills.txt")[1]]
+        costs: dict[str, tuple[str, str]] = {}
+        for line in (ROOT / "work" / "formulas" / "skill_costs.txt").read_text("utf-8").splitlines()[1:]:
+            parts = (line.split("\t") + ["", ""])[:3]
+            if parts[0].isdigit() and int(parts[0]) < len(named):
+                costs[named[int(parts[0])]] = (parts[1], parts[2])
+
+        def number(text: str) -> int | None:
+            m = re.fullmatch(r"\(?(-?\d+)\)?|\(0-(\d+)\)", text.strip())
+            if not m:
+                return None
+            v = int(m[1]) if m[1] is not None else -int(m[2])
+            return v if -32768 <= v <= 32767 else None
+
+        written = formulas = 0
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            mc, lc = h.index("mana"), h.index("lvlmana")
+            for r in rows:
+                if not is_record(r) or r[0] not in costs or r[mc] or r[lc]:
+                    continue
+                mana, lvl = costs[r[0]]
+                for col, text in ((mc, mana), (lc, lvl)):
+                    v = number(text) if text else None
+                    if v:
+                        r[col] = str(v)
+                        written += bank == "base"
+                    elif text and v is None:
+                        formulas += bank == "base"
+            write_tsv(p, h, rows)
+        self.report.append(f"\nskill costs: {written} mana/lvlmana values from D2Sigma's skills2 formulas written in; "
+                           f"{formulas} formulas left for the plugin (pet-count lvlmana)")
+
     def fill_skilldesc(self) -> None:
         """D2R asserts when a class skill has no skilldesc (Median's hidden class skills, granted at character
         creation, have none). They point at the "attack" description, which has no skill tree page."""
@@ -1497,6 +1539,7 @@ def main() -> int:
     m.claim_presets()
     m.claim_mazes()
     m.sound_rows()
+    m.skill_costs()
     m.fill_skilldesc()
     m.skilldesc_lines()
     m.clean_cube_outputs()

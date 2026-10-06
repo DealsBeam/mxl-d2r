@@ -439,7 +439,38 @@ MAX_FORMULA = 255  # D2R parse fields hold 255 characters
 
 
 SKILL_CAPS = ROOT / "work" / "formulas" / "skill_caps.txt"
+SKILL_COSTS = ROOT / "work" / "formulas" / "skill_costs.txt"
 SKCP_WRAP = len("(blvl+1>999+())?999:1")
+
+
+def export_skill_costs(ref) -> int:
+    """Median's mana costs are not in skills.txt (mana/lvlmana are empty; 1.13c's mana is a byte and Median's run to
+    300+) but formulas in skills2code.bin: mana at skills2 +0x36, lvlmana at +0x3a (u32 offsets, -1 none). D2Sigma's
+    mana check (D2SkillValidation.cpp 0x100b0af0) and its tooltip line (D2SkillDesc.cpp type 77) use
+    ((level - 1) * lvlmana + mana) << manashift, lvlmana scaled by (100 + stat 228) / 100. Writes row, mana and lvlmana
+    as rendered formulas for txt_migrate.py (skill_costs)."""
+    ents = entries("skills2code")
+    by_start = {st: k for k, st in enumerate(formula_starts(ents))}
+    b, size = read_bin("skills2")
+    n = struct.unpack_from("<I", b)[0]
+    lines, count = ["row\tmana\tlvlmana"], 0
+    for r in range(n):
+        texts = []
+        for off in (0x36, 0x3a):
+            start = struct.unpack_from("<I", b, 4 + r * size + off)[0]
+            text = ""
+            if start != 0xFFFFFFFF and start in by_start:
+                q: list[str] = []
+                tree = decode(ents[by_start[start]][2], "skills", q)
+                if q:
+                    tree = fold(tree)
+                ref.used.clear()
+                text = Renderer("skills", ref, stub_mxl=True).render(tree)
+            texts.append(text)
+        count += any(texts)
+        lines.append(f"{r}\t{texts[0]}\t{texts[1]}")
+    SKILL_COSTS.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+    return count
 
 
 def export_skill_caps(ref, keep_mxl: bool, shorten: dict, too_long: list) -> int:
@@ -550,6 +581,7 @@ def cmd_convert() -> int:
         cols = ", ".join(f"{c}@{o}" for c, o in sorted(fields.items(), key=lambda x: x[1]))
         summary.append(f"- {table}: {len(fields)} formula columns, {changed} cells rewritten ({differs} with new text). Columns: {cols}")
     caps = export_skill_caps(ref, keep_mxl, shorten, too_long)
+    costs = export_skill_costs(ref)
     plines = ["name\tfunction\tkind\targ1\targ2\targ3"]
     for key, pname in PROXIES.items():
         args = [str(x) for x in key[1:]] + [""] * (3 - len(key[1:]))
@@ -559,6 +591,7 @@ def cmd_convert() -> int:
                    f"tabpoints calls -> {PROXY_FILE.name}")
     summary.append(f"- skill caps: {caps} skills with a cap formula (skills2 mlvl +0x2f, skcn +0x3e) -> "
                    f"{SKILL_CAPS.name}")
+    summary.append(f"- skill costs: {costs} skills with mana/lvlmana formulas (skills2 +0x36/+0x3a) -> {SKILL_COSTS.name}")
     report = ["# Formula conversion report", "", *summary, "",
               "## Median-only formula functions used in tables (need a D2R implementation)", ""]
     report += [f"- {u} in {where}: {n}" for (u, where), n in sorted(used_unsupported.items())]
