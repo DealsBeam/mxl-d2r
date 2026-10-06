@@ -693,6 +693,26 @@ class Migrator:
         """Median's missiles on D2Sigma's own hit functions move to the slots above; for hit 72 (the owner casts the
         skill sHitPar1, D2Sigma 0x1008d400) sHitPar1 is a Median skill row, translated to the migrated id."""
         skill_ids = self.median_ids("skills")
+        state_ids, stat_ids = self.median_ids("states"), self.median_ids("itemstatcost")
+        ih, irows = read_tsv(OUT / "data" / "global" / "excel" / "base" / "itemstatcost.txt")
+        stat_rows = {r[ih.index("*ID")]: r for r in irows if r}
+
+        def stat_param(stat: str, param: str) -> str:
+            """A stat's parameter as D2R numbers: a skill (procs/oskills/auras...), or skill << 6 | level (encode 2/3)."""
+            s = stat_rows.get(stat)
+            if s is None or not param.isdigit():
+                return param
+            if s[0] == "state":  # stat 98: the parameter is a state
+                return str(state_ids.get(int(param), int(param)))
+            if s[0] == "item_aura":  # hidden, but its parameter is the aura skill
+                return str(skill_ids.get(int(param), int(param)))
+            if s[ih.index("Encode")] in ("2", "3"):
+                v = int(param)
+                return str(skill_ids.get(v >> 6, v >> 6) << 6 | v & 63)
+            if s[ih.index("descfunc")] in SKILL_PARAM_DESCFUNCS:
+                return str(skill_ids.get(int(param), int(param)))
+            return param
+
         for bank in ("base", ""):
             p = OUT / "data" / "global" / "excel" / bank / "missiles.txt"
             if not p.exists():
@@ -708,6 +728,17 @@ class Migrator:
                 if r[sh] == "72" and r[p1].isdigit():
                     r[p1] = str(skill_ids.get(int(r[p1]), int(r[p1])))
                     skills += 1
+                if r[sh] == "71":
+                    # D2Sigma 0x1008e6f0: state Param4 on the owner, stat sHitPar1 (param Param5) and sHitPar2
+                    # (param CltParam5); all Median row numbers
+                    ps, s1, s2 = h.index("Param4"), p1, h.index("sHitPar2")
+                    if r[ps].isdigit():
+                        r[ps] = str(state_ids.get(int(r[ps]), int(r[ps])))
+                    for sc, pc in ((s1, h.index("Param5")), (s2, h.index("CltParam5"))):
+                        if r[sc].isdigit():
+                            r[sc] = str(stat_ids.get(int(r[sc]), int(r[sc])))
+                            r[pc] = stat_param(r[sc], r[pc])
+                    skills += 1
                 if r[sh] in self.SRV_HIT_MOVED:
                     r[sh] = self.SRV_HIT_MOVED[r[sh]]
                     moved += 1
@@ -717,7 +748,27 @@ class Migrator:
             write_tsv(p, h, rows)
             if bank == "":
                 self.report.append(f"\nmissiles: {moved} hit functions moved to D2R's free slots; "
-                                   f"{skills} hit-72 skill parameters translated")
+                                   f"{skills} hit-71/72 rows translated")
+        # Hit 41 (D2Sigma 0x1008f210) spawns the monstats row its skill's calc1 gives; those formulas name Median
+        # rows (e.g. "ulvl+2387"). Numbers whose monstats row moved are rewritten; others ("ulvl==140") stay.
+        mh, mrows = read_tsv(NAMED / "missiles.txt")
+        summoners = {r[mh.index("Skill")] for r in mrows if r and r[mh.index("pSrvHitFunc")] == "41"} - {""}
+        monster_ids = self.median_ids("monstats")
+        fixed = 0
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            c1 = h.index("calc1")
+            for r in rows:
+                if is_record(r) and r[0] in summoners and r[c1]:
+                    new = re.sub(r"(?<![\w.'])\d+(?![\w'])",
+                                 lambda m: str(monster_ids.get(int(m[0]), int(m[0]))), r[c1])
+                    fixed += new != r[c1] and bank == "base"
+                    r[c1] = new
+            write_tsv(p, h, rows)
+        self.report.append(f"missiles: {fixed} hit-41 summon formulas moved to D2R monstats rows")
 
     def remap_property_params(self) -> None:
         """Median's item properties give skill (and monster) parameters as Median row numbers, but D2R keeps its
