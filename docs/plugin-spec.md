@@ -29,7 +29,7 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 | 165 (-> 184) | 0x100ab190 | 10 | Holy Freeze, skills_1907, item auras (Penumbra, Majesty, ...) — **plugin** (aura with layers) |
 | 166 (-> 185) | 0x100abff0 | 7 | flamestrike, flamestrike_2 — **plugin** (missile at target) |
 | 167 | 0x100ad4a0 | 1 | resurrect_2 |
-| 171 (-> 190) | 0x100acee0 | 1 | queen_of_blades — needs Median's damage block (see below) |
+| 171 (-> 190) | 0x100acee0 | 1 | queen_of_blades — **plugin** (area damage, see below) |
 
 **Replaced originals: D2R runs the vanilla behaviour for these today, which may differ from Median.**
 
@@ -165,6 +165,28 @@ Both fill a 0x70/0x6c-byte damage block themselves (Median's damage: elemental t
 EType, min/max from Median's own helpers `0x100a6020`/`0x100a5ec0`, `0x10041e80`), then 161 applies it to the melee
 target and 171 to every unit in aurarangecalc chosen by aurafilter (`0x10042600`, callback `0x100bb740`). Port
 together with D2R's damage application.
+
+### 171: area damage (`0x100acee0`) — mxl-core 0.17.0, slot 190 (`area_damage.cpp`)
+
+queen_of_blades is periodic (srvstfunc 28 puts its buff state on; the periodic event calls 171 every perdelay frames).
+D2Sigma builds one damage block (hit flags 2 | HitFlags, HitClass, the skill's elemental damage) and hits every unit in
+aurarangecalc chosen by aurafilter (`0x10042600`, callback `0x100bb740`), adding the caster's weapon damage scaled by
+SrcDam (D2Game `0x6fcfd450`, SrcDam/128) per target. Ported with D2R's pieces the way its damage auras (srvdofunc 66,
+`0x5630e0`, callback `0x561280`) use them:
+
+| D2R | What |
+|---|---|
+| `0x437d00` (unit, &damage, skill, level) | skill's elemental damage into the block |
+| `0x4327d0` (game, unit, 0, 0, range, filter, callback, context, 0, file, line) | unit finder; callback (finder ctx {game, caster, count, context}, target) -> counted if non-zero |
+| `0x4494b0` (&to, &from) | copy a damage block |
+| `0x44c030` (game, attacker, target, &damage, 0, srcDam byte) | weapon damage, srcDam/128 (0 = 128) |
+| `0x44ce80` (game, attacker, target, 1, &damage), `0x44a9b0` (game, attacker, target, &damage) | hit and apply |
+
+D2R's damage block is 0x180 bytes: +0 hit flags, +4 result flags (u16), +0x40/+0x48/+0x50 a small list (data, count,
+capacity with bit 63 = inline storage at +0x58, 16 x 12 bytes), +0x144 hit class, +0x158 a tagged callback pointer
+(1 = empty); the destruction D2R inlines is in `DestroyDamage`. SrcDam comes from `mxl_damage.h` (txt_migrate
+damage_tables). Not ported: the hit roll when ResultFlags bit 0 is clear (`0x10057690`; every unit found is hit),
+Median's physical damage helpers (no MinDam/MaxDam on queen_of_blades) and `0x10056d20`.
 
 ### 165: aura (`0x100ab190`) — mxl-core 0.16.0, slot 184 (`auras.cpp`)
 
