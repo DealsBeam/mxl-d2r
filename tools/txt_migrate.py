@@ -990,6 +990,57 @@ class Migrator:
             if bank == "base" and filled:
                 self.report.append(f"\nskills: {len(filled)} class skills had no skilldesc; set to 'attack'")
 
+    # Which strings D2R's skill description line types read (D2Client UI/SkillDesc.cpp, 0x287a50: a switch on the
+    # line type that asserts "stringIndex1 != strdummy [&& stringIndex2 != strdummy]" when one is missing).
+    DESCLINE_NEEDS = {2: "AB", 3: "AB", 4: "A", 5: "A", 6: "A", 7: "A", 12: "A", 13: "A", 15: "AB", 17: "A",
+                      18: "A", 19: "A", 20: "AB", 21: "AB", 23: "A", 24: "A", 25: "A", 30: "A", 31: "A", 32: "AB",
+                      33: "AB", 34: "A", 35: "A", 37: "A", 38: "AB", 40: "AB", 41: "A", 42: "A", 46: "AB", 47: "A",
+                      49: "A", 50: "A", 51: "A", 53: "A", 54: "A", 55: "A", 56: "A", 57: "A", 58: "AB", 59: "A",
+                      62: "AB", 63: "A", 64: "A", 65: "AB", 69: "A", 70: "AB", 71: "AB", 72: "A", 73: "A", 74: "A",
+                      76: "AB", 77: "AB", 78: "A", 79: "AB"}
+
+    def skilldesc_lines(self) -> None:
+        """Median's skill description lines that D2R's renderer can't draw (bug #9, the strdummy assert):
+        - type 40 "%s Receives Bonuses From:" (Sksyn, 401 lines) without textb: D2Sigma fills %s with the skill's
+          own name; written in as textb = the row's str name.
+        - D2Sigma's own types that collide with D2R's 74-79: 77 with no strings (a line D2Sigma builds in code, the
+          first line of 516 skills) and 76 (challenge unlock hints, calcb = unlocked). D2R's 76/77 are synergy lines
+          that need two strings; dropped.
+        - any other line missing a string its D2R type needs (a handful of Median data slips); dropped."""
+        groups = (("descline", "desc", 6), ("dsc2line", "dsc2", 5), ("dsc3line", "dsc3", 7))
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "skilldesc.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            name = h.index("str name")
+            n_syn = n_drop = 0
+            for r in rows:
+                if not is_record(r):
+                    continue
+                for line, prefix, count in groups:
+                    for i in range(1, count + 1):
+                        if f"{line}{i}" not in h:
+                            continue
+                        cols = [h.index(c) for c in (f"{line}{i}", f"{prefix}texta{i}", f"{prefix}textb{i}",
+                                                     f"{prefix}calca{i}", f"{prefix}calcb{i}")]
+                        kind, a, b = r[cols[0]], r[cols[1]], r[cols[2]]
+                        if not kind.isdigit():
+                            continue
+                        if kind == "40" and a and not b and r[name]:
+                            r[cols[2]] = r[name]
+                            n_syn += 1
+                            continue
+                        needs = self.DESCLINE_NEEDS.get(int(kind), "")
+                        if ("A" in needs and not a) or ("B" in needs and not b):
+                            for c in cols:
+                                r[c] = ""
+                            n_drop += 1
+            write_tsv(p, h, rows)
+            if bank == "":
+                self.report.append(f"\nskilldesc (D2R line types): {n_syn} synergy headers given the skill's name; "
+                                   f"{n_drop} lines D2R can't draw dropped (mostly D2Sigma's code-built type 77)")
+
     def split_large_sets(self) -> None:
         """D2R allows 6 items per set; Median's "Orphan's Call" has 9. Items 7+ go to a copy of the set named
         "<set> (2)" so the tables load; the full set needs a plugin (reported)."""
@@ -1260,6 +1311,7 @@ def main() -> int:
     m.claim_presets()
     m.claim_mazes()
     m.fill_skilldesc()
+    m.skilldesc_lines()
     m.skill_rules()
     m.vendor_stock()
     m.item_spells()
