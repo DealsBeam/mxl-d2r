@@ -132,8 +132,10 @@ Like vanilla Charged Strike (D2R `0x5562b0`): the skill target unit, if any, tak
 `0x101f1b04`; D2R `0x44b2b0`); calc1 missiles (srvmissilea/b/c by calc2 clamped 1-3, flags 0x21) start at the skill
 target and fly to 2*target - caster; each gets 1.13c's charged-strike init function (`D2Game+0x41f50`, through
 `0x101f1a40`) with its index. D2R replaced the init-function pointer with a kind code at params +0x70 (1 =
-charged-strike bolt, 4 = multishot) and its argument at +0x74. Not ported: `0x10041f30(game, unit)` (a D2Game call
-through `0x101f1d78`, unidentified). D2Sigma resolves D2Game/D2Common addresses as (module index, RVA) through
+charged-strike bolt, 4 = multishot) and its argument at +0x74. D2Sigma first calls `0x10041f30(game, unit)` (through
+`0x101f1d78` = D2Game `+0xe07a0`): vanilla's skill-target check, which clears the path target when it no longer
+matches its GUID or is an item on the ground/equipped (97 call sites in 1.13c). D2R's is `0x491b50`, run by the target
+getter `0x48fe20` that the plugin calls, so it is covered. D2Sigma resolves D2Game/D2Common addresses as (module index, RVA) through
 `0x10042870`; module 8 is D2Game.dll (table at `0x101d4014`). Median runs on 1.13c.
 
 ### 160: storm state (`0x100a97e0`)

@@ -1029,6 +1029,62 @@ class Migrator:
                                    f"{n_moved} skills with D2Sigma srvdofunc {sigma_first}-{sigma_last} -> +{shift}; "
                                    f"{n_ranged} teleports with a range / layered buffs -> 179/174/180")
 
+    def sound_rows(self) -> None:
+        """Median's own sound rows (appended after D2R's: sounds is d2r_wins) come from 1.13c's format and miss D2R's
+        audio columns: no Channel, no HD Redirect, no Volume Min/Max (1.13c had one Volume, dropped as obsolete) and
+        a .wav name where D2R's files are .flac. Rows that reuse a vanilla file (Whirlpool's "distilledwater" plays
+        object\\sewerwater) copy those columns from the D2R row playing the same file, so they get its HD sound;
+        Median's Volume becomes Volume Min/Max. Rows with Median's own audio (taunts etc.) get the channel D2R uses
+        for that folder and a .flac name: they stay silent until the audio itself is ported."""
+        mh_src, mrows_src = read_tsv(NAMED / "sounds.txt")
+        volume = {r[0]: r[mh_src.index("Volume")] for r in mrows_src if r and r[0]}
+        copied = custom = 0
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "sounds.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            dh, drows = read_tsv(D2R / bank / "sounds.txt")
+            vanilla = {r[dh.index("Sound")] for r in drows if r}
+            stem = lambda f: f.lower().replace("/", "\\").rsplit(".", 1)[0]
+            by_file: dict[str, list[str]] = {}
+            channel_of: dict[str, Counter] = defaultdict(Counter)
+            for r in drows:
+                if not r or not r[dh.index("FileName")]:
+                    continue
+                f = stem(r[dh.index("FileName")])
+                by_file.setdefault(f, r)
+                if r[dh.index("Channel")].endswith("_sd"):
+                    channel_of[f.split("\\")[0]][r[dh.index("Channel")]] += 1
+            audio = ["Redirect", "Channel", "FileName", "IsLocal", "IsMusic", "IsAmbientScene", "IsAmbientEvent",
+                     "IsUI", "Pitch Min", "Pitch Max", "LFEMix", "3dSpread", "Is2D", "HDOptOut", "Delay"]
+            for r in rows:
+                name = r[h.index("Sound")]
+                if not name or name in vanilla:
+                    continue
+                f = stem(r[h.index("FileName")])
+                twin = by_file.get(f)
+                if twin is not None:
+                    for c in audio:
+                        r[h.index(c)] = twin[dh.index(c)]
+                    copied += bank == "base"
+                else:
+                    top = f.split("\\")[0]
+                    if channel_of[top]:
+                        r[h.index("Channel")] = channel_of[top].most_common(1)[0][0]
+                    if r[h.index("FileName")]:
+                        r[h.index("FileName")] = r[h.index("FileName")].rsplit(".", 1)[0] + ".flac"
+                    for c, v in (("Pitch Min", "100"), ("Pitch Max", "100"), ("3dSpread", "60")):
+                        if not r[h.index(c)]:
+                            r[h.index(c)] = v
+                    custom += bank == "base"
+                v = volume.get(name, "")
+                if v:
+                    r[h.index("Volume Min")] = r[h.index("Volume Max")] = v
+            write_tsv(p, h, rows)
+        self.report.append(f"\nsounds: {copied} Median rows took a vanilla file's D2R audio columns, "
+                           f"{custom} play Median's own audio (silent until it is ported)")
+
     def fill_skilldesc(self) -> None:
         """D2R asserts when a class skill has no skilldesc (Median's hidden class skills, granted at character
         creation, have none). They point at the "attack" description, which has no skill tree page."""
@@ -1386,6 +1442,7 @@ def main() -> int:
     m.clean_treasure_classes()
     m.claim_presets()
     m.claim_mazes()
+    m.sound_rows()
     m.fill_skilldesc()
     m.skilldesc_lines()
     m.clean_cube_outputs()
