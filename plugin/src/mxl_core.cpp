@@ -5,12 +5,13 @@
 // the plugin records which image it expects (the PE header timestamp; it changes with D2R patches and D2RLoader
 // releases) and changes nothing on any other.
 //
-// Engine changes: room for more than 512 states (states_fix.cpp), D2Sigma's added skill server functions
-// (sigma_skills.cpp).
+// Engine changes: room for more than 512 states (states_fix.cpp), level types above 36 (level_types.cpp),
+// D2Sigma's added skill server functions (sigma_skills.cpp).
 #include <D2RLPlugin/api.h>
 
 #include "sigma_skills.h"
 #include "states_fix.h"
+#include "level_types.h"
 
 #include <windows.h>
 
@@ -19,13 +20,14 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.6.0";
+constexpr const char* PluginVersion = "0.7.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
 int g_skillsInstalled = 0;
 char g_skillsReport[512] = "";
 char g_statesReport[160] = "off: not the expected game image";
+char g_levelTypesReport[160] = "off: not the expected game image";
 
 constexpr D2RL::PluginInfo Info {
 	.infoSize    = D2RL::PluginInfoSize,
@@ -35,7 +37,7 @@ constexpr D2RL::PluginInfo Info {
 	.version     = PluginVersion,
 	.author      = "mxl-d2r",
 	.description = "D2Sigma behaviour for the Median XL port (skills, formulas, engine limits).",
-	.flags       = D2RL::PluginFlags::Shared | D2RL::PluginFlags::ModScopedOnly,
+	.flags       = D2RL::PluginFlags::Shared | D2RL::PluginFlags::ModScopedOnly | D2RL::PluginFlags::NativeHooks,
 };
 
 auto ImageStamp(const D2RL::PluginContext* context) noexcept -> uint32_t {
@@ -63,6 +65,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	command->plugin->WriteConsoleMessage(line);
 	std::snprintf(line, sizeof(line), "states fix %s", g_statesReport);
 	command->plugin->WriteConsoleMessage(line);
+	std::snprintf(line, sizeof(line), "level types %s", g_levelTypesReport);
+	command->plugin->WriteConsoleMessage(line);
 	std::snprintf(line, sizeof(line), "skill functions %d/%d:%s", g_skillsInstalled, SigmaSkillCount(),
 	              g_skillsReport[0] ? g_skillsReport : " none");
 	command->plugin->WriteConsoleMessage(line);
@@ -88,6 +92,9 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	if (BuildMatches(context)) {
 		InstallStatesFix(context, g_statesReport, sizeof(g_statesReport));
 		std::snprintf(line, sizeof(line), "mxl-core: states fix %s", g_statesReport);
+		context->LogInfo(line);
+		InstallLevelTypeGuards(context, g_levelTypesReport, sizeof(g_levelTypesReport));
+		std::snprintf(line, sizeof(line), "mxl-core: level types %s", g_levelTypesReport);
 		context->LogInfo(line);
 		g_skillsInstalled = InstallSigmaSkills(context, g_skillsReport, sizeof(g_skillsReport));
 		std::snprintf(line, sizeof(line), "mxl-core: %d/%d skill functions:%s", g_skillsInstalled, SigmaSkillCount(),

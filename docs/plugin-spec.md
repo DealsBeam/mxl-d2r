@@ -183,7 +183,18 @@ Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R bas
   (docs/formulas.md).
 - Skill tree rules (`ui/SkillTree.cpp`): devotions lock each other, "pick up to three masteries".
 - Skill descriptions (`D2SkillDesc.cpp`).
-- Engine limits: states (below), level types (Median 36-51).
+- Engine limits: states (below), level types (below).
+
+## Level types
+
+Median has 52 level types (36-51 its own, used by 44 areas). D2R loads LvlTypes.txt into a vector (`0x32db30`), so
+the tile sets load. Only AutoMap.txt is fixed at 36: the loader `0x32cae0` matches each row's LevelName against 36
+names (table `0x1cfe110`, 0x10 bytes each; unmatched rows assert "ii < NUM_LEVEL_TYPES" and become type 0) and keeps
+each type's row range in a 36-entry array at `0x2a9a8e0` (8 bytes each, followed by another object at `0x2a9aa00`).
+The automap tile lookup `0x32bdf0(levelType, tileType, style, sequence)` reads that array unchecked.
+**mxl-core 0.7.0** hooks the lookup: types >= 36 answer -1 ("no automap tile"), so Median's areas have no automap
+tiles instead of reading past the array. Full support: relocate the name table (+16 names) and the range array (52
+entries), raise the loader's bound 0x24 -> 0x34.
 
 ## States limit (engine; in progress)
 
