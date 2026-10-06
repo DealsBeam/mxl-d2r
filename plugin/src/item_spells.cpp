@@ -298,23 +298,33 @@ void ApplyDye(const mxl_items::SigmaItem& entry, d2r::Game* game, d2r::Unit* pla
 	SendItem(game, player, target);
 }
 
+// A Median level number as D2R's level id, or 0 when D2R cannot link it from where the player stands: no such level,
+// or another act (D2R's portal routine refuses those).
+auto LinkableLevel(d2r::Game* game, d2r::Unit* player, int32_t median) noexcept -> int32_t {
+	if (median <= 0 || median >= static_cast<int32_t>(std::size(mxl_items::LevelIds))) {
+		return 0;
+	}
+	const uint32_t dataFlag = d2r::DataFlag(game);
+	const int32_t level = mxl_items::LevelIds[median];
+	void* room = g_unitRoom(player);
+	if (level <= 0 || level > 0xffff || room == nullptr ||
+	    g_levelAct(dataFlag, level) != g_levelAct(dataFlag, g_roomLevelId(room))) {
+		return 0;
+	}
+	return level;
+}
+
 // D2Sigma 0x1007f720: the destination of a key (its calc1, a Median level number) or 0 when it may not open one
-// here: wrong difficulty, no such level, a level D2R cannot link (another act) or already opened.
+// here: wrong difficulty, a level D2R cannot link or already opened.
 auto KeyLevel(const mxl_items::SigmaItem& entry, d2r::Game* game, d2r::Unit* player, d2r::Unit* item) noexcept
 	-> int32_t {
 	if (entry.difficulty != 0 && entry.difficulty - 1 != d2r::At<uint8_t>(game, GameDifficulty)) {
 		return 0;
 	}
 	const uint8_t* record = ItemRecordOf(game, item);
-	const uint32_t dataFlag = d2r::DataFlag(game);
-	const int32_t median = g_evalItemCalc(dataFlag, player, item, d2r::At<int32_t>(record, ItCalc1));
-	if (median <= 0 || median >= static_cast<int32_t>(std::size(mxl_items::LevelIds))) {
-		return 0;
-	}
-	const int32_t level = mxl_items::LevelIds[median];
-	void* room = g_unitRoom(player);
-	if (level <= 0 || level > 0xffff || room == nullptr ||
-	    g_levelAct(dataFlag, level) != g_levelAct(dataFlag, g_roomLevelId(room))) {
+	const int32_t level =
+		LinkableLevel(game, player, g_evalItemCalc(d2r::DataFlag(game), player, item, d2r::At<int32_t>(record, ItCalc1)));
+	if (level == 0) {
 		return 0;
 	}
 	const int32_t key = CounterKeyBase + level;
@@ -325,17 +335,14 @@ auto KeyLevel(const mxl_items::SigmaItem& entry, d2r::Game* game, d2r::Unit* pla
 }
 
 // A portal next to the player, as D2R's cube "Red Portal" output (0x5da800) opens one.
-auto OpenKeyPortal(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, int32_t level) noexcept -> bool {
-	const uint8_t* record = ItemRecordOf(game, item);
-	const int32_t kind = g_evalItemCalc(d2r::DataFlag(game), player, item, d2r::At<int32_t>(record, ItCalc1 + 4));
+auto OpenPortal(d2r::Game* game, d2r::Unit* player, int32_t level, int32_t object) noexcept -> bool {
 	void* room = g_unitRoom(player);
 	int32_t xy[2] = {};
 	g_unitXY(player, xy);
 	void* spot = nullptr;
 	g_freeSpot(game, room, xy, 3, 0x400, &spot, 5, 100);
 	d2r::Unit* portal = nullptr;
-	if (spot == nullptr || g_createPortal(game, player, spot, xy[0], xy[1], level, &portal,
-	                                      kind != 0 ? mxl_items::ObjectOneWayPortal : ObjectRedPortal, 0, 1) == 0) {
+	if (spot == nullptr || g_createPortal(game, player, spot, xy[0], xy[1], level, &portal, object, 0, 1) == 0) {
 		return false;
 	}
 	if (portal != nullptr) {
@@ -345,6 +352,15 @@ auto OpenKeyPortal(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, int32_t 
 		if (uint8_t* data = d2r::At<uint8_t*>(portal, UnitObjectData)) {
 			data[ObjPortalLevelHigh] = static_cast<uint8_t>(level >> 8);
 		}
+	}
+	return true;
+}
+
+auto OpenKeyPortal(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, int32_t level) noexcept -> bool {
+	const uint8_t* record = ItemRecordOf(game, item);
+	const int32_t kind = g_evalItemCalc(d2r::DataFlag(game), player, item, d2r::At<int32_t>(record, ItCalc1 + 4));
+	if (!OpenPortal(game, player, level, kind != 0 ? mxl_items::ObjectOneWayPortal : ObjectRedPortal)) {
+		return false;
 	}
 	const int32_t key = CounterKeyBase + level;
 	*g_gameCounter(reinterpret_cast<uint8_t*>(game) + GameCounters, &key) += 1;
@@ -472,6 +488,20 @@ auto UseDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Unit*
 }
 
 }  // namespace
+
+// D2Sigma's srvdofunc 154 (0x100aafa0) -> slot 173: a red portal next to the caster to the Median level its calc1
+// gives (0x10097870, the keys' routine). Used by mysterious_companion_skill(_2) and judgementwander_2_skill.
+auto SrvDoLevelPortal(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (game == nullptr || unit == nullptr || level < 1 || g_createPortal == nullptr) {
+		return 0;
+	}
+	const uint8_t* skill = d2r::api.getSkillRecord(d2r::DataFlag(game), skillId);
+	if (skill == nullptr) {
+		return 0;
+	}
+	const int32_t target = LinkableLevel(game, unit, d2r::EvalCalc(game, unit, skill, d2r::SkCalc1, skillId, level));
+	return target != 0 && OpenPortal(game, unit, target, ObjectRedPortal) ? 1 : 0;
+}
 
 auto InstallItemSpells(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;

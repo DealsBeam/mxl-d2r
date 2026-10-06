@@ -1,4 +1,4 @@
-// D2Sigma's aura function, srvdofunc 165 -> slot 184, and its layered self buff (18 -> 174) and storm (124 -> 175).
+// D2Sigma's aura function, srvdofunc 165 -> slot 184, and its layered self buff (18 -> 174) and storm (124 -> 180).
 #pragma once
 
 #include <cstdint>

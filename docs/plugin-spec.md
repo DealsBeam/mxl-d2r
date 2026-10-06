@@ -16,22 +16,23 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 | srvdofunc | D2Sigma function | Median skills | Examples |
 |---|---|---|---|
 | 153 (-> 172) | 0x100ad720 | 40 | blood_skeleton, ice_elementals, fire_elementals, summon_familiars — **plugin** (multi-summon) |
-| 154 | 0x100aafa0 | 3 | mysterious_companion_skill, judgementwander_2_skill |
+| 154 (-> 173) | 0x100aafa0 | 3 | mysterious_companion_skill, judgementwander_2_skill — **plugin** (red portal to the Median level calc1, the keys' routine; 0.21.0) |
 | 155 (-> D2R 109) | 0x100ab090 | 1 | **town_portal** (see below) |
-| 156 | 0x100aaee0 | 1 | skills_374 |
+| 156 (-> 175) | 0x100aaee0 | 1 | skills_374 — not ported (two D2Game calls; hidden skill) |
 | 157 (-> 176) | 0x100aca50 | 25 | catapult_shot, overkill, diseased_cattle, hail_of_stones — **plugin** (barrage) |
 | 158 (-> 177) | 0x100acc50 | 74 | DeathMaul, MegademonInferno, CountessFirewall, egg_trap — **plugin** (missile row) |
 | 159 (-> 178) | 0x100aa7e0 | 15 | spiral_dance, heaven_s_fury, crucify_2, barrier_strike — **plugin** (strike burst) |
 | 160 (-> D2R 124) | 0x100a97e0 | 4 | thundergod, armageddon_2, frigid_domain, overheat — **data** (D2R's Armageddon) |
 | 161 (-> D2R 121) | 0x100ad0f0 | 2 | hyena_strike, exorcism — **data** (D2R's Rabies, see below) |
-| 162 | 0x100ac7c0 | 1 | skills_667 |
+| 162 (-> 181) | 0x100ac7c0 | 1 | skills_667 — not ported (casts a random one of Param1-8's skills) |
 | 163, 164, 168-170 | 0x100a9ac0, 0x100ac430, 0x100aabf0, 0x100ac200, 0x100aa9e0 | 0 | unused by the data |
 | 165 (-> 184) | 0x100ab190 | 10 | Holy Freeze, skills_1907, item auras (Penumbra, Majesty, ...) — **plugin** (aura with layers) |
 | 166 (-> 185) | 0x100abff0 | 7 | flamestrike, flamestrike_2 — **plugin** (missile at target) |
-| 167 | 0x100ad4a0 | 1 | resurrect_2 |
+| 167 (-> D2R 58) | 0x100ad4a0 | 1 | resurrect_2 — **data** (D2R's Revive; D2Sigma sets life to calc1 outright, D2R reads it as a life bonus) |
 | 171 (-> 190) | 0x100acee0 | 1 | queen_of_blades — **plugin** (area damage, see below) |
 
-**Replaced originals: D2Sigma's own versions of vanilla functions.** Compared with D2R's (mxl-core 0.18.0): most
+**Replaced originals: D2Sigma's own versions of vanilla functions.** Their plugin slots use the ones 153-171's +19 shift
+leaves free (174, 179, 180). Compared with D2R's (mxl-core 0.18.0): most
 are vanilla's routine re-implemented, the Median additions being the skills2 layers (as in 165) and a range limit.
 
 | srvdofunc | D2Sigma function | Median skills | Examples | Port |
@@ -40,7 +41,7 @@ are vanilla's routine re-implemented, the Median additions being the skills2 lay
 | 16 | 0x100adb60 | 0 | | unused |
 | 18 | 0x100ab710 | 122 | Fire Ball, CatapultPlague, RogueMissile | self buff: D2R 0x553e60 + layers; the 6 rows with layers -> **slot 174** |
 | 24 | 0x100ab400 | 17 | Fire Wall, Charged Bolt Sentry | D2R 0x553950 (D2R also caps active walls); D2Sigma clamps the spot to aurarangecalc (only burning_veil sets one: not ported) |
-| 27 | 0x100ad9d0 | 53 | Teleport, jitan_s_gate | D2R 0x554c40 + distance limit aurarangecalc (-1 refuses) for players -> **slot 173** (47 rows with a range) |
+| 27 | 0x100ad9d0 | 53 | Teleport, jitan_s_gate | D2R 0x554c40 + distance limit aurarangecalc (-1 refuses) for players -> **slot 179** (47 rows with a range) |
 | 41 | 0x100a9290 | 4 | vampiric_strike, deathgaze | not compared (4 skills) |
 | 54 | 0x100aa050 | 1 | queen_of_blades_2 | not compared (queen_of_blades_2) |
 | 68 | 0x100a9f50 | 39 | Shout, lightning_shield | same as D2R (0x567500): nova + buff; layers unused by its rows |
@@ -51,7 +52,7 @@ are vanilla's routine re-implemented, the Median additions being the skills2 lay
 | 114 | 0x100ad460 | 9 | jinn, blade_spirits | calls the original (Raven) |
 | 120 | 0x100aa320 | 1 | takedown | not compared (takedown) |
 | 122 | 0x100ab920 | 0 | | unused |
-| 124 | 0x100a9510 | 38 | Hurricane, war_spirit | storm: D2R 0x575de0 + layers; land_of_the_dead -> **slot 175** |
+| 124 | 0x100a9510 | 38 | Hurricane, war_spirit | storm: D2R 0x575de0 + layers; land_of_the_dead -> **slot 180** |
 
 ### 155: town portal (`FUN_100ab090`)
 

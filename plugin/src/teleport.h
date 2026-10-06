@@ -1,4 +1,4 @@
-// D2Sigma's teleport, srvdofunc 27 with aurarangecalc -> slot 173 (teleport.cpp).
+// D2Sigma's teleport, srvdofunc 27 with aurarangecalc -> slot 179 (teleport.cpp).
 #pragma once
 
 #include <cstdint>

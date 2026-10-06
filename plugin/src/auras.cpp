@@ -1,6 +1,6 @@
 // D2Sigma's aura function (srvdofunc 165, D2SkillDo.cpp 0x100ab190) -> slot 184, and its versions of the self buff
-// (18, 0x100ab710) -> slot 174 and the timed storm (124, 0x100a9510) -> slot 175, which add the same per-aurastat layer
-// to D2R's functions 18 (0x553e60) and 124 (0x575de0). Only the Median skills that use a layer move to 174/175.
+// (18, 0x100ab710) -> slot 174 and the timed storm (124, 0x100a9510) -> slot 180, which add the same per-aurastat layer
+// to D2R's functions 18 (0x553e60) and 124 (0x575de0). Only the Median skills that use a layer move to 174/180.
 //
 // D2Sigma's version is vanilla's aura routine: the aurastats (calcs evaluated) go onto the caster under aurastate and
 // onto the units its finder picks (aurarangecalc, aurafilter) under auratargetstate, refreshed on every aura pulse.

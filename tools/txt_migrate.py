@@ -370,7 +370,7 @@ class Migrator:
         self.report.append(f"\nformula functions: {len(calls)} proxy skills (mxf_*) for D2Sigma's hasstate/statlayer/"
                            f"itemstat/tabpoints, calc code mxfn")
 
-    LAYERED_FUNCS = {"165": None, "18": 174, "124": 175}  # D2Sigma srvdofunc -> plugin slot (165 moves with 153-171)
+    LAYERED_FUNCS = {"165": None, "18": 174, "124": 180}  # D2Sigma srvdofunc -> plugin slot (165 moves with 153-171)
 
     def layered_skills(self) -> set[str]:
         """Median skills on a D2Sigma function that gives aurastats a layer from skills2 (first six dwords): aura 165,
@@ -385,7 +385,7 @@ class Migrator:
         skills2 table (first six dwords; callback 0x100bbbe0). Layers are Median numbers: for the stat `state` a state,
         for skill-on-event stats (Encode 2/3) skill << 6 | level, for +skill and synergy stats a skill; translated to
         the migrated ids. Listed for the skills with srvdofunc 165 that use a layer, and for D2Sigma's versions of the
-        self buff 18 and the storm 124, which do the same (0x100ab710, 0x100a9510; plugin slots 174/175)."""
+        self buff 18 and the storm 124, which do the same (0x100ab710, 0x100a9510; plugin slots 174/180)."""
         h, rows = read_tsv(NAMED / "skills.txt")
         s2h, s2rows = read_tsv(ROOT / "work" / "sigma" / "skills2.txt")
         ih, irows = read_tsv(OUT / "data" / "global" / "excel" / "base" / "itemstatcost.txt")
@@ -914,10 +914,13 @@ class Migrator:
           on a hit auratargetstate for ELen, a missile (flags 0x8000), the skill's elemental damage and the melee
           hit. D2Sigma picks srvmissilea/b/c by calc2; D2R by its own rule (srvmissilea here), so hyena_strike's
           upgraded missile (srvmissilec, Median stat 191) is not used.
+        - D2Sigma 167 (resurrect_2, srvstfunc 21 and pettype revive like Revive) is a Revive: D2R's 58. D2Sigma sets
+          the pet's life to calc1 outright and adds the minion pierce/procs; D2R reads calc1 as its life bonus.
         - Teleport (27): D2Sigma's version (0x100ad9d0) limits the distance to aurarangecalc (-1: no teleport) for
-          players. Rows with aurarangecalc move to plugin slot 173 (D2R's teleport with that limit).
+          players. Rows with aurarangecalc move to plugin slot 179 (D2R's teleport with that limit).
         - D2Sigma's self buff (18) and storm (124) give aurastats a layer like its aura 165: rows that use one move
-          to plugin slots 174/175 (D2R's function, then the layers)."""
+          to plugin slots 174/180 (D2R's function, then the layers). Slots 172-190 hold D2Sigma 153-171 (+19); the
+          ones those leave free (174: 155 -> 109, 179: 160 -> 124, 180: 161 -> 121) carry these."""
         caps = {"mlvl", "skcp", "skcn"}
         named = [row[0] for row in read_tsv(ROOT / "work" / "named" / "skills.txt")[1]]
         skill_caps = {}
@@ -926,8 +929,8 @@ class Migrator:
             if row.isdigit() and int(row) < len(named):
                 skill_caps[named[int(row)]] = (mlvl, skcn)
         sigma_first, sigma_last, shift = 153, 171, 19
-        to_d2r = {155: 109, 160: 124, 161: 121}  # 161: melee + elemental + target state + missile = Rabies
-        ranged = {27: 173}  # D2Sigma's replaced originals that the plugin reimplements, for rows with aurarangecalc
+        to_d2r = {155: 109, 160: 124, 161: 121, 167: 58}  # 161: melee + elemental + target state + missile = Rabies
+        ranged = {27: 179}  # D2Sigma's replaced originals that the plugin reimplements, for rows with aurarangecalc
         layered = self.layered_skills()  # D2Sigma 18/124 rows whose aurastats carry a layer -> plugin 174/175
         for bank in ("base", ""):
             p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
@@ -976,7 +979,7 @@ class Migrator:
                 self.report.append(f"\nskills (D2Sigma rules): {n_cap} skpoints formulas with Median's skill caps "
                                    f"written in (mlvl, skcn; skcp from the plugin);{n_right} active class skills -> rightskill 1; "
                                    f"{n_moved} skills with D2Sigma srvdofunc {sigma_first}-{sigma_last} -> +{shift}; "
-                                   f"{n_ranged} teleports with a range / layered buffs -> 173-175")
+                                   f"{n_ranged} teleports with a range / layered buffs -> 179/174/180")
 
     def fill_skilldesc(self) -> None:
         """D2R asserts when a class skill has no skilldesc (Median's hidden class skills, granted at character

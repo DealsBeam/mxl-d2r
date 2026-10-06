@@ -8,6 +8,7 @@
 #include "d2r.h"
 #include "pet_scaling.h"
 #include "area_damage.h"
+#include "item_spells.h"
 #include "teleport.h"
 #include "stat_list.h"
 #include "auras.h"
@@ -291,12 +292,13 @@ struct SlotFunction {
 
 constexpr SlotFunction Functions[] = {
 	{172, SrvDoMultiSummon, "multi-summon (D2Sigma 153)"},
-	{173, SrvDoRangedTeleport, "teleport with a range (D2Sigma 27)"},
+	{173, SrvDoLevelPortal, "portal to a level (D2Sigma 154)"},
 	{174, SrvDoLayeredBuff, "self buff with layered stats (D2Sigma 18)"},
-	{175, SrvDoLayeredStorm, "storm with layered stats (D2Sigma 124)"},
 	{176, SrvDoMissileBarrage, "missile barrage (D2Sigma 157)"},
 	{177, SrvDoMissileRow, "missile row (D2Sigma 158)"},
 	{178, SrvDoStrikeBurst, "strike burst (D2Sigma 159)"},
+	{179, SrvDoRangedTeleport, "teleport with a range (D2Sigma 27)"},
+	{180, SrvDoLayeredStorm, "storm with layered stats (D2Sigma 124)"},
 	{184, SrvDoAura, "aura with layered stats (D2Sigma 165)"},
 	{185, SrvDoMissileAtTarget, "missile at target (D2Sigma 166)"},
 	{190, SrvDoAreaDamage, "area damage (D2Sigma 171)"},

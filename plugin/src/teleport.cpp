@@ -1,4 +1,4 @@
-// D2Sigma's teleport (srvdofunc 27, D2SkillDo.cpp 0x100ad9d0) -> slot 173, for Median's teleports with an
+// D2Sigma's teleport (srvdofunc 27, D2SkillDo.cpp 0x100ad9d0) -> slot 179, for Median's teleports with an
 // aurarangecalc (47 of 53: Teleport, harbinger, blink, pounce, ...).
 //
 // D2Sigma's one change to vanilla: the skill's aurarangecalc. -1 refuses the teleport (Median's formulas give -1 in
