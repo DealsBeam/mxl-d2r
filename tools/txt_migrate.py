@@ -480,6 +480,7 @@ class Migrator:
             dh, drows = read_tsv(D2R / bank / "skills.txt")
             d2r_own = {(r[0], r[dh.index("srvdofunc")]) for r in drows}
             sp, ml, cc = h.index("skpoints"), h.index("maxlvl"), h.index("charclass")
+            c9, c10 = h.index("calc9"), h.index("calc10")
             rs, pa, do = h.index("rightskill"), h.index("passive"), h.index("srvdofunc")
             n_cap = n_right = n_moved = 0
             for r in rows:
@@ -491,6 +492,10 @@ class Migrator:
                     # skcp stays: a skillcalc row (extra_calc_codes) the mxl-core plugin answers, else 0
                     text = re.sub(r"\bskcn\b", f"({skcn})" if skcn else "0", text)
                     r[sp] = text
+                    # calc9/calc10 (D2R-only columns 1.13c lacks) carry mlvl and skcn for the plugin's
+                    # bmax/maxe codes
+                    if not r[c9] and not r[c10]:
+                        r[c9], r[c10] = mlvl, skcn or "0"
                     n_cap += 1
                 if r[cc] and r[pa] != "1" and r[rs] in ("", "0"):
                     r[rs] = "1"

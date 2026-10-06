@@ -193,7 +193,10 @@ Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R bas
   `bd12`-`bd78`/`bdz1`-`bdz7` (base-level diminishing, `0x100a5be0`: a + (110*blvl/(blvl+6))*(b-a)/100), `wdm`
   (SrcDam*100/128; D2R SrcDam +0x24d, Param1 +0x1b8) and `area` (room -> level id; D2R `0x2efc10(0x34b440(unit))`;
   Median's level ids are unchanged by the migration) and `skcd` (case 73, `0x100b0ed0`: the delay formula, D2R's
-  compiled localdelay at record +0x238, minus the unit's stat 309 for the skill). Still 0: `bmax`, `maxe`, `mnhp`/`mnar` (Median's minion scaling, `0x10067c60`/`0x10067bd0`), `pdmn`, `pdmx`, `mode` (unit+0x10 in 1.13c)
+  compiled localdelay at record +0x238, minus the unit's stat 309 for the skill), `bmax` (case 88, `0x100a6e00`: max(0, min(mlvl + skcn + skcp, clvl + 1 -
+  reqlevel)); mlvl/skcn are stored by txt_migrate.py in calc9/calc10, D2R-only columns at +0x1b0/+0x1b4; reqlevel
+  +0x214) and `maxe` (case 92: base level > 0 and equal to bmax). Still 0 (rare): `mode` (1 skill; 1.13c unit+0x10),
+  `pdmn`/`pdmx` (2 skills; `0x100a6260`/`0x100a6180`, skills2-based damage), `mnhp`/`mnar` (Median's minion scaling, `0x10067c60`/`0x10067bd0`), `pdmn`, `pdmx`, `mode` (unit+0x10 in 1.13c)
   (cases in `0x100a6340`, jump table `0x100a67b0`). Open as before:
   `wdm`, `skcd`, `aura`, `bl12..`, `area`, ... (docs/validation.md lists counts).
 - Formula functions: `hasstate`, `tabpoints`, `statlayer`, `itemstat`, items `skilllevel`, missiles `stat`

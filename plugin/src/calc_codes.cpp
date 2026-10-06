@@ -17,7 +17,10 @@
 //   area       the unit's current level id (case 106, 0x100bdf40: room -> level -> id)
 //   skcd       the skill's cooldown: its localdelay formula (D2R record +0x238) minus the unit's cooldown-reduction
 //              stat for that skill (case 73, 0x100b0ed0, Median stat 309)
-// Not yet: maxe/bmax (max-level checks), mnhp/mnar
+//   bmax       the skill's current maximum base level: max(0, min(mlvl + skcn + skcp, clvl + 1 - reqlevel)) (case 88,
+//              0x100a6e00); mlvl and skcn come from calc9/calc10, where tools/txt_migrate.py stores them
+//   maxe       1 when the skill's base level (> 0) equals bmax (case 92)
+// Not yet: (max-level checks), mnhp/mnar
 // (Median's minion scaling), mode, pdmn/pdmx, mlvl/skcn (written into skpoints instead).
 #include "calc_codes.h"
 
@@ -37,6 +40,10 @@ constexpr int SkPassiveState = 0xb4;
 constexpr int SkParam1 = 0x1b8;                // int32 Param1..Param8, 4 bytes apart
 constexpr int SkSrcDam = 0x24d;                // uint8
 constexpr int SkLocalDelayCalc = 0x238;        // compiled localdelay formula (-1 none)
+constexpr int SkCalc9 = 0x1b0;                 // mlvl (written by txt_migrate.py)
+constexpr int SkCalc10 = 0x1b4;                // skcn
+constexpr int SkReqLevel = 0x214;              // uint16
+constexpr int32_t StatLevel = 12;
 constexpr uint64_t D2RCodeBlvl = 41;           // D2R's own "blvl" row
 constexpr uint64_t UnitRoomRva = 0x34b440;     // (unit) -> room
 constexpr uint64_t RoomLevelIdRva = 0x2efc10;  // (room) -> level id
@@ -96,6 +103,22 @@ auto BaseLevelProgression(uint64_t dataFlag, void* unit, uint64_t code, int32_t 
 	return static_cast<uint64_t>(lo + (scale * (hi - lo)) / 100);
 }
 
+auto MaxBaseLevel(uint64_t dataFlag, void* unit, int32_t skillId, uint32_t level) noexcept -> int32_t {
+	const uint32_t flag = static_cast<uint32_t>(dataFlag & 0xff);
+	const uint8_t* skill = d2r::api.getSkillRecord(flag, skillId);
+	if (skill == nullptr || unit == nullptr) {
+		return 0;
+	}
+	auto* u = static_cast<d2r::Unit*>(unit);
+	const int32_t lvl = static_cast<int32_t>(level);
+	const int32_t cap = d2r::api.evalSkillCalc(flag, u, d2r::At<int32_t>(skill, SkCalc9), skillId, lvl) +
+	                    d2r::api.evalSkillCalc(flag, u, d2r::At<int32_t>(skill, SkCalc10), skillId, lvl) +
+	                    g_getUnitStat(unit, mxl_ids::StatSkillCapBonus, skillId);
+	const int32_t byLevel = g_getUnitStat(unit, StatLevel, 0) + 1 - d2r::At<uint16_t>(skill, SkReqLevel);
+	const int32_t v = cap < byLevel ? cap : byLevel;
+	return v > 0 ? v : 0;
+}
+
 auto CalcCode(uint64_t dataFlag, void* unit, uint64_t code, int32_t skillId, uint32_t level) noexcept -> uint64_t {
 	switch (static_cast<int32_t>(code & 0xff)) {
 	case mxl_ids::Calc_syn1: return LayerStat(unit, mxl_ids::StatSyn1, skillId);
@@ -135,6 +158,11 @@ auto CalcCode(uint64_t dataFlag, void* unit, uint64_t code, int32_t skillId, uin
 		const int32_t reduction = g_getUnitStat(unit, mxl_ids::StatCooldownReduction, skillId);
 		return static_cast<uint64_t>(static_cast<int64_t>(reduction != 0 ? delay - reduction : delay));
 	}
+	case mxl_ids::Calc_bmax: return static_cast<uint64_t>(MaxBaseLevel(dataFlag, unit, skillId, level));
+	case mxl_ids::Calc_maxe: {
+		const int32_t blvl = static_cast<int32_t>(g_original(dataFlag, unit, D2RCodeBlvl, skillId, level));
+		return blvl > 0 && blvl == MaxBaseLevel(dataFlag, unit, skillId, level) ? 1 : 0;
+	}
 	case mxl_ids::Calc_wdm: {
 		const uint8_t* skill = d2r::api.getSkillRecord(static_cast<uint32_t>(dataFlag & 0xff), skillId);
 		return skill == nullptr ? 0 : static_cast<uint64_t>(d2r::At<uint8_t>(skill, SkSrcDam) * 100 / 128);
@@ -156,7 +184,7 @@ auto InstallCalcCodes(const D2RL::PluginContext* context, char* report, size_t r
 	g_unitRoom = reinterpret_cast<UnitRoomFn>(context->exeBase + UnitRoomRva);
 	g_roomLevelId = reinterpret_cast<RoomLevelIdFn>(context->exeBase + RoomLevelIdRva);
 	const bool ok = context->InstallInlineHook(CalcCodeRva, CalcCodeEntry, sizeof(CalcCodeEntry), CalcCode, &g_original);
-	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd (rows %d..)" : "off: calc code hook failed (rows %d..)",
+	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe (rows %d..)" : "off: calc code hook failed (rows %d..)",
 	              mxl_ids::FirstCalcCode);
 	return ok;
 }

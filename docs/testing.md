@@ -8,10 +8,11 @@ functions it installed.
 
 | Since | What | How to test | Expected |
 |---|---|---|---|
-| 0.9.0 | Plugin loads; engine fixes applied | Console: `mxl` | `mxl-core 0.9.0`, `states fix on: 73 sites ...` (or 72), `level types on: ...`, `calc codes on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd`, `skill functions 5/5` |
+| 0.9.0 | Plugin loads; engine fixes applied | Console: `mxl` | `mxl-core 0.9.0`, `states fix on: 73 sites ...` (or 72), `level types on: ...`, `calc codes on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe`, `skill functions 5/5` |
 | 0.8.0 | Synergies (syn1-syn6) | An item with "+X% to <skill>"-style synergy bonuses; compare the skill's damage/tooltip with and without it | Damage/tooltip changes with the item |
 | 0.8.0 | Item max-level bonus (skcp) | An item with "+N to maximum level of <skill>" | That skill can take N more points |
 | 0.9.0 | Base-level skill values (bl12/bd12...) and weapon damage % (wdm) | Skill tooltips that show per-level values or "% weapon damage"; raise the skill by a point and check the value moves | Non-zero values that grow with points spent (not with +skill items) |
+| 0.9.0 | "Maxed skill" effects (bmax/maxe) | Skills whose tooltip/bonus changes when maxed (e.g. "max this skill ... to remove cooldown") | The bonus appears once the skill reaches its current cap |
 | 0.9.0 | Cooldown in skill tooltips (skcd) | Tooltip of a skill with a cooldown | Shows the cooldown (not 0) |
 | 0.9.0 | Area-dependent skills (area) | The class "slow missiles" passives (paragon_of_sanc...) in their level range | Active only in the areas their Param7..Param8 range covers |
 | data | Formulas with other Median codes (aura, area, bl12...) | Skills whose tooltips previously showed odd or zero values | Values show (codes not yet implemented count as 0) |
