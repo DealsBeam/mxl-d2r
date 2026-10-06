@@ -1143,8 +1143,9 @@ class Migrator:
         """Median's mana costs live in skills2 formulas (tools/formula.py export_skill_costs), not in skills.txt's
         mana/lvlmana, so the port's skills cost nothing beyond minmana. D2R's mana/lvlmana are 16-bit numbers and its
         cost is D2Sigma's ((level - 1) * lvlmana + mana) << manashift, so constant formulas ("300", "(0-9)") are
-        written in. Not covered: 17 lvlmana formulas (pet-count costs of summons) and D2Sigma's lvlmana scaling by
-        stat 228 (Median's mana cost %) - both need the plugin."""
+        written in. The 17 others (16 summons' petmax-based lvlmana, titan_s_fortitude's) go to calc7 (lvlmana) and
+        calc8 (mana), which no Median skill uses; mxl-core evaluates them for the caster and applies stat 228
+        (Median's mana cost %) to lvlmana (plugin mana_costs.cpp)."""
         named = [row[0] for row in read_tsv(NAMED / "skills.txt")[1]]
         costs: dict[str, tuple[str, str]] = {}
         for line in (ROOT / "work" / "formulas" / "skill_costs.txt").read_text("utf-8").splitlines()[1:]:
@@ -1166,6 +1167,7 @@ class Migrator:
                 continue
             h, rows = read_tsv(p)
             mc, lc = h.index("mana"), h.index("lvlmana")
+            calc_for = {mc: h.index("calc8"), lc: h.index("calc7")}
             for r in rows:
                 if not is_record(r) or r[0] not in costs or r[mc] or r[lc]:
                     continue
@@ -1176,10 +1178,12 @@ class Migrator:
                         r[col] = str(v)
                         written += bank == "base"
                     elif text and v is None:
+                        assert not r[calc_for[col]], (r[0], h[calc_for[col]])
+                        r[calc_for[col]] = text
                         formulas += bank == "base"
             write_tsv(p, h, rows)
         self.report.append(f"\nskill costs: {written} mana/lvlmana values from D2Sigma's skills2 formulas written in; "
-                           f"{formulas} formulas left for the plugin (pet-count lvlmana)")
+                           f"{formulas} formulas in calc7/calc8 for the plugin")
 
     def fill_skilldesc(self) -> None:
         """D2R asserts when a class skill has no skilldesc (Median's hidden class skills, granted at character

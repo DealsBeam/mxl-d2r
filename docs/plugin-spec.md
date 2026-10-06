@@ -302,6 +302,18 @@ expected value 0).
 Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R base max 97) and cltstfunc 82
 (D2R base max 55).
 
+## Mana costs (mxl-core 0.29.0, `mana_costs.cpp`)
+
+D2Sigma's cost (0x100b0af0, D2Resource.cpp 0x100a1dc0) is `((level - 1) * lvlmana + mana) << manashift`; mana and
+lvlmana are skills2 formulas (skills2 +0x36/+0x3a) and lvlmana is multiplied by `(100 + stat 228) / 100`. txt_migrate
+`skill_costs` writes the 2,053 constant values into skills.txt mana/lvlmana and the 17 other formulas into calc7
+(lvlmana) / calc8 (mana), unused by Median. D2R's cost function `0x33aa00` (dataFlag, skillId, level; minmana << 8 as
+the floor) has no unit, so it is hooked through a stub that passes the caller's callee-saved register as a fourth
+argument: RDI at the server charge site (call 0x4369fb inside `0x436830`, whose entry is already hooked by the loader)
+and RBX at the client charge site (`0x2188b0`, call 0x218937), picked by return address (0x436a00 / 0x21893c). Other
+callers (`0x338110` / `0x33d480` tooltips and checks) keep D2R's value. Skills record: minmana +0x226, manashift
++0x228, mana +0x22a, lvlmana +0x22c, calc7 +0x1a8, calc8 +0x1ac.
+
 ## Item spells (misc.txt `pSpell`)
 
 D2Sigma replaced pSpell 12-22 with its own handlers: table 0x101d95b0 of {client start, use} pairs, dispatcher
