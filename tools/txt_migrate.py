@@ -78,7 +78,10 @@ MAX_ITEMS_PER_SET = 6  # D2R and D2RLoader
 # table (0x236fe30) has slots 0-19 and 16-19 are empty, so 16 is usable but does nothing without mxl-core.
 SIGMA_ITEM_SPELLS = set(range(12, 22))
 SIGMA_TARGETED_SPELLS = {14, 20}  # dyes, mystic orbs: applied to a clicked item
+SIGMA_HELP_SPELLS = {13, 21}  # right-click shows the item's help text (help_tooltips)
+SIGMA_KEPT_SPELLS = {13, 18, 21}  # not used up (also keys with calc3 set)
 PLUGIN_SPELL = 16
+PLUGIN_SPELL_KEEP = 17  # same, but the item is not used up (mxl-core sets the slot's "keep" flag)
 # Tables with item property slots (code/param/min/max columns), for remap_property_params.
 PROPERTY_TABLES = ("uniqueitems", "setitems", "sets", "runes", "magicprefix", "magicsuffix", "automagic",
                    "rareprefix", "raresuffix", "qualityitems", "lowqualityitems", "gems", "cubemain", "monprop")
@@ -448,12 +451,14 @@ class Migrator:
         Identify cursor (spellicon 0): D2R passes the clicked item to the item spell when spellicon is not -1."""
         to_d2r = {"22": "3"}
         self.sigma_items: list[tuple[str, int, str]] = []  # (code, D2Sigma spell, calc1)
+        self.help_keys: set[str] = set()
         for bank in ("base", ""):
             p = OUT / "data" / "global" / "excel" / bank / "misc.txt"
             if not p.exists():
                 continue
             h, rows = read_tsv(p)
             ps, ic, cc, ci = h.index("pSpell"), h.index("spellicon"), h.index("code"), h.index("calc1")
+            sd, sdm, c3 = h.index("spelldescstr"), h.index("spelldesc"), h.index("calc3")
             n = 0
             for r in rows:
                 if not is_record(r):
@@ -466,13 +471,43 @@ class Migrator:
                         self.sigma_items.append((r[cc], int(r[ps]), r[ci]))
                     if int(r[ps]) in SIGMA_TARGETED_SPELLS:
                         r[ic] = "0"
-                    r[ps] = str(PLUGIN_SPELL)
+                    if int(r[ps]) in SIGMA_HELP_SPELLS and r[sd] and not r[sdm]:
+                        r[sdm] = "1"  # show the help text in the tooltip (help_tooltips)
+                        self.help_keys.add(r[sd])
+                    # D2Sigma keeps these items (its handler reports "not used"): help items, containers, keys
+                    # with calc3 set. D2R decides on the client from the slot's flag, which mxl-core sets for 17.
+                    keep = int(r[ps]) in SIGMA_KEPT_SPELLS or (int(r[ps]) == 16 and r[c3] not in ("", "0"))
+                    r[ps] = str(PLUGIN_SPELL_KEEP if keep else PLUGIN_SPELL)
             write_tsv(p, h, rows)
             if bank == "base":
                 by = Counter(s for _c, s, _k in self.sigma_items)
                 self.report.append(f"\nmisc pSpell: {n} items with D2Sigma's timed potion (22) -> D2R's 3; "
                                    f"{len(self.sigma_items)} items with D2Sigma's item spells -> {PLUGIN_SPELL} "
                                    f"(mxl-core): " + ", ".join(f"{s}: {k}" for s, k in sorted(by.items())))
+
+    def help_tooltips(self) -> None:
+        """D2Sigma's item spells 13 and 21 (arcane shards, catalysts, oils, ...) only show a help panel on right-click
+        (packet 0x27 with the item's spelldescstr; D2R has no such packet). item_spells sets spelldesc 1 so D2R shows
+        the text in the tooltip instead; here the panel's leading layout number line ("90\\n") is dropped from those
+        strings (both string folders, every language)."""
+        lead = re.compile(r"^\s*\d+\s*\n")
+        n = 0
+        for folder in ("strings", "strings-legacy"):
+            for p in sorted((OUT / "data" / "local" / "lng" / folder).glob("*.json")):
+                recs = json.loads(p.read_text("utf-8-sig"))
+                changed = False
+                for e in recs:
+                    if e.get("Key") in self.help_keys:
+                        for lang, text in e.items():
+                            if lang not in ("id", "Key") and isinstance(text, str) and lead.match(text):
+                                e[lang] = lead.sub("", text, count=1)
+                                changed = True
+                        n += folder == "strings"
+                if changed:
+                    text = json.dumps(recs, ensure_ascii=False, indent=2).replace("\n", "\r\n")
+                    p.write_text("﻿" + text, encoding="utf-8", newline="")
+        self.report.append(f"\nhelp tooltips: {len(self.help_keys)} item help texts (D2Sigma spells 13/21) shown in "
+                           f"tooltips ({n} strings)")
 
     def row_ids(self, table: str, key: str | None = None) -> dict[str, int]:
         """Output row number of each key (column 0, or `key`) in the base bank."""
@@ -635,11 +670,27 @@ class Migrator:
             row = misc_row.get(code.strip(), -1)
             diff = m2rows[row][m2h.index("field_0x26")] if 0 <= row < len(m2rows) else ""
             items.append(f"    {{{code32(code)}, {spell}, {arg}, {int(diff or 0)}}},  // {esc(code)}")
+        # Containers (D2Sigma spell 18, 0x1006f240): the item code they hold is misc.bin +0x8c (ultracode; not in
+        # the named table), each absorbed item adds calc1 to stat1 up to len.
+        bin_ = (BINS / "misc.bin").read_bytes()
+        rec = (len(bin_) - 4) // struct.unpack_from("<I", bin_)[0]
+        containers = []
+        for code, spell, calc1 in self.sigma_items:
+            row = misc_row.get(code.strip(), -1)
+            if spell != 18 or row < 0:
+                continue
+            held = bin_[4 + row * rec + 0x8c: 4 + row * rec + 0x90].rstrip(b"\0").decode("latin1")
+            r = nrows[row]
+            stat_name, cap = r[nh.index("stat1")], r[nh.index("len")]
+            if held.strip() and stat_name in stat_id and calc1.isdigit() and cap.isdigit():
+                containers.append(f"    {{{code32(code)}, {code32(held.strip())}, {stat_id[stat_name]}, {calc1}, {cap}}},"
+                                  f"  // {esc(code)} holds {esc(held.strip())}")
         level_ids = self.median_ids("levels")
         levels = [str(level_ids.get(i, -1)) for i in range(max(level_ids) + 1)]
         lines = ["// Generated by tools/txt_migrate.py (item_spell_tables); do not edit.", "#pragma once", "",
                  "#include <cstdint>", "", "namespace mxl_items {", "",
-                 f"inline constexpr int32_t PluginSpell = {PLUGIN_SPELL};  // misc pSpell of every D2Sigma item spell",
+                 f"inline constexpr int32_t PluginSpell = {PLUGIN_SPELL};  // misc pSpell of D2Sigma's item spells",
+                 f"inline constexpr int32_t PluginSpellKeep = {PLUGIN_SPELL_KEEP};  // the same, item not used up",
                  "", "// Items with D2Sigma item spells: code (4 chars, little-endian), D2Sigma's pSpell, argument",
                  "// (mystic orbs: mysticorbs row; dyes: calc1; others: calc1 when constant, else -1).",
                  "struct SigmaItem {", "\tuint32_t code;", "\tint32_t spell;", "\tint32_t arg;",
@@ -664,6 +715,10 @@ class Migrator:
                   "", "// Median level number -> migrated level id (item formulas give Median's numbers, e.g. keys' calc1).",
                   "inline constexpr int16_t LevelIds[] = {" + ", ".join(levels) + "};",
                   f"inline constexpr int32_t ObjectOneWayPortal = {self.median_ids('objects')[586]};  // Median 586",
+                  "", "// Containers (D2Sigma spell 18): container code, code of the items it absorbs, stat counting them,",
+                  "// amount per item, maximum.",
+                  "struct Container {", "\tuint32_t code;", "\tuint32_t held;", "\tint32_t stat;", "\tint32_t amount;",
+                  "\tint32_t max;", "};", "inline constexpr Container Containers[] = {", *containers, "};",
                   f"inline constexpr int32_t ItemTypeWeapon = {types['weap']};",
                   f"inline constexpr int32_t ItemTypeArmor = {types['armo']};",
                   "", "}  // namespace mxl_items", ""]
@@ -1077,6 +1132,7 @@ def main() -> int:
     m.skill_rules()
     m.vendor_stock()
     m.item_spells()
+    m.help_tooltips()
     m.remap_property_params()
     m.item_spell_tables()
     m.extra_calc_codes()

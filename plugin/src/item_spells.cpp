@@ -20,10 +20,17 @@
 //   16 keys / summoning scrolls / riftstones (0x1007f720): a portal next to the player to level calc1 (a Median
 //      level number, translated by LevelIds), once per level and game. D2Sigma: calc2 0 -> red portal (object 60,
 //      0x10097870), else Median's one-way portal (0x100976d0); misc2 +0x26 limits the item to one difficulty;
-//      calc3 non-zero keeps the item (not consumed by D2Sigma; here the client decides, see testing.md). Opened with
+//      calc3 non-zero keeps the item (pSpell PluginSpellKeep, below). Opened with
 //      D2R's portal routine 0x432ce0 the way D2R's cube "Red Portal" output does (0x5da800), which also places the
 //      return portal; D2R only links levels of the same act and stores the destination in a byte (levels <= 255).
-// Not yet (refused, so the item is kept): 12, 13, 15, 17-19, 21 (arcane shards, cube items, ...).
+//   18 containers (gem/rune clusters, 0x1006f240): right-click takes every item the container holds (its misc.bin
+//      ultracode) from the inventory and cube, and from the stash in town, adding `amount` to its count stat each,
+//      up to its maximum. Items are removed the way D2R removes a used-up tome (0x4712a0).
+//   13, 21 (arcane shards, catalysts, oils): D2Sigma only shows the item's help text; it is in the tooltip now
+//      (tools/txt_migrate.py help_tooltips), right-click is refused.
+// Items D2Sigma keeps (13, 18, 21, keys with calc3) use pSpell PluginSpellKeep (17), whose table flag is set here:
+// D2R's client marks an item spell as "used up" from that flag (0x308e80) and the server checks the two agree.
+// Not yet (refused, so the item is kept): 12, 15, 17, 19 (home_cherry, Perfect Ruby, askari_call, cherry, toa).
 #include "item_spells.h"
 
 #include "d2r.h"
@@ -76,6 +83,21 @@ constexpr int ItCalc1 = 0xa4;                    // items record: calc1-calc3 (c
 constexpr int32_t ObjectRedPortal = 60;
 constexpr int32_t CounterKeyBase = 0x6d780000;   // per-game counter key for "portal to level n opened": base + n
 
+constexpr uint64_t ItemSpellTable = 0x236fe30;  // 20 x {check, use, flag}; flag 1 = the item is not used up
+constexpr uint64_t UnitInventoryRva = 0x34a360;  // (unit, file, line) -> inventory
+constexpr uint64_t InventoryFirstRva = 0x388c10; // (inventory) -> first item
+constexpr uint64_t InventoryNextRva = 0x38aba0;  // (item) -> next item in the owner's inventory
+constexpr uint64_t RoomIsTownRva = 0x2f0750;     // (room) -> non-zero in town
+constexpr uint64_t ItemLocationRva = 0x382d20;   // (int32 location[4], item): unit id, page, packed x/y, ...
+constexpr uint64_t UnitClassIdRva = 0x34a330;    // (unit, file, line) -> unit +8
+constexpr uint64_t InventoryChangeRva = 0x472590;  // (player, adds, removes, addIds, removeIds, nAdds, nRemoves, 0)
+                                                   // -> bool: validated inventory change (as in 0x4712a0)
+constexpr uint64_t SetItemByte5cRva = 0x36dea0;  // (item, byte): item data +0x5c
+constexpr uint64_t FreeItemRva = 0x43ec10;       // (game, item)
+constexpr int32_t PageInventory = 0;
+constexpr int32_t PageCube = 3;
+constexpr int32_t PageStash = 4;
+
 constexpr int ItPSpell = 0x94;  // items record: pSpell (int32), as 1.13c
 constexpr int ItCode = 0x80;    // items record: code (4 chars), as 1.13c
 constexpr int32_t StatLevel = 12;
@@ -118,6 +140,16 @@ using CreatePortalFn = int32_t (*)(d2r::Game* game, d2r::Unit* unit, void* room,
 using SetPortalLevelFn = void (*)(d2r::Unit* object, uint32_t level);
 using GameCounterFn = int32_t* (*)(void* counters, const int32_t* key);
 using UnitMessageFn = void (*)(d2r::Unit* player, int32_t message, d2r::Unit* subject);
+using UnitInventoryFn = void* (*)(d2r::Unit* unit, const char* file, int32_t line);
+using InventoryFirstFn = d2r::Unit* (*)(void* inventory);
+using InventoryNextFn = d2r::Unit* (*)(d2r::Unit* item);
+using RoomIsTownFn = int64_t (*)(void* room);
+using ItemLocationFn = int32_t* (*)(int32_t* location, d2r::Unit* item);
+using UnitClassIdFn = uint32_t (*)(d2r::Unit* unit, const char* file, int32_t line);
+using InventoryChangeFn = uint8_t (*)(d2r::Unit* player, int32_t* adds, int32_t* removes, uint32_t* addIds,
+                                      uint32_t* removeIds, uint64_t addCount, uint64_t removeCount, uint8_t zero);
+using SetItemByteFn = void (*)(d2r::Unit* item, uint8_t value);
+using FreeItemFn = void (*)(d2r::Game* game, d2r::Unit* item);
 
 DispatchFn g_useOriginal = nullptr;
 DispatchFn g_checkOriginal = nullptr;
@@ -146,6 +178,15 @@ CreatePortalFn g_createPortal = nullptr;
 SetPortalLevelFn g_setPortalLevel = nullptr;
 GameCounterFn g_gameCounter = nullptr;
 UnitMessageFn g_unitMessage = nullptr;
+UnitInventoryFn g_unitInventory = nullptr;
+InventoryFirstFn g_inventoryFirst = nullptr;
+InventoryNextFn g_inventoryNext = nullptr;
+RoomIsTownFn g_roomIsTown = nullptr;
+ItemLocationFn g_itemLocation = nullptr;
+UnitClassIdFn g_unitClassId = nullptr;
+InventoryChangeFn g_inventoryChange = nullptr;
+SetItemByteFn g_setItemByte5c = nullptr;
+FreeItemFn g_freeItem = nullptr;
 
 auto ItemRecordOf(d2r::Game* game, d2r::Unit* item) noexcept -> const uint8_t* {
 	return g_itemRecord(d2r::DataFlag(game), g_unitClass(item, "mxl-core item_spells", 0));
@@ -157,7 +198,8 @@ auto SigmaItemOf(d2r::Game* game, d2r::Unit* item) noexcept -> const mxl_items::
 		return nullptr;
 	}
 	const uint8_t* record = ItemRecordOf(game, item);
-	if (record == nullptr || d2r::At<int32_t>(record, ItPSpell) != mxl_items::PluginSpell) {
+	if (record == nullptr || (d2r::At<int32_t>(record, ItPSpell) != mxl_items::PluginSpell &&
+	                          d2r::At<int32_t>(record, ItPSpell) != mxl_items::PluginSpellKeep)) {
 		return nullptr;
 	}
 	const uint32_t code = d2r::At<uint32_t>(record, ItCode);
@@ -302,6 +344,66 @@ auto OpenKeyPortal(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, int32_t 
 	return true;
 }
 
+auto ContainerOf(const mxl_items::SigmaItem& entry) noexcept -> const mxl_items::Container* {
+	for (const auto& c : mxl_items::Containers) {
+		if (c.code == entry.code) {
+			return &c;
+		}
+	}
+	return nullptr;
+}
+
+// Take an item out of the player's inventory and free it, as D2R does with a used-up tome (0x4712a0): a validated
+// inventory change removing it, the "removed" item update to the client, then the unit is freed.
+auto RemoveItem(d2r::Game* game, d2r::Unit* player, d2r::Unit* item) noexcept -> bool {
+	int32_t location[8] = {};
+	g_itemLocation(location, item);
+	uint32_t classId = g_unitClassId(item, "mxl-core item_spells", 0);
+	if (g_inventoryChange(player, nullptr, location, nullptr, &classId, 0, 1, 0) == 0) {
+		return false;
+	}
+	g_setItemByte5c(item, 0);
+	g_sendItem(game, player, item, 0x20, 4, 0, 0, 0, static_cast<uint32_t>(location[2]));
+	g_setItemByte5c(item, 0);
+	g_freeItem(game, item);
+	return true;
+}
+
+// D2Sigma 0x1006f240: the container takes every item it holds from the inventory and the cube (and the stash in
+// town), one `amount` each, until its count reaches `max`.
+void FillContainer(const mxl_items::Container& c, d2r::Game* game, d2r::Unit* player, d2r::Unit* container) noexcept {
+	void* list = g_itemStatList(nullptr, container, 0, MagicStatList);
+	void* inventory = g_unitInventory(player, "mxl-core item_spells", 0);
+	if (list == nullptr || inventory == nullptr) {
+		return;
+	}
+	void* room = g_unitRoom(player);
+	const bool town = room != nullptr && g_roomIsTown(room) != 0;
+	const uint32_t dataFlag = d2r::DataFlag(game);
+	int32_t taken = 0;
+	for (d2r::Unit* it = g_inventoryFirst(inventory); it != nullptr;) {
+		d2r::Unit* next = g_inventoryNext(it);
+		if (it != container && d2r::At<int32_t>(it, d2r::UnitType) == 4) {
+			const uint8_t* record = ItemRecordOf(game, it);
+			const int32_t page = g_itemByte55(it);
+			if (record != nullptr && d2r::At<uint32_t>(record, ItCode) == c.held &&
+			    (page == PageInventory || page == PageCube || (page == PageStash && town))) {
+				if (g_getUnitStat(container, c.stat, 0) + c.amount > c.max) {
+					break;
+				}
+				if (RemoveItem(game, player, it)) {
+					g_statListAdd(dataFlag, list, c.stat, c.amount, 0);
+					++taken;
+				}
+			}
+		}
+		it = next;
+	}
+	if (taken > 0) {
+		SendItem(game, player, container);
+	}
+}
+
 auto IsOtherItem(d2r::Unit* target, d2r::Unit* item) noexcept -> bool {
 	return target != nullptr && target != item && d2r::At<int32_t>(target, d2r::UnitType) == 4;
 }
@@ -322,6 +424,8 @@ auto CheckDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Uni
 		}
 		g_unitMessage(player, 0x15, player);
 		return 0;
+	case 18:
+		return ContainerOf(*entry) != nullptr ? 1 : 0;
 	default:
 		return 0;  // not implemented: refuse, so the item is not used up
 	}
@@ -347,6 +451,11 @@ auto UseDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Unit*
 		if (const int32_t level = KeyLevel(*entry, game, player, item);
 		    level == 0 || !OpenKeyPortal(game, player, item, level)) {
 			g_unitMessage(player, 0x15, player);
+		}
+		break;
+	case 18:
+		if (const mxl_items::Container* c = ContainerOf(*entry)) {
+			FillContainer(*c, game, player, item);
 		}
 		break;
 	default:
@@ -384,13 +493,26 @@ auto InstallItemSpells(const D2RL::PluginContext* context, char* report, size_t 
 	g_setPortalLevel = reinterpret_cast<SetPortalLevelFn>(base + SetPortalLevelRva);
 	g_gameCounter = reinterpret_cast<GameCounterFn>(base + GameCounterRva);
 	g_unitMessage = reinterpret_cast<UnitMessageFn>(base + UnitMessageRva);
-	const bool ok =
+	g_unitInventory = reinterpret_cast<UnitInventoryFn>(base + UnitInventoryRva);
+	g_inventoryFirst = reinterpret_cast<InventoryFirstFn>(base + InventoryFirstRva);
+	g_inventoryNext = reinterpret_cast<InventoryNextFn>(base + InventoryNextRva);
+	g_roomIsTown = reinterpret_cast<RoomIsTownFn>(base + RoomIsTownRva);
+	g_itemLocation = reinterpret_cast<ItemLocationFn>(base + ItemLocationRva);
+	g_unitClassId = reinterpret_cast<UnitClassIdFn>(base + UnitClassIdRva);
+	g_inventoryChange = reinterpret_cast<InventoryChangeFn>(base + InventoryChangeRva);
+	g_setItemByte5c = reinterpret_cast<SetItemByteFn>(base + SetItemByte5cRva);
+	g_freeItem = reinterpret_cast<FreeItemFn>(base + FreeItemRva);
+	// D2R's slot PluginSpellKeep is empty; its flag 1 makes the client report the item as "not used up" (0x308e80)
+	static constexpr uint8_t Zero[4] = {};
+	const bool keep = context->PatchWriteU32(ItemSpellTable + static_cast<uint64_t>(mxl_items::PluginSpellKeep) * 12 + 8,
+	                                         Zero, sizeof(Zero), 1);
+	const bool ok = keep &&
 		context->InstallInlineHook(CheckDispatchRva, CheckDispatchEntry, sizeof(CheckDispatchEntry), CheckDispatch,
 	                               &g_checkOriginal) &&
 		context->InstallInlineHook(UseDispatchRva, UseDispatchEntry, sizeof(UseDispatchEntry), UseDispatch, &g_useOriginal);
 	std::snprintf(report, reportSize,
-	              ok ? "on: %zu items on pSpell %d; mystic orbs (%zu rows), dyes, keys; others refused for now"
-	                 : "off: item spell hooks failed (%zu items on pSpell %d, %zu orb rows)",
+	              ok ? "on: %zu items on pSpell %d/17; mystic orbs (%zu rows), dyes, keys, containers; help items in tooltips"
+	                 : "off: item spell patch/hooks failed (%zu items on pSpell %d/17, %zu orb rows)",
 	              std::size(mxl_items::Items), mxl_items::PluginSpell, std::size(mxl_items::Orbs));
 	return ok;
 }

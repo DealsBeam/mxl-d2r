@@ -163,6 +163,8 @@ caster's party. Needs the callback's rules first.
 | Skill target unit | 0x48fe20 | (game, unit) |
 | Apply queued melee hit | 0x44b2b0 | (game, attacker, target, 0, 1) (SUnitDmg.cpp) |
 | Item spells (misc pSpell) | 0x236fe30 | 20 entries {check, use, flag} (u32 indexes): check handlers at 0x1d3ea30 (11), use handlers at 0x1d3ea90 (16); 16-19 are empty (index 0), 20+ does nothing. Flag 1 = not usable (0x308e80) |
+| Item spell "used up" | 0x308e80 | (item) -> 1 when the item's slot flag is 0. The client puts this in the use-item message (0x1c7a30 -> 0x1400ed1e0) and the server (0x4f40c0) refuses the message unless they agree; when set, the server frees the item after the use handler. mxl-core sets slot 17's flag to 1 for the items D2Sigma keeps |
+| Remove an inventory item | 0x4712a0 pattern | location 0x382d20 (int[4], item); 0x472590 (player, 0, &location, 0, &unit+8, 0 adds, 1 remove, 0) validates and applies; 0x36dea0 (item, 0); 0x535f60 (game, player, item, 0x20, 4, 0, 0, 0, location[2]); free 0x43ec10 (game, item). Inventory walk: 0x34a360 (unit) -> inventory, 0x388c10 first, 0x38aba0 next; page = item data +0x55 (0x36cfe0: 0 inventory, 3 cube, 4 stash) |
 | Item spell dispatchers | 0x5817f0, 0x581680 | check (game, player, item, target) -> bool and use (same args), called from the player's use-item message (0x4f40c0). When the item's spellicon (record +0x144, char) is not -1 the handler gets the clicked target item instead of the item; the caller removes the used item afterwards |
 | Item helpers | see item_spells.cpp | class id 0x349860 (unit, file, line); items record 0x314110 (dataFlag, class) with 1.13c's layout to +0x94 (code +0x80, pSpell +0x94, calc1 +0xa4); is-type 0x373890 (item, itemtype); quality 0x36cf60 (item data +0); level requirement 0x376de0 (item, player), -1 none; item update packet 0x535f60 as after identifying (0x46e8c0) |
 | Item properties | 0x3d4620 | (type, unit, item, mods, index, set, &property, state, statlist flags, 0): 1.13c's D2Common 10665. Property {int prop, param, min, max}; funcs at 0x2386ab0. Item stat list 0x3d5230 (owner, item, state, flags), created if missing; stat list add 0x2f3330 (dataFlag, list, stat, value, layer) |
@@ -187,18 +189,19 @@ the cursor; the click on another item then runs the use handler with (game, play
 | pSpell | Handler | Items | Does | Port |
 |---|---|---|---|---|
 | 12 | 0x1007fa10 | home_cherry | calc1/calc2 -> warp | refused |
-| 13 | 0x1007f910 | 58: arcane shards/crystal, catalysts | client sends a request (misc +0xb6) to the server | refused |
+| 13 | 0x1007f910 | 58: arcane shards/crystal, catalysts, oils | shows the item's help text: packet 0x27 (unit type 4, item id, string spelldescstr); not used up. D2R has no packet 0x27 | text in the tooltip (data), right-click refused |
 | 14 | 0x1007eff0 | 22 mystic dyes | target weapon/armour: stat 183 = calc1 + 1 (1-21) | plugin |
 | 15 | 0x1007ebb0 | Perfect Ruby, askari_call | | refused |
 | 16 | 0x1007f720 | 40 keys, riftstones, summoning scrolls | portal to level calc1; misc2 +0x26 = difficulty + 1 (0 any); calc2 0: red portal (0x10097870: object 60 or the level's own, plus the return portal), else one-way portal object 586 (0x100976d0); once per level and game (DRLG level +0x230 bit 4); calc3 non-zero: the use "fails", so the item is kept | plugin (0.13.0) |
 | 17 | 0x1007faf0 | cherry | | refused |
-| 18 | 0x1007f300 | 103 gc01-gc103 | cube-related (looks for `box `) | refused |
+| 18 | 0x1007f300 -> 0x1006f240 | 103 containers (gem/rune/shrine clusters) | takes the items it holds (misc.bin +0x8c, ultracode) from inventory, cube (in town or with a cube) and stash (in town), adding calc1 to stat1 each up to len; the absorbed items are destroyed, the container kept | plugin (0.14.0) |
 | 19 | 0x1007f8d0 | toa ("Not used") | | refused |
 | 20 | 0x1007f4b0 | 101 mystic orbs | below | plugin |
-| 21 | 0x1007eef0 | catalyst_of_transference | as 13 | refused |
+| 21 | 0x1007eef0 | catalyst_of_transference | as 13 | as 13 |
 | 22 | 0x1007e900 | 12 potions | timed potion | D2R's 3 (data) |
 
-`txt_migrate.py` (item_spells) moves 12-21 to pSpell 16, an empty but usable slot of D2R's table, gives 14/20 D2R's
+`txt_migrate.py` (item_spells) moves 12-21 to pSpell 16 (used up) or 17 (kept: 13, 18, 21, keys with calc3), empty
+but usable slots of D2R's table, gives 14/20 D2R's
 Identify cursor (spellicon 0) and lists the items by code in `plugin/src/mxl_items.h`. mxl-core hooks D2R's two
 dispatchers (0x5817f0 check, 0x581680 use) and handles pSpell-16 items; the ones not implemented are refused, so
 they are not used up.
