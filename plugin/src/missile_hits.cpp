@@ -1,12 +1,15 @@
 // D2Sigma's own missile hit functions (D2MslHitFuncs.cpp; server table 0x101dc7c8). Its added ones (61-77) and the
 // three whose numbers D2R 3.x reused (34, 41, 42) are moved by txt_migrate (SRV_HIT_MOVED) into D2R's empty server
 // hit slots 61-70 (table 0x2391030, bound 71 at 0x2391404; dispatcher 0x464ac0 calls (game, missile, target unit
-// or null), and the plugin fills the ones ported here. 69 runs D2R's own hit 1 (data only). Not yet ported: 34, 42,
-// 62, 73 (their slots stay empty: the missile hits without the extra effect).
+// or null), and the plugin fills the ones ported here. Median's 69 runs D2R's own hit 1 and its 40 D2R's 40 (both
+// vanilla's, data only). Not yet ported: 42 (one missile, parasite_2: bounces to a unit nearby) and 73 (one,
+// habeas_corpus); their slots stay empty, so those missiles hit without the extra effect.
 #include "missile_hits.h"
 
 #include "d2r.h"
+#include "item_spells.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 
@@ -17,6 +20,11 @@ using d2r::Game;
 using d2r::Unit;
 
 constexpr uint64_t SrvHitTable = 0x2391030;
+constexpr uint64_t CltHitTable = 0x2358710;       // client hit functions (record +0x2a), bound 81 at 0x2358a64
+constexpr uint64_t RvaClientOwner = 0x9a7b0;      // (missile) -> its owner on the client
+constexpr uint64_t RvaClientTarget = 0x9a570;     // (unit) -> its skill target on the client
+constexpr uint64_t RvaClientMissile = 0x1b7760;   // (&params, 0): client missile
+constexpr uint64_t RvaUnitDataFlag = 0x34a0e0;    // (unit) -> the data-table flag
 constexpr uint64_t RvaMissileOwner = 0x490300;    // (game, missile) -> owner unit
 constexpr uint64_t RvaUnitClass = 0x349860;       // (unit, file, line) -> class id (missile row)
 constexpr uint64_t RvaMissileRecord = 0x166040;   // (dataFlag, missile) -> missiles.txt record
@@ -34,14 +42,22 @@ constexpr uint64_t RvaDetachList = 0x2f7920;      // (unit, list)
 constexpr uint64_t RvaFreeList = 0x2f4180;        // (dataFlag, list)
 constexpr uint64_t RvaUnitRoom = 0x34b440;        // (unit) -> room
 constexpr uint64_t RvaRoomAt = 0x38dfb0;          // (room, x, y) -> the room holding x/y (near the given one)
+constexpr uint64_t RvaHostile = 0x492790;         // (game, a, b, players by hostility flag) -> non-zero: enemies
+constexpr uint64_t RvaGetStat = 0x2f5020;         // (unit, stat, layer)
+constexpr uint64_t RvaSetStat = 0x2f7d10;         // (unit, stat, value, layer)
 constexpr uint64_t RvaSpawnMonster = 0x492cf0;    // (game, room, x, y, monster, mode, -1 / 4 (search), flags)
 
 constexpr int MsHitPar1 = 0x70;
 constexpr int MsHitPar2 = 0x74;
 constexpr int MsSkill = 0x1b6;                    // int16
 constexpr int MsHitSubMissile1 = 0x46;            // int16
+constexpr int MsCltHitSubMissile1 = 0x4e;         // int16 (D2R's client hit 2, 0x1ac8f0)
+constexpr int MsCHitPar1 = 0x90;
+constexpr int MsCHitPar2 = 0x94;
 constexpr int SkCalc1 = 0x190;                    // skills calc1-4 at +0x190
 constexpr int SkCalc3 = 0x198;
+constexpr int StatLife = 6;
+constexpr int StatMaxLife = 7;
 constexpr int SkSummode = 0x113;                  // byte, -1 none
 constexpr int SkParam1 = 0x1b8;
 // D2R's missile record is 1.13c's moved on by 0x24 from +0x24 (D2Sigma reads Param4 at +0x44, SrvCalc1 at +0x80, ...)
@@ -83,6 +99,9 @@ using CreateStateListFn = void* (*)(StateListParams* params);
 using SetStateFn = void (*)(Unit* unit, int32_t state, int32_t on);
 using DetachListFn = void (*)(Unit* unit, void* list);
 using FreeListFn = void (*)(uint32_t dataFlag, void* list);
+using HostileFn = uint64_t (*)(Game* game, Unit* a, Unit* b, char playerFlag);
+using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
+using SetStatFn = void (*)(Unit* unit, int32_t stat, int32_t value, int32_t layer);
 using UnitRoomFn = void* (*)(Unit* unit);
 using RoomAtFn = void* (*)(void* room, int32_t x, int32_t y);
 using SpawnMonsterFn = Unit* (*)(Game* game, void* room, int32_t x, int32_t y, int32_t monster, int32_t mode,
@@ -102,6 +121,9 @@ SetStateFn g_setState = nullptr;
 SetStateFn g_clearState = nullptr;
 DetachListFn g_detachList = nullptr;
 FreeListFn g_freeList = nullptr;
+HostileFn g_hostile = nullptr;
+GetStatFn g_getStat = nullptr;
+SetStatFn g_setStat = nullptr;
 UnitRoomFn g_unitRoom = nullptr;
 RoomAtFn g_roomAt = nullptr;
 SpawnMonsterFn g_spawnMonster = nullptr;
@@ -332,18 +354,213 @@ auto HitSummon(Game* game, Unit* missile, Unit* /*target*/) noexcept -> int64_t 
 	return 1;
 }
 
+// D2Sigma 34 (0x1008df40) -> slot 67: the unit hit, when it is the owner's ally (1.13c D2Game 0x6fd00570, D2R
+// 0x492790 the other way round), gets calc1 % of its maximum life back (the missile skill's calc1 at its level;
+// 100 or more: full life). Life is stat 6 and maximum life 7, both in 256ths. (6)
+auto HitHealAlly(Game* game, Unit* missile, Unit* target) noexcept -> int64_t {
+	if (game == nullptr || missile == nullptr || target == nullptr) {
+		return 0;
+	}
+	Unit* owner = g_owner(game, missile);
+	const int32_t skill = g_missileSkill(missile);
+	const int32_t level = g_missileLevel(missile);
+	const uint8_t* skillRecord = skill > 0 ? d2r::api.getSkillRecord(d2r::DataFlag(game), skill) : nullptr;
+	if (owner == nullptr || skillRecord == nullptr || level < 1 || g_hostile(game, owner, target, 0) != 0) {
+		return 0;
+	}
+	const int32_t percent = d2r::EvalCalc(game, owner, skillRecord, SkCalc1, skill, level);
+	const int32_t life = g_getStat(target, StatLife, 0);
+	const int32_t maxLife = g_getStat(target, StatMaxLife, 0);
+	if (percent > 99) {
+		g_setStat(target, StatLife, maxLife, 0);
+	} else if (percent > 0 && life < maxLife) {
+		const int64_t heal = static_cast<int64_t>(maxLife) * percent / 100;
+		g_setStat(target, StatLife, static_cast<int32_t>(std::min<int64_t>(life + heal, maxLife)), 0);
+	}
+	return 1;
+}
+
+// D2Sigma 30 (0x1008d220) -> slot 69: a portal where the missile is, to Median level sHitPar1; sHitPar2 set: the
+// one-way kind, once per level and game (item_spells.cpp HitLevelPortal). ancient_gate, judgementwander (8)
+auto HitPortal(Game* game, Unit* missile, Unit* /*target*/) noexcept -> int64_t {
+	if (game == nullptr || missile == nullptr) {
+		return 0;
+	}
+	const uint8_t* record = RecordOf(game, missile);
+	if (record == nullptr) {
+		return 0;
+	}
+	return HitLevelPortal(game, g_owner(game, missile), missile, At<int32_t>(record, MsHitPar1),
+	                      At<int32_t>(record, MsHitPar2) != 0)
+	           ? 1
+	           : 0;
+}
+
+// D2Sigma 62 (0x1008dd70) -> slot 62: HitSubMissile1 starts where the missile is and goes for the owner's current
+// skill target (1.13c path target copied over, D2Common 10042 -> 10706; D2R: the params' target unit), with the
+// missile's skill and level, range sHitPar1 (else the skill's calc1, at least 1). (2)
+auto HitSpawnAtTarget(Game* game, Unit* missile, Unit* /*target*/) noexcept -> int64_t {
+	if (game == nullptr || missile == nullptr) {
+		return 1;
+	}
+	Unit* owner = g_owner(game, missile);
+	const uint8_t* record = RecordOf(game, missile);
+	if (owner == nullptr || record == nullptr) {
+		return 1;
+	}
+	const int32_t sub = At<int16_t>(record, MsHitSubMissile1);
+	const int32_t skill = g_missileSkill(missile);
+	const int32_t level = g_missileLevel(missile);
+	int32_t x = 0, y = 0;
+	if (sub <= 0 || !d2r::UnitXY(missile, &x, &y)) {
+		return 1;
+	}
+	int32_t range = At<int32_t>(record, MsHitPar1);
+	if (range < 1) {
+		const uint8_t* skillRecord = skill > 0 ? d2r::api.getSkillRecord(d2r::DataFlag(game), skill) : nullptr;
+		range = skillRecord != nullptr ? d2r::EvalCalc(game, owner, skillRecord, SkCalc1, skill, level) : 1;
+		range = range < 1 ? 1 : range;
+	}
+	d2r::MissileParams params{};
+	params.flags = 0x8001;  // 1: start at x/y; 0x8000: range from the params
+	params.owner = owner;
+	params.target = d2r::api.skillTargetUnit(game, owner);
+	params.missile = sub;
+	params.x = x;
+	params.y = y;
+	params.skill = skill;
+	params.skillLevel = level;
+	params.range = range;
+	d2r::api.createMissile(game, &params);
+	return 1;
+}
+
+// Client side: D2R's client hit functions get (missile, unit hit or null).
+using ClientUnitFn = Unit* (*)(Unit* unit);
+using ClientMissileFn = Unit* (*)(d2r::MissileParams* params, int32_t zero);
+using UnitDataFlagFn = uint32_t (*)(Unit* unit);
+ClientUnitFn g_clientOwner = nullptr;
+ClientUnitFn g_clientTarget = nullptr;
+ClientMissileFn g_clientMissile = nullptr;
+UnitDataFlagFn g_unitDataFlag = nullptr;
+
+// The client half of a hit: the missile's record, owner, skill and level.
+struct ClientHit {
+	const uint8_t* record;
+	Unit* owner;
+	int32_t skill;
+	int32_t level;
+	uint32_t dataFlag;
+};
+auto ClientHitOf(Unit* missile, ClientHit* hit) noexcept -> bool {
+	if (missile == nullptr) {
+		return false;
+	}
+	hit->dataFlag = g_unitDataFlag(missile);
+	hit->record = g_missileRecord(hit->dataFlag, g_unitClass(missile, "mxl-core missile_hits.cpp", __LINE__));
+	hit->owner = g_clientOwner(missile);
+	hit->skill = g_missileSkill(missile);
+	hit->level = g_missileLevel(missile);
+	return hit->record != nullptr && hit->owner != nullptr;
+}
+
+// A calc of the missile skill on the client (D2Sigma's fallbacks for an empty cHitPar)
+auto ClientSkillCalc(const ClientHit& hit, int field) noexcept -> int32_t {
+	const uint8_t* skill = hit.skill > 0 ? d2r::api.getSkillRecord(hit.dataFlag, hit.skill) : nullptr;
+	const int32_t v = skill != nullptr
+	                      ? d2r::api.evalSkillCalc(hit.dataFlag, hit.owner, At<int32_t>(skill, field), hit.skill, hit.level)
+	                      : 1;
+	return v < 1 ? 1 : v;
+}
+
+// D2Sigma client 7 (0x1008c770) -> client slot 7 (empty in D2R): the client half of hit 77's nova,
+// CltHitSubMissile1 in every cHitPar1-th of the 64 directions, range cHitPar2 (else calc3). (14)
+auto CltHitNova(Unit* missile, Unit* /*target*/) noexcept -> int64_t {
+	ClientHit hit{};
+	if (!ClientHitOf(missile, &hit)) {
+		return 1;
+	}
+	const int32_t sub = At<int16_t>(hit.record, MsCltHitSubMissile1);
+	if (sub <= 0) {
+		return 1;
+	}
+	int32_t range = At<int32_t>(hit.record, MsCHitPar2);
+	if (range < 1) {
+		range = ClientSkillCalc(hit, SkCalc3);
+	}
+	int32_t step = At<int32_t>(hit.record, MsCHitPar1);
+	step = step < 1 ? 1 : step;
+	for (int i = 0; i < 64; i += step) {
+		d2r::MissileParams params{};
+		params.flags = 0x8002;
+		params.owner = hit.owner;
+		params.origin = missile;
+		params.missile = sub;
+		params.targetX = NovaDX[i];
+		params.targetY = NovaDY(i);
+		params.skill = hit.skill;
+		params.skillLevel = hit.level;
+		params.range = range;
+		g_clientMissile(&params, 0);
+	}
+	return 1;
+}
+
+// D2Sigma client 6 (0x1008c970) -> client slot 6 (empty in D2R): the client half of hit 62, CltHitSubMissile1 from
+// the missile towards the owner's target, range cHitPar1 (else calc1). (2)
+auto CltHitAtTarget(Unit* missile, Unit* /*target*/) noexcept -> int64_t {
+	ClientHit hit{};
+	if (!ClientHitOf(missile, &hit)) {
+		return 1;
+	}
+	const int32_t sub = At<int16_t>(hit.record, MsCltHitSubMissile1);
+	int32_t x = 0, y = 0;
+	if (sub <= 0 || !d2r::UnitXY(missile, &x, &y)) {
+		return 1;
+	}
+	int32_t range = At<int32_t>(hit.record, MsCHitPar1);
+	if (range < 1) {
+		range = ClientSkillCalc(hit, SkCalc1);
+	}
+	d2r::MissileParams params{};
+	params.flags = 0x8001;
+	params.owner = hit.owner;
+	params.target = g_clientTarget(hit.owner);
+	params.missile = sub;
+	params.x = x;
+	params.y = y;
+	params.skill = hit.skill;
+	params.skillLevel = hit.level;
+	params.range = range;
+	g_clientMissile(&params, 0);
+	return 1;
+}
+
 using HitFn = int64_t (*)(Game* game, Unit* missile, Unit* target);
+using CltHitFn = int64_t (*)(Unit* missile, Unit* target);
 struct HitSlot {
 	int slot;
 	HitFn function;
 	const char* name;
 };
+struct CltHitSlot {
+	int slot;
+	CltHitFn function;
+	const char* name;
+};
+constexpr CltHitSlot CltHits[] = {
+	{6, CltHitAtTarget, "missile at owner's target (D2Sigma client 6)"},
+	{7, CltHitNova, "nova (D2Sigma client 7)"},
+};
 constexpr HitSlot Hits[] = {
 	{61, HitRunSkillFunction, "run skill function (D2Sigma hit 61)"},
+	{62, HitSpawnAtTarget, "missile at owner's target (D2Sigma hit 62)"},
 	{63, HitOwnerState, "owner state (D2Sigma hit 71)"},
 	{64, HitCastSkill, "cast skill (D2Sigma hit 72)"},
 	{66, HitNova, "nova (D2Sigma hit 77)"},
+	{67, HitHealAlly, "heal ally (D2Sigma hit 34)"},
 	{68, HitSummon, "summon (D2Sigma hit 41)"},
+	{69, HitPortal, "level portal (D2Sigma hit 30)"},
 };
 
 }  // namespace
@@ -364,9 +581,16 @@ auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t
 	g_clearState = reinterpret_cast<SetStateFn>(g_exeBase + RvaClearState);
 	g_detachList = reinterpret_cast<DetachListFn>(g_exeBase + RvaDetachList);
 	g_freeList = reinterpret_cast<FreeListFn>(g_exeBase + RvaFreeList);
+	g_hostile = reinterpret_cast<HostileFn>(g_exeBase + RvaHostile);
+	g_getStat = reinterpret_cast<GetStatFn>(g_exeBase + RvaGetStat);
+	g_setStat = reinterpret_cast<SetStatFn>(g_exeBase + RvaSetStat);
 	g_unitRoom = reinterpret_cast<UnitRoomFn>(g_exeBase + RvaUnitRoom);
 	g_roomAt = reinterpret_cast<RoomAtFn>(g_exeBase + RvaRoomAt);
 	g_spawnMonster = reinterpret_cast<SpawnMonsterFn>(g_exeBase + RvaSpawnMonster);
+	g_clientOwner = reinterpret_cast<ClientUnitFn>(g_exeBase + RvaClientOwner);
+	g_clientTarget = reinterpret_cast<ClientUnitFn>(g_exeBase + RvaClientTarget);
+	g_clientMissile = reinterpret_cast<ClientMissileFn>(g_exeBase + RvaClientMissile);
+	g_unitDataFlag = reinterpret_cast<UnitDataFlagFn>(g_exeBase + RvaUnitDataFlag);
 	static constexpr uint8_t Empty[8] = {};
 	int installed = 0;
 	size_t used = 0;
@@ -380,9 +604,19 @@ auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t
 			used += n > 0 ? static_cast<size_t>(n) : 0;
 		}
 	}
+	for (const CltHitSlot& h : CltHits) {
+		const bool ok = context->PatchWriteU64(CltHitTable + static_cast<uint64_t>(h.slot) * 8, Empty, sizeof(Empty),
+		                                       reinterpret_cast<uint64_t>(h.function));
+		installed += ok ? 1 : 0;
+		if (used < reportSize) {
+			const int n = std::snprintf(report + used, reportSize - used, "%s clthit %d %s%s", used ? ";" : "", h.slot,
+			                            h.name, ok ? "" : " FAILED");
+			used += n > 0 ? static_cast<size_t>(n) : 0;
+		}
+	}
 	return installed;
 }
 
 auto MissileHitCount() noexcept -> int {
-	return static_cast<int>(sizeof(Hits) / sizeof(Hits[0]));
+	return static_cast<int>(sizeof(Hits) / sizeof(Hits[0]) + sizeof(CltHits) / sizeof(CltHits[0]));
 }

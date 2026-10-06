@@ -334,15 +334,16 @@ auto KeyLevel(const mxl_items::SigmaItem& entry, d2r::Game* game, d2r::Unit* pla
 	return level;
 }
 
-// A portal next to the player, as D2R's cube "Red Portal" output (0x5da800) opens one.
-auto OpenPortal(d2r::Game* game, d2r::Unit* player, int32_t level, int32_t object) noexcept -> bool {
-	void* room = g_unitRoom(player);
+// A portal next to `at` (the player, or a missile), as D2R's cube "Red Portal" output (0x5da800) opens one.
+auto OpenPortalAt(d2r::Game* game, d2r::Unit* player, d2r::Unit* at, int32_t level, int32_t object) noexcept -> bool {
+	void* room = g_unitRoom(at);
 	int32_t xy[2] = {};
-	g_unitXY(player, xy);
+	g_unitXY(at, xy);
 	void* spot = nullptr;
 	g_freeSpot(game, room, xy, 3, 0x400, &spot, 5, 100);
 	d2r::Unit* portal = nullptr;
-	if (spot == nullptr || g_createPortal(game, player, spot, xy[0], xy[1], level, &portal, object, 0, 1) == 0) {
+	if (room == nullptr || spot == nullptr ||
+	    g_createPortal(game, player, spot, xy[0], xy[1], level, &portal, object, 0, 1) == 0) {
 		return false;
 	}
 	if (portal != nullptr) {
@@ -354,6 +355,10 @@ auto OpenPortal(d2r::Game* game, d2r::Unit* player, int32_t level, int32_t objec
 		}
 	}
 	return true;
+}
+
+auto OpenPortal(d2r::Game* game, d2r::Unit* player, int32_t level, int32_t object) noexcept -> bool {
+	return OpenPortalAt(game, player, player, level, object);
 }
 
 auto OpenKeyPortal(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, int32_t level) noexcept -> bool {
@@ -501,6 +506,31 @@ auto SrvDoLevelPortal(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t
 	}
 	const int32_t target = LinkableLevel(game, unit, d2r::EvalCalc(game, unit, skill, d2r::SkCalc1, skillId, level));
 	return target != 0 && OpenPortal(game, unit, target, ObjectRedPortal) ? 1 : 0;
+}
+
+// D2Sigma missile hit 30 (0x1008d220 -> D2Objects.cpp 0x10097870 / 0x100976d0): a portal where the missile is, to
+// Median level sHitPar1. With sHitPar2 set, D2Sigma's one-way portal (Median object 586) and only once per level and
+// game (D2Sigma's level flag 4, shared with the keys: the same game counter here); without, a red portal (D2Sigma
+// takes the level's own portal object, else 60). ancient_gate, judgementwander (8)
+auto HitLevelPortal(d2r::Game* game, d2r::Unit* owner, d2r::Unit* missile, int32_t median, bool once) noexcept -> bool {
+	if (game == nullptr || owner == nullptr || missile == nullptr) {
+		return false;
+	}
+	const int32_t level = LinkableLevel(game, missile, median);
+	if (level == 0) {
+		return false;
+	}
+	const int32_t key = CounterKeyBase + level;
+	if (once && *g_gameCounter(reinterpret_cast<uint8_t*>(game) + GameCounters, &key) > 0) {
+		return false;
+	}
+	if (!OpenPortalAt(game, owner, missile, level, once ? mxl_items::ObjectOneWayPortal : ObjectRedPortal)) {
+		return false;
+	}
+	if (once) {
+		*g_gameCounter(reinterpret_cast<uint8_t*>(game) + GameCounters, &key) += 1;
+	}
+	return true;
 }
 
 auto InstallItemSpells(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {

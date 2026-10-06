@@ -684,7 +684,8 @@ class Migrator:
     # they move there, the plugin fills the ones it has ported (docs/plugin-spec.md, Missile functions).
     # 69 (0x1008eeb0) is vanilla hit 1 (explosion: missile damage | HitFlags/ResultFlags to every unit within
     # sHitPar1, D2R 0x45bc40) with weapon damage recomputed at the hit and an optional to-hit roll; it runs D2R's 1.
-    SRV_HIT_MOVED = {"34": "67", "41": "68", "42": "70", "61": "61", "62": "62", "69": "1", "71": "63", "72": "64",
+    SRV_HIT_MOVED = {"30": "69", "34": "67", "41": "68", "42": "70", "61": "61", "62": "62", "69": "1", "71": "63",
+                     "72": "64",
                      "73": "65", "77": "66"}
     # D2Sigma's client hit 5-7: D2R's 6/7 are empty, its 5 is Echoing Strike's; Median's 5 moves to the empty 20.
     CLT_HIT_MOVED = {"5": "20"}

@@ -13,4 +13,6 @@ struct Game;
 struct Unit;
 }
 // D2Sigma srvdofunc 154 -> slot 173: a portal to the Median level the skill's calc1 gives.
+// D2Sigma missile hit 30: a portal at the missile to Median level `median` (missile_hits.cpp).
+auto HitLevelPortal(d2r::Game* game, d2r::Unit* owner, d2r::Unit* missile, int32_t median, bool once) noexcept -> bool;
 auto SrvDoLevelPortal(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t;
