@@ -6,12 +6,13 @@
 // releases) and changes nothing on any other.
 //
 // Engine changes: room for more than 512 states (states_fix.cpp), level types above 36 (level_types.cpp),
-// D2Sigma's added skill server functions (sigma_skills.cpp).
+// D2Sigma's calc codes (calc_codes.cpp), D2Sigma's added skill server functions (sigma_skills.cpp).
 #include <D2RLPlugin/api.h>
 
 #include "sigma_skills.h"
 #include "states_fix.h"
 #include "level_types.h"
+#include "calc_codes.h"
 
 #include <windows.h>
 
@@ -20,7 +21,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.7.0";
+constexpr const char* PluginVersion = "0.8.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -28,6 +29,7 @@ int g_skillsInstalled = 0;
 char g_skillsReport[512] = "";
 char g_statesReport[160] = "off: not the expected game image";
 char g_levelTypesReport[160] = "off: not the expected game image";
+char g_calcReport[160] = "off: not the expected game image";
 
 constexpr D2RL::PluginInfo Info {
 	.infoSize    = D2RL::PluginInfoSize,
@@ -67,6 +69,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	command->plugin->WriteConsoleMessage(line);
 	std::snprintf(line, sizeof(line), "level types %s", g_levelTypesReport);
 	command->plugin->WriteConsoleMessage(line);
+	std::snprintf(line, sizeof(line), "calc codes %s", g_calcReport);
+	command->plugin->WriteConsoleMessage(line);
 	std::snprintf(line, sizeof(line), "skill functions %d/%d:%s", g_skillsInstalled, SigmaSkillCount(),
 	              g_skillsReport[0] ? g_skillsReport : " none");
 	command->plugin->WriteConsoleMessage(line);
@@ -95,6 +99,9 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		context->LogInfo(line);
 		InstallLevelTypeGuards(context, g_levelTypesReport, sizeof(g_levelTypesReport));
 		std::snprintf(line, sizeof(line), "mxl-core: level types %s", g_levelTypesReport);
+		context->LogInfo(line);
+		InstallCalcCodes(context, g_calcReport, sizeof(g_calcReport));
+		std::snprintf(line, sizeof(line), "mxl-core: calc codes %s", g_calcReport);
 		context->LogInfo(line);
 		g_skillsInstalled = InstallSigmaSkills(context, g_skillsReport, sizeof(g_skillsReport));
 		std::snprintf(line, sizeof(line), "mxl-core: %d/%d skill functions:%s", g_skillsInstalled, SigmaSkillCount(),
