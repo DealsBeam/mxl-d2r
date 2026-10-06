@@ -12,6 +12,7 @@ functions it installed.
 | 0.7.0 | Median-only areas (level types 36-51) | Enter one (e.g. an uber/Median-only zone) and open the automap | No crash or freeze; the automap stays blank there (expected for now) |
 | 0.6.0 | States fix (bug #14) | Play a while with buffs, auras, curses, summons; enter/leave towns and areas | No crashes; buffs show and expire normally |
 | 0.6.0 | High-numbered Median states | A Median buff skill late in the list (e.g. a class aura/shout) and its icon/overlay | Effect applies and ends; no crash |
+| data | Skill caps (Median's real rules) | Spend points in one tab | Each skill stops at its own cap (e.g. 20 or 25; Molten Core 1); a point in the tab's Specialization raises the caps; locked pairs (e.g. Molten Core vs Entanglement) can't both be taken |
 | data | Town Portal (bug #6) | Put Town Portal on the right mouse button, cast outside town | Blue portal opens, leads to town and back |
 | data | Death no longer crashes (bug #12) | Die to anything | "... was slain by ..." message, no crash |
 | data | Tooltip number lines (296 strings kept from D2R) | Hover items and skills | "Durability: x of y", "Required Strength: n" etc. show their numbers |

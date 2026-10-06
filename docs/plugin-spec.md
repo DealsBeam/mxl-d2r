@@ -177,7 +177,13 @@ Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R bas
 
 ## Still to specify
 
-- Skill calc codes D2Sigma adds (`D2SkillCalc.cpp`): `mlvl`, `skcp`, `skcn` (skill level cap), `syn1`-`syn6`,
+- Skill calc codes D2Sigma adds (`D2SkillCalc.cpp`; codes 73-110 go through `0x100a6340(unit, code, skill, level)`,
+  jump table `0x100a67b0`; Median's skillcalc rows 73+ differ from D2R's, so these names need D2R rows + an evaluator
+  hook). **Skill caps done in data:** `mlvl` (87) = skills2 u16 at +0x2f; `skcn` (110) = the skills2code formula at
+  skills2 +0x3e (Specialization's clc1 raising the tab's caps, `*-999`/`-666` locks between skills), evaluated via
+  `0x100a7620`; both written into each skill's skpoints by txt_migrate.py (work/formulas/skill_caps.txt). `skcp` (89) =
+  the unit's stat 449 with the skill id as its parameter (items' "+N to maximum level of <skill>"): 0 until the
+  plugin evaluates it. Still open: `syn1`-`syn6`,
   `wdm`, `skcd`, `aura`, `bl12..`, `area`, ... (docs/validation.md lists counts).
 - Formula functions: `hasstate`, `tabpoints`, `statlayer`, `itemstat`, items `skilllevel`, missiles `stat`
   (docs/formulas.md).

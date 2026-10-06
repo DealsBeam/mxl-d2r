@@ -415,6 +415,47 @@ SHORTEN = ROOT / "work" / "shorten.json"
 MAX_FORMULA = 255  # D2R parse fields hold 255 characters
 
 
+SKILL_CAPS = ROOT / "work" / "formulas" / "skill_caps.txt"
+SKCP_WRAP = len("(blvl+1>999+())?999:1")
+
+
+def export_skill_caps(ref, keep_mxl: bool, shorten: dict, too_long: list) -> int:
+    """Median's skill-point rule "(blvl+1>mlvl+skcp+skcn)?999:1" uses three D2Sigma calc codes: mlvl is a per-skill
+    number (skills2.bin u16 at +0x2f), skcn a per-skill formula in skills2code.bin (offset: u32 at +0x3e, -1 none;
+    Specialization bonuses and the "these skills lock each other" rules), skcp an item stat with the skill as its
+    parameter (stat 449; needs the plugin). Writes row, mlvl and the rendered skcn formula for txt_migrate.py."""
+    ents = entries("skills2code")
+    starts = formula_starts(ents)
+    by_start = {st: k for k, st in enumerate(starts)}
+    b, size = read_bin("skills2")
+    n = struct.unpack_from("<I", b)[0]
+    lines, count = ["row\tmlvl\tskcn"], 0
+    for r in range(n):
+        rec = 4 + r * size
+        mlvl = struct.unpack_from("<H", b, rec + 0x2f)[0]
+        off = struct.unpack_from("<I", b, rec + 0x3e)[0]
+        text = ""
+        if off != 0xFFFFFFFF and off in by_start:
+            _idx, _t, code = ents[by_start[off]]
+            q: list[str] = []
+            tree = decode(code, "skills", q)
+            if q:
+                tree = fold(tree)
+            ref.used.clear()
+            text = Renderer("skills", ref, stub_mxl=not keep_mxl).render(tree)
+            if len(text) + SKCP_WRAP > MAX_FORMULA:
+                too_long.append(("skills2code", _idx, len(text)))
+                for ent, row in ref.used:
+                    rows = shorten.setdefault(ent, [])
+                    if row not in rows:
+                        rows.append(row)
+        if mlvl or text:
+            count += 1
+        lines.append(f"{r}\t{mlvl}\t{text}")
+    SKILL_CAPS.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+    return count
+
+
 def cmd_convert() -> int:
     """Exit code 3 when formulas were too long and work/shorten.json gained rows: rerun mxl_names.py (which gives
     those rows compact names) and this command again. tools/build.py does that automatically."""
@@ -485,6 +526,9 @@ def cmd_convert() -> int:
             f.writelines("\t".join(x) + "\r\n" for x in [header, *rows])
         cols = ", ".join(f"{c}@{o}" for c, o in sorted(fields.items(), key=lambda x: x[1]))
         summary.append(f"- {table}: {len(fields)} formula columns, {changed} cells rewritten ({differs} with new text). Columns: {cols}")
+    caps = export_skill_caps(ref, keep_mxl, shorten, too_long)
+    summary.append(f"- skill caps: {caps} skills with a cap formula (skills2 mlvl +0x2f, skcn +0x3e) -> "
+                   f"{SKILL_CAPS.name}")
     report = ["# Formula conversion report", "", *summary, "",
               "## Median-only formula functions used in tables (need a D2R implementation)", ""]
     report += [f"- {u} in {where}: {n}" for (u, where), n in sorted(used_unsupported.items())]

@@ -373,10 +373,11 @@ class Migrator:
                            f"{', '.join(f'{k} {v}' for k, v in sorted(skipped.items()))}")
 
     def skill_rules(self) -> None:
-        """Interim stand-ins for skill rules D2Sigma enforced in code (until the plugin does it; docs/bugs.md):
-        - skpoints "(blvl+1>mlvl+skcp+skcn)?999:1" uses D2Sigma's cap variables, which D2R reads as 0, so every
-          point cost 999 (no allocation). Cost 1 point, with maxlvl 20 as the base cap (APPROXIMATION: Median's
-          cap also grows with "Maximum Skill Level Increased by" items).
+        """Skill rules D2Sigma enforced in code, rebuilt in data where D2R's formulas can express them:
+        - skpoints "(blvl+1>mlvl+skcp+skcn)?999:1" uses three D2Sigma calc codes (docs/plugin-spec.md, skill caps).
+          mlvl (a per-skill number) and skcn (a per-skill formula: Specialization bonuses, skills that lock each
+          other) come from skills2 (work/formulas/skill_caps.txt, tools/formula.py) and are written in; skcp (items'
+          "+N to the maximum level of this skill") becomes 0 until the plugin evaluates it.
         - rightskill: D2Sigma's own skill picker ignored it, D2R's honours it; active class skills get 1.
         - srvdofunc 153-171 are D2Sigma's added skill functions, but D2R's own table (0x238ea00, 191 slots, bound
           0xbe) already uses 153-171 for its newer skills. They move to the free slots 172-190 (+19), where the
@@ -390,6 +391,12 @@ class Migrator:
           the skill's aura stats and a periodic event, the same as D2R's 124 (0x575de0); the rows use vanilla
           Armageddon's columns."""
         caps = {"mlvl", "skcp", "skcn"}
+        named = [row[0] for row in read_tsv(ROOT / "work" / "named" / "skills.txt")[1]]
+        skill_caps = {}
+        for line in (ROOT / "work" / "formulas" / "skill_caps.txt").read_text("utf-8").splitlines()[1:]:
+            row, mlvl, skcn = (line.split("\t") + ["", ""])[:3]
+            if row.isdigit() and int(row) < len(named):
+                skill_caps[named[int(row)]] = (mlvl, skcn)
         sigma_first, sigma_last, shift = 153, 171, 19
         to_d2r = {155: 109, 160: 124}
         for bank in ("base", ""):
@@ -406,9 +413,11 @@ class Migrator:
                 if not is_record(r):
                     continue
                 if caps & set(re.findall(r"[a-z]+", r[sp])):
-                    r[sp] = ""
-                    if r[ml] in ("", "0") or int(r[ml]) > 20:
-                        r[ml] = "20"
+                    mlvl, skcn = skill_caps.get(r[0], ("0", ""))
+                    text = re.sub(r"\bmlvl\b", mlvl, r[sp])
+                    text = re.sub(r"\bskcp\b", "0", text)
+                    text = re.sub(r"\bskcn\b", f"({skcn})" if skcn else "0", text)
+                    r[sp] = text
                     n_cap += 1
                 if r[cc] and r[pa] != "1" and r[rs] in ("", "0"):
                     r[rs] = "1"
@@ -422,8 +431,8 @@ class Migrator:
                     n_moved += 1
             write_tsv(p, h, rows)
             if bank == "base":
-                self.report.append(f"\nskills (interim, D2Sigma rules): {n_cap} skpoints formulas with Median's cap "
-                                   f"variables -> 1 point, maxlvl 20; {n_right} active class skills -> rightskill 1; "
+                self.report.append(f"\nskills (D2Sigma rules): {n_cap} skpoints formulas with Median's skill caps "
+                                   f"written in (mlvl, skcn; skcp 0 until the plugin); {n_right} active class skills -> rightskill 1; "
                                    f"{n_moved} skills with D2Sigma srvdofunc {sigma_first}-{sigma_last} -> +{shift}")
 
     def fill_skilldesc(self) -> None:
