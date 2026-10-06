@@ -206,6 +206,34 @@ D2R's generic stat aura is srvdofunc 65, but Median's auras use aurafilter 1 whe
 D2Sigma's callback does its own target selection: a plain remap to 65 could put an enemy aura (Holy Freeze) on the
 caster's party. Needs the callback's rules first.
 
+## Client skill functions (skills.txt `cltdofunc`)
+
+D2Sigma's client table is at **0x101df428** (4-byte pointers; entries other than D2Sigma's are filled with D2Client's
+at start-up). D2Sigma's own entries: replaced vanilla 11, 15, 22, 31, 93, 94, 95 (not compared yet) and added
+96-99. D2R's table is **0x235f7d0** (8-byte pointers, bound 130 at `0x235f7c4`, dispatcher `0x216d20` calls
+(unit, skill, level)); D2R 3.x uses 96-109 for its own skills (97 Volcano, 98 Sigil Death Explosion, 99 Ring of Fire),
+so Median's rows ran those. 110-129 are free.
+
+| D2Sigma | Function | Median skills | Pairs with | Port |
+|---|---|---|---|---|
+| 97 | 0x100a7690 | 74 | server 158 (missile row) | moved to 110 (empty: no client effect) |
+| 98 | 0x100a84b0 | 15: whirlpool, torment, spiral_dance, crucify_2, ravage, mana_pulse, ... | server 159 (strike burst) | **111, mxl-core 0.22.0**: cltmissilea/b/c by calc3 (1-3) on the target, skipped beyond distance 100 |
+| 99 | 0x100a7cb0 | 7: flamestrike, dragon_jaws, havoc | server 166 (missile at target) | moved to 112 (empty) |
+
+D2R client pieces used: data flag `0x34a0e0` (unit), skill target `0x9a570` (unit), client missile `0x1b7760`
+(&params, 0; same parameter block as the server's `0x5371a0`), record cltmissile +0x13e, a/b/c +0x140/+0x142/+0x144.
+
+## Missile functions
+
+D2Sigma's missile do-tables start at **0x101dc4b0** (client, 72 entries) and 0x101dc5d0 (server); start-up fills
+the vanilla entries, D2Sigma's own are client 19 (0x100892f0), 69, 70 and server 4, 15 (0x10089930), 38. Client 19
+/ server 15 are vanilla Frozen Orb's spawner (every Param1 frames a SubMissile1 in the missile's direction, then turn
+by Param2 of 64), which D2R's `0x1a8880` / `0x459380` do the same way; Median runs 1,017 server-15 / 1,110 client-19
+missiles on them (whirlpool's spawners among them). Not compared: server 4 (phalanx), client 69 (phalanx_2; D2R
+uses 69/70 and server 38 for its own missiles), hit functions (`D2MslHitFuncs.cpp`; whirlpool's hit 29/30 follow
+vanilla Frozen Orb's ring semantics, sHitPar1 = ring size). D2R tables: server do `0x2390e80` (index = record
++0x2c), client do `0x2358430`.
+
 ## D2R side (dump of image 0x6ab3782c; RVAs relative to the image base)
 
 | What | RVA | Notes |

@@ -916,6 +916,9 @@ class Migrator:
           upgraded missile (srvmissilec, Median stat 191) is not used.
         - D2Sigma 167 (resurrect_2, srvstfunc 21 and pettype revive like Revive) is a Revive: D2R's 58. D2Sigma sets
           the pet's life to calc1 outright and adds the minion pierce/procs; D2R reads calc1 as its life bonus.
+        - cltdofunc: D2Sigma's client table adds 96-99, which D2R 3.x uses for its own skills (97 Volcano, 98 Sigil
+          Death Explosion, 99 Ring of Fire). Median's 97/98/99 (the client halves of D2Sigma 158/159/166) move to
+          D2R's free client slots 110/111/112; mxl-core fills 111 (strike burst), 110/112 stay empty (no client effect).
         - Teleport (27): D2Sigma's version (0x100ad9d0) limits the distance to aurarangecalc (-1: no teleport) for
           players. Rows with aurarangecalc move to plugin slot 179 (D2R's teleport with that limit).
         - D2Sigma's self buff (18) and storm (124) give aurastats a layer like its aura 165: rows that use one move
@@ -939,10 +942,12 @@ class Migrator:
             h, rows = read_tsv(p)
             dh, drows = read_tsv(D2R / bank / "skills.txt")
             d2r_own = {(r[0], r[dh.index("srvdofunc")]) for r in drows}
+            d2r_clt = {(r[0], r[dh.index("cltdofunc")]) for r in drows}
             sp, ml, cc = h.index("skpoints"), h.index("maxlvl"), h.index("charclass")
             c9, c10 = h.index("calc9"), h.index("calc10")
             rs, pa, do = h.index("rightskill"), h.index("passive"), h.index("srvdofunc")
-            arc = h.index("aurarangecalc")
+            arc, cdo = h.index("aurarangecalc"), h.index("cltdofunc")
+            clt_moved = {"97": "110", "98": "111", "99": "112"}  # D2Sigma client 97-99 -> free D2R client slots
             n_cap = n_right = n_moved = n_ranged = 0
             for r in rows:
                 if not is_record(r):
@@ -961,6 +966,8 @@ class Migrator:
                 if r[cc] and r[pa] != "1" and r[rs] in ("", "0"):
                     r[rs] = "1"
                     n_right += 1
+                if r[cdo] in clt_moved and (r[0], r[cdo]) not in d2r_clt:
+                    r[cdo] = clt_moved[r[cdo]]
                 if r[0] in layered and self.LAYERED_FUNCS.get(r[do]):
                     r[do] = str(self.LAYERED_FUNCS[r[do]])
                     n_ranged += 1

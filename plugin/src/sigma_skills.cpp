@@ -304,6 +304,78 @@ constexpr SlotFunction Functions[] = {
 	{190, SrvDoAreaDamage, "area damage (D2Sigma 171)"},
 };
 
+
+// --- Client skill functions (cltdofunc) -------------------------------------------------------------------------
+// D2Sigma's client table (0x101df428) adds 96-99, but D2R 3.x gave 96-109 to its own skills (97 Volcano, 98 Sigil
+// Death Explosion, 99 Ring of Fire), so Median's rows ran those. D2R's table (0x235f7d0, 130 slots, bound at
+// 0x235f7c4) is free from 110 on: txt_migrate moves Median's 97/98/99 to 110/111/112. Client functions are
+// (unit, skill, level) -> non-zero when they ran (dispatcher 0x216d20).
+constexpr uint64_t CltDoTable = 0x235f7d0;
+constexpr uint64_t RvaUnitDataFlag = 0x34a0e0;     // (unit) -> data flag byte, as client functions read it
+constexpr uint64_t RvaClientTarget = 0x9a570;      // (unit) -> the unit's skill target (client)
+constexpr uint64_t RvaClientMissile = 0x1b7760;    // (&params, 0): client missile, D2R's client Charged Strike
+constexpr int SkCltMissile = 0x13e;                // int16 cltmissile, then cltmissilea/b/c at +0x140/+0x142/+0x144
+
+using UnitDataFlagFn = uint8_t (*)(Unit* unit);
+using ClientTargetFn = Unit* (*)(Unit* unit);
+using ClientMissileFn = Unit* (*)(d2r::MissileParams* params, int32_t zero);
+UnitDataFlagFn g_unitDataFlag = nullptr;
+ClientTargetFn g_clientTarget = nullptr;
+ClientMissileFn g_clientMissile = nullptr;
+
+// D2Sigma client 98 (0x100a84b0), the client half of the strike burst (159): cltmissilea/b/c by calc3 (clamped 1-3)
+// placed on the target, as the server places its missile (here also aimed past it, like the server port). Skipped
+// beyond D2Sigma's distance limit (D2Common distance > 10000). whirlpool, torment, spiral_dance, crucify_2, ...
+auto CltDoStrikeBurst(Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (unit == nullptr || g_clientMissile == nullptr) {
+		return 0;
+	}
+	const uint32_t dataFlag = g_unitDataFlag(unit);
+	const uint8_t* skill = d2r::api.getSkillRecord(dataFlag, skillId);
+	Unit* target = g_clientTarget(unit);
+	if (skill == nullptr || target == nullptr) {
+		return 0;
+	}
+	int32_t pick = d2r::api.evalSkillCalc(dataFlag, unit, At<int32_t>(skill, d2r::SkCalc3), skillId, level);
+	pick = pick < 1 ? 1 : (pick > 3 ? 3 : pick);
+	const int32_t missile = At<int16_t>(skill, SkCltMissile + pick * 2);
+	if (missile < 0 || missile >= d2r::api.missileCount(dataFlag)) {
+		return 0;
+	}
+	int32_t ux = 0, uy = 0, tx = 0, ty = 0;
+	if (!d2r::UnitXY(unit, &ux, &uy) || !d2r::UnitXY(target, &tx, &ty)) {
+		return 0;
+	}
+	const int64_t dx = tx - ux, dy = ty - uy;
+	if (dx * dx + dy * dy > 10000) {
+		return 0;
+	}
+	d2r::MissileParams params;
+	std::memset(&params, 0, sizeof(params));
+	params.flags = 0x21;
+	params.owner = unit;
+	params.missile = missile;
+	params.x = tx;
+	params.y = ty;
+	params.targetX = tx * 2 - ux;
+	params.targetY = ty * 2 - uy;
+	params.skill = skillId;
+	params.skillLevel = level;
+	params.initKind = 1;
+	g_clientMissile(&params, 0);
+	return 1;
+}
+
+using CltDoFn = int64_t (*)(Unit* unit, int32_t skill, int32_t level);
+struct ClientSlot {
+	int slot;
+	CltDoFn function;
+	const char* name;
+};
+constexpr ClientSlot ClientFunctions[] = {
+	{111, CltDoStrikeBurst, "client strike burst (D2Sigma client 98)"},
+};
+
 }  // namespace
 
 auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> int {
@@ -326,9 +398,22 @@ auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t
 			used += n > 0 ? static_cast<size_t>(n) : 0;
 		}
 	}
+	g_unitDataFlag = reinterpret_cast<UnitDataFlagFn>(context->exeBase + RvaUnitDataFlag);
+	g_clientTarget = reinterpret_cast<ClientTargetFn>(context->exeBase + RvaClientTarget);
+	g_clientMissile = reinterpret_cast<ClientMissileFn>(context->exeBase + RvaClientMissile);
+	for (const ClientSlot& f : ClientFunctions) {
+		const uint64_t rva = CltDoTable + static_cast<uint64_t>(f.slot) * 8;
+		const bool ok = context->PatchWriteU64(rva, Empty, sizeof(Empty), reinterpret_cast<uint64_t>(f.function));
+		installed += ok ? 1 : 0;
+		if (used < reportSize) {
+			const int n = std::snprintf(report + used, reportSize - used, "%s cltdofunc %d %s%s", used ? ";" : "",
+			                            f.slot, f.name, ok ? "" : " FAILED");
+			used += n > 0 ? static_cast<size_t>(n) : 0;
+		}
+	}
 	return installed;
 }
 
 auto SigmaSkillCount() noexcept -> int {
-	return static_cast<int>(sizeof(Functions) / sizeof(Functions[0]));
+	return static_cast<int>(sizeof(Functions) / sizeof(Functions[0]) + sizeof(ClientFunctions) / sizeof(ClientFunctions[0]));
 }
