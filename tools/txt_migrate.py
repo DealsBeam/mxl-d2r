@@ -74,6 +74,17 @@ D2R_WINS = {"sounds", "soundenviron", "skillcalc", "misscalc", "playerclass", "p
 # asserts on anything else. Median's inventory sizes need converting to that layout (later).
 D2R_ONLY = {"inventory"}
 MAX_ITEMS_PER_SET = 6  # D2R and D2RLoader
+# D2Sigma's item spells (misc pSpell) that D2R lacks, all moved to PLUGIN_SPELL (item_spells); D2R's item spell
+# table (0x236fe30) has slots 0-19 and 16-19 are empty, so 16 is usable but does nothing without mxl-core.
+SIGMA_ITEM_SPELLS = set(range(12, 22))
+SIGMA_TARGETED_SPELLS = {14, 20}  # dyes, mystic orbs: applied to a clicked item
+PLUGIN_SPELL = 16
+# Tables with item property slots (code/param/min/max columns), for remap_property_params.
+PROPERTY_TABLES = ("uniqueitems", "setitems", "sets", "runes", "magicprefix", "magicsuffix", "automagic",
+                   "rareprefix", "raresuffix", "qualityitems", "lowqualityitems", "gems", "cubemain", "monprop")
+# Stat tooltip functions (descfunc) whose parameter is a skill: 15 on-event, 16 aura, 24 charges, 27/28 +skill,
+# and Median's 33 (cooldown reduction), 37 (maximum skill level), 38 (activation frequency).
+SKILL_PARAM_DESCFUNCS = {"15", "16", "24", "27", "28", "33", "37", "38"}
 # (Median key column, D2R key column) where they differ: the .bin keeps the short code in the first column.
 KEY_PAIRS = {"playerclass": ("Player Class", "Code"), "storepage": ("Store Page", "Code")}
 # Median columns D2R dropped on purpose; not copied to overflow/.
@@ -377,7 +388,7 @@ class Migrator:
             while len(rows) < full:
                 pad += 1
                 row = [""] * len(h)
-                row[0] = f"mxpad{pad}"
+                row[0] = f"x{pad:03d}"  # codes are at most 4 characters
                 rows.append(row)
             added = []
             for code in mxl:
@@ -428,24 +439,225 @@ class Migrator:
 
     def item_spells(self) -> None:
         """misc.txt pSpell (what using an item does). D2R maps pSpell 0-19 to its handlers (0x236fe30) and ignores
-        20+; D2Sigma added its own. Median's healing/mana/rejuvenation potions use D2Sigma's 22, a timed potion
-        (state for len frames adding stat1-stat3), which is exactly D2R's 3. Median's other values (12-21: quest
-        items, cube items, mystic orbs) still need the plugin (docs/bugs.md)."""
+        20+; D2Sigma replaced 12-22 with its own (D2Sigma 0x101d95b0). Median's healing/mana/rejuvenation potions
+        use D2Sigma's 22, a timed potion (state for len frames adding stat1-stat3), which is exactly D2R's 3.
+        D2Sigma's 12-21 (quest/cube items, dyes, mystic orbs, keys) would run D2R's unrelated 12-15 (12 Scroll of
+        Resistance, 13 Token of Absolution: a respec) or nothing, so they all become PLUGIN_SPELL, a slot D2R leaves
+        empty but usable; the mxl-core plugin recognises the items by code (plugin/src/mxl_items.h) and refuses the
+        ones it does not implement yet. Targeted spells (dyes 14, orbs 20: used on another item) get D2R's
+        Identify cursor (spellicon 0): D2R passes the clicked item to the item spell when spellicon is not -1."""
         to_d2r = {"22": "3"}
+        self.sigma_items: list[tuple[str, int, str]] = []  # (code, D2Sigma spell, calc1)
         for bank in ("base", ""):
             p = OUT / "data" / "global" / "excel" / bank / "misc.txt"
             if not p.exists():
                 continue
             h, rows = read_tsv(p)
-            ps = h.index("pSpell")
+            ps, ic, cc, ci = h.index("pSpell"), h.index("spellicon"), h.index("code"), h.index("calc1")
             n = 0
             for r in rows:
-                if is_record(r) and r[ps] in to_d2r:
+                if not is_record(r):
+                    continue
+                if r[ps] in to_d2r:
                     r[ps] = to_d2r[r[ps]]
                     n += 1
+                elif r[ps].isdigit() and int(r[ps]) in SIGMA_ITEM_SPELLS:
+                    if bank == "base":
+                        self.sigma_items.append((r[cc], int(r[ps]), r[ci]))
+                    if int(r[ps]) in SIGMA_TARGETED_SPELLS:
+                        r[ic] = "0"
+                    r[ps] = str(PLUGIN_SPELL)
             write_tsv(p, h, rows)
             if bank == "base":
-                self.report.append(f"\nmisc pSpell: {n} items with D2Sigma's timed potion (22) -> D2R's 3")
+                by = Counter(s for _c, s, _k in self.sigma_items)
+                self.report.append(f"\nmisc pSpell: {n} items with D2Sigma's timed potion (22) -> D2R's 3; "
+                                   f"{len(self.sigma_items)} items with D2Sigma's item spells -> {PLUGIN_SPELL} "
+                                   f"(mxl-core): " + ", ".join(f"{s}: {k}" for s, k in sorted(by.items())))
+
+    def row_ids(self, table: str, key: str | None = None) -> dict[str, int]:
+        """Output row number of each key (column 0, or `key`) in the base bank."""
+        h, rows = read_tsv(OUT / "data" / "global" / "excel" / "base" / f"{table}.txt")
+        k = h.index(key) if key else 0
+        return {r[k]: i for i, r in enumerate(rows) if r and r[k]}
+
+    def median_ids(self, entity: str) -> dict[int, int]:
+        """Median row -> migrated ID for an index-addressed entity (idmap.json)."""
+        return {e["row"]: e["id"] for e in self.idmap[entity]}
+
+    def param_kinds(self) -> dict[str, str]:
+        """Properties whose parameter is a row number of a renumbered table, by the property's func1 and its
+        stat1's tooltip function (descfunc) / encoding: "skill" (procs, oskills, charges, auras, Median's per-skill
+        stats), "skill-range" (func 12, random skill: min/max are skills) and "monster" (descfunc 23, reanimate).
+        Median's own descfuncs 31/34 take string ids and 35 element numbers; those stay."""
+        ph, prows = read_tsv(OUT / "data" / "global" / "excel" / "base" / "properties.txt")
+        ih, irows = read_tsv(OUT / "data" / "global" / "excel" / "base" / "itemstatcost.txt")
+        stats = {r[0]: r for r in irows if r}
+        kinds = {}
+        for r in prows:
+            if not r or not r[0]:
+                continue
+            func, s = r[ph.index("func1")], stats.get(r[ph.index("stat1")])
+            descfunc = s[ih.index("descfunc")] if s else ""
+            encode = s[ih.index("Encode")] if s else ""
+            if func == "12":
+                kinds[r[0]] = "skill-range"
+            elif func in ("11", "19", "22") or descfunc in SKILL_PARAM_DESCFUNCS or encode in ("2", "3"):
+                kinds[r[0]] = "skill"
+            elif descfunc == "23":
+                kinds[r[0]] = "monster"
+        return kinds
+
+    @staticmethod
+    def property_columns(header: list[str]) -> list[tuple[int, int | None, int | None, int | None]]:
+        """(code, param, min, max) column indexes of each property slot in an item/affix/recipe table."""
+        lower = {c.lower(): i for i, c in enumerate(header)}
+        groups = []
+        for i, c in enumerate(header):
+            if m := re.fullmatch(r"(a?)prop(\d+[ab]?)((?: \([nh]\))?)", c, re.I):
+                keys = [f"{m[1]}{x}{m[2]}{m[3]}" for x in ("par", "min", "max")]
+            elif m := re.fullmatch(r"([pf]|t1)code(\d+[ab]?)", c, re.I):
+                keys = [f"{m[1]}{x}{m[2]}" for x in ("param", "min", "max")]
+            elif m := re.fullmatch(r"(\w*mod\d+)code", c, re.I):
+                keys = [f"{m[1]}{x}" for x in ("param", "min", "max")]
+            elif m := re.fullmatch(r"((?:[bc] )?mod \d+)", c, re.I):
+                keys = [f"{m[1]} {x}" for x in ("param", "min", "max")]
+            else:
+                continue
+            groups.append((i, *(lower.get(k.lower()) for k in keys)))
+        return groups
+
+    def remap_property_params(self) -> None:
+        """Median's item properties give skill (and monster) parameters as Median row numbers, but D2R keeps its
+        own rows at their IDs and Median's from that point move (skills 357+ by 72: idmap.json). Rewrite numeric
+        parameters of Median's rows in every table with property slots; names and other parameters stay."""
+        kinds = self.param_kinds()
+        ids = {"skill": self.median_ids("skills"), "monster": self.median_ids("monstats")}
+        counts: Counter = Counter()
+        for table in PROPERTY_TABLES:
+            named = NAMED / f"{table}.txt"
+            if not named.exists():
+                continue
+            median_keys = None if table in REPLACE else {r[0] for r in read_tsv(named)[1] if r}
+            for bank in ("base", ""):
+                p = OUT / "data" / "global" / "excel" / bank / f"{table}.txt"
+                if not p.exists():
+                    continue
+                h, rows = read_tsv(p)
+                groups = self.property_columns(h)
+                changed = 0
+                for r in rows:
+                    if not is_record(r) or (median_keys is not None and r[0] not in median_keys):
+                        continue
+                    for code, par, lo, hi in groups:
+                        kind = kinds.get(r[code])
+                        cols = [lo, hi] if kind == "skill-range" else [par]
+                        table_ids = ids["monster" if kind == "monster" else "skill"]
+                        for c in cols if kind else []:
+                            if c is not None and r[c].isdigit() and int(r[c]) in table_ids \
+                                    and table_ids[int(r[c])] != int(r[c]):
+                                r[c] = str(table_ids[int(r[c])])
+                                changed += 1
+                write_tsv(p, h, rows)
+                if bank == "base":
+                    counts[table] = changed
+        self.report.append("\nproperty parameters: Median skill/monster row numbers -> migrated IDs: " +
+                           ", ".join(f"{t} {n}" for t, n in counts.items() if n))
+
+    def item_spell_tables(self) -> None:
+        """plugin/src/mxl_items.h: the items behind PLUGIN_SPELL (item_spells) and D2Sigma's mysticorbs table
+        (work/sigma/mysticorbs.txt, 143-byte records; docs/plugin-spec.md, Item spells), with every id migrated."""
+        props = self.row_ids("properties")
+        types = self.row_ids("itemtypes", "Code")
+        mh, mrows = read_tsv(NAMED / "properties.txt")
+        th, trows = read_tsv(NAMED / "itemtypes.txt")
+        kinds = self.param_kinds()
+        skill_ids, monster_ids = self.median_ids("skills"), self.median_ids("monstats")
+        h, rows = read_tsv(OUT / "data" / "global" / "excel" / "base" / "itemstatcost.txt")
+        stat_id = {r[0]: int(r[h.index("*ID")]) for r in rows if r and r[h.index("*ID")].lstrip("-").isdigit()}
+        named_stats = [r[0] for r in read_tsv(NAMED / "itemstatcost.txt")[1]]
+
+        def stat(median_id: int) -> int:
+            return stat_id[named_stats[median_id]]
+
+        def itemtype(median_row: int) -> int:
+            if median_row <= 0 or median_row >= len(trows):
+                return -1
+            return types.get(trows[median_row][th.index("Code")], -1)
+
+        oh, orows = read_tsv(ROOT / "work" / "sigma" / "mysticorbs.txt")
+        unmapped = 0
+        orbs = []
+        for orow in orows:
+            raw = bytearray(143)
+            for j, c in enumerate(oh):
+                if c.startswith("field_0x") and orow[j].lstrip("-").isdigit():
+                    raw[int(c[8:], 16)] = int(orow[j]) & 0xff
+            req, = struct.unpack_from("<b", raw, 0x20)
+            inc = struct.unpack_from("<2h", raw, 0x23)
+            exc = struct.unpack_from("<2h", raw, 0x27)
+            maxn, = struct.unpack_from("<h", raw, 0x2b)
+            slots = []
+            for k in range(6):
+                prop, par, lo, hi = struct.unpack_from("<4i", raw, 0x2d + 16 * k)
+                if prop < 0:
+                    slots.append((-1, 0, 0, 0))
+                    continue
+                code = mrows[prop][0]
+                kind = kinds.get(code)
+                if kind == "skill":
+                    par = skill_ids.get(par, par)
+                elif kind == "monster":
+                    par = monster_ids.get(par, par)
+                elif kind == "skill-range":
+                    lo, hi = skill_ids.get(lo, lo), skill_ids.get(hi, hi)
+                pid = props.get(code, -1)
+                unmapped += pid < 0
+                slots.append((pid, par, lo, hi))
+            orbs.append((orow[1], req, maxn, [itemtype(t) for t in inc], [itemtype(t) for t in exc],
+                         raw[0x8d], raw[0x8e], slots))
+
+        def code32(code: str) -> str:
+            b = (code + "    ")[:4].encode("latin1")
+            return f"0x{struct.unpack('<I', b)[0]:08x}"
+
+        def esc(s: str) -> str:  # quoted, so a trailing backslash cannot continue the // comment
+            return '"' + s.replace("*/", "* /") + '"'
+
+        items = []
+        for code, spell, calc1 in self.sigma_items:
+            arg = int(calc1) if calc1.lstrip("-").isdigit() else -1
+            if spell == 20:
+                arg -= 1  # D2Sigma: mysticorbs row = calc1 - 1
+            items.append(f"    {{{code32(code)}, {spell}, {arg}}},  // {esc(code)}")
+        lines = ["// Generated by tools/txt_migrate.py (item_spell_tables); do not edit.", "#pragma once", "",
+                 "#include <cstdint>", "", "namespace mxl_items {", "",
+                 f"inline constexpr int32_t PluginSpell = {PLUGIN_SPELL};  // misc pSpell of every D2Sigma item spell",
+                 "", "// Items with D2Sigma item spells: code (4 chars, little-endian), D2Sigma's pSpell, argument",
+                 "// (mystic orbs: mysticorbs row; dyes: calc1; others: calc1 when constant, else -1).",
+                 "struct SigmaItem {", "\tuint32_t code;", "\tint32_t spell;", "\tint32_t arg;", "};",
+                 "inline constexpr SigmaItem Items[] = {", *items, "};", "",
+                 "// D2Sigma's mysticorbs rows (index = row, also the layer of StatOrbCount). Properties: properties.txt",
+                 "// row (-1 none), param, min, max. Item types: itemtypes rows (-1 none); qualities: D2Sigma's 1-based",
+                 "// item quality + 1 (0 any).",
+                 "struct OrbProp {", "\tint32_t prop, param, min, max;", "};",
+                 "struct Orb {", "\tint32_t reqLevel;", "\tint32_t maxCount;", "\tint32_t include[2];",
+                 "\tint32_t exclude[2];", "\tint32_t includeQuality;", "\tint32_t excludeQuality;",
+                 "\tOrbProp props[6];", "};", "inline constexpr Orb Orbs[] = {"]
+        for name, req, maxn, inc, exc, qi, qe, slots in orbs:
+            ps = ", ".join(f"{{{a}, {b}, {c}, {d}}}" for a, b, c, d in slots)
+            lines.append(f"    {{{req}, {maxn}, {{{inc[0]}, {inc[1]}}}, {{{exc[0]}, {exc[1]}}}, {qi}, {qe}, "
+                         f"{{{ps}}}}},  // {esc(name)}")
+        lines += ["};", "",
+                  f"inline constexpr int32_t StatOrbCount = {stat(290)};       // Median 290, layer = orb row",
+                  f"inline constexpr int32_t StatOrbMultiplier = {stat(289)};  // Median 289: orb effects x N",
+                  f"inline constexpr int32_t StatItemLevelReq = {stat(92)};    // item_levelreq",
+                  f"inline constexpr int32_t StatDyeColour = {stat(183)};      // Median 183",
+                  f"inline constexpr int32_t ItemTypeWeapon = {types['weap']};",
+                  f"inline constexpr int32_t ItemTypeArmor = {types['armo']};",
+                  "", "}  // namespace mxl_items", ""]
+        (ROOT / "plugin" / "src" / "mxl_items.h").write_text("\n".join(lines), encoding="utf-8")
+        self.report.append(f"\nitem spells: {len(items)} items, {len(orbs)} mystic orb rows -> plugin/src/mxl_items.h"
+                           + (f" ({unmapped} orb properties without a D2R row)" if unmapped else ""))
 
     def vendor_stock(self) -> None:
         """Shops. Median leaves every item's vendor columns empty; D2Sigma stocks vendors from npcstores.bin, 52-byte
@@ -853,6 +1065,8 @@ def main() -> int:
     m.skill_rules()
     m.vendor_stock()
     m.item_spells()
+    m.remap_property_params()
+    m.item_spell_tables()
     m.extra_calc_codes()
     m.formula_proxies()
     if m.dangling:

@@ -8,7 +8,11 @@ functions it installed.
 
 | Since | What | How to test | Expected |
 |---|---|---|---|
-| 0.11.0 | Plugin loads; engine fixes applied | Console: `mxl` | `mxl-core 0.11.0`, `states fix on: 73 sites ...` (or 72), `level types on: ...`, `calc codes on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe, mxfn (hasstate, statlayer); missiles msyn, blvl`, `skill functions 5/5` |
+| 0.12.0 | Plugin loads; engine fixes applied | Console: `mxl` | `mxl-core 0.12.0`, `states fix on: 73 sites ...` (or 72), `level types on: ...`, `calc codes on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe, mxfn (hasstate, statlayer); missiles msyn, blvl`, `skill functions 5/5`, `item spells on: 330 items on pSpell 16; mystic orbs (101 rows), dyes; ...` |
+| 0.12.0 | Mystic orbs (bug #11) | Buy an orb from Gheed (e.g. a stat orb), right-click it, click an armour or weapon in the inventory | Cursor changes like Identify; the item gains the orb's bonus and +4 level requirement; the orb is used up. Applying the same orb beyond its maximum (5 for normal orbs), or to an item it doesn't fit, does nothing and keeps the orb. Also try one on an equipped item |
+| 0.12.0 | Dyes (bug #11) | Right-click a mystic dye, click an armour | Dye used up, no crash (the colour won't show: D2R draws items without Median's dye) |
+| 0.12.0 | Other D2Sigma items are safe | Right-click an arcane shard, a key (e.g. key_of_lies), a gcNN cube item | Nothing happens and the item stays (before: shards ran D2R's respec) |
+| data | Item skill procs/oskills (bug #16) | A unique with "+N to <Median skill>" or "chance to cast", e.g. Book of Triune (Mind Control) | Tooltip and proc name the right skill |
 | 0.8.0 | Synergies (syn1-syn6) | An item with "+X% to <skill>"-style synergy bonuses; compare the skill's damage/tooltip with and without it | Damage/tooltip changes with the item |
 | 0.8.0 | Item max-level bonus (skcp) | An item with "+N to maximum level of <skill>" | That skill can take N more points |
 | 0.9.0 | Base-level skill values (bl12/bd12...) and weapon damage % (wdm) | Skill tooltips that show per-level values or "% weapon damage"; raise the skill by a point and check the value moves | Non-zero values that grow with points spent (not with +skill items) |

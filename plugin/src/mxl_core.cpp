@@ -6,13 +6,15 @@
 // releases) and changes nothing on any other.
 //
 // Engine changes: room for more than 512 states (states_fix.cpp), level types above 36 (level_types.cpp),
-// D2Sigma's calc codes (calc_codes.cpp), D2Sigma's added skill server functions (sigma_skills.cpp).
+// D2Sigma's calc codes (calc_codes.cpp), D2Sigma's added skill server functions (sigma_skills.cpp), D2Sigma's
+// item spells (item_spells.cpp).
 #include <D2RLPlugin/api.h>
 
 #include "sigma_skills.h"
 #include "states_fix.h"
 #include "level_types.h"
 #include "calc_codes.h"
+#include "item_spells.h"
 
 #include <windows.h>
 
@@ -21,7 +23,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.11.0";
+constexpr const char* PluginVersion = "0.12.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -30,6 +32,7 @@ char g_skillsReport[512] = "";
 char g_statesReport[160] = "off: not the expected game image";
 char g_levelTypesReport[160] = "off: not the expected game image";
 char g_calcReport[160] = "off: not the expected game image";
+char g_itemSpellsReport[160] = "off: not the expected game image";
 
 constexpr D2RL::PluginInfo Info {
 	.infoSize    = D2RL::PluginInfoSize,
@@ -74,6 +77,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "skill functions %d/%d:%s", g_skillsInstalled, SigmaSkillCount(),
 	              g_skillsReport[0] ? g_skillsReport : " none");
 	command->plugin->WriteConsoleMessage(line);
+	std::snprintf(line, sizeof(line), "item spells %s", g_itemSpellsReport);
+	command->plugin->WriteConsoleMessage(line);
 	return D2RL::ConsoleCommandResult::Handled;
 }
 
@@ -106,6 +111,9 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		g_skillsInstalled = InstallSigmaSkills(context, g_skillsReport, sizeof(g_skillsReport));
 		std::snprintf(line, sizeof(line), "mxl-core: %d/%d skill functions:%s", g_skillsInstalled, SigmaSkillCount(),
 		              g_skillsReport);
+		context->LogInfo(line);
+		InstallItemSpells(context, g_itemSpellsReport, sizeof(g_itemSpellsReport));
+		std::snprintf(line, sizeof(line), "mxl-core: item spells %s", g_itemSpellsReport);
 		context->LogInfo(line);
 	}
 	return context->RegisterConsoleCommand("mxl", MxlCommand, "Median XL core plugin status.");

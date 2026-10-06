@@ -162,7 +162,10 @@ caster's party. Needs the callback's rules first.
 | Unit "skill used" flag | 0x34e790 | (unit, on): unit+0x124 bit 0x40 (1.10 unit+0xc4) |
 | Skill target unit | 0x48fe20 | (game, unit) |
 | Apply queued melee hit | 0x44b2b0 | (game, attacker, target, 0, 1) (SUnitDmg.cpp) |
-| Item spells (misc pSpell) | 0x236fe30 | 20 entries {check, use, flag}: check handlers at 0x1d3ea30 (11), use handlers at 0x1d3ea90 (16); pSpell 20+ does nothing |
+| Item spells (misc pSpell) | 0x236fe30 | 20 entries {check, use, flag} (u32 indexes): check handlers at 0x1d3ea30 (11), use handlers at 0x1d3ea90 (16); 16-19 are empty (index 0), 20+ does nothing. Flag 1 = not usable (0x308e80) |
+| Item spell dispatchers | 0x5817f0, 0x581680 | check (game, player, item, target) -> bool and use (same args), called from the player's use-item message (0x4f40c0). When the item's spellicon (record +0x144, char) is not -1 the handler gets the clicked target item instead of the item; the caller removes the used item afterwards |
+| Item helpers | see item_spells.cpp | class id 0x349860 (unit, file, line); items record 0x314110 (dataFlag, class) with 1.13c's layout to +0x94 (code +0x80, pSpell +0x94, calc1 +0xa4); is-type 0x373890 (item, itemtype); quality 0x36cf60 (item data +0); level requirement 0x376de0 (item, player), -1 none; item update packet 0x535f60 as after identifying (0x46e8c0) |
+| Item properties | 0x3d4620 | (type, unit, item, mods, index, set, &property, state, statlist flags, 0): 1.13c's D2Common 10665. Property {int prop, param, min, max}; funcs at 0x2386ab0. Item stat list 0x3d5230 (owner, item, state, flags), created if missing; stat list add 0x2f3330 (dataFlag, list, stat, value, layer) |
 | Summon pet | 0x4350e0 | (game, &params) -> pet: 1.10's block with an 8-byte owner: flags +0 (1 = at x/y), owner +8, monster u16 +0x10, AI state +0x14, mode +0x18, x/y +0x1c, pettype +0x24, petmax +0x28. Registers the pet (enforces petmax) |
 | Pet setup (D2R Raise Skeleton, 0x55e440) | 0x55fb50, 0x55ef80, 0x58d950 | level from the owner (game, owner, pet, 0, level); the skill's passive/aura stats and aura state on the pet (game, owner, pet, skill, level, owner+0x12c, 0); party/AI (game, pet, 0, owner+0x130). Skills record: summon +0x110, pettype +0x112, summode +0x113, petmax +0x114 |
 | Create portal object | 0x432ce0 | (game, unit, room, x, y, destLevel, &object, objectId 0x3b, 0, 0) |
@@ -174,6 +177,50 @@ expected value 0).
 
 Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R base max 97) and cltstfunc 82
 (D2R base max 55).
+
+## Item spells (misc.txt `pSpell`)
+
+D2Sigma replaced pSpell 12-22 with its own handlers: table 0x101d95b0 of {client start, use} pairs, dispatcher
+0x1007f140 (D2ItemSpell.cpp). Two-step spells (dyes 14, mystic orbs 20) first run 0x1007e840, which puts the item on
+the cursor; the click on another item then runs the use handler with (game, player, item, target).
+
+| pSpell | Handler | Items | Does | Port |
+|---|---|---|---|---|
+| 12 | 0x1007fa10 | home_cherry | calc1/calc2 -> warp | refused |
+| 13 | 0x1007f910 | 58: arcane shards/crystal, catalysts | client sends a request (misc +0xb6) to the server | refused |
+| 14 | 0x1007eff0 | 22 mystic dyes | target weapon/armour: stat 183 = calc1 + 1 (1-21) | plugin |
+| 15 | 0x1007ebb0 | Perfect Ruby, askari_call | | refused |
+| 16 | 0x1007f720 | 40 keys (dimensional_link, key_of_lies, ...) | portal to level calc1 (act check from the levels record +0x26; calc2 picks the portal kind, calc3 blocks) | refused |
+| 17 | 0x1007faf0 | cherry | | refused |
+| 18 | 0x1007f300 | 103 gc01-gc103 | cube-related (looks for `box `) | refused |
+| 19 | 0x1007f8d0 | toa ("Not used") | | refused |
+| 20 | 0x1007f4b0 | 101 mystic orbs | below | plugin |
+| 21 | 0x1007eef0 | catalyst_of_transference | as 13 | refused |
+| 22 | 0x1007e900 | 12 potions | timed potion | D2R's 3 (data) |
+
+`txt_migrate.py` (item_spells) moves 12-21 to pSpell 16, an empty but usable slot of D2R's table, gives 14/20 D2R's
+Identify cursor (spellicon 0) and lists the items by code in `plugin/src/mxl_items.h`. mxl-core hooks D2R's two
+dispatchers (0x5817f0 check, 0x581680 use) and handles pSpell-16 items; the ones not implemented are refused, so
+they are not used up.
+
+**Mystic orbs** (0x1007f4b0). Row = calc1 - 1 in D2Sigma's mysticorbs table (143 bytes; `work/sigma/mysticorbs.txt`):
+
+| Offset | Field |
+|---|---|
+| +0x00 | name (32) |
+| +0x20 | int8 level requirement added to the item |
+| +0x21 | u16 description string |
+| +0x23, +0x25 | u16 item types the orb fits (`armo`, `weap`, `myor`, `riam`, `helm`, `shie`, `tors`) |
+| +0x27, +0x29 | u16 excluded item types (`nomo`) |
+| +0x2b | int16 maximum of this orb per item |
+| +0x2d | 6 properties {int prop, param, min, max} (prop -1: none) |
+| +0x8d, +0x8e | u8 quality for the included / excluded types (0 any; else D2Common 10106 + 1, 7 = rare) |
+
+Check (0x1008f840, then the handler): an excluded type matches -> allowed only if its quality is set and differs;
+else an included type must match (with its quality, if set); the item holds fewer than the maximum (stat 290, layer
+= row); the item's level requirement (D2Common 11015) + the orb's <= the player's level. Apply: on the item's stat
+list with flags 0x40 (created if missing) add item_levelreq, apply the six properties (D2Common 10665) stat 289 times
+(at least once), add 1 to stat 290 at the row's layer; the orb is used up.
 
 ## Still to specify
 

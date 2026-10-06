@@ -26,6 +26,10 @@ public class Decompile extends GhidraScript {
             long v = Long.decode(arg);
             Address a = toAddr(v >= base ? v : base + v);
             Function f = getFunctionContaining(a);
+            if (f == null) {  // only reached through a pointer table: define it on the fly (-readOnly, not saved)
+                disassemble(a);
+                f = createFunction(a, null);
+            }
             if (f == null) { println("no function at " + a); continue; }
             DecompileResults res = di.decompileFunction(f, 120, monitor);
             String rva = String.format("0x%x", f.getEntryPoint().getOffset() - base);
