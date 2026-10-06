@@ -8,7 +8,7 @@ functions it installed.
 
 | Since | What | How to test | Expected |
 |---|---|---|---|
-| 0.8.0 | Plugin loads; engine fixes applied | Console: `mxl` | `mxl-core 0.8.0`, `states fix on: 73 sites ...` (or 72), `level types on: ...`, `calc codes on: syn1-syn6, skcp`, `skill functions 5/5` |
+| 0.8.0 | Plugin loads; engine fixes applied | Console: `mxl` | `mxl-core 0.8.0`, `states fix on: 73 sites ...` (or 72), `level types on: ...`, `calc codes on: syn1-syn6, skcp, aura, pass`, `skill functions 5/5` |
 | 0.8.0 | Synergies (syn1-syn6) | An item with "+X% to <skill>"-style synergy bonuses; compare the skill's damage/tooltip with and without it | Damage/tooltip changes with the item |
 | 0.8.0 | Item max-level bonus (skcp) | An item with "+N to maximum level of <skill>" | That skill can take N more points |
 | data | Formulas with other Median codes (aura, area, bl12...) | Skills whose tooltips previously showed odd or zero values | Values show (codes not yet implemented count as 0) |

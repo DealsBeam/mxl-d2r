@@ -187,8 +187,9 @@ Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R bas
   as D2R's rows, placeholders up to 127, then Median's 37 missing codes (rows 127-163, `plugin/src/mxl_ids.h`), so
   every formula compiles. The hook on D2R's code switch `0x33b3b0(dataFlag, unit, code, skill, level)` (unknown rows
   -> 0) answers `syn1`-`syn6` (cases 74-77/104-105: the unit's stats 383/393/396/397/399/400 with the skill as
-  parameter, D2Common 10973; D2R `0x2f5020(unit, stat, layer)`) and `skcp` (stat 449). Still 0: `skcd`, `bl12`..,
-  `bd12`.., `wdm`, `bmax`, `aura`, `pass`, `maxe`, `blz*`/`bdz*`, `mnhp`, `mnar`, `area`, `pdmn`, `pdmx`, `mode`
+  parameter, D2Common 10973; D2R `0x2f5020(unit, stat, layer)`), `skcp` (stat 449), `aura`/`pass` (1 if the unit has
+  the skill's aurastate +0xa0 / passivestate +0xb4; D2R `0x3351b0`). Still 0: `skcd`, `bl12`.., `bd12`.., `wdm`,
+  `bmax`, `maxe`, `blz*`/`bdz*`, `mnhp`, `mnar`, `area`, `pdmn`, `pdmx`, `mode`
   (cases in `0x100a6340`, jump table `0x100a67b0`). Open as before:
   `wdm`, `skcd`, `aura`, `bl12..`, `area`, ... (docs/validation.md lists counts).
 - Formula functions: `hasstate`, `tabpoints`, `statlayer`, `itemstat`, items `skilllevel`, missiles `stat`
