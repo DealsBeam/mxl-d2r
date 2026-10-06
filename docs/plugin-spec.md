@@ -100,10 +100,29 @@ by calc3 clamped to 1-3. calc2 goes to the missile's attack-bonus field (1.10 pa
 min(calc2, petmax) pets (summon, summode, pettype at 1.10 +0xbc/+0xbf/+0xbe; petmax +0xc0), each via 1.10's
 summon-pet call. Position: TargetCorpse skills (flag bit 24 at +4) use the target corpse (no skill on 153 has it);
 otherwise, when aurarangecalc is non-zero and the skill target lies within it (squared distance), the target, else the
-caster. After each pet: `0x100683d0` (D2Hirelings.cpp, Median's minion scaling by pettype: level, stats, ~10 steps;
-**not ported**), `0x10067940` (the skill's aura/passive stats on the pet; D2R `0x55ef80`), `0x10042740` (party/AI;
+caster. After each pet: `0x100683d0` (D2Hirelings.cpp, Median's minion scaling; below), `0x10067940` (the skill's aura/passive stats on the pet; D2R `0x55ef80`), `0x10042740` (party/AI;
 D2R `0x58d950`), `0x10049c00(owner, 0x200b, 1)` (D2Achievements.cpp counter; skipped). The plugin also sets the pet
-level with D2R's `0x55fb50` as D2R's Raise Skeleton does, until Median's scaling is ported.
+level with D2R's `0x55fb50` as D2R's Raise Skeleton does (level = the owner's level, as D2Sigma's step 2).
+
+**Minion scaling** (`0x100683d0` (game, owner, pet, skill, level); mxl-core 0.15.0, `pet_scaling.cpp`). 1.13c skills
+record: calc1 +0x138, Param3/4/5 +0x150/+0x154/+0x158 (D2R +0x1c0/+0x1c4/+0x1c8). D2Common 10887 sets a unit stat
+(D2R `0x2f7d10`), 10551 adds (D2R `0x2f34f0`).
+
+| Step | Function | Does | Port |
+|---|---|---|---|
+| 1 | 0x10067b30 | new stat list on the pet, state 307, stats 350/351 = skill, level (modifierlist) | no |
+| 2 | 0x10068520 | level = owner's level (at most the class's experience.txt MaxLvl) | D2R 0x55fb50 |
+| 3 | 0x10068120 | tohit (19) set to mnar: (level-1)*Param5, plus that * owner stat 500 / 100 | yes |
+| 4 | 0x10068190 | maxhp and hp set to mnhp: (Param3 + (level-1)*Param4) * (pet level/2 + 100) * (calc1 + 100) / 3333, << 8 (unsigned 64-bit, clamped) | yes |
+| 5 | 0x10068250 | add owner stat 487 to fire/cold/lightning res (<= 105) and poison res (<= 80); owner stat 229 to damage resist (<= 50) | yes |
+| 6 | 0x10067db0 | add the owner's pierce stats 333-336 when not 0 | yes |
+| 7 | 0x10067e20 | pettypeext byte 2: the owner's skill-on-event stats 196, 292 (and 195 if 1) with chance / byte 13, layers re-encoded | no |
+| 8 | 0x10068020 | pettypeext byte 0: add the owner's 1, 0, 485, 278, 86 in full and 329-332, 357 halved | yes |
+| 9 | 0x10068320 | the skill's aurastat/passivestat (1.13c +0x54/+0x68, +0x98/+0xa4) on the pet | D2R 0x55ef80 |
+| 10 | 0x100681e0 | sumumod (+0xe4) on the pet | empty on all 153 skills |
+
+pettypeext: 14 bytes per pettype row (work/sigma/pettypeext.txt), indexed by migrated pettype in `mxl_pets.h`.
+Calc codes `mnhp`/`mnar` call the same formulas with the unit's own level (`0x100a6340`, EDX = 0); mnhp stays in 1/256.
 
 ### 159: strike burst (`0x100aa7e0`)
 
@@ -255,7 +274,7 @@ summoning scrolls to Median levels 263-280 are refused). "Once per game" uses D2
   compiled localdelay at record +0x238, minus the unit's stat 309 for the skill), `bmax` (case 88, `0x100a6e00`: max(0, min(mlvl + skcn + skcp, clvl + 1 -
   reqlevel)); mlvl/skcn are stored by txt_migrate.py in calc9/calc10, D2R-only columns at +0x1b0/+0x1b4; reqlevel
   +0x214) and `maxe` (case 92: base level > 0 and equal to bmax). Still 0 (rare): `mode` (1 skill; 1.13c unit+0x10),
-  `pdmn`/`pdmx` (2 skills; `0x100a6260`/`0x100a6180`, skills2-based damage), `mnhp`/`mnar` (Median's minion scaling, `0x10067c60`/`0x10067bd0`), `pdmn`, `pdmx`, `mode` (unit+0x10 in 1.13c)
+  `pdmn`/`pdmx` (2 skills; `0x100a6260`/`0x100a6180`, skills2-based damage), `pdmn`, `pdmx`, `mode` (unit+0x10 in 1.13c)
   (cases in `0x100a6340`, jump table `0x100a67b0`). Open as before:
   `wdm`, `skcd`, `aura`, `bl12..`, `area`, ... (docs/validation.md lists counts).
 - Missile calc codes (mxl-core 0.10.0): Median's misscalc adds `msyn` (43) and `blvl` (44) after D2R's 42

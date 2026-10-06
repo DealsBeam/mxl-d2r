@@ -8,7 +8,7 @@ functions it installed.
 
 | Since | What | How to test | Expected |
 |---|---|---|---|
-| 0.14.0 | Plugin loads; engine fixes applied | Console: `mxl` | `mxl-core 0.14.0`, `states fix on: 73 sites ...` (or 72), `level types on: ...`, `calc codes on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe, mxfn (hasstate, statlayer); missiles msyn, blvl`, `skill functions 5/5`, `item spells on: 330 items on pSpell 16; items on pSpell 16/17; mystic orbs (101 rows), dyes, keys, containers; ...` |
+| 0.15.0 | Plugin loads; engine fixes applied | Console: `mxl` | `mxl-core 0.15.0`, `states fix on: 73 sites ...` (or 72), `level types on: ...`, `calc codes on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe, mnhp, mnar, mxfn (hasstate, statlayer); missiles msyn, blvl`, `skill functions 5/5`, `item spells on: 330 items on pSpell 16; items on pSpell 16/17; mystic orbs (101 rows), dyes, keys, containers; ...` |
 | 0.12.0 | Mystic orbs (bug #11) | Buy an orb from Gheed (e.g. a stat orb), right-click it, click an armour or weapon in the inventory | Cursor changes like Identify; the item gains the orb's bonus and +4 level requirement; the orb is used up. Applying the same orb beyond its maximum (5 for normal orbs), or to an item it doesn't fit, does nothing and keeps the orb. Also try one on an equipped item |
 | 0.12.0 | Dyes (bug #11) | Right-click a mystic dye, click an armour | Dye used up, no crash (the colour won't show: D2R draws items without Median's dye) |
 | 0.14.0 | Arcane shard help | Hover an arcane shard, Arcane Crystal, Oil of Craft, a catalyst | The recipe help text shows in the tooltip (check the line order); right-click does nothing and the item stays |
@@ -34,6 +34,7 @@ functions it installed.
 | data | Town Portal (bug #6) | Put Town Portal on the right mouse button, cast outside town | Blue portal opens, leads to town and back |
 | data | Death no longer crashes (bug #12) | Die to anything | "... was slain by ..." message, no crash |
 | data | Tooltip number lines (296 strings kept from D2R) | Hover items and skills | "Durability: x of y", "Required Strength: n" etc. show their numbers |
+| 0.15.0 | Minion scaling (Median's rules) | Necromancer blood_skeleton or Barbarian guardian_spirit at two different character levels / skill levels; hover the pet | Pet level = your level; life grows with skill level and your level (and "+% summon life" items); attack rating grows with skill level; "+summon resist" items raise its resists. Compare with the skill tooltip's life/AR lines (mnhp/mnar, now non-zero) |
 | 0.3.0 | Multi-summon, slot 172 | Necromancer: blood_skeleton (or Barbarian guardian_spirit) | Several pets per cast, up to the cap; at the cursor when in range |
 | 0.2.0 | Barrage, slot 176 | Necromancer: catapult_shot | Missiles land at random spots around the target |
 | 0.2.0 | Missile row, slot 177 | Necromancer: death_ripple_2 (or Assassin CountessFirewall) | A row of missiles across the aim line |

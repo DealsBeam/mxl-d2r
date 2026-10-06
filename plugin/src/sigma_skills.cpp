@@ -6,6 +6,7 @@
 #include "sigma_skills.h"
 
 #include "d2r.h"
+#include "pet_scaling.h"
 
 #include <cstdio>
 #include <cstring>
@@ -137,8 +138,8 @@ auto SrvDoMissileBarrage(Game* game, Unit* unit, int32_t skillId, int32_t level)
 // pettype; at the skill target when it lies within aurarangecalc (a squared distance) of the caster, else at the
 // caster. blood_skeleton, ice_elementals, fire_elementals, the Barbarian spirits, the totems and 35 more.
 // The pets are set up as D2R's Raise Skeleton does it (level, the skill's passive/aura stats, party). Not ported
-// yet: D2Sigma's TargetCorpse branch (no skill on this function uses it), its minion scaling (0x100683d0,
-// D2Hirelings.cpp: per-pettype rules) and its achievement counter.
+// yet: D2Sigma's TargetCorpse branch (no skill on this function uses it) and its achievement counter. Each pet gets
+// D2Sigma's minion scaling (0x100683d0, pet_scaling.cpp) after its level is set.
 auto SrvDoMultiSummon(Game* game, Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
 	if (game == nullptr || unit == nullptr) {
 		return 0;
@@ -181,6 +182,7 @@ auto SrvDoMultiSummon(Game* game, Unit* unit, int32_t skillId, int32_t level) no
 			continue;
 		}
 		d2r::api.setPetLevel(game, unit, pet, 0, level);
+		ScalePet(game, unit, pet, skillId, level);
 		d2r::api.petSkillStats(game, unit, pet, skillId, level, At<int32_t>(unit, d2r::UnitArg12c), 0);
 		d2r::api.addPetToParty(game, pet, 0, At<int32_t>(unit, d2r::UnitArg130));
 	}
@@ -295,6 +297,7 @@ constexpr SlotFunction Functions[] = {
 
 auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> int {
 	d2r::Bind(context->exeBase);
+	InstallPetScaling(context->exeBase);
 	static constexpr uint8_t Empty[8] = {};
 	int installed = 0;
 	size_t used = 0;

@@ -31,12 +31,13 @@
 //   msyn       the owner's synergy stat with the missile's skill as parameter (Median stat 382)
 //   blvl       the base level of the missile's skill on the owner (players uncapped; other owners at most 1, as
 //              D2Sigma's cap 0x100bdff0 gives 1 to units that are not players or hirelings)
-// Not yet: (max-level checks), mnhp/mnar
-// (Median's minion scaling), mode, pdmn/pdmx, mlvl/skcn (written into skpoints instead).
+//   mnhp, mnar Median's minion life and attack rating for the skill (pet_scaling.cpp, with the unit's level)
+// Not yet: mode, pdmn/pdmx, mlvl/skcn (written into skpoints instead).
 #include "calc_codes.h"
 
 #include "d2r.h"
 #include "mxl_ids.h"
+#include "pet_scaling.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -200,6 +201,14 @@ auto CalcCode(uint64_t dataFlag, void* unit, uint64_t code, int32_t skillId, uin
 		return static_cast<uint64_t>(static_cast<int64_t>(reduction != 0 ? delay - reduction : delay));
 	}
 	case mxl_ids::Calc_mxfn: return FormulaFunction(dataFlag, unit, skillId);
+	case mxl_ids::Calc_mnhp:
+		return static_cast<uint64_t>(static_cast<int64_t>(MinionLifeCode(static_cast<uint32_t>(dataFlag & 0xff),
+		                                                                  static_cast<d2r::Unit*>(unit), skillId,
+		                                                                  static_cast<int32_t>(level))));
+	case mxl_ids::Calc_mnar:
+		return static_cast<uint64_t>(static_cast<int64_t>(MinionAttackRatingCode(static_cast<uint32_t>(dataFlag & 0xff),
+		                                                                          static_cast<d2r::Unit*>(unit), skillId,
+		                                                                          static_cast<int32_t>(level))));
 	case mxl_ids::Calc_bmax: return static_cast<uint64_t>(MaxBaseLevel(dataFlag, unit, skillId, level));
 	case mxl_ids::Calc_maxe: {
 		const int32_t blvl = static_cast<int32_t>(g_original(dataFlag, unit, D2RCodeBlvl, skillId, level));
@@ -253,7 +262,7 @@ auto InstallCalcCodes(const D2RL::PluginContext* context, char* report, size_t r
 	g_roomLevelId = reinterpret_cast<RoomLevelIdFn>(context->exeBase + RoomLevelIdRva);
 	const bool ok = context->InstallInlineHook(CalcCodeRva, CalcCodeEntry, sizeof(CalcCodeEntry), CalcCode, &g_original) &&
 	                context->InstallInlineHook(MissCodeRva, MissCodeEntry, sizeof(MissCodeEntry), MissCode, &g_missOriginal);
-	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe, mxfn (hasstate, statlayer); missiles msyn, blvl (rows %d..)" : "off: calc code hook failed (rows %d..)",
+	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe, mnhp, mnar, mxfn (hasstate, statlayer); missiles msyn, blvl (rows %d..)" : "off: calc code hook failed (rows %d..)",
 	              mxl_ids::FirstCalcCode);
 	return ok;
 }
