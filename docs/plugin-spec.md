@@ -188,8 +188,12 @@ Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R bas
   every formula compiles. The hook on D2R's code switch `0x33b3b0(dataFlag, unit, code, skill, level)` (unknown rows
   -> 0) answers `syn1`-`syn6` (cases 74-77/104-105: the unit's stats 383/393/396/397/399/400 with the skill as
   parameter, D2Common 10973; D2R `0x2f5020(unit, stat, layer)`), `skcp` (stat 449), `aura`/`pass` (1 if the unit has
-  the skill's aurastate +0xa0 / passivestate +0xb4; D2R `0x3351b0`). Still 0: `skcd`, `bl12`.., `bd12`.., `wdm`,
-  `bmax`, `maxe`, `blz*`/`bdz*`, `mnhp`, `mnar`, `area`, `pdmn`, `pdmx`, `mode`
+  the skill's aurastate +0xa0 / passivestate +0xb4; D2R `0x3351b0`) and, in 0.9.0, `bl12`-`bl78`/`blz1`-`blz7`
+  (base-level linear on Param pairs, `0x100a5c40`: blvl>0 ? a+(blvl-1)*b : (z ? a : 0); blvl from D2R's own code 41),
+  `bd12`-`bd78`/`bdz1`-`bdz7` (base-level diminishing, `0x100a5be0`: a + (110*blvl/(blvl+6))*(b-a)/100), `wdm`
+  (SrcDam*100/128; D2R SrcDam +0x24d, Param1 +0x1b8) and `area` (room -> level id; D2R `0x2efc10(0x34b440(unit))`;
+  Median's level ids are unchanged by the migration). Still 0: `skcd` (case 73: `0x100b0ed0` = the 1.13c delay formula
+  (D2R localdelay, a compiled field not yet located) minus the unit's stat 309 for the skill), `bmax`, `maxe`, `mnhp`/`mnar` (Median's minion scaling, `0x10067c60`/`0x10067bd0`), `pdmn`, `pdmx`, `mode` (unit+0x10 in 1.13c)
   (cases in `0x100a6340`, jump table `0x100a67b0`). Open as before:
   `wdm`, `skcd`, `aura`, `bl12..`, `area`, ... (docs/validation.md lists counts).
 - Formula functions: `hasstate`, `tabpoints`, `statlayer`, `itemstat`, items `skilllevel`, missiles `stat`

@@ -1,4 +1,4 @@
-// mxl-core: D2RLoader plugin carrying the D2Sigma behaviour that data alone cannot express (docs/plugin.md).
+﻿// mxl-core: D2RLoader plugin carrying the D2Sigma behaviour that data alone cannot express (docs/plugin.md).
 //
 // It loads with the MedianXL mod, logs the game build it runs on and adds the console command "mxl". Engine
 // changes are tied to one game image (RVAs from the dump of the D2R image D2RLoader runs, tools/dump_image.py), so
@@ -21,7 +21,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.8.0";
+constexpr const char* PluginVersion = "0.9.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
