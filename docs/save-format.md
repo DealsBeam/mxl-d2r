@@ -38,3 +38,14 @@ Bit-packed, LSB first, each item padded to a byte:
 | timestamp bit | 1 | after the defense/durability fields in 3.3 |
 | quantity, total sockets | 9, 4 | when stackable / socketed |
 | stats | 16-bit id, Save Param Bits, Save Bits (value + Save Add) | ends with 0xffff |
+
+## Warning: hand-written items are rejected (2026-10-06)
+
+The mod runs D2RLoader's **extended** save format (`[d2rcore.save_format] mode = "extended"`), which stores wider
+item, stat, affix and skill IDs than retail 3.3. Two hand-built items (a +1 Whirlpool sword/axe, stat 97 with a
+12-bit skill parameter) made D2R drop the character from character select, even with the save checksum, size and
+both `.d2rl` hashes correct. A `.d2rl` mismatch alone only greys a character out (D2RLoader guide, "Environment
+badges"). The skill-parameter width (and possibly other fields) differs in the extended format and is not known
+yet. Until a game-written item with a skill stat has been decoded, get test items with D2RLoader's debug-mode Item
+Spawner instead of editing saves. Paladin saves also hold a starter item whose code does not decode with the
+retail Huffman table (flags 0xaa2010 at inventory 8,3), another sign that extended items differ.
