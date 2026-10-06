@@ -832,7 +832,11 @@ class Migrator:
           rightskill 1 (it has no charclass, so the rule above misses it).
         - D2Sigma 160 (thundergod, armageddon_2, frigid_domain, overheat) is its Armageddon: a timed aurastate with
           the skill's aura stats and a periodic event, the same as D2R's 124 (0x575de0); the rows use vanilla
-          Armageddon's columns."""
+          Armageddon's columns.
+        - D2Sigma 161 (hyena_strike, exorcism: srvstfunc 57 like Rabies) is D2R's Rabies 121 (0x576bb0): melee roll,
+          on a hit auratargetstate for ELen, a missile (flags 0x8000), the skill's elemental damage and the melee
+          hit. D2Sigma picks srvmissilea/b/c by calc2; D2R by its own rule (srvmissilea here), so hyena_strike's
+          upgraded missile (srvmissilec, Median stat 191) is not used."""
         caps = {"mlvl", "skcp", "skcn"}
         named = [row[0] for row in read_tsv(ROOT / "work" / "named" / "skills.txt")[1]]
         skill_caps = {}
@@ -841,7 +845,7 @@ class Migrator:
             if row.isdigit() and int(row) < len(named):
                 skill_caps[named[int(row)]] = (mlvl, skcn)
         sigma_first, sigma_last, shift = 153, 171, 19
-        to_d2r = {155: 109, 160: 124}
+        to_d2r = {155: 109, 160: 124, 161: 121}  # 161: melee + elemental + target state + missile = Rabies
         for bank in ("base", ""):
             p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
             if not p.exists():

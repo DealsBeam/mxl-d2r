@@ -23,7 +23,7 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 | 158 (-> 177) | 0x100acc50 | 74 | DeathMaul, MegademonInferno, CountessFirewall, egg_trap — **plugin** (missile row) |
 | 159 (-> 178) | 0x100aa7e0 | 15 | spiral_dance, heaven_s_fury, crucify_2, barrier_strike — **plugin** (strike burst) |
 | 160 (-> D2R 124) | 0x100a97e0 | 4 | thundergod, armageddon_2, frigid_domain, overheat — **data** (D2R's Armageddon) |
-| 161 (-> 180) | 0x100ad0f0 | 2 | hyena_strike, exorcism — needs Median's damage block (see below) |
+| 161 (-> D2R 121) | 0x100ad0f0 | 2 | hyena_strike, exorcism — **data** (D2R's Rabies, see below) |
 | 162 | 0x100ac7c0 | 1 | skills_667 |
 | 163, 164, 168-170 | 0x100a9ac0, 0x100ac430, 0x100aabf0, 0x100ac200, 0x100aa9e0 | 0 | unused by the data |
 | 165 | 0x100ab190 | 10 | Holy Freeze, skills_1907 |
@@ -148,6 +148,18 @@ is blocked for the missile's size (D2Common 10303, mask 5; not ported) or beyond
 distance (max + min/2) of 100.
 
 ### 161, 171: Median's damage block
+
+**161 is D2R's Rabies (121, `0x576bb0`)**: both do a melee roll; on a hit, auratargetstate on the target (ELen),
+a missile at the target with flags 0x8000, the skill's elemental damage (EType/EMin/EMax) in the damage block and
+the melee hit. Only the missile choice differs: D2Sigma takes srvmissilea/b/c by calc2 (clamped 1-3), D2R
+(`0x571700`) by a state/stat rule of its own, else srvmissilea. Mapped in data; hyena_strike's srvmissilec
+(when Median stat 191 > 0) is lost.
+
+**165 (auras, still open):** `0x100ab190` is vanilla's aura routine (aurastate on the caster, auratargetstate on
+units found by aurarangecalc/aurafilter through D2Game's finder, callback `0x100bbbe0`), plus one Median addition:
+each aurastat carries a layer from D2Sigma's skills2 (first six dwords per row), e.g. aurastat `state` with layer 940
+(a Median state) or `item_skillonattack` with a packed skill/level. 6 of the 10 skills use layers, so D2R's aura 65
+alone is not enough: needs D2R's aura routine with layered stats (migrated state/skill ids).
 
 Both fill a 0x70/0x6c-byte damage block themselves (Median's damage: elemental type switch on the 1.13c record's
 EType, min/max from Median's own helpers `0x100a6020`/`0x100a5ec0`, `0x10041e80`), then 161 applies it to the melee
