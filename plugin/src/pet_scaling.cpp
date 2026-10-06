@@ -10,13 +10,16 @@
 //   pierce (0x10067db0): the owner's four pierce stats, when not 0
 //   attributes (0x10068020, pettypeext byte 0): the owner's energy, strength, Median 485, 278 and 86 in full, its four
 //      elemental masteries and magic mastery halved
+//   procs (0x10067e20, pettypeext byte 2): every layer (skill << 6 | level) of the owner's skill on kill and Median
+//      stat 292, and of skill on attack when byte 2 is 1, added to the pet with the value (the chance) divided by
+//      pettypeext byte 13 (at least 1); the owner's layers are read with stat_list.cpp
 // Not ported: the stat list recording the summoning skill/level (0x10067b30, stats 350/351 under state 307), the
-// owner's skill-on-event stats (0x10067e20, pettypeext byte 2), the summon unique mod (0x100681e0: sumumod is empty on
-// every 153 skill).
+// summon unique mod (0x100681e0: sumumod is empty on every 153 skill).
 #include "pet_scaling.h"
 
 #include "d2r.h"
 #include "mxl_pets.h"
+#include "stat_list.h"
 
 #include <cstdint>
 #include <iterator>
@@ -108,6 +111,18 @@ void ScalePet(d2r::Game* game, d2r::Unit* owner, d2r::Unit* pet, int32_t skillId
 		AddIfSet(pet, stat, Stat(owner, stat));
 	}
 	const uint8_t petType = d2r::At<uint8_t>(skill, d2r::SkPetType);
+	if (petType < std::size(mxl_pets::PetTypes) && mxl_pets::PetTypes[petType].copyProcs != 0) {
+		const mxl_pets::PetType& type = mxl_pets::PetTypes[petType];
+		const int32_t procStats[] = {mxl_pets::StatSkillOnKill, mxl_pets::StatProc292, mxl_pets::StatSkillOnAttack};
+		const int statCount = type.copyProcs == 1 ? 3 : 2;
+		StatEntry procs[64];
+		const int found = UnitStatsById(owner, procStats, statCount, procs, static_cast<int>(std::size(procs)));
+		const int32_t divisor = type.procDivisor != 0 ? type.procDivisor : 1;
+		for (int i = 0; i < found; ++i) {
+			const int32_t value = procs[i].value / divisor;
+			g_addStat(pet, procs[i].stat, value < 1 ? 1 : value, procs[i].layer);
+		}
+	}
 	if (petType < std::size(mxl_pets::PetTypes) && mxl_pets::PetTypes[petType].copyAttributes != 0) {
 		for (const int32_t stat : mxl_pets::AttributeStats) {
 			AddIfSet(pet, stat, Stat(owner, stat));

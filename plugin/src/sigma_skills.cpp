@@ -9,6 +9,7 @@
 #include "pet_scaling.h"
 #include "area_damage.h"
 #include "teleport.h"
+#include "stat_list.h"
 #include "auras.h"
 
 #include <cstdio>
@@ -309,6 +310,7 @@ auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t
 	InstallAuras(context->exeBase);
 	InstallAreaDamage(context->exeBase);
 	InstallTeleport(context->exeBase);
+	InstallStatList(context->exeBase);
 	static constexpr uint8_t Empty[8] = {};
 	int installed = 0;
 	size_t used = 0;

@@ -479,6 +479,11 @@ class Migrator:
                  "// with pettypeext byte 0 (0x10068020): in full, and halved",
                  "inline constexpr int32_t AttributeStats[] = {" + ", ".join(str(stat(s)) for s in (1, 0, 485, 278, 86)) + "};",
                  "inline constexpr int32_t HalfStats[] = {" + ", ".join(str(stat(s)) for s in (329, 331, 330, 332, 357)) + "};",
+                 "// with pettypeext byte 2 (0x10067e20): every layer of these owner stats, value / procDivisor (at least 1);",
+                 "// skill on kill and Median 292 always, skill on attack only when byte 2 is 1",
+                 f"inline constexpr int32_t StatSkillOnKill = {stat(196)};    // Median 196",
+                 f"inline constexpr int32_t StatSkillOnAttack = {stat(195)};  // Median 195",
+                 f"inline constexpr int32_t StatProc292 = {stat(292)};        // Median 292",
                  "", "}  // namespace mxl_pets", ""]
         (ROOT / "plugin" / "src" / "mxl_pets.h").write_text("\n".join(lines), encoding="utf-8")
         self.report.append(f"\npets: {len(prows)} pettypeext rows -> plugin/src/mxl_pets.h")

@@ -22,5 +22,10 @@ inline constexpr int32_t PierceStats[] = {333, 335, 334, 336};
 // with pettypeext byte 0 (0x10068020): in full, and halved
 inline constexpr int32_t AttributeStats[] = {1, 0, 514, 278, 86};
 inline constexpr int32_t HalfStats[] = {329, 331, 330, 332, 357};
+// with pettypeext byte 2 (0x10067e20): every layer of these owner stats, value / procDivisor (at least 1);
+// skill on kill and Median 292 always, skill on attack only when byte 2 is 1
+inline constexpr int32_t StatSkillOnKill = 196;    // Median 196
+inline constexpr int32_t StatSkillOnAttack = 195;  // Median 195
+inline constexpr int32_t StatProc292 = 292;        // Median 292
 
 }  // namespace mxl_pets

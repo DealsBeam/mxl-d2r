@@ -117,7 +117,7 @@ record: calc1 +0x138, Param3/4/5 +0x150/+0x154/+0x158 (D2R +0x1c0/+0x1c4/+0x1c8)
 | 4 | 0x10068190 | maxhp and hp set to mnhp: (Param3 + (level-1)*Param4) * (pet level/2 + 100) * (calc1 + 100) / 3333, << 8 (unsigned 64-bit, clamped) | yes |
 | 5 | 0x10068250 | add owner stat 487 to fire/cold/lightning res (<= 105) and poison res (<= 80); owner stat 229 to damage resist (<= 50) | yes |
 | 6 | 0x10067db0 | add the owner's pierce stats 333-336 when not 0 | yes |
-| 7 | 0x10067e20 | pettypeext byte 2: the owner's skill-on-event stats 196, 292 (and 195 if 1) with chance / byte 13, layers re-encoded | no |
+| 7 | 0x10067e20 | pettypeext byte 2: the owner's skill-on-event stats 196, 292 (and 195 if 1) with chance / byte 13, layers re-encoded | 0.20.0 (layers kept as they are; the owner's layers read by `stat_list.cpp`: unit +0x88 StatListEx, totals array found at run time and checked against `0x2f5020`) |
 | 8 | 0x10068020 | pettypeext byte 0: add the owner's 1, 0, 485, 278, 86 in full and 329-332, 357 halved | yes |
 | 9 | 0x10068320 | the skill's aurastat/passivestat (1.13c +0x54/+0x68, +0x98/+0xa4) on the pet | D2R 0x55ef80 |
 | 10 | 0x100681e0 | sumumod (+0xe4) on the pet | empty on all 153 skills |
