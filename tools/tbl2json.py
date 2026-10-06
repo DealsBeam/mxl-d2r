@@ -121,14 +121,23 @@ def main() -> int:
 
     folders = {f: {p.name: json.loads(p.read_text("utf-8-sig")) for p in sorted((D2R_LNG / f).glob("*.json"))}
                for f in ("strings", "strings-legacy") if (D2R_LNG / f).exists()}
-    # One ID per new key, above every ID in either folder, so a key has the same ID in both string sets.
-    max_id = max(e["id"] for files in folders.values() for recs in files.values() for e in recs)
+    # One ID per new key, the same in both string sets. D2R matches string IDs by their low 16 bits (bug #7: Median's
+    # 262189 "ArcaneApe" answered for 45, GheedIntroGossip1), so new IDs stay below 65536, start after D2R's own
+    # (next_string_id.txt: 28106; commands.json's lone 251780 is left out) and skip every 16-bit value in use.
+    all_ids = [e["id"] for files in folders.values() for recs in files.values() for e in recs]
+    used16 = {i & 0xffff for i in all_ids}
+    next_id = max(i for i in all_ids if i < 0x10000) + 1
     new_ids: dict[str, int] = {}
     for files in folders.values():
         d2r_keys = {e["Key"] for recs in files.values() for e in recs}
         for k in texts:
             if k not in d2r_keys and k not in new_ids:
-                new_ids[k] = max_id + 1 + len(new_ids)
+                while next_id in used16:
+                    next_id += 1
+                if next_id > 0xffff:
+                    raise SystemExit("tbl2json: more new strings than free 16-bit string IDs")
+                new_ids[k] = next_id
+                used16.add(next_id)
     for folder, files in folders.items():
         d2r_keys = {e["Key"] for recs in files.values() for e in recs}
         overridden, kept = set(), {}
@@ -159,7 +168,7 @@ def main() -> int:
                       f"(in {NEW_KEYS_FILE}), {len(kept)} kept D2R's text (placeholders differ)")
         if folder == "strings":
             report += [f"  - `{k}`: D2R {d!r} / Median {m!r}" for k, (d, m) in sorted(kept.items())]
-    report.append(f"- New-key IDs {max_id + 1}..{max_id + len(new_ids)}, shared by both folders")
+    report.append(f"- New-key IDs {min(new_ids.values(), default=0)}..{max(new_ids.values(), default=0)} (below 65536, free in 16 bits), shared by both folders")
 
     (OUT / "strings_idkeys.json").write_text(json.dumps({str(k): v for k, v in sorted(idkeys.items())}, indent=0),
                                              encoding="utf-8")
