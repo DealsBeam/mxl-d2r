@@ -311,6 +311,51 @@ class Migrator:
                 self.report.append(f"\nlvlmaze: {len(missing)} maze levels had no lvlmaze row; added copies of a "
                                    f"same-LevelType row for levels {', '.join(missing)}")
 
+    def formula_proxies(self) -> None:
+        """D2Sigma's formula functions (hasstate, statlayer, itemstat, tabpoints): tools/formula.py renders each
+        distinct call as skill('mxf_N'.mxfn) and lists the calls in work/formulas/proxies.txt. Each becomes a hidden
+        skills row named mxf_N (appended in both banks) with Param1 = function (1 hasstate, 2 statlayer, 3 itemstat,
+        4 tabpoints) and Param2..4 = its arguments as migrated ids; skillcalc gets the code mxfn, which the mxl-core
+        plugin answers from those params (else 0)."""
+        src = ROOT / "work" / "formulas" / "proxies.txt"
+        if not src.exists():
+            return
+        calls = [line.split("\t") for line in src.read_text("utf-8").splitlines()[1:] if line.strip()]
+        sh, srows = read_tsv(OUT / "data" / "global" / "excel" / "base" / "states.txt")
+        state_id = {r[0]: i for i, r in enumerate(r for r in srows if r and r[0])}
+        ih, irows = read_tsv(OUT / "data" / "global" / "excel" / "base" / "itemstatcost.txt")
+        stat_id = {r[0]: r[ih.index("*ID")] for r in irows if r and r[0]}
+
+        def arg(kind: str, pos: int, value: str) -> str:
+            if (kind == "1" and pos == 0) or (kind == "2" and pos == 0) or (kind == "3" and pos == 1):
+                table = state_id if kind == "1" else stat_id
+                return str(table.get(value, -1))
+            return value
+
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
+            h, rows = read_tsv(p)
+            rows = [r for r in rows if not (r and r[0].startswith("mxf_"))]
+            ci, p1 = h.index("*Id"), h.index("Param1")
+            first = len(rows)
+            for k, (name, _fn, kind, *args) in enumerate(calls):
+                row = [""] * len(h)
+                row[0], row[ci], row[p1] = name, str(first + k), kind
+                for j, v in enumerate(args[:3]):
+                    if v != "":
+                        row[p1 + 1 + j] = arg(kind, j, v)
+                rows.append(row)
+            write_tsv(p, h, rows)
+            sc = OUT / "data" / "global" / "excel" / bank / "skillcalc.txt"
+            ch, crows = read_tsv(sc)
+            if not any(r and r[0] == "mxfn" for r in crows):
+                row = [""] * len(ch)
+                row[0], row[1] = "mxfn", "Median XL formula function proxy (mxl-core plugin)"
+                crows.append(row)
+                write_tsv(sc, ch, crows)
+        self.report.append(f"\nformula functions: {len(calls)} proxy skills (mxf_*) for D2Sigma's hasstate/statlayer/"
+                           f"itemstat/tabpoints, calc code mxfn")
+
     def extra_calc_codes(self) -> None:
         """D2Sigma's skill calc codes 73-110 (syn1-syn6, aura, area, bl12, ...) are not D2R codes, and D2R's own
         rows 73+ differ, so formulas naming them would not compile. Each bank's skillcalc.txt is rebuilt as D2R's
@@ -364,6 +409,7 @@ class Migrator:
                  f"inline constexpr int32_t FirstCalcCode = {first};"]
         for i, code in enumerate(codes):
             lines.append(f"inline constexpr int32_t Calc_{code} = {first + i};")
+        lines.append(f"inline constexpr int32_t Calc_mxfn = {first + len(codes)};  // formula function proxy")
         miss = [r[0].strip() for r in read_tsv(OUT / "data" / "global" / "excel" / "base" / "misscalc.txt")[1] if r]
         lines += ["", "// misscalc.txt rows of D2Sigma's missile calc codes (the same in both banks)."]
         lines += [f"inline constexpr int32_t MissCalc_{c} = {miss.index(c)};" for c in ("msyn", "blvl")]
@@ -808,6 +854,7 @@ def main() -> int:
     m.vendor_stock()
     m.item_spells()
     m.extra_calc_codes()
+    m.formula_proxies()
     if m.dangling:
         m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]
         m.report += [f"- {t}: {n} cells" for t, n in sorted(m.dangling.items())]

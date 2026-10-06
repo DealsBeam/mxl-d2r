@@ -44,6 +44,7 @@ inline constexpr int32_t Calc_pdmn = 160;
 inline constexpr int32_t Calc_pdmx = 161;
 inline constexpr int32_t Calc_mode = 162;
 inline constexpr int32_t Calc_skcn = 163;
+inline constexpr int32_t Calc_mxfn = 164;  // formula function proxy
 
 // misscalc.txt rows of D2Sigma's missile calc codes (the same in both banks).
 inline constexpr int32_t MissCalc_msyn = 47;

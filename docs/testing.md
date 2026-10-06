@@ -8,10 +8,12 @@ functions it installed.
 
 | Since | What | How to test | Expected |
 |---|---|---|---|
-| 0.10.0 | Plugin loads; engine fixes applied | Console: `mxl` | `mxl-core 0.10.0`, `states fix on: 73 sites ...` (or 72), `level types on: ...`, `calc codes on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe; missiles msyn, blvl`, `skill functions 5/5` |
+| 0.11.0 | Plugin loads; engine fixes applied | Console: `mxl` | `mxl-core 0.11.0`, `states fix on: 73 sites ...` (or 72), `level types on: ...`, `calc codes on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe, mxfn (hasstate, statlayer); missiles msyn, blvl`, `skill functions 5/5` |
 | 0.8.0 | Synergies (syn1-syn6) | An item with "+X% to <skill>"-style synergy bonuses; compare the skill's damage/tooltip with and without it | Damage/tooltip changes with the item |
 | 0.8.0 | Item max-level bonus (skcp) | An item with "+N to maximum level of <skill>" | That skill can take N more points |
 | 0.9.0 | Base-level skill values (bl12/bd12...) and weapon damage % (wdm) | Skill tooltips that show per-level values or "% weapon damage"; raise the skill by a point and check the value moves | Non-zero values that grow with points spent (not with +skill items) |
+| 0.11.0 | State-dependent formulas (hasstate) | Fire Ball's poison interaction, or any skill that changes while a buff/curse is on (e.g. Meditation, shrine effects) | Values change when the state is active |
+| 0.11.0 | Layered stat formulas (statlayer) | Holy Shock tooltip with "activation frequency" items | Values include the per-skill item bonus |
 | 0.10.0 | Missile formulas (msyn, blvl) | A skill whose missile damage/size scales with the skill's points or synergy items (32 missiles use blvl) | Missile effect grows with points spent |
 | 0.9.0 | "Maxed skill" effects (bmax/maxe) | Skills whose tooltip/bonus changes when maxed (e.g. "max this skill ... to remove cooldown") | The bonus appears once the skill reaches its current cap |
 | 0.9.0 | Cooldown in skill tooltips (skcd) | Tooltip of a skill with a cooldown | Shows the cooldown (not 0) |

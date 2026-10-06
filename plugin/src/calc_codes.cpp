@@ -20,6 +20,11 @@
 //   bmax       the skill's current maximum base level: max(0, min(mlvl + skcn + skcp, clvl + 1 - reqlevel)) (case 88,
 //              0x100a6e00); mlvl and skcn come from calc9/calc10, where tools/txt_migrate.py stores them
 //   maxe       1 when the skill's base level (> 0) equals bmax (case 92)
+//   mxfn       D2Sigma's formula functions, called through hidden proxy skills (tools/formula.py, txt_migrate.py):
+//              the formula reads skill('mxf_N'.mxfn) and mxf_N's Param1..4 hold the function and its arguments.
+//              1 hasstate(state): the unit has the state; 2 statlayer(stat, mode, layer): the stat at that layer,
+//              mode 0 total / 1 base / 2 the third D2R getter, as D2R's own stat(); 3 itemstat and 4 tabpoints: 0
+//              for now
 //
 // Missile formulas: D2R's missile code switch 0x3b9dc0 (dataFlag, missile, owner, code, missileId, level) is hooked the
 // same way for D2Sigma's two missile codes (0x10088fd0, codes 43-44):
@@ -50,6 +55,8 @@ constexpr int SkCalc9 = 0x1b0;                 // mlvl (written by txt_migrate.p
 constexpr int SkCalc10 = 0x1b4;                // skcn
 constexpr int SkReqLevel = 0x214;              // uint16
 constexpr int32_t StatLevel = 12;
+constexpr uint64_t GetUnitBaseStatRva = 0x2f48c0;  // stat() mode 1
+constexpr uint64_t GetUnitStatMode2Rva = 0x2f5c60; // stat() mode 2
 constexpr uint64_t MissCodeRva = 0x3b9dc0;
 // MOV [RSP+0x8],RBX / MOV [RSP+0x18],RBP / PUSH RSI / PUSH RDI / PUSH R14
 constexpr uint8_t MissCodeEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x56, 0x57, 0x41, 0x56};
@@ -72,6 +79,8 @@ using MissCodeFn = uint64_t (*)(uint64_t dataFlag, void* missile, void* owner, u
                                 uint32_t level) noexcept;
 MissCodeFn g_missOriginal = nullptr;
 GetUnitStatFn g_getUnitStat = nullptr;
+GetUnitStatFn g_getUnitBaseStat = nullptr;
+GetUnitStatFn g_getUnitStatMode2 = nullptr;
 HasStateFn g_hasState = nullptr;
 UnitRoomFn g_unitRoom = nullptr;
 RoomLevelIdFn g_roomLevelId = nullptr;
@@ -132,6 +141,25 @@ auto MaxBaseLevel(uint64_t dataFlag, void* unit, int32_t skillId, uint32_t level
 	return v > 0 ? v : 0;
 }
 
+auto FormulaFunction(uint64_t dataFlag, void* unit, int32_t proxySkill) noexcept -> uint64_t {
+	const uint8_t* proxy = d2r::api.getSkillRecord(static_cast<uint32_t>(dataFlag & 0xff), proxySkill);
+	if (proxy == nullptr || unit == nullptr) {
+		return 0;
+	}
+	const int32_t a = Param(proxy, 2), b = Param(proxy, 3), c = Param(proxy, 4);
+	switch (Param(proxy, 1)) {
+	case 1: return a >= 0 && g_hasState(unit, a) != 0 ? 1 : 0;
+	case 2: {
+		if (a < 0) {
+			return 0;
+		}
+		const GetUnitStatFn get = b == 1 ? g_getUnitBaseStat : b == 2 ? g_getUnitStatMode2 : g_getUnitStat;
+		return static_cast<uint64_t>(static_cast<int64_t>(get(unit, a, c)));
+	}
+	default: return 0;
+	}
+}
+
 auto CalcCode(uint64_t dataFlag, void* unit, uint64_t code, int32_t skillId, uint32_t level) noexcept -> uint64_t {
 	switch (static_cast<int32_t>(code & 0xff)) {
 	case mxl_ids::Calc_syn1: return LayerStat(unit, mxl_ids::StatSyn1, skillId);
@@ -171,6 +199,7 @@ auto CalcCode(uint64_t dataFlag, void* unit, uint64_t code, int32_t skillId, uin
 		const int32_t reduction = g_getUnitStat(unit, mxl_ids::StatCooldownReduction, skillId);
 		return static_cast<uint64_t>(static_cast<int64_t>(reduction != 0 ? delay - reduction : delay));
 	}
+	case mxl_ids::Calc_mxfn: return FormulaFunction(dataFlag, unit, skillId);
 	case mxl_ids::Calc_bmax: return static_cast<uint64_t>(MaxBaseLevel(dataFlag, unit, skillId, level));
 	case mxl_ids::Calc_maxe: {
 		const int32_t blvl = static_cast<int32_t>(g_original(dataFlag, unit, D2RCodeBlvl, skillId, level));
@@ -217,12 +246,14 @@ auto MissCode(uint64_t dataFlag, void* missile, void* owner, uint64_t code, int3
 auto InstallCalcCodes(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	d2r::Bind(context->exeBase);
 	g_getUnitStat = reinterpret_cast<GetUnitStatFn>(context->exeBase + GetUnitStatRva);
+	g_getUnitBaseStat = reinterpret_cast<GetUnitStatFn>(context->exeBase + GetUnitBaseStatRva);
+	g_getUnitStatMode2 = reinterpret_cast<GetUnitStatFn>(context->exeBase + GetUnitStatMode2Rva);
 	g_hasState = reinterpret_cast<HasStateFn>(context->exeBase + HasStateRva);
 	g_unitRoom = reinterpret_cast<UnitRoomFn>(context->exeBase + UnitRoomRva);
 	g_roomLevelId = reinterpret_cast<RoomLevelIdFn>(context->exeBase + RoomLevelIdRva);
 	const bool ok = context->InstallInlineHook(CalcCodeRva, CalcCodeEntry, sizeof(CalcCodeEntry), CalcCode, &g_original) &&
 	                context->InstallInlineHook(MissCodeRva, MissCodeEntry, sizeof(MissCodeEntry), MissCode, &g_missOriginal);
-	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe; missiles msyn, blvl (rows %d..)" : "off: calc code hook failed (rows %d..)",
+	std::snprintf(report, reportSize, ok ? "on: syn1-6, skcp, aura, pass, bl/blz/bd/bdz, wdm, area, skcd, bmax, maxe, mxfn (hasstate, statlayer); missiles msyn, blvl (rows %d..)" : "off: calc code hook failed (rows %d..)",
 	              mxl_ids::FirstCalcCode);
 	return ok;
 }

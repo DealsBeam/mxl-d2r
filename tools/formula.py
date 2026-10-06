@@ -194,6 +194,20 @@ def const(n: Node) -> int:
 PREC = {"?": 1, "<": 3, ">": 3, "<=": 3, ">=": 3, "==": 3, "!=": 3, "+": 4, "-": 4, "*": 5, "/": 5, "^": 6}
 
 
+# D2Sigma's formula functions (hasstate, statlayer, itemstat, tabpoints) have no D2R equivalent. Each distinct call
+# becomes a hidden "proxy" skill row (tools/txt_migrate.py adds them) whose Param1..4 hold the function and its
+# arguments, and the call becomes skill('<proxy>'.mxfn): D2R evaluates calc code mxfn on that skill, which the
+# mxl-core plugin answers (else 0). PROXIES: (function, args...) -> proxy row name, in first-use order.
+PROXY_FUNCS = {"mxl_hasstate": 1, "mxl_statlayer": 2, "mxl_itemstat": 3, "mxl_tabpoints": 4}
+PROXIES: dict[tuple, str] = {}
+PROXY_FILE = ROOT / "work" / "formulas" / "proxies.txt"
+
+
+def proxy_call(key: tuple) -> str:
+    name = PROXIES.setdefault(key, f"mxf_{len(PROXIES)}")
+    return f"skill('{name}'.mxfn)"
+
+
 class Renderer:
     """Renders a tree as D2 formula text. `ref` resolves (kind, row) -> name for skill/stat/missile/state refs."""
 
@@ -240,6 +254,15 @@ class Renderer:
             return f"({s})" if parent > p else s
         idx, name = n.value
         a = n.args
+        if self.ctx == "skills" and name in PROXY_FUNCS and all(x.kind == "const" for x in a):
+            self.unsupported.add(name)
+            if name == "mxl_hasstate":
+                return proxy_call((name, self.ref("state", const(a[0]))))
+            if name == "mxl_statlayer":  # (stat, mode, layer)
+                return proxy_call((name, self.ref("stat", const(a[0])), const(a[1]), const(a[2])))
+            if name == "mxl_itemstat":  # (bodyloc, stat)
+                return proxy_call((name, const(a[0]), self.ref("stat", const(a[1]))))
+            return proxy_call((name, const(a[0])))  # tabpoints(tab)
         if self.stub_mxl and name.startswith("mxl_"):
             self.unsupported.add(name)
             return "0"
@@ -527,6 +550,13 @@ def cmd_convert() -> int:
         cols = ", ".join(f"{c}@{o}" for c, o in sorted(fields.items(), key=lambda x: x[1]))
         summary.append(f"- {table}: {len(fields)} formula columns, {changed} cells rewritten ({differs} with new text). Columns: {cols}")
     caps = export_skill_caps(ref, keep_mxl, shorten, too_long)
+    plines = ["name\tfunction\tkind\targ1\targ2\targ3"]
+    for key, pname in PROXIES.items():
+        args = [str(x) for x in key[1:]] + [""] * (3 - len(key[1:]))
+        plines.append("\t".join([pname, key[0], str(PROXY_FUNCS[key[0]]), *args]))
+    PROXY_FILE.write_text("\n".join(plines) + "\n", encoding="utf-8")
+    summary.append(f"- formula functions: {len(PROXIES)} proxy skills for D2Sigma's hasstate/statlayer/itemstat/"
+                   f"tabpoints calls -> {PROXY_FILE.name}")
     summary.append(f"- skill caps: {caps} skills with a cap formula (skills2 mlvl +0x2f, skcn +0x3e) -> "
                    f"{SKILL_CAPS.name}")
     report = ["# Formula conversion report", "", *summary, "",

@@ -205,7 +205,13 @@ Other tables to check for the same problem: Median uses cltdofunc 98-99 (D2R bas
   `0x100bdff0` (1 for units other than players/hirelings; the plugin caps every non-player at 1). Hooked on D2R's
   missile code switch `0x3b9dc0(dataFlag, missile, owner, code, missileId, level)` (missile formulas: `0x3b4a90`,
   callback `0x3b5540`).
-- Formula functions: `hasstate`, `tabpoints`, `statlayer`, `itemstat`, items `skilllevel`, missiles `stat`
+- Formula functions (mxl-core 0.11.0): each distinct call of D2Sigma's hasstate/statlayer/itemstat/tabpoints (all
+  arguments are constants) becomes a hidden proxy skill `mxf_N` (57; Param1 = function, Param2..4 = migrated
+  arguments; work/formulas/proxies.txt) and the call `skill('mxf_N'.mxfn)`: D2R's skill() evaluates calc code
+  `mxfn` (skillcalc row 164) for that skill id, and the plugin answers hasstate (`0x3351b0`) and statlayer (mode
+  0/1/2 = D2R `0x2f5020`/`0x2f48c0`/`0x2f5c60`, as D2R's stat()). itemstat (bodyloc 1/4/5: helmet, gloves; 6 calls in
+  hidden passives skills_2062/2063/2066/2069/3001) and tabpoints (skills_1473) answer 0 until D2R's body-location
+  item lookup is found. Earlier notes: `hasstate`, `tabpoints`, `statlayer`, `itemstat`, items `skilllevel`, missiles `stat`
   (docs/formulas.md).
 - Skill tree rules (`ui/SkillTree.cpp`): devotions lock each other, "pick up to three masteries".
 - Skill descriptions (`D2SkillDesc.cpp`).
