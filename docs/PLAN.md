@@ -49,7 +49,12 @@ Status (2026-10-06):
   files exist nowhere (several are vanilla's own dead rows: nul, gore20, pentacle; Median's: extra/icestormimpactvar3,
   extra/spikefiendmamamissile, extra/auraresistcoldcast, extra/firesmoke.dcc, extra/lifedrain.dcc, extra/genericsplash,
   'expansion|baaldeathghostie01'): classic mode may fail on those if they ever spawn.
-- Test pending: does classic mode (G) draw these from the mod (docs/testing.md)?
+- Classic mode draws the mod's item pictures (confirmed 2026-10-07).
+- Monsters (2026-10-07): install_mod.py ships Median's monster files D2R lacks (5,994 files, 363 MB, COF + DCC);
+  tools/animdata_merge.py merges animdata.d2 (D2R base, +2,529 Median records, Median's speed on 245 shared ones;
+  7 with a different frame count keep D2R's). gfx_placeholders.py: 1,193 monsters now keep their own Code and
+  monstats2 row (Median timing, Median art in classic mode) and only borrow a D2R HD model; 24 still borrow the
+  donor's graphics (10 codes Median's files do not complete). Startup clean.
 - Next: monsters (383 MB). gfx_placeholders.py swaps Median's 254 unknown monster codes to D2R donors because the
   classic COF is read even in HD (timing). Shipping Median's monster COF/DCC would let monsters keep their own codes
   (Median's animation timing; classic art), with monsters.json still mapping each to a donor HD model; needs a check

@@ -56,7 +56,9 @@ def main() -> int:
     # inventory pictures (items/*.dc6, the invfile/uniqueinvfile/setinvfile names): classic mode (G) draws items from
     # them. Files D2R already has are left alone so its own effects and items keep matching their HD versions.
     d2r_files = set(D2R_FILELIST.read_text("utf-8").splitlines()) if D2R_FILELIST.exists() else set()
-    for sub in ("missiles", "overlays", "items"):
+    # Monsters (Phase 5): Median's own animations (COF + DCC); gfx_placeholders.py lets monsters these complete keep
+    # their own Code (HD still shows a borrowed model), and animdata_merge.py adds their timing.
+    for sub in ("missiles", "overlays", "items", "monsters"):
         for p in (MXL_GLOBAL / sub).rglob("*"):
             rel = p.relative_to(MXL_GLOBAL.parent.parent).as_posix().lower()  # data/global/...
             if p.is_file() and f"data:{rel}" not in d2r_files:

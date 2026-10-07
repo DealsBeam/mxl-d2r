@@ -5,10 +5,13 @@ data/global/monsters/<code>/cof/<code><mode><weaponclass>.cof, used even in HD f
 data/hd/character/monsters.json assigns to the monstats Id. Median uses 254 graphics codes D2R does not have,
 and D2R crashes on a missing COF ("Could not add cof file") and has no HD model for Median's monster Ids.
 
-For every monster whose Code is unknown to D2R, or whose monstats2 row enables a mode D2R has no COF for, this
-borrows a D2R monster's graphics: its Code, and its monstats2 visual columns (sizes, parts, modes, light...).
-The donor is a D2R monster with the same MonType, else a zombie. monsters.json then maps every monstats Id to the
-HD model of the Code it ends up with.
+Phase 5: tools/install_mod.py ships Median's own monster animations (COF + DCC, files D2R lacks) and
+tools/animdata_merge.py its animdata records. A monster whose Code or modes D2R lacks but Median's files complete keeps
+its own Code and monstats2 row (Median's timing; Median's art in classic mode) and only borrows a D2R monster's HD
+model in monsters.json. Monsters Median's files do not complete either (a few codes) still borrow a D2R monster's
+graphics: its Code and its monstats2 visual columns (sizes, parts, modes, light...).
+The donor is a D2R monster with the same MonType, else a zombie. monsters.json maps every monstats Id to the HD model
+of its donor or of the Code it ends up with.
 
 Writes into work/mod/data (after txt_migrate.py) and work/mod/gfx_placeholders.md.
 Usage: python tools/gfx_placeholders.py
@@ -31,6 +34,7 @@ MONSTERS_JSON = D2R / "data" / "hd" / "character" / "monsters.json"
 MODES = ["DT", "NU", "WL", "GH", "A1", "A2", "BL", "SC", "S1", "S2", "S3", "S4", "DD", "RN"]  # KB, SQ reuse others
 KEEP = {"Id", "*hcIdx", "*eol"}  # monstats2 columns that stay the row's own
 FALLBACK = "zombie1"
+MXL_MONSTERS = ROOT / "extract" / "mxl" / "data" / "global" / "monsters"
 NOT_DONORS = re.compile(r"^gorgon\d")  # enabled in monstats but never spawned in D2R
 
 
@@ -63,6 +67,8 @@ def missing_cofs(code: str, h2: list[str], row2: list[str], cofs: set[str]) -> l
 
 def main() -> int:
     cofs, mj = d2r_files()
+    mxl_cofs = {p.stem.lower() for p in MXL_MONSTERS.rglob("*.cof")} if MXL_MONSTERS.exists() else set()
+    all_cofs = cofs | mxl_cofs
     hd = dict(mj)
     report = ["# Placeholder monster graphics", "",
               "Monsters below borrow a D2R monster's graphics (Code + monstats2 visuals) until Median's art is "
@@ -94,6 +100,7 @@ def main() -> int:
         fallback = donors["*" + FALLBACK]
         replaced: dict[str, list[str]] = {}  # monstats2 Id -> donor monstats row
         changed = Counter()
+        own_art = Counter()  # (Median code, donor of the HD model) -> monsters keeping their own animations
         for r in rows:
             if not is_record(r) or not r[ci]:
                 continue
@@ -103,6 +110,11 @@ def main() -> int:
             if r[xi] in replaced:
                 donor = replaced[r[xi]]
             elif not missing_cofs(r[ci], h2, row2, cofs):
+                continue
+            elif not missing_cofs(r[ci], h2, row2, all_cofs):
+                donor = donors.get(r[ti], fallback)
+                hd[r[0]] = mj[donor[0]]
+                own_art[(r[ci], donor[0])] += 1
                 continue
             else:
                 donor = donors.get(r[ti], fallback)
@@ -118,7 +130,11 @@ def main() -> int:
                 hd[r[0]] = model[r[ci].lower()]
         write_tsv(d / "monstats.txt", h, rows)
         write_tsv(d / "monstats2.txt", h2, rows2)
-        report += [f"## Bank {bank or 'rotw'}: {sum(changed.values())} monsters, {len(replaced)} monstats2 rows", "",
+        report += [f"## Bank {bank or 'rotw'}: {sum(own_art.values())} monsters keep Median's animations "
+                   f"({len(own_art)} code/model pairs), HD model borrowed", "",
+                   "| Median code | HD model of | Monsters |", "|---|---|---|"]
+        report += [f"| {a} | {b} | {n} |" for (a, b), n in sorted(own_art.items())]
+        report += ["", f"Still borrowing graphics: {sum(changed.values())} monsters, {len(replaced)} monstats2 rows", "",
                    "| Median code | Placeholder code | Donor | Monsters |", "|---|---|---|---|"]
         report += [f"| {a} | {b} | {c} | {n} |" for (a, b, c), n in sorted(changed.items())]
         report.append("")

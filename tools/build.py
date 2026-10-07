@@ -21,7 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decode"], ["tbl2json.py"],
-         ["txt_migrate.py"], ["gfx_placeholders.py"], ["missile_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_layouts.py"],
+         ["txt_migrate.py"], ["gfx_placeholders.py"], ["animdata_merge.py"], ["missile_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_layouts.py"],
          ["validate.py"]]
 
 
