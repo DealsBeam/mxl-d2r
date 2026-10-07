@@ -6,4 +6,4 @@
 #include <cstddef>
 
 // Patches the game image (all or nothing). Call only on the expected image, before any game unit exists.
-auto InstallStatesFix(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;
+auto InstallStatesFix(const D2RL::PluginContext* context, bool keepCurrent, char* report, size_t reportSize) noexcept -> bool;

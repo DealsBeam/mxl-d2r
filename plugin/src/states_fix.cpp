@@ -23,17 +23,18 @@ struct Site {
 	uint64_t rva;  // of a 32-bit immediate or displacement
 	uint32_t from;
 	uint32_t to;
+	bool current;  // a current-states access (left alone when the current array stays in place)
 };
 
 constexpr Site Sites[] = {
-	{0x3eb79, 0x2b00, 0x2c00},  // pool constructor: element size
-	{0x2f66ee, 0x2b00, 0x2c00},  // extended stat list creation: memset size
-	{0x2f62ba, 0xaf0, 0x2b00},  // check state
-	{0x2f7f8f, 0xaf0, 0x2b00},  // set/clear state: read
-	{0x2f7fb0, 0xaf0, 0x2b00},  // set/clear state: write
-	{0x2f7fff, 0xaf0, 0x2b00},  // set state: "changed" bit
-	{0x2f63c6, 0xaf0, 0x2b00},  // state array pointer
-	{0x2f634f, 0x2bc, 0xac0},  // "changed" array pointer (dword index)
+	{0x3eb79, 0x2b00, 0x2c00, false},  // pool constructor: element size
+	{0x2f66ee, 0x2b00, 0x2c00, false},  // extended stat list creation: memset size
+	{0x2f62ba, 0xaf0, 0x2b00, true},  // check state
+	{0x2f7f8f, 0xaf0, 0x2b00, true},  // set/clear state: read
+	{0x2f7fb0, 0xaf0, 0x2b00, true},  // set/clear state: write
+	{0x2f7fff, 0xaf0, 0x2b00, false},  // set state: "changed" bit
+	{0x2f63c6, 0xaf0, 0x2b00, true},  // state array pointer
+	{0x2f634f, 0x2bc, 0xac0, false},  // "changed" array pointer (dword index)
 	// Not the copy routine 0x2f0d80 (its 32 dword moves at 0x2f1060-0x2f120a): its only caller, the creation
 	// function 0x2f65d0, copies from a template on its stack whose state area (+0xaf0..+0xb70) is zeroed there.
 	// Redirected, it read 0x80 bytes past that template into other stack data, so new stat lists started with
@@ -55,7 +56,8 @@ auto ListEmpty(uint64_t base, uint64_t rva) noexcept -> bool {  // never constru
 
 }  // namespace
 
-auto InstallStatesFix(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+auto InstallStatesFix(const D2RL::PluginContext* context, bool keepCurrent, char* report, size_t reportSize) noexcept
+	-> bool {
 	const uint64_t base = context->exeBase;
 	if (!ListEmpty(base, PoolRva + 0x18) || !ListEmpty(base, PoolRva + 0x28)) {
 		std::snprintf(report, reportSize, "off: the stat-list pool is already in use");
@@ -88,8 +90,12 @@ auto InstallStatesFix(const D2RL::PluginContext* context, char* report, size_t r
 		return mutations->stageBytePatch(context, transaction, &request, &operation) == D2RL::Mutations::Result::Success;
 	};
 	bool staged = true;
+	int sites = 0;
 	for (const Site& s : Sites) {
-		staged = staged && stage(s.rva, s.from, s.to);
+		if (!(keepCurrent && s.current)) {
+			staged = staged && stage(s.rva, s.from, s.to);
+			++sites;
+		}
 	}
 	// The live pool's element size: 0x2b00 once its static constructor has run, 0 before (then the patched
 	// constructor writes 0x2c00 itself).
@@ -110,7 +116,8 @@ auto InstallStatesFix(const D2RL::PluginContext* context, char* report, size_t r
 		std::snprintf(report, reportSize, "off: commit failed (reason %u)", static_cast<unsigned>(result.failureReason));
 		return false;
 	}
-	std::snprintf(report, reportSize, "on: %zu sites, state arrays at +0x2b00 (room for 1024 states)",
-	              sizeof(Sites) / sizeof(Sites[0]) + (liveSize == OldSize ? 1 : 0));
+	std::snprintf(report, reportSize, keepCurrent ? "on: %d sites, current states stay at +0xaf0 (32 blocks), \"changed\" flags at +0x2b00 + blocks*4 (room for 1024 states)"
+	                                              : "on: %d sites, state arrays at +0x2b00 (room for 1024 states)",
+	              sites + (liveSize == OldSize ? 1 : 0));
 	return true;
 }
