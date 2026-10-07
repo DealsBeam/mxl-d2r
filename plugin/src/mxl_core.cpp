@@ -17,6 +17,7 @@
 #include "item_spells.h"
 #include "missile_hits.h"
 #include "mana_costs.h"
+#include "state_trace.h"
 
 #include <windows.h>
 
@@ -27,7 +28,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.33.3";
+constexpr const char* PluginVersion = "0.34.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -63,7 +64,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat), separated by spaces, commas or lines.
+// items missiles mana itemstat; "trace" turns the bug #22 state trace on), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
 void ReadOffList() noexcept {
@@ -208,6 +209,12 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: mana costs %s", g_manaCostsReport);
 		context->LogInfo(line);
+		if (Off("trace")) {  // diagnosis word, not a part: turns the state trace on (bug #22)
+			char report[96];
+			InstallStateTrace(context, report, sizeof(report));
+			std::snprintf(line, sizeof(line), "mxl-core: state trace %s", report);
+			context->LogInfo(line);
+		}
 	}
 	return context->RegisterConsoleCommand("mxl", MxlCommand, "Median XL core plugin status.");
 }
