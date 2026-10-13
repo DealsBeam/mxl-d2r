@@ -42,7 +42,7 @@ mxl-core, mxl-skills, mxl-items, mxl-monsters, mxl-npc, mxl-ui. Every hook check
 ## Phase 5: Graphics
 First test whether legacy-graphics mode loads modded DCC/DC6. Then decide per asset.
 
-Status (2026-10-06):
+Status (2026-10-14):
 - Installed for classic mode (install_mod.py, Median-only files; ones D2R has stay D2R's): map tiles/presets
   (`global/tiles`, also needed in HD), missile and overlay animations (265 + 107 .dcc), item pictures (542 .dc6).
   Every item picture name the item tables use exists (D2R's or Median's). 11 missile CelFiles and 15 overlay
@@ -55,14 +55,30 @@ Status (2026-10-06):
   7 with a different frame count keep D2R's). gfx_placeholders.py: 1,193 monsters now keep their own Code and
   monstats2 row (Median timing, Median art in classic mode) and only borrow a D2R HD model; 24 still borrow the
   donor's graphics (10 codes Median's files do not complete). Startup clean.
-- Next: monsters (383 MB). gfx_placeholders.py swaps Median's 254 unknown monster codes to D2R donors because the
-  classic COF is read even in HD (timing). Shipping Median's monster COF/DCC would let monsters keep their own codes
-  (Median's animation timing; classic art), with monsters.json still mapping each to a donor HD model; needs a check
-  that HD models play with Median's frame counts, and Median's animdata.d2 entries. Then HD art: items.json /
-  missiles.json look-alikes today (item_hd.py, missile_hd.py); converting Median's DC6/DCC to HD .sprite is the
-  way to real HD pictures. Skill tree backgrounds and tab titles (bug #3) are art too.
+- Next: HD art. items.json / missiles.json / monsters.json use D2R look-alikes today (item_hd.py, missile_hd.py,
+  gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
+  backgrounds and tab titles (bug #3) are art too. Deferred checks: Median monster art in classic mode, Median-only
+  areas, Whirlpool (docs/testing.md).
 
 ## Phase 6: Test and release
 Smoke tests, saves/reload, TCP/IP, `d2rl pack`.
 
 **First milestone:** a playable vertical slice (one class, its items, Act 1).
+
+## Progress estimate (2026-10-14)
+
+Judgement estimates, not measurements. "Phase done" total is weighted by each phase's share of the work.
+
+| Phase | Share of total work | Phase done | Adds to overall |
+|---|---|---|---|
+| 0 Setup | 2% | 100% | 2.0% |
+| 1 Tools (extract, decode, convert) | 12% | 90% | 10.8% |
+| 2 Data port (tables, strings, install, booting) | 10% | 90% | 9.0% |
+| 3 Triage of Median's engine code | 8% | 70% | 5.6% |
+| 4 Plugins (engine behaviour) | 30% | 62% | 18.6% |
+| 5 Graphics | 28% | 20% | 5.6% |
+| 6 Test and release | 10% | 5% | 0.5% |
+| **Total** | **100%** | **~52%** | **~52%** |
+
+Open: bug #22 (monsters not targetable, states fix; 0.34.1 under test), the docs/testing.md backlog, Phase 5 HD art,
+Median's remaining systems (Ubers and challenges, cube extras, character and stash screens), Phase 6.

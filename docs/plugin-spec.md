@@ -461,6 +461,26 @@ byte for byte, one D2RLoader transaction, skipped if the pool already has chunks
 packets' state-id width (if narrower than 10 bits, states above it misbehave in multiplayer independently of this fix);
 the startup assertions remain (harmless).
 
+**Bug #22 (monsters cannot be hovered or attacked, 2026-10-07):** bisected to the states fix (plugin all off: works;
+only states off: works). The state trace (0.34.0, below) showed only ordinary states (105 alignment on monsters and
+NPCs as in D2R; 186 sharedstash, which D2R itself sets on the player at join, `0x52f9d5`; Median's 906 and 247 on the
+player from skills) and no state-mask check (`0x336440`) answering yes, so no state blocks targeting. Byte scans found no
+other user of the dword index 0x2bc and no other 0x2b00-sized allocation; the extended list has its own fields at
++0x2af0/+0x2af8 (creation args), below the new tail. Test in progress, 0.34.1 "keepcurrent": 32 blocks of current
+states fit exactly in D2R's 16+16-dword area (+0xaf0..+0xb70), so the current array stays where every reader expects it
+and only the "changed" flags move (+0x2b00 + blocks*4; sites 0x2f7fff and 0x2f634f, plus pool size and memset: 5
+sites). If hovering works with it, it becomes the default (it also keeps the copy routine's zeroing of +0xaf0..+0xb70
+correct); room is then exactly 1,024 states (Median: 1,014).
+
+## Diagnosis switch and state trace
+
+`<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
+spaces, commas or lines. Parts left out: `states levels calc skills items missiles mana itemstat`. Never leave out
+`calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
+(`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
+state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500
+lines); `keepcurrent` selects the 0.34.1 states fix variant above. Delete the file for normal play.
+
 Data cannot fix it: Median's own data references 639 of its 782 added states (skills aurastate/passivestate/
 auratargetstate/State1-3, misc state/cstate, states overlays), so even compacted it needs 871 > 512. Plan: move both
 arrays to a larger area (enlarge the pool element, redirect the four accessors and any inlined copies, check network
