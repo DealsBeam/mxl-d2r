@@ -33,6 +33,7 @@ Next: Phase 2 (install into D2R, `d2rl compile`, first boot).
 Migrate 94 standard tables, `d2rl init` / `d2rl compile`, boot with `-txt`, enable extended saves.
 
 ## Phase 3: Triage D2Sigma
+Triage table: [subsystems/README.md](subsystems/README.md) (2026-10-14, 109 source modules bucketed; largest open: quests, requirements, NPC actions, crafting, hirelings).
 One note per subsystem in `docs/subsystems/`, each feature bucketed:
 (a) data-only, (b) SDK service, (c) native hook, (d) UI rebuild, (e) cut/defer.
 
