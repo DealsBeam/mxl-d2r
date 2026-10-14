@@ -162,6 +162,11 @@ D2R_WHEN_EMPTY = {"overlay": {"Character"}}
 # Knockback "GH" (like Get Hit); D2R's are SQ and KB, and skills.txt's SQ resolves through them (with GH, Whirlwind's
 # sequence found no mode and the animation lookup crashed, 2026-10-14).
 D2R_ALWAYS = {"plrmode": {"Code"}, "monmode": {"code"}}
+# Signed bytes in the .bin records that the decoder read unsigned: monstats coldeffect -20 came out as 236 (chilled
+# monsters at +236% speed instead of -20%), spawnx/spawny -2 as 254, misc spellicon -1 (none) as 255. Found
+# 2026-10-14 by comparing shared rows with D2R.
+SIGNED_BYTE = {"monstats": {"coldeffect", "coldeffect(N)", "coldeffect(H)", "spawnx", "spawny"},
+               "misc": {"spellicon"}}
 ID_COMMENT_COLUMNS = {"*id", "*hcidx", "*index"}
 
 
@@ -1530,6 +1535,8 @@ class Migrator:
                 # the first decoder wrote a few small numbers as raw control characters ("")
                 if v and dc in self._int_cols.get(table, ()) and len(v) == 1 and ord(v) < 32:
                     return str(ord(v))
+                if dc in SIGNED_BYTE.get(table, ()) and v.isdigit() and 127 < int(v) < 256:
+                    return str(int(v) - 256)
                 # D2R booleans are 0/1; 1.13c sometimes stored other non-zero flags
                 if dc in bool_cols and re.fullmatch(r"-?\d+", v) and v not in ("0", "1"):
                     return "1"

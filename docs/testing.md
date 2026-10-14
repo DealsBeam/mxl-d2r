@@ -8,6 +8,7 @@ functions it installed.
 
 | Since | What | How to test | Expected |
 |---|---|---|---|
+| data | **Cold effect on monsters** (coldeffect -20, was read as 236) | Chill monsters (any cold skill or cold damage item) | Chilled monsters slow down (Median: -20%) instead of speeding up |
 | data | **Monster sequence skills** (monstats Sk*mode `mqN` -> sequence names, 1,152 slots) | Fight monsters that raise or revive (Fallen Shamans, Greater Mummies, skeleton-raising casters), charging monsters, Sand Maggots | Shamans revive Fallen, mummies raise, maggots burrow and lay eggs, chargers charge; no monster stands still where it should use a skill |
 | data | **HD item pictures: Median's own art** (tools/item_art.py, 987 base items + 45 uniques + 22 set items) | In HD, open a vendor (Gheed, Charsi, Akara) and the stash; look at Median-only items (charms, crafting items, Median armors, quest items); compare with G | They show Median's real picture (upscaled from classic, a bit soft) instead of a D2R look-alike; nothing missing or misplaced in the grid |
 | 0.36.0 | **Whirlwind hit rate as in classic Median** (1.13c table: a hit every 4-16 frames by weapon speed) | barby: Whirlwind through a pack with the axe; if you have one, try a faster weapon or an IAS item | Noticeably more hits per spin than before (D2R's own timing hit about half as often). Tell me how it feels against classic Median; the log records the speeds of the first hits |

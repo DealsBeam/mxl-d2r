@@ -30,6 +30,10 @@ which bank a Median character loads is still to be confirmed in game. Report: `w
   (`data/hd/overlays/<Character>/<overlay>.json`). Matching D2R rows keep D2R's value (`D2R_WHEN_EMPTY`, 293 rows).
   Without it HD drew no overlay: Whirlwind showed only the get-hit frames its sequence plays under the spin
   overlay (reported 2026-10-14), and auras and cast effects had no HD effect.
+- Signed bytes read unsigned by the decoder (`SIGNED_BYTE`): monstats `coldeffect` (all three difficulties) -20
+  came out as 236 on ~2,970 monsters, so chilled monsters ran at +236% instead of Median's -20%; monstats
+  `spawnx`/`spawny` -2 as 254; misc `spellicon` -1 (no icon) as 255 on 1,181 items. Found by comparing every
+  numeric column on rows shared with D2R; the other 128-255 values there are real (sizes, coordinates, SrcDamage).
 - monstats `Sk1mode`..`Sk8mode` (fixed in tools/mxl_names.py, `MIXED_COLUMNS`): the cells are monmode codes or a
   monseq sequence; the decoder wrote sequences as placeholders `mqN` (the Nth sequence), and the naming step only
   resolves columns that are 90% placeholders, so 1,152 monster skill slots kept `mq8`, `mq63`, ... D2R found no
