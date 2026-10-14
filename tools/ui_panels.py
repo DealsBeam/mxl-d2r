@@ -5,7 +5,11 @@ data/hd/global/ui/panel/inventory/classic_background.sprite, plus a .lowend at h
 512 x 704 classic pictures in six 256-pixel tiles (themes/classic_sigma/game/panels/*.dc6, 2 x 3 tiles per page).
 Each page used here is assembled, scaled to 1162 x 1507 (x 2.2695 across, x 2.1406 down; bilinear) and written to
 data/hd/global/ui/panel/mxl/<name>.sprite, referenced by the layouts as PANEL\\mxl\\<name> (tools/ui_layouts.py).
-Sprites newer than their DC6 are kept.
+Sprites newer than their DC6 (and this script) are kept.
+
+Stash: Median's gold box sits above the grid, where D2R's Personal / Shared tabs go, while D2R's gold button is below
+the shared-stash arrows. The box (MOVES) is moved down to the empty bottom of the panel and its old place is filled
+with the panel's background, taken from just right of the box.
 
 Usage: python tools/ui_panels.py
 """
@@ -23,6 +27,22 @@ CLASSIC_W, CLASSIC_H = 512, 704
 HD_W, HD_H = 1162, 1507
 # sprite name -> (dc6, page)
 PANELS = {"inventory": ("character-inventory", 0), "cube": ("crafting", 0), "stash": ("stash", 0)}
+# sprite name -> [(left, top, right, bottom, new top)] in classic pixels
+MOVES = {"stash": [(112, 86, 403, 134, 615)]}
+FILL_FROM = 404  # background strip for the holes: opaque pixels of the same row from this x on
+
+
+def move_boxes(rows: list[list[tuple]], moves: list[tuple]) -> None:
+    for x0, y0, x1, y1, new_y in moves:
+        box = [r[x0:x1] for r in rows[y0:y1]]
+        for y in range(y0, y1):
+            strip = [p for p in rows[y][FILL_FROM:] if p[3]][:16]
+            for x in range(x0, x1):
+                rows[y][x] = strip[(x - x0) % len(strip)]
+        for i, line in enumerate(box):
+            for j, p in enumerate(line):
+                if p[3]:
+                    rows[new_y + i][x0 + j] = p
 
 
 def page_rows(dc6: Path, page: int, pal) -> list[list[tuple]]:
@@ -79,10 +99,12 @@ def main() -> int:
     for name, (dc6, page) in PANELS.items():
         src = SRC / f"{dc6}.dc6"
         hd, low = OUT / f"{name}.sprite", OUT / f"{name}.lowend.sprite"
-        if hd.exists() and low.exists() and hd.stat().st_mtime >= src.stat().st_mtime:
+        newest = max(src.stat().st_mtime, Path(__file__).stat().st_mtime)
+        if hd.exists() and low.exists() and hd.stat().st_mtime >= newest:
             continue
         pal = pal or palette()
         rows = page_rows(src, page, pal)
+        move_boxes(rows, MOVES.get(name, []))
         write_sprite(hd, HD_W, HD_H, scale(rows, HD_W, HD_H))
         write_sprite(low, HD_W // 2, HD_H // 2, scale(rows, HD_W // 2, HD_H // 2))
         print(f"   panel {name}: {dc6}.dc6 page {page} -> {HD_W}x{HD_H}")

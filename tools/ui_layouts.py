@@ -117,6 +117,8 @@ INV_SLOTS = {  # widget: (left, right, top, bottom)
 }
 CUBE_GRID = (39, 208)          # Median's Transmogrify Box, left panel
 STASH_GRID = (53, 149)         # Median's stash (Bank Page 1 / Big Bank Page 1), 14 x 14, left panel
+STASH_TABS = (112, 86, 403, 134)  # where Median's gold box was (left, top, right, bottom)
+STASH_GOLD = (118, 619)        # the box's coin after ui_panels.py moves it down (MOVES)
 CUBE_BUTTON = (224, 580)       # the transmute button's place in Median's crafting.dc6
 GOLD_ICON = (37, 636)          # the coin box at the left of Median's gold bar (character-inventory.dc6, y 635-662)
 GOLD_TEXT = (62, 636)
@@ -215,6 +217,14 @@ def stash() -> str:
     t = t.replace('"PANEL\\\\Stash\\\\StashPanel_BG_Personal"', '"PANEL\\\\mxl\\\\stash"')
     t = t.replace('"PANEL\\\\Stash\\\\StashPanel_BG_Shared"', '"PANEL\\\\mxl\\\\stash"')
     t = set_fields(t, "grid", grid_fields(*hd(*STASH_GRID), 14, 14))
+    # Personal / Shared tabs (195 x 72 each) centred where Median's gold box was (ui_panels.py moves it down)
+    x0, y0 = hd(*STASH_TABS[:2])
+    x1, y1 = hd(*STASH_TABS[2:])
+    t = set_rect(t, "BankTabs", rect((x0 + x1) // 2 - 195, (y0 + y1) // 2 - 36))
+    # gold: D2R's button on the box's coin, the amount in the box's first bar
+    gx, gy = hd(*STASH_GOLD)
+    t = set_rect(t, "gold_withdraw", rect(gx, gy))
+    t = set_rect(t, "gold_amount", rect(gx + 58, gy, 420, 48))
     return t
 
 
