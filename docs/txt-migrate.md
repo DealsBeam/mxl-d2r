@@ -34,6 +34,10 @@ which bank a Median character loads is still to be confirmed in game. Report: `w
   came out as 236 on ~2,970 monsters, so chilled monsters ran at +236% instead of Median's -20%; monstats
   `spawnx`/`spawny` -2 as 254; misc `spellicon` -1 (no icon) as 255 on 1,181 items. Found by comparing every
   numeric column on rows shared with D2R; the other 128-255 values there are real (sizes, coordinates, SrcDamage).
+- 32-bit fields printed unsigned by the decoder (`UNSIGNED_32_TABLES` lists the exceptions): -1 came out as
+  4294967295 (automagic mod1min/max, cubemain value, skills ELevLen1/2, EMinLev5, ...); now written signed. Not
+  changed on purpose: skills reqlevel 65526 on 196 item-only skills is what 1.13c stored and read as an unsigned
+  word (an unlearnable level).
 - monstats `Sk1mode`..`Sk8mode` (fixed in tools/mxl_names.py, `MIXED_COLUMNS`): the cells are monmode codes or a
   monseq sequence; the decoder wrote sequences as placeholders `mqN` (the Nth sequence), and the naming step only
   resolves columns that are 90% placeholders, so 1,152 monster skill slots kept `mq8`, `mq63`, ... D2R found no

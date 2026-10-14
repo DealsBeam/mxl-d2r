@@ -167,6 +167,10 @@ D2R_ALWAYS = {"plrmode": {"Code"}, "monmode": {"code"}}
 # 2026-10-14 by comparing shared rows with D2R.
 SIGNED_BYTE = {"monstats": {"coldeffect", "coldeffect(N)", "coldeffect(H)", "spawnx", "spawny"},
                "misc": {"spellicon"}}
+# 32-bit fields the decoder printed unsigned: -1 as 4294967295 (automagic mod1min, cubemain value, skills ELevLen1,
+# EMinLev5, ...). Written as the signed value they hold, so D2R's text parser cannot clamp them to 2147483647.
+# experience.txt holds real unsigned 32-bit values (D2R's own Warlock column).
+UNSIGNED_32_TABLES = {"experience"}
 ID_COMMENT_COLUMNS = {"*id", "*hcidx", "*index"}
 
 
@@ -1537,6 +1541,8 @@ class Migrator:
                     return str(ord(v))
                 if dc in SIGNED_BYTE.get(table, ()) and v.isdigit() and 127 < int(v) < 256:
                     return str(int(v) - 256)
+                if table not in UNSIGNED_32_TABLES and v.isdigit() and 2**31 <= int(v) < 2**32:
+                    return str(int(v) - 2**32)
                 # D2R booleans are 0/1; 1.13c sometimes stored other non-zero flags
                 if dc in bool_cols and re.fullmatch(r"-?\d+", v) and v not in ("0", "1"):
                     return "1"

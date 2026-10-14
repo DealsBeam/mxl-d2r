@@ -424,6 +424,12 @@ high one, which mxl-core then writes (0.19.0; the 12 summoning scrolls to levels
   33 x6, 34 x2, 39 x2, 32/36/42 x1 (36 = Wirt's leg + Tome of Town Portal -> Cow Level, bug #19). Next: find
   D2R's cube condition switch (1.13c D2Game's cube op check, then the D2R equivalent), see what it does with an
   unknown op, and hook it for 29-42; the craft flags need their setter (D2Craft.cpp 0x1005ad90 callers).
+  D2Sigma runs its own recipe search (`0x1005a9f5` area, calls the checker at 0x1005a9f5/0x1005aa1c): for each
+  cubemain record (0x148 bytes; enabled, ladder, min difficulty +2, class +3, ...) with its cubemainext record (24
+  bytes) it checks cubemain's condition, then a second one from cubemainext (+0x04 op, +0x08 param, +0x0c value;
+  1,480 recipes), then `ext+0x00 * 100 <= 0x100be6f0()` (65 recipes, 50-3000; likely a gold cost), then makes the
+  recipe (`0x100595d0`, up to 6 tries). The port has only cubemain's own condition: the second condition and the
+  cost are missing, so those recipes are less restricted in D2R than in Median.
 - Skill descriptions (`D2SkillDesc.cpp`).
 - Engine limits: states (below), level types (below).
 
