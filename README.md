@@ -26,4 +26,4 @@ Ignored working folders: `extract/` (raw game/MXL extractions), `work/` (scratch
 
 ## Plan
 
-See [docs/PLAN.md](docs/PLAN.md).
+See [docs/PLAN.md](docs/PLAN.md). Handoff notes for porting another classic mod: [docs/porting-playbook.md](docs/porting-playbook.md).
