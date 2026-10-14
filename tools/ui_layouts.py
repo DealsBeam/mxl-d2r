@@ -103,7 +103,10 @@ def skill_tree() -> str:
 
 # Median's classic panel (512 x 704) -> D2R HD panel (1162 x 1507)
 SX, SY = 1162 / 512, 1507 / 704
-CELL = '{ "x": 66, "y": 62 }'
+# Items draw at their HD size (98 pixels per cell) whatever cellSize says, so the grid keeps 98 x 92 cells and the
+# whole widget is scaled to Median's 66 x 62 (first test: 66 x 62 cells left 98-pixel items overlapping).
+CELL = '{ "x": 98, "y": 92 }'
+GRID_SCALE = 0.6735
 # Median inventory.bin (player rows), right panel: x is screen x, the panel starts at 512
 INV_GRID = (551, 330)
 INV_SLOTS = {  # widget: (left, right, top, bottom)
@@ -114,7 +117,8 @@ INV_SLOTS = {  # widget: (left, right, top, bottom)
 }
 CUBE_GRID = (39, 208)          # Median's Transmogrify Box, left panel
 CUBE_BUTTON = (224, 580)       # the transmute button's place in Median's crafting.dc6
-GOLD = (18, 636)               # the gold box in Median's character-inventory.dc6
+GOLD_ICON = (37, 636)          # the coin box at the left of Median's gold bar (character-inventory.dc6, y 635-662)
+GOLD_TEXT = (62, 636)
 RECT = re.compile(r'"rect":\s*\{[^}]*\}')
 
 
@@ -147,7 +151,7 @@ def set_fields(text: str, name: str, fields: str) -> str:
 
 
 def grid_fields(x: int, y: int) -> str:
-    return (f'{{ "rect": {rect(x, y)}, "cellCount": {{ "x": 15, "y": 10 }}, "cellSize": {CELL}, '
+    return (f'{{ "rect": {{ "x": {x}, "y": {y}, "scale": {GRID_SCALE} }}, "cellCount": {{ "x": 15, "y": 10 }}, "cellSize": {CELL}, '
             f'"gemSocketFilename": "PANEL\\\\gemsocket", "chronicleFlourishOffset": {{ "x": -1, "y": 0 }} }}')
 
 
@@ -159,10 +163,11 @@ def inventory_original() -> str:
         x, y = hd(l - 512, top)
         x2, y2 = hd(r - 512, b)
         t = set_rect(t, widget, rect(x, y, x2 - x, y2 - y))
-    bx, by = hd(*GOLD)
-    t = set_rect(t, "gold_button", rect(bx, by))
-    t = set_rect(t, "gold_amount_tooltip", rect(bx, by))
-    t = set_rect(t, "gold_amount", rect(bx + 58, by - 1, 249, 48))
+    bx, by = hd(*GOLD_ICON)
+    tx, _ty = hd(*GOLD_TEXT)
+    t = set_rect(t, "gold_button", rect(bx, by + 4))
+    t = set_rect(t, "gold_amount_tooltip", rect(bx, by + 4))
+    t = set_rect(t, "gold_amount", rect(tx, by + 5, 420, 48))
     return t
 
 
