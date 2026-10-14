@@ -116,6 +116,7 @@ INV_SLOTS = {  # widget: (left, right, top, bottom)
     "slot_gloves": (614, 672, 247, 305),
 }
 CUBE_GRID = (39, 208)          # Median's Transmogrify Box, left panel
+STASH_GRID = (53, 149)         # Median's stash (Bank Page 1 / Big Bank Page 1), 14 x 14, left panel
 CUBE_BUTTON = (224, 580)       # the transmute button's place in Median's crafting.dc6
 GOLD_ICON = (37, 636)          # the coin box at the left of Median's gold bar (character-inventory.dc6, y 635-662)
 GOLD_TEXT = (62, 636)
@@ -150,8 +151,8 @@ def set_fields(text: str, name: str, fields: str) -> str:
     return text[:s] + block[:j] + fields + block[k + 1:] + text[e:]
 
 
-def grid_fields(x: int, y: int) -> str:
-    return (f'{{ "rect": {{ "x": {x}, "y": {y}, "scale": {GRID_SCALE} }}, "cellCount": {{ "x": 15, "y": 10 }}, "cellSize": {CELL}, '
+def grid_fields(x: int, y: int, cols: int = 15, rows: int = 10) -> str:
+    return (f'{{ "rect": {{ "x": {x}, "y": {y}, "scale": {GRID_SCALE} }}, "cellCount": {{ "x": {cols}, "y": {rows} }}, "cellSize": {CELL}, '
             f'"gemSocketFilename": "PANEL\\\\gemsocket", "chronicleFlourishOffset": {{ "x": -1, "y": 0 }} }}')
 
 
@@ -206,13 +207,25 @@ def cube() -> str:
     return t
 
 
+def stash() -> str:
+    """D2R's stash panel (personal, shared and its own gem/material/rune tabs): the personal and shared tabs get
+    Median's stash art and its 14 x 14 grid; tabs, shared-stash arrows and gold stay D2R's (they sit above and below
+    the grid). The extra tabs and the small cube view in them stay D2R's."""
+    t = baseline("bankexpansionlayouthd.json")
+    t = t.replace('"PANEL\\\\Stash\\\\StashPanel_BG_Personal"', '"PANEL\\\\mxl\\\\stash"')
+    t = t.replace('"PANEL\\\\Stash\\\\StashPanel_BG_Shared"', '"PANEL\\\\mxl\\\\stash"')
+    t = set_fields(t, "grid", grid_fields(*hd(*STASH_GRID), 14, 14))
+    return t
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "skillstreepanelhd.json").write_text(skill_tree(), encoding="utf-8")
     (OUT / "playerinventoryoriginallayouthd.json").write_text(inventory_original(), encoding="utf-8")
     (OUT / "playerinventoryexpansionlayouthd.json").write_text(inventory_expansion(), encoding="utf-8")
     (OUT / "horadriccubelayouthd.json").write_text(cube(), encoding="utf-8")
-    print(f"skillstreepanelhd.json: {TABS} tabs; inventory and cube: 15 x 10 grids on Median's panels")
+    (OUT / "bankexpansionlayouthd.json").write_text(stash(), encoding="utf-8")
+    print(f"skillstreepanelhd.json: {TABS} tabs; inventory and cube 15 x 10, stash 14 x 14 on Median's panels")
     return 0
 
 
