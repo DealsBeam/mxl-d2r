@@ -429,7 +429,10 @@ high one, which mxl-core then writes (0.19.0; the 12 summoning scrolls to levels
   bytes) it checks cubemain's condition, then a second one from cubemainext (+0x04 op, +0x08 param, +0x0c value;
   1,480 recipes), then `ext+0x00 * 100 <= 0x100be6f0()` (65 recipes, 50-3000; likely a gold cost), then makes the
   recipe (`0x100595d0`, up to 6 tries). The port has only cubemain's own condition: the second condition and the
-  cost are missing, so those recipes are less restricted in D2R than in Median.
+  cost are missing, so those recipes are less restricted in D2R than in Median. D2R side not found yet: its
+  cubemain records are 0x158 bytes (enabled +0x0b, min diff +0x1b, numinputs +0x0c); 0x3e52c0/0x3e5480 are only
+  vector copies of the table and 0x4496e0/0x4649f0 are unrelated. Next try: the 1.13c D2Game cube function (switch
+  on op 1-28) and match its D2R twin by the op cases.
 - Skill descriptions (`D2SkillDesc.cpp`).
 - Engine limits: states (below), level types (below).
 
