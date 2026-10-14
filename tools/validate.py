@@ -271,7 +271,8 @@ class Validator:
                         self.add("plugin", table, col, "Median value outside D2R's list (engine feature in D2Sigma)", rid, v)
                     else:
                         self.add("error", table, col, "value not in D2R's allowed list", rid, v)
-                if ref_set is not None and v not in ref_set:
+                # SQ (sequence) is not a PlrMode row; D2R's skill loader takes it as a token (126 vanilla skills)
+                if ref_set is not None and v not in ref_set and not (typ.get("file") == "PlrMode" and v == "SQ"):
                     self.add("error", table, col, f"no {typ['file']}.{typ.get('field')} '{v}'", rid, v)
                 if prop_set is not None and v not in prop_set:
                     self.add("error", table, col, "unknown property code", rid, v)

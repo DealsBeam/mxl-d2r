@@ -1085,7 +1085,11 @@ class Migrator:
         - Stop functions (srvstopfunc/cltstopfunc, columns 1.13c also has): D2R gives its Whirlwind (srvdofunc 76,
           cltdofunc 45; Talic's 168) stop function 1, which ends the spin and its aurastate when the skill is let go
           or interrupted; 1.13c's rows had none. Median rows on a do function that D2R pairs with a stop function
-          (whirlwind_2, windform) get the same one."""
+          (whirlwind_2, windform) get the same one.
+        - anim / seqtrans "GH" -> "SQ": 1.13c's plrmode.txt gives the Sequence mode (18) the code GH, the same as Get
+          Hit, so the decoded tables wrote GH for every sequence skill (Whirlwind, Zeal, Fend, Strafe, ... 122 rows).
+          D2R names it SQ and reads GH as get hit: those skills played the knockback frames and never ran their
+          sequence (no skill function, no damage). No D2R skill uses GH."""
         caps = {"mlvl", "skcp", "skcn"}
         named = [row[0] for row in read_tsv(ROOT / "work" / "named" / "skills.txt")[1]]
         skill_caps = {}
@@ -1118,7 +1122,8 @@ class Migrator:
                         if r[dh.index("srvstopfunc")] not in ("", "0")}
             clt_stop = {r[dh.index("cltdofunc")]: r[dh.index("cltstopfunc")] for r in drows
                         if r[dh.index("cltstopfunc")] not in ("", "0")}
-            n_stop = 0
+            n_stop = n_seq = 0
+            an, st = h.index("anim"), h.index("seqtrans")
             clt_moved = {"97": "110", "98": "111", "99": "112", "15": "19", "11": "15", "95": "111", "22": "113"}
             n_cap = n_right = n_moved = n_ranged = 0
             for r in rows:
@@ -1135,6 +1140,10 @@ class Migrator:
                     if not r[c9] and not r[c10]:
                         r[c9], r[c10] = mlvl, skcn or "0"
                     n_cap += 1
+                if r[an] == "GH" or r[st] == "GH":
+                    r[an] = "SQ" if r[an] == "GH" else r[an]
+                    r[st] = "SQ" if r[st] == "GH" else r[st]
+                    n_seq += 1
                 if r[do] in srv_stop and r[ss] in ("", "0"):
                     r[ss] = srv_stop[r[do]]
                     n_stop += 1
@@ -1164,7 +1173,8 @@ class Migrator:
                                    f"written in (mlvl, skcn; skcp from the plugin);{n_right} active class skills -> rightskill 1; "
                                    f"{n_moved} skills with D2Sigma srvdofunc {sigma_first}-{sigma_last} -> +{shift}; "
                                    f"{n_ranged} teleports with a range / layered buffs -> 179/174/180; "
-                                   f"{n_stop} skills given D2R's stop function for their do function (Whirlwind)")
+                                   f"{n_stop} skills given D2R's stop function for their do function (Whirlwind); "
+                                   f"{n_seq} sequence skills anim/seqtrans GH -> SQ")
 
     def sound_rows(self) -> None:
         """Median's own sound rows (appended after D2R's: sounds is d2r_wins) come from 1.13c's format and miss D2R's
