@@ -9,7 +9,8 @@
   missile_hd.py      HD models for Median's missiles (by CelFile) -> hd/missiles/missiles.json
   item_hd.py         HD inventory pictures for Median's items/uniques/sets -> hd/items/*.json (bug #18)
   skill_icons.py     Median's skill icons as D2R icon sheets (classic + HD) and skilldesc IconCel
-  ui_layouts.py      UI layout overrides (8-tab skill tree)
+  ui_panels.py       Median panel art as HD panel backgrounds (inventory, cube)
+  ui_layouts.py      UI layout overrides (8-tab skill tree, 15x10 inventory and cube)
   validate.py        D2R schema checks        -> work/mod/validate_report.md
 
 Usage: python tools/build.py   (exit code = validate.py's: 1 if there are errors)
@@ -21,7 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decode"], ["tbl2json.py"],
-         ["txt_migrate.py"], ["gfx_placeholders.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_layouts.py"],
+         ["txt_migrate.py"], ["gfx_placeholders.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["ui_layouts.py"],
          ["validate.py"]]
 
 

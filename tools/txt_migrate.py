@@ -229,6 +229,30 @@ class Migrator:
 
     _schema = None
 
+    # Median's grid sizes (inventory.bin, the same for both screen rows): player inventory and Horadric Cube 15 x 10.
+    # D2R keeps its own rows (2 per page); only gridX/gridY change, the HD panels come from tools/ui_layouts.py.
+    # Classic mode (G) still draws D2R's classic panel art and grid positions. Stash (14 x 14) waits for a check of
+    # the shared stash file with a bigger page.
+    INVENTORY_SIZES = {"Amazon": (15, 10), "Sorceress": (15, 10), "Necromancer": (15, 10), "Paladin": (15, 10),
+                       "Barbarian": (15, 10), "Druid": (15, 10), "Assassin": (15, 10), "Warlock": (15, 10),
+                       "Transmogrify Box Page 1": (15, 10), "Transmogrify Box": (15, 10)}
+
+    def inventory_sizes(self) -> None:
+        n = 0
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "inventory.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            gx, gy = h.index("gridX"), h.index("gridY")
+            for r in rows:
+                size = self.INVENTORY_SIZES.get(r[0]) or self.INVENTORY_SIZES.get(r[0][:-1] if r[0].endswith("2") else "")
+                if size:
+                    r[gx], r[gy] = str(size[0]), str(size[1])
+                    n += 1
+            write_tsv(p, h, rows)
+        self.report.append(f"\ninventory: {n} rows set to Median's grid sizes (player 15x10, cube 15x10)")
+
     def clean_treasure_classes(self) -> None:
         """Treasure class entries must name an item code, item type, treasure class, unique or set item (D2R's
         format). Case-only mismatches are fixed; anything else (Median's sacred auto classes "sarm93"/"swea93",
@@ -1656,6 +1680,7 @@ def main() -> int:
         m.migrate(t)
     m.split_large_sets()
     m.clean_treasure_classes()
+    m.inventory_sizes()
     m.claim_presets()
     m.claim_mazes()
     m.sound_rows()

@@ -65,6 +65,10 @@ Status (2026-10-14):
   (542 files, 474 used) to D2R's HD sprite (98 px per cell, bilinear x3.5; .lowend 49 px) under
   hd/global/ui/items/<folder>/mxl/; item_hd.py points 987 base items, 45 uniques and 22 set items at them. Items
   whose picture D2R also has keep D2R's HD art; the rest still borrow a look-alike.
+- Inventory and cube sizes (2026-10-14): Median's 15 x 10 player inventory and 15 x 10 Horadric Cube (D2R 10 x 4,
+  3 x 4). inventory.txt gridX/gridY (txt_migrate inventory_sizes); HD panels use Median's own panel art
+  (tools/ui_panels.py) and Median's positions scaled to D2R's panel (tools/ui_layouts.py). Open: the 14 x 14 stash
+  (needs a shared-stash check), trade window, classic-mode panels, the cube grid shown inside D2R's stash panel.
 - Next: HD art. items.json / missiles.json / monsters.json use D2R look-alikes today (item_hd.py, missile_hd.py,
   gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
   backgrounds and tab titles (bug #3) are art too. Deferred checks: Median monster art in classic mode, Median-only
