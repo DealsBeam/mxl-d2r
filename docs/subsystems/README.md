@@ -34,7 +34,7 @@ size. Buckets from docs/PLAN.md: **(a)** data-only, **(b)** D2RLoader service, *
 | D2Shrines.cpp, D2ObjectFn.cpp, D2Objects.cpp | 2, 10, 5 | object functions (objects2) | c | to read | objects 573+ renumbered (txt-migrate.md) |
 | D2Dungeon.cpp, D2Drlg.cpp, D2DrlgWarp.cpp, D2DrlgLevel.cpp, D2Landscape.cpp | 11, 4, 2, 1, 1 | Median's levels and dungeons (level types 36+) | c | partial | level_types.cpp (automap rows); Median-only areas untested |
 | D2Town.cpp | 5 | town rules | c | to read | |
-| D2Craft.cpp | 32 | crafting (cubemainext: 1,616 of 7,500 recipes set its fields) | c | to read | cube recipes run as D2R's cube; the extension fields are not used yet |
+| D2Craft.cpp | 32 | cube recipe conditions: ops 29-42 beyond D2R's 1-28 (41 recipes, incl. the Cow Level), the player's craft flags; cubemainext's fields mirror op/param/value | c | to read | details in plugin-spec.md "Cube conditions" |
 | D2Runeword.cpp, D2SetItems.cpp | 1, 4 | runeword/set rules | a | to read | |
 | D2ItemGeneration.cpp, D2Items.cpp, D2ItemActions.cpp, D2ItemEventFunc.cpp | 1, 2, 7, 5 | item generation and item events | c | to read | |
 | D2Currency.cpp | 8 | Median's currencies (e.g. arcane shards) | c | partial | containers and shard help done (item_spells.cpp) |

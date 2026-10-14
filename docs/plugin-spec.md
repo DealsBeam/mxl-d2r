@@ -414,6 +414,16 @@ high one, which mxl-core then writes (0.19.0; the 12 summoning scrolls to levels
   (`skill('<other devotion>'.blvl)*-666` / `-500`), and each mastery is locked once the hidden counter
   `skills_1091` (one per class: 1180, 1273, 1359, 1457, 1543, 1619; aurastatcalc1 `clc1+clc2+clc3`) passes 2 unless
   it already has points, and until its unlock item stat (skills_1835/1836 passives) is present.
+- **Cube conditions (D2Craft.cpp, open, found 2026-10-14):** cubemain's `op`/`param`/`value` gate a recipe on a
+  condition. D2R knows ops 1-28 (its own data uses only 28); D2Sigma's checker `0x10059d00(game, unit, op, param,
+  value, ...)` adds 29-42 (switch cases 0x1d-0x2a): 29 param == `0x10048930()`+1; 30/31 a skill's level (D2Common
+  10306, with/without bonuses) >= value; 32/33 a check `0x100befc0(param)` true/false; 34/35 a level/area match
+  (`0x100bda80`, `0x1005ca60`, `0x1005ce60`); 36 `0x1005c970() == 0` (the Cow Level recipe); 37 random chance
+  value% (0-100); 38/39 and 40/41 a bit in the player's 256-bit craft flags at unit+0x1b30 (set/clear,
+  `0x1005ab60`/`0x1005ad90`); 42 two values summing to >= 9001. Median uses 41 recipes with them: 38 x19, 37 x9,
+  33 x6, 34 x2, 39 x2, 32/36/42 x1 (36 = Wirt's leg + Tome of Town Portal -> Cow Level, bug #19). Next: find
+  D2R's cube condition switch (1.13c D2Game's cube op check, then the D2R equivalent), see what it does with an
+  unknown op, and hook it for 29-42; the craft flags need their setter (D2Craft.cpp 0x1005ad90 callers).
 - Skill descriptions (`D2SkillDesc.cpp`).
 - Engine limits: states (below), level types (below).
 
