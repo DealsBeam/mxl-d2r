@@ -32,8 +32,11 @@ which bank a Median character loads is still to be confirmed in game. Report: `w
   overlay (reported 2026-10-14), and auras and cast effects had no HD effect.
 - skills `anim` / `seqtrans` GH -> SQ: 1.13c's plrmode.txt gives the Sequence mode (index 18) the code GH, the same
   as Get Hit, so the decoded tables wrote GH for every sequence skill (122 rows: Whirlwind, Zeal-style multi-hits,
-  Strafe, Fend, ...). D2R spells it SQ (a token, not a PlrMode row) and reads GH as get hit: those skills played
-  the knockback frames and the server never started them (found 2026-10-14 through the 0.34.x skill trace).
+  Strafe, Fend, ...). D2R spells it SQ and reads GH as get hit: those skills played the knockback frames and the
+  server never started them (found 2026-10-14 through the 0.34.x skill trace).
+- plrmode / monmode `Code`: Median's copies had 1.13c's GH for Sequence and Knockback; D2R's are SQ and KB, and
+  the engine resolves skills' SQ through this column. With GH, SQ found no mode (-1) and the animation lookup
+  `0x3b6700` crashed on the first Whirlwind (2026-10-14). These rows always take D2R's value (`D2R_ALWAYS`).
 - skills stop functions: D2R gives Whirlwind (srvdofunc 76 / cltdofunc 45) srvstopfunc and cltstopfunc 1 (they end
   the spin and its aurastate when the skill is released or interrupted); 1.13c rows had none. Median rows on a do
   function D2R pairs with a stop function get the same one (whirlwind_2, windform; `skill_rules`).

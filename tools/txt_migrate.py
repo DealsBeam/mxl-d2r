@@ -158,6 +158,10 @@ KEYS = {"weapons": "code", "armor": "code", "misc": "code", "itemtypes": "Code",
 # value. overlay Character is the HD overlay folder (data/hd/overlays/<Character>/<overlay>.json); without it D2R
 # draws no HD overlay (Whirlwind's spin, auras, cast effects: 293 rows).
 D2R_WHEN_EMPTY = {"overlay": {"Character"}}
+# Engine tokens D2R renamed: a matching row always takes D2R's value. plrmode/monmode Code: 1.13c spelled Sequence and
+# Knockback "GH" (like Get Hit); D2R's are SQ and KB, and skills.txt's SQ resolves through them (with GH, Whirlwind's
+# sequence found no mode and the animation lookup crashed, 2026-10-14).
+D2R_ALWAYS = {"plrmode": {"Code"}, "monmode": {"code"}}
 ID_COMMENT_COLUMNS = {"*id", "*hcidx", "*index"}
 
 
@@ -1088,8 +1092,9 @@ class Migrator:
           (whirlwind_2, windform) get the same one.
         - anim / seqtrans "GH" -> "SQ": 1.13c's plrmode.txt gives the Sequence mode (18) the code GH, the same as Get
           Hit, so the decoded tables wrote GH for every sequence skill (Whirlwind, Zeal, Fend, Strafe, ... 122 rows).
-          D2R names it SQ and reads GH as get hit: those skills played the knockback frames and never ran their
-          sequence (no skill function, no damage). No D2R skill uses GH."""
+          D2R's plrmode.txt names it SQ (and Knockback KB; plrmode/monmode Code are kept from D2R, D2R_ALWAYS) and
+          reads GH as get hit: those skills played the knockback frames and never ran their sequence (no skill
+          function, no damage). No D2R skill uses GH."""
         caps = {"mlvl", "skcp", "skcn"}
         named = [row[0] for row in read_tsv(ROOT / "work" / "named" / "skills.txt")[1]]
         skill_caps = {}
@@ -1535,7 +1540,9 @@ class Migrator:
                 for dc in dh:
                     if dc in cmap:
                         v = median_value(dc, mrow[mi[cmap[dc]]])
-                        if v == "" and match is not None and dc in D2R_WHEN_EMPTY.get(table, ()):
+                        if match is not None and dc in D2R_ALWAYS.get(table, ()):
+                            v = match[di[dc]]
+                        elif v == "" and match is not None and dc in D2R_WHEN_EMPTY.get(table, ()):
                             v = match[di[dc]]
                         out.append(v)
                     elif dc in consts:
