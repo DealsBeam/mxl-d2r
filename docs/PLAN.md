@@ -75,7 +75,7 @@ Smoke tests, saves/reload, TCP/IP, `d2rl pack`.
 
 **First milestone:** a playable vertical slice (one class, its items, Act 1).
 
-## Progress estimate (2026-10-14)
+## Progress estimate (2026-10-14, updated after the Phase 5/3 hour)
 
 Judgement estimates, not measurements. "Phase done" total is weighted by each phase's share of the work.
 
@@ -83,12 +83,12 @@ Judgement estimates, not measurements. "Phase done" total is weighted by each ph
 |---|---|---|---|
 | 0 Setup | 2% | 100% | 2.0% |
 | 1 Tools (extract, decode, convert) | 12% | 90% | 10.8% |
-| 2 Data port (tables, strings, install, booting) | 10% | 90% | 9.0% |
-| 3 Triage of Median's engine code | 8% | 70% | 5.6% |
-| 4 Plugins (engine behaviour) | 30% | 62% | 18.6% |
-| 5 Graphics | 28% | 20% | 5.6% |
+| 2 Data port (tables, strings, install, booting) | 10% | 94% | 9.4% |
+| 3 Triage of Median's engine code | 8% | 80% | 6.4% |
+| 4 Plugins (engine behaviour) | 30% | 64% | 19.2% |
+| 5 Graphics | 28% | 27% | 7.6% |
 | 6 Test and release | 10% | 5% | 0.5% |
-| **Total** | **100%** | **~52%** | **~52%** |
+| **Total** | **100%** | **~55%** | **~55%** |
 
 Open: bug #22 (monsters not targetable, states fix; 0.34.1 under test), the docs/testing.md backlog, Phase 5 HD art,
 Median's remaining systems (Ubers and challenges, cube extras, character and stash screens), Phase 6.
