@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <intrin.h>
+#include <windows.h>
 
 namespace {
 
@@ -87,12 +88,14 @@ void SetState(void* unit, int32_t state, int32_t on) noexcept {
 		uint32_t type, flag;
 		int32_t cls;
 		Describe(unit, &type, &cls, &flag);
-		const uint64_t key = (1ull << 63) | (uint64_t(flag & 0xff) << 48) | (uint64_t(type & 0xff) << 40) |
+		// the thread tells the server's game loop from the client's (both use data flag 2 in single player)
+		const uint64_t thread = GetCurrentThreadId() & 0x3fff;
+		const uint64_t key = (1ull << 63) | (thread << 49) | (uint64_t(type & 0xff) << 40) |
 		                     (uint64_t(cls & 0xffff) << 24) | (uint64_t(on != 0) << 16) | uint64_t(state & 0xffff);
 		if (FirstTime(key)) {
 			char line[160];
-			std::snprintf(line, sizeof(line), "mxl-core trace: state %d %s on type %u class %d (flag %u)", state,
-			              on ? "set" : "cleared", type, cls, flag);
+			std::snprintf(line, sizeof(line), "mxl-core trace: state %d %s on type %u class %d (flag %u, thread %llu)", state,
+			              on ? "set" : "cleared", type, cls, flag, static_cast<unsigned long long>(thread));
 			g_context->LogInfo(line);
 		}
 	}
@@ -139,8 +142,8 @@ auto SkillStart(void* game, void* unit, int32_t skill, int32_t level, int32_t fo
 	if (unit != nullptr && *static_cast<const uint32_t*>(unit) == 0 && _InterlockedIncrement(&g_startLines) <= 60) {
 		void* room = g_unitRoom(unit);
 		char line[160];
-		std::snprintf(line, sizeof(line), "mxl-core trace: server skill start %d level %d force %d -> %d (in town %d)", skill,
-		              level, force, result, room ? g_roomInTown(room) : -1);
+		std::snprintf(line, sizeof(line), "mxl-core trace: server skill start %d level %d force %d -> %d (in town %d, thread %lu)",
+		              skill, level, force, result, room ? g_roomInTown(room) : -1, GetCurrentThreadId() & 0x3fff);
 		g_context->LogInfo(line);
 	}
 	return result;
