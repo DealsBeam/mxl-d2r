@@ -159,10 +159,17 @@ def inventory_original() -> str:
     t = baseline("playerinventoryoriginallayouthd.json")
     t = t.replace('"PANEL\\\\Inventory\\\\Classic_Background"', '"PANEL\\\\mxl\\\\inventory"')
     t = set_fields(t, "grid", grid_fields(*hd(INV_GRID[0] - 512, INV_GRID[1])))
+    # Slots draw their frame and item at D2R's HD size too: keep D2R's size, scale like the grid, centre the result
+    # on Median's slot.
     for widget, (l, r, top, b) in INV_SLOTS.items():
         x, y = hd(l - 512, top)
         x2, y2 = hd(r - 512, b)
-        t = set_rect(t, widget, rect(x, y, x2 - x, y2 - y))
+        s_, e_ = block_span(t, f'"name": "{widget}"')
+        m = re.search(r'"width":\s*(\d+),\s*"height":\s*(\d+)', t[s_:e_])
+        w, h = int(m.group(1)), int(m.group(2))
+        sw, sh = w * GRID_SCALE, h * GRID_SCALE
+        cx, cy = round((x + x2 - sw) / 2), round((y + y2 - sh) / 2)
+        t = set_rect(t, widget, f'{{ "x": {cx}, "y": {cy}, "width": {w}, "height": {h}, "scale": {GRID_SCALE} }}')
     bx, by = hd(*GOLD_ICON)
     tx, _ty = hd(*GOLD_TEXT)
     t = set_rect(t, "gold_button", rect(bx, by + 4))
