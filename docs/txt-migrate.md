@@ -26,6 +26,10 @@ which bank a Median character loads is still to be confirmed in game. Report: `w
   `HireableBossDamagePercent`, skills `delay`->`localdelay`, uniqueitems `enabled`->`spawnable`,
   itemtypes `MaxSock1/25/40` -> `MaxSockets1..3` + thresholds 25/40, hireling `Resist` -> 4 element columns,
   soundenviron `EAX *` -> `SFX EAX *`.
+- overlay `Character`: 1.13c has the column but Median left it empty; D2R uses it as the HD overlay folder
+  (`data/hd/overlays/<Character>/<overlay>.json`). Matching D2R rows keep D2R's value (`D2R_WHEN_EMPTY`, 293 rows).
+  Without it HD drew no overlay: Whirlwind showed only the get-hit frames its sequence plays under the spin
+  overlay (reported 2026-10-14), and auras and cast effects had no HD effect.
 - skills stop functions: D2R gives Whirlwind (srvdofunc 76 / cltdofunc 45) srvstopfunc and cltstopfunc 1 (they end
   the spin and its aurastate when the skill is released or interrupted); 1.13c rows had none. Median rows on a do
   function D2R pairs with a stop function get the same one (whirlwind_2, windform; `skill_rules`).

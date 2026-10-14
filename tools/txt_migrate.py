@@ -154,6 +154,10 @@ def hiredesc_keys() -> dict[str, str]:
     return {c.strip(): k for c, k in zip(codes, keys) if c.strip() and k}
 KEYS = {"weapons": "code", "armor": "code", "misc": "code", "itemtypes": "Code", "treasureclassex": "Treasure Class",
         "objects": "Name"}
+# Columns 1.13c has but left empty, which D2R fills with new meaning: a Median row that matches a D2R row keeps D2R's
+# value. overlay Character is the HD overlay folder (data/hd/overlays/<Character>/<overlay>.json); without it D2R
+# draws no HD overlay (Whirlwind's spin, auras, cast effects: 293 rows).
+D2R_WHEN_EMPTY = {"overlay": {"Character"}}
 ID_COMMENT_COLUMNS = {"*id", "*hcidx", "*index"}
 
 
@@ -1520,7 +1524,10 @@ class Migrator:
                 out = []
                 for dc in dh:
                     if dc in cmap:
-                        out.append(median_value(dc, mrow[mi[cmap[dc]]]))
+                        v = median_value(dc, mrow[mi[cmap[dc]]])
+                        if v == "" and match is not None and dc in D2R_WHEN_EMPTY.get(table, ()):
+                            v = match[di[dc]]
+                        out.append(v)
                     elif dc in consts:
                         out.append(consts[dc])
                     elif dc.lower() in ID_COMMENT_COLUMNS and row_id is not None:
