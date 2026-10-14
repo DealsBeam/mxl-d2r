@@ -16,6 +16,12 @@ up first (`Saved Games/Diablo II Resurrected/mxl-manual-backups/`) and edit only
 16-bit stat id, then the value in itemstatcost **CSvBits** (Median: strength-statpts 11, newskills 9, level 8,
 experience 32, ...); the list ends with 0xffff.
 
+## Class skills ("if")
+"if", then one byte (hard points) per class skill: 95 in Median (95 rows per charclass in skills.txt), in the
+order of the class's skills by skill ID. Barbarian slot 40 is whirlwind_2 (ID 1306). Slot 78 holds 1 on every new
+character (a hidden class passive, e.g. skills_1272 / skills_1358). Hand-setting a byte works with the checksum and
+`.d2rl` updates above (barby got Whirlwind this way, 2026-10-14; backup in mxl-manual-backups/barby-before-whirlwind).
+
 ## Items ("JM" + u16 count, then the items)
 Bit-packed, LSB first, each item padded to a byte:
 
