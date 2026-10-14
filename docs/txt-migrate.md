@@ -26,6 +26,9 @@ which bank a Median character loads is still to be confirmed in game. Report: `w
   `HireableBossDamagePercent`, skills `delay`->`localdelay`, uniqueitems `enabled`->`spawnable`,
   itemtypes `MaxSock1/25/40` -> `MaxSockets1..3` + thresholds 25/40, hireling `Resist` -> 4 element columns,
   soundenviron `EAX *` -> `SFX EAX *`.
+- skills stop functions: D2R gives Whirlwind (srvdofunc 76 / cltdofunc 45) srvstopfunc and cltstopfunc 1 (they end
+  the spin and its aurastate when the skill is released or interrupted); 1.13c rows had none. Median rows on a do
+  function D2R pairs with a stop function get the same one (whirlwind_2, windform; `skill_rules`).
 - missiles: D2R merged `LevRange` into `Range` (an expression now): `Range` becomes `Range+LevRange*lvl`.
 - automap: the `.bin` stores `LevelName` as a level-type number (lost by the first decoder). D2R's automap
   names are its lvltypes names reformatted ("Act 1 - Town" -> "1 Town"), so vanilla types map exactly.

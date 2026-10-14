@@ -1077,7 +1077,11 @@ class Migrator:
           players. Rows with aurarangecalc move to plugin slot 179 (D2R's teleport with that limit).
         - D2Sigma's self buff (18) and storm (124) give aurastats a layer like its aura 165: rows that use one move
           to plugin slots 174/180 (D2R's function, then the layers). Slots 172-190 hold D2Sigma 153-171 (+19); the
-          ones those leave free (174: 155 -> 109, 179: 160 -> 124, 180: 161 -> 121) carry these."""
+          ones those leave free (174: 155 -> 109, 179: 160 -> 124, 180: 161 -> 121) carry these.
+        - Stop functions (srvstopfunc/cltstopfunc, columns 1.13c also has): D2R gives its Whirlwind (srvdofunc 76,
+          cltdofunc 45; Talic's 168) stop function 1, which ends the spin and its aurastate when the skill is let go
+          or interrupted; 1.13c's rows had none. Median rows on a do function that D2R pairs with a stop function
+          (whirlwind_2, windform) get the same one."""
         caps = {"mlvl", "skcp", "skcn"}
         named = [row[0] for row in read_tsv(ROOT / "work" / "named" / "skills.txt")[1]]
         skill_caps = {}
@@ -1104,6 +1108,13 @@ class Migrator:
             # D2Sigma's client functions -> D2R's: 97-99 to the plugin's free slots; replaced vanilla ones to the D2R
             # function that does what D2Sigma's does (15: Charged Strike fan = D2R 19; 11: spray = D2R 15; 95: like 98)
             # or to the plugin (22: wall -> 113). 31 (Raise Skeleton) and 94 (doomknight2) keep D2R's.
+            # do function -> stop function, from D2R's rows (Whirlwind)
+            ss, cs = h.index("srvstopfunc"), h.index("cltstopfunc")
+            srv_stop = {r[dh.index("srvdofunc")]: r[dh.index("srvstopfunc")] for r in drows
+                        if r[dh.index("srvstopfunc")] not in ("", "0")}
+            clt_stop = {r[dh.index("cltdofunc")]: r[dh.index("cltstopfunc")] for r in drows
+                        if r[dh.index("cltstopfunc")] not in ("", "0")}
+            n_stop = 0
             clt_moved = {"97": "110", "98": "111", "99": "112", "15": "19", "11": "15", "95": "111", "22": "113"}
             n_cap = n_right = n_moved = n_ranged = 0
             for r in rows:
@@ -1120,6 +1131,11 @@ class Migrator:
                     if not r[c9] and not r[c10]:
                         r[c9], r[c10] = mlvl, skcn or "0"
                     n_cap += 1
+                if r[do] in srv_stop and r[ss] in ("", "0"):
+                    r[ss] = srv_stop[r[do]]
+                    n_stop += 1
+                if r[cdo] in clt_stop and r[cs] in ("", "0"):
+                    r[cs] = clt_stop[r[cdo]]
                 if r[cc] and r[pa] != "1" and r[rs] in ("", "0"):
                     r[rs] = "1"
                     n_right += 1
@@ -1143,7 +1159,8 @@ class Migrator:
                 self.report.append(f"\nskills (D2Sigma rules): {n_cap} skpoints formulas with Median's skill caps "
                                    f"written in (mlvl, skcn; skcp from the plugin);{n_right} active class skills -> rightskill 1; "
                                    f"{n_moved} skills with D2Sigma srvdofunc {sigma_first}-{sigma_last} -> +{shift}; "
-                                   f"{n_ranged} teleports with a range / layered buffs -> 179/174/180")
+                                   f"{n_ranged} teleports with a range / layered buffs -> 179/174/180; "
+                                   f"{n_stop} skills given D2R's stop function for their do function (Whirlwind)")
 
     def sound_rows(self) -> None:
         """Median's own sound rows (appended after D2R's: sounds is d2r_wins) come from 1.13c's format and miss D2R's
