@@ -15,11 +15,14 @@ picture D2R has:
   uniques     D2R's entry with the same name when its base is in the same table; else a D2R unique with the same
   and sets    invfile (Median reuses many); else the base item's picture
 
-Every asset written is checked against D2R's file list. Report: work/mod/item_hd_report.md.
+Phase 5: an item whose picture is Median's own (its invfile, or the unique's / set item's invfile, is a DC6 D2R does
+not have; 542 files) gets that picture converted to HD instead (tools/item_art.py: <folder>/mxl/<invfile>.sprite).
+Every asset written is checked against D2R's file list or the converted sprites. Report: work/mod/item_hd_report.md.
 Usage: python tools/item_hd.py
 """
 import csv
 import json
+from item_art import median_asset
 import re
 import sys
 from collections import Counter, defaultdict
@@ -105,6 +108,18 @@ def main() -> int:
     # Median base items
     items: dict[str, dict] = {}
     m_folder: dict[str, str] = {}
+    m_cells: dict[str, tuple[int, int]] = {}
+
+    def cells(r: dict) -> tuple[int, int]:
+        def num(v: str) -> int:
+            return int(v) if v and v.strip().lstrip("-").isdigit() else 1
+        return num(r.get("invwidth", "")), num(r.get("invheight", ""))
+
+    def own_art(inv: str, folder: str, size: tuple[int, int]) -> str | None:
+        a = median_asset(inv, folder, *size)
+        if a:
+            have.add(f"{folder}/{a}")
+        return a
     how = Counter()
     for table, folder in TABLES.items():
         for r in rows(OUT_EXCEL / f"{table}.txt"):
@@ -112,8 +127,12 @@ def main() -> int:
             if not code or code in items:
                 continue
             m_folder[code] = folder
+            m_cells[code] = cells(r)
             asset = d_items.get(code, {}).get("asset")
-            if asset and folder_of.get(code) == folder and exists(folder, asset):
+            if own := own_art(r.get("invfile", ""), folder, m_cells[code]):
+                asset = own
+                how["Median's own art"] += 1
+            elif asset and folder_of.get(code) == folder and exists(folder, asset):
                 how["D2R's own"] += 1
             elif c := by_inv.get((folder, r.get("invfile", "").lower())):
                 asset = c.most_common(1)[0][0]
@@ -153,7 +172,10 @@ def main() -> int:
                 continue
             seen.add(k)
             entry = mapping.get(k)
-            if entry and vanilla_folder.get(k) == folder and all(exists(folder, a) for a in entry.values()):
+            if own := own_art(r.get("invfile", ""), folder, m_cells.get(code, (1, 1))):
+                entry = {"normal": own, "uber": own, "ultra": own}
+                how[f"{label}: Median's own art"] += 1
+            elif entry and vanilla_folder.get(k) == folder and all(exists(folder, a) for a in entry.values()):
                 how[f"{label}: D2R's own"] += 1
             elif a := inv_assets.get((folder, r.get("invfile", "").lower())):
                 entry = {"normal": a, "uber": a, "ultra": a}

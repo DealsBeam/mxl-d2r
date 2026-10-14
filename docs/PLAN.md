@@ -60,6 +60,10 @@ Status (2026-10-14):
   the same seqnum as a D2R one a copy of that state (29 entries: whirlwind_2 and windform -> Whirlwind's spin,
   leap_2 -> Leap, cautious_strike/iron_spiral_2 -> Double Swing, smg -> Blade Fury, ...). Skills whose sequence
   has no D2R clip still have no HD body animation.
+- HD item pictures from Median's own art (2026-10-14): tools/item_art.py converts each Median-only inventory DC6
+  (542 files, 474 used) to D2R's HD sprite (98 px per cell, bilinear x3.5; .lowend 49 px) under
+  hd/global/ui/items/<folder>/mxl/; item_hd.py points 987 base items, 45 uniques and 22 set items at them. Items
+  whose picture D2R also has keep D2R's HD art; the rest still borrow a look-alike.
 - Next: HD art. items.json / missiles.json / monsters.json use D2R look-alikes today (item_hd.py, missile_hd.py,
   gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
   backgrounds and tab titles (bug #3) are art too. Deferred checks: Median monster art in classic mode, Median-only
