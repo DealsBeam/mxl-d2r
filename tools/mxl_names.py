@@ -93,6 +93,10 @@ NUMERIC_REFS = {
     ("armor", ("missiletype",)): "missiles",
 }
 PREFIX_ENTITY = {p: e for e, (p, *_r) in ENTITIES.items() if e != "monstats2" and p}
+# Columns that mix plain values with placeholders of one entity (under the 90% rule): monstats' Sk1mode..Sk8mode hold
+# monmode codes (A1, S1, ...) or a monseq sequence (mqN = the Nth sequence); unresolved, D2R found no mode for ~1,100
+# monster skill slots (2026-10-14).
+MIXED_COLUMNS = {("monstats", f"Sk{i}mode"): "monseq" for i in range(1, 9)}
 # Columns whose "ms" placeholders point at monstats2 rows instead of monstats rows.
 MONSTATS2_COLUMNS = {("monstats", "MonStatsEx"), ("monstats2", "Id")}
 UNUSED_SLOT = re.compile(r"^(unused\d*|not used)$", re.I)
@@ -226,6 +230,9 @@ class Resolver:
                         continue
                 if skill_names and skill_names == len(vals):
                     self.columns[(t.name, c)] = ("skills", "display")
+        for (tname, c), ent in MIXED_COLUMNS.items():
+            if tname in self.tables and c in self.tables[tname].header:
+                self.columns[(tname, c)] = (ent, "placeholder")
 
     def cell_entity(self, ent: str, value: str) -> str:
         if ent != "*":

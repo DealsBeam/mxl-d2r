@@ -30,6 +30,11 @@ which bank a Median character loads is still to be confirmed in game. Report: `w
   (`data/hd/overlays/<Character>/<overlay>.json`). Matching D2R rows keep D2R's value (`D2R_WHEN_EMPTY`, 293 rows).
   Without it HD drew no overlay: Whirlwind showed only the get-hit frames its sequence plays under the spin
   overlay (reported 2026-10-14), and auras and cast effects had no HD effect.
+- monstats `Sk1mode`..`Sk8mode` (fixed in tools/mxl_names.py, `MIXED_COLUMNS`): the cells are monmode codes or a
+  monseq sequence; the decoder wrote sequences as placeholders `mqN` (the Nth sequence), and the naming step only
+  resolves columns that are 90% placeholders, so 1,152 monster skill slots kept `mq8`, `mq63`, ... D2R found no
+  mode for them (monster skills that play a sequence: raises, resurrects, charges, leaps, maggot burrowing, ...).
+  They now name the sequence (seq_skeletonraise, monseq_63, ...); checked against D2R on every shared monster.
 - skills `anim` / `seqtrans` GH -> SQ: 1.13c's plrmode.txt gives the Sequence mode (index 18) the code GH, the same
   as Get Hit, so the decoded tables wrote GH for every sequence skill (122 rows: Whirlwind, Zeal-style multi-hits,
   Strafe, Fend, ...). D2R spells it SQ and reads GH as get hit: those skills played the knockback frames and the
