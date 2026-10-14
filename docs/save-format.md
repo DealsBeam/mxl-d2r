@@ -16,6 +16,13 @@ up first (`Saved Games/Diablo II Resurrected/mxl-manual-backups/`) and edit only
 16-bit stat id, then the value in itemstatcost **CSvBits** (Median: strength-statpts 11, newskills 9, level 8,
 experience 32, ...); the list ends with 0xffff.
 
+## Stats in practice (2026-10-14)
+The "gf" list in these saves uses 16-bit stat ids (tools/save/d2s_stats.py still reads 9 bits and fails on them).
+Barbarian growth (charstats): LifePerLevel 120 and ManaPerLevel 20 (quarter points), ManaPerMagic 6, StatPerLevel 5;
+life/mana/stamina are stored <<8. experience.txt row L is the experience at which level L+1 starts (row 9 = 37000 =
+level 10). barby was set to level 10 this way (all 45 stat points in energy, 9 unspent skill points); backup in
+mxl-manual-backups/barby-before-level10.
+
 ## Class skills ("if")
 "if", then one byte (hard points) per class skill: 95 in Median (95 rows per charclass in skills.txt), in the
 order of the class's skills by skill ID. Barbarian slot 40 is whirlwind_2 (ID 1306). Slot 78 holds 1 on every new

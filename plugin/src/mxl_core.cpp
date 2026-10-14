@@ -28,7 +28,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.34.4";
+constexpr const char* PluginVersion = "0.35.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -64,7 +64,8 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat; "trace" turns the bug #22 state trace on, "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
+// items missiles mana itemstat; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
 void ReadOffList() noexcept {
@@ -157,8 +158,12 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 		constexpr const char* OffNote = "off: left out by mxl-core-off.txt";
-		if (Off("states")) {
-			std::snprintf(g_statesReport, sizeof(g_statesReport), "%s", OffNote);
+		// Off unless asked for (bug #22, 2026-10-14): D2RLoader 1.3.1 already syncs more than 512 states ("wide
+		// states", D2RCore SendChangedWideStateStats) and reads both arrays at D2R's own offsets (+0xaf0, then the
+		// "changed" flags right after), so moving them stopped every state change from reaching the client.
+		if (!Off("statesfix")) {
+			std::snprintf(g_statesReport, sizeof(g_statesReport),
+			              "off: D2RLoader's wide states handle Median's states (\"statesfix\" in mxl-core-off.txt turns it on)");
 		} else {
 			InstallStatesFix(context, Off("keepcurrent"), g_statesReport, sizeof(g_statesReport));
 		}

@@ -472,10 +472,19 @@ and only the "changed" flags move (+0x2b00 + blocks*4; sites 0x2f7fff and 0x2f63
 sites). If hovering works with it, it becomes the default (it also keeps the copy routine's zeroing of +0xaf0..+0xb70
 correct); room is then exactly 1,024 states (Median: 1,014).
 
+**Turned off by default (0.35.0, 2026-10-14):** D2RLoader 1.3.1 already supports more than 512 states. D2RCore
+replaces D2R's state senders (0x53a210 changed, 0x539890 full, both ending in `jmp [rip+...]`) with its exports
+`SendChangedWideStateStats` / `SendAllWideStateStats` (and `ReceiveWideStateStatPacket` on the client), which take
+the block count from the live table and read the arrays at D2R's own offsets (`lea rax,[rcx+0xaf0]`, `lea rbx,
+[rcx+rdx*4+0xaf0]`, D2RCore 0x3e5a92). Moving the arrays therefore stopped all state sync to the client (bug #22,
+the missing Whirlwind overlay). With 32 blocks the "changed" flags cover +0xb70..+0xbf0; D2R's code only copies
++0xb70/+0xb78 from the creation template (zeroed) and nothing in the stat code reads +0xb70..+0xbf0, so leaving
+the layout alone is safe. The fix stays available with the word `statesfix`.
+
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. Parts left out: `states levels calc skills items missiles mana itemstat`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500
