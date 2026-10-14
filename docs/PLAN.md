@@ -55,6 +55,11 @@ Status (2026-10-14):
   7 with a different frame count keep D2R's). gfx_placeholders.py: 1,193 monsters now keep their own Code and
   monstats2 row (Median timing, Median art in classic mode) and only borrow a D2R HD model; 24 still borrow the
   donor's graphics (10 codes Median's files do not complete). Startup clean.
+- HD body animations for Median's sequence skills (2026-10-14): D2R's HD player models pick a sequence clip by
+  skill ID (state machine: modeId 18 + skillIndex). tools/hd_skill_anims.py gives each Median sequence skill with
+  the same seqnum as a D2R one a copy of that state (29 entries: whirlwind_2 and windform -> Whirlwind's spin,
+  leap_2 -> Leap, cautious_strike/iron_spiral_2 -> Double Swing, smg -> Blade Fury, ...). Skills whose sequence
+  has no D2R clip still have no HD body animation.
 - Next: HD art. items.json / missiles.json / monsters.json use D2R look-alikes today (item_hd.py, missile_hd.py,
   gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
   backgrounds and tab titles (bug #3) are art too. Deferred checks: Median monster art in classic mode, Median-only
