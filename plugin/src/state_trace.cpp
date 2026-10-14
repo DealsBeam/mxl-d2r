@@ -21,6 +21,11 @@ constexpr uint8_t SkillCheckEntry[] = {0x40, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28,
 constexpr uint64_t WhirlStartRva = 0x56a420;  // srvstfunc 38, Whirlwind's start (game, unit, skill, level) -> 1 started
 // MOV [RSP+0x10],RBX / MOV [RSP+0x20],R9D / PUSH RBP / PUSH RSI / PUSH RDI / PUSH R12
 constexpr uint8_t WhirlStartEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x44, 0x89, 0x4c, 0x24, 0x20, 0x55, 0x56, 0x57, 0x41, 0x54};
+constexpr uint64_t SkillStartRva = 0x43b3e0;  // server: (game, unit, skill, level, force) -> start a skill (calls srvstfunc)
+// MOV [RSP+0x10],RBX / MOV [RSP+0x18],RBP / MOV [RSP+0x20],RSI
+constexpr uint8_t SkillStartEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20};
+constexpr uint64_t UnitRoomRva = 0x34b440;    // (unit) -> room
+constexpr uint64_t RoomInTownRva = 0x2f0750;  // (room) -> 1 in a town
 constexpr uint64_t HasStateRva = 0x3351b0;   // (unit, state)
 constexpr uint64_t UnitClassRva = 0x349860;  // (unit, file, line) -> class id
 constexpr uint64_t DataFlagRva = 0x34a0e0;   // (unit) -> data flag byte
@@ -29,6 +34,9 @@ using SetStateFn = void (*)(void* unit, int32_t state, int32_t on) noexcept;
 using MaskCheckFn = int32_t (*)(void* unit, const uint32_t* mask) noexcept;
 using SkillCheckFn = int32_t (*)(void* unit, int64_t* entry) noexcept;
 using WhirlStartFn = int64_t (*)(void* game, void* unit, int32_t skill, int32_t level) noexcept;
+using SkillStartFn = int32_t (*)(void* game, void* unit, int32_t skill, int32_t level, int32_t force) noexcept;
+using UnitRoomFn = void* (*)(void* unit) noexcept;
+using RoomInTownFn = int32_t (*)(void* room) noexcept;
 using HasStateFn = int32_t (*)(void* unit, int32_t state) noexcept;
 using UnitClassFn = int32_t (*)(void* unit, const char* file, int32_t line) noexcept;
 using DataFlagFn = uint8_t (*)(void* unit) noexcept;
@@ -42,6 +50,10 @@ DataFlagFn g_dataFlag = nullptr;
 SkillCheckFn g_skillCheck = nullptr;
 WhirlStartFn g_whirlStart = nullptr;
 HasStateFn g_hasState = nullptr;
+SkillStartFn g_skillStart = nullptr;
+UnitRoomFn g_unitRoom = nullptr;
+RoomInTownFn g_roomInTown = nullptr;
+volatile long g_startLines = 0;
 volatile long g_whirlLines = 0;
 
 constexpr int MaxSeen = 1500;
@@ -121,6 +133,19 @@ auto SkillCheck(void* unit, int64_t* entry) noexcept -> int32_t {
 	return result;
 }
 
+// Server skill starts by players (the code that calls srvstfunc): skill, result, in town; the first 60.
+auto SkillStart(void* game, void* unit, int32_t skill, int32_t level, int32_t force) noexcept -> int32_t {
+	const int32_t result = g_skillStart(game, unit, skill, level, force);
+	if (unit != nullptr && *static_cast<const uint32_t*>(unit) == 0 && _InterlockedIncrement(&g_startLines) <= 60) {
+		void* room = g_unitRoom(unit);
+		char line[160];
+		std::snprintf(line, sizeof(line), "mxl-core trace: server skill start %d level %d force %d -> %d (in town %d)", skill,
+		              level, force, result, room ? g_roomInTown(room) : -1);
+		g_context->LogInfo(line);
+	}
+	return result;
+}
+
 // Whirlwind's server start: what it returns, the first 40 times.
 auto WhirlStart(void* game, void* unit, int32_t skill, int32_t level) noexcept -> int64_t {
 	const int32_t blocked = unit ? g_hasState(unit, 12) : -1;
@@ -142,11 +167,14 @@ auto InstallStateTrace(const D2RL::PluginContext* context, char* report, size_t 
 	g_unitClass = reinterpret_cast<UnitClassFn>(context->exeBase + UnitClassRva);
 	g_dataFlag = reinterpret_cast<DataFlagFn>(context->exeBase + DataFlagRva);
 	g_hasState = reinterpret_cast<HasStateFn>(context->exeBase + HasStateRva);
+	g_unitRoom = reinterpret_cast<UnitRoomFn>(context->exeBase + UnitRoomRva);
+	g_roomInTown = reinterpret_cast<RoomInTownFn>(context->exeBase + RoomInTownRva);
 	const bool ok =
 		context->InstallInlineHook(SetStateRva, SetStateEntry, sizeof(SetStateEntry), SetState, &g_setState) &&
 		context->InstallInlineHook(MaskCheckRva, MaskCheckEntry, sizeof(MaskCheckEntry), MaskCheck, &g_maskCheck) &&
 		context->InstallInlineHook(SkillCheckRva, SkillCheckEntry, sizeof(SkillCheckEntry), SkillCheck, &g_skillCheck) &&
+		context->InstallInlineHook(SkillStartRva, SkillStartEntry, sizeof(SkillStartEntry), SkillStart, &g_skillStart) &&
 		context->InstallInlineHook(WhirlStartRva, WhirlStartEntry, sizeof(WhirlStartEntry), WhirlStart, &g_whirlStart);
-	std::snprintf(report, reportSize, ok ? "on: logging state changes, state-mask hits, player skill checks, Whirlwind starts" : "off: hook failed");
+	std::snprintf(report, reportSize, ok ? "on: logging state changes, state-mask hits, player skill checks, server skill starts, Whirlwind starts" : "off: hook failed");
 	return ok;
 }
