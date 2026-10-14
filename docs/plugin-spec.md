@@ -431,8 +431,33 @@ high one, which mxl-core then writes (0.19.0; the 12 summoning scrolls to levels
   recipe (`0x100595d0`, up to 6 tries). The port has only cubemain's own condition: the second condition and the
   cost are missing, so those recipes are less restricted in D2R than in Median. D2R side not found yet: its
   cubemain records are 0x158 bytes (enabled +0x0b, min diff +0x1b, numinputs +0x0c); 0x3e52c0/0x3e5480 are only
-  vector copies of the table and 0x4496e0/0x4649f0 are unrelated. Next try: the 1.13c D2Game cube function (switch
-  on op 1-28) and match its D2R twin by the op cases.
+  vector copies of the table and 0x4496e0/0x4649f0 are unrelated (superseded below).
+- **Cube conditions, D2R side (found 2026-10-14, hook not written yet):**
+  - Records: `0x3e3f60(?, index)` returns cubemain record `index` (asserts in D2Common HoradricCube.cpp). Records
+    are **0x16c** bytes at data tables +0x1570, count at +0x1578 (the 0x158 above was wrong). Layout as read by the
+    matcher: +0 enabled, +1 min diff, +2 class (-1 any), +3 op (byte), +4 param, +8 value, +0xc numinputs,
+    +0xe version, +0x10/+0x12 ladder seasons (`0x403fe0`).
+  - Recipe search: `0x529090(int *result, game, player, out)` (D2Game PlrTrade.cpp). It counts cube items, then
+    walks every record: enabled, version, ladder, difficulty, class and numinputs, then the player condition in a
+    switch on op **1-14 only** (1/2 date, 3-14 player stat compares via `0x2f5020`/`0x2f48c0`/`0x2f5e80`). Any
+    other op falls through as passed. It then calls `0x529d50(game, inventory, record, input#)` for inputs 0..6;
+    all 7 nonzero -> recipe found (result = index).
+  - `0x529d50` matches one input against the cube items, and checks the item condition ops 15-27+ on each item
+    (stat compares on the item, same as D2Sigma's `0x1005a400`). So Median's main ops 3-18 already work in D2R.
+  - D2Sigma differences to port:
+    1. Main ops 32-39 and 42: player conditions in 0x10059d00. 33 `0x100befc0(param)` false (6 recipes, param
+       893), 34 area match (2), 36 Cow King alive (cow portal), 37 chance value%, 38/39 craft flag bits (unit
+       +0x1b30), 42 two values summing to >= 9001.
+    2. cubemainext second condition (+0x04 op, +0x08 param, +0x0c value) from the same checker: ops 3 and 6
+       (player stats; ~200 recipes), 30 (skill level, 18 recipes), 39 and 41 (craft flags, 55 recipes). Ops 15-18
+       in ext are item conditions: D2Sigma checks them on each input with `0x1005a400(ext op, param, value)`.
+    3. Gold cost: ext +0x00 * 100 <= player's gold (`0x100be6f0`), 65 recipes (50-5000 -> 5,000-500,000 gold).
+       Whether and where D2Sigma takes the gold is not read yet.
+  - Plan: inline hooks on `0x529090` (remember game/player in a thread-local, call the original) and `0x529d50`
+    (for input# 0, return 0 when the record's Median-only condition fails; the record index is
+    (record - table) / 0x16c). The ext rows come from cubemainext.bin, generated into a plugin header by
+    txt_migrate. Check at load that D2R's row count matches 7,500. Craft flags need their setter
+    (D2Craft.cpp 0x1005ad90 callers) first.
 - Skill descriptions (`D2SkillDesc.cpp`).
 - Engine limits: states (below), level types (below).
 
