@@ -481,6 +481,21 @@ the missing Whirlwind overlay). With 32 blocks the "changed" flags cover +0xb70.
 +0xb70/+0xb78 from the creation template (zeroed) and nothing in the stat code reads +0xb70..+0xbf0, so leaving
 the layout alone is safe. The fix stays available with the word `statesfix`.
 
+## Whirlwind (mxl-core 0.36.0, `whirlwind.cpp`)
+
+Median keeps 1.13c's Whirlwind (D2Sigma's srvdofunc table leaves 76 at D2Game's own; no D2Sigma code refers to the
+skill). Compared with D2R's (do `0x568f40`, start `0x56a420`): same start, movement, one target per hit, two hits
+with two weapons, calc1 as the damage %, HitFlags/HitClass, aurastate with aurastats. The difference is the hit
+rate. D2R 2.4 waits `0x56ac00(unit, weapon)` frames between hits: the weapon's attack animation length at D2R's
+speed, clamp(stat 68 + 120*IAS/(120+IAS), 15, 175). 1.13c (D2Game 0x6fce1470, D2Common 10564) takes the same
+animation length at 100 + stat 68 + IAS (stat 93, no diminishing returns, no cap) and maps it through a table:
+< 12 frames -> a hit every 4, < 15 -> 6, < 18 -> 8, < 20 -> 10, < 23 -> 12, < 26 -> 14, else 16 (no weapon: 10).
+The hook on 0x56ac00 (only Whirlwind calls it) rescales D2R's length to 1.13c's speed and applies the table; it
+logs stat 68 / IAS / both speeds for the first hits, to confirm whether D2R's stat 68 carries the base 100 that
+1.13c adds itself (the code assumes so when stat 68 >= 100). Word `whirlwind` in mxl-core-off.txt turns it off.
+Data side: anim/seqtrans SQ, plrmode SQ/KB, D2R's stop functions, the overlay Character column and the HD state
+machine copies (txt-migrate.md, tools/hd_skill_anims.py).
+
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
