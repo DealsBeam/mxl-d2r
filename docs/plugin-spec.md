@@ -414,50 +414,65 @@ high one, which mxl-core then writes (0.19.0; the 12 summoning scrolls to levels
   (`skill('<other devotion>'.blvl)*-666` / `-500`), and each mastery is locked once the hidden counter
   `skills_1091` (one per class: 1180, 1273, 1359, 1457, 1543, 1619; aurastatcalc1 `clc1+clc2+clc3`) passes 2 unless
   it already has points, and until its unlock item stat (skills_1835/1836 passives) is present.
-- **Cube conditions (D2Craft.cpp, open, found 2026-10-14):** cubemain's `op`/`param`/`value` gate a recipe on a
-  condition. D2R knows ops 1-28 (its own data uses only 28); D2Sigma's checker `0x10059d00(game, unit, op, param,
-  value, ...)` adds 29-42 (switch cases 0x1d-0x2a): 29 param == `0x10048930()`+1; 30/31 a skill's level (D2Common
-  10306, with/without bonuses) >= value; 32/33 a check `0x100befc0(param)` true/false; 34/35 a level/area match
-  (`0x100bda80`, `0x1005ca60`, `0x1005ce60`); 36 `0x1005c970() == 0` (the Cow Level recipe); 37 random chance
-  value% (0-100); 38/39 and 40/41 a bit in the player's 256-bit craft flags at unit+0x1b30 (set/clear,
-  `0x1005ab60`/`0x1005ad90`); 42 two values summing to >= 9001. Median uses 41 recipes with them: 38 x19, 37 x9,
-  33 x6, 34 x2, 39 x2, 32/36/42 x1 (36 = Wirt's leg + Tome of Town Portal -> Cow Level, bug #19). Next: find
-  D2R's cube condition switch (1.13c D2Game's cube op check, then the D2R equivalent), see what it does with an
-  unknown op, and hook it for 29-42; the craft flags need their setter (D2Craft.cpp 0x1005ad90 callers).
-  D2Sigma runs its own recipe search (`0x1005a9f5` area, calls the checker at 0x1005a9f5/0x1005aa1c): for each
-  cubemain record (0x148 bytes; enabled, ladder, min difficulty +2, class +3, ...) with its cubemainext record (24
-  bytes) it checks cubemain's condition, then a second one from cubemainext (+0x04 op, +0x08 param, +0x0c value;
-  1,480 recipes), then `ext+0x00 * 100 <= 0x100be6f0()` (65 recipes, 50-3000; likely a gold cost), then makes the
-  recipe (`0x100595d0`, up to 6 tries). The port has only cubemain's own condition: the second condition and the
-  cost are missing, so those recipes are less restricted in D2R than in Median. D2R side not found yet: its
-  cubemain records are 0x158 bytes (enabled +0x0b, min diff +0x1b, numinputs +0x0c); 0x3e52c0/0x3e5480 are only
-  vector copies of the table and 0x4496e0/0x4649f0 are unrelated (superseded below).
-- **Cube conditions, D2R side (found 2026-10-14, hook not written yet):**
-  - Records: `0x3e3f60(?, index)` returns cubemain record `index` (asserts in D2Common HoradricCube.cpp). Records
-    are **0x16c** bytes at data tables +0x1570, count at +0x1578 (the 0x158 above was wrong). Layout as read by the
-    matcher: +0 enabled, +1 min diff, +2 class (-1 any), +3 op (byte), +4 param, +8 value, +0xc numinputs,
-    +0xe version, +0x10/+0x12 ladder seasons (`0x403fe0`).
-  - Recipe search: `0x529090(int *result, game, player, out)` (D2Game PlrTrade.cpp). It counts cube items, then
-    walks every record: enabled, version, ladder, difficulty, class and numinputs, then the player condition in a
-    switch on op **1-14 only** (1/2 date, 3-14 player stat compares via `0x2f5020`/`0x2f48c0`/`0x2f5e80`). Any
-    other op falls through as passed. It then calls `0x529d50(game, inventory, record, input#)` for inputs 0..6;
-    all 7 nonzero -> recipe found (result = index).
-  - `0x529d50` matches one input against the cube items, and checks the item condition ops 15-27+ on each item
-    (stat compares on the item, same as D2Sigma's `0x1005a400`). So Median's main ops 3-18 already work in D2R.
-  - D2Sigma differences to port:
-    1. Main ops 32-39 and 42: player conditions in 0x10059d00. 33 `0x100befc0(param)` false (6 recipes, param
-       893), 34 area match (2), 36 Cow King alive (cow portal), 37 chance value%, 38/39 craft flag bits (unit
-       +0x1b30), 42 two values summing to >= 9001.
-    2. cubemainext second condition (+0x04 op, +0x08 param, +0x0c value) from the same checker: ops 3 and 6
-       (player stats; ~200 recipes), 30 (skill level, 18 recipes), 39 and 41 (craft flags, 55 recipes). Ops 15-18
-       in ext are item conditions: D2Sigma checks them on each input with `0x1005a400(ext op, param, value)`.
-    3. Gold cost: ext +0x00 * 100 <= player's gold (`0x100be6f0`), 65 recipes (50-5000 -> 5,000-500,000 gold).
-       Whether and where D2Sigma takes the gold is not read yet.
-  - Plan: inline hooks on `0x529090` (remember game/player in a thread-local, call the original) and `0x529d50`
-    (for input# 0, return 0 when the record's Median-only condition fails; the record index is
-    (record - table) / 0x16c). The ext rows come from cubemainext.bin, generated into a plugin header by
-    txt_migrate. Check at load that D2R's row count matches 7,500. Craft flags need their setter
-    (D2Craft.cpp 0x1005ad90 callers) first.
+- **Cube conditions (D2Craft.cpp; confirmed 2026-10-20, ported in mxl-core 0.37.0, `cube_conditions.cpp`):**
+  - **The checker** `0x10059d00` (thiscall: ecx = game, edx = the player; stack: op, param, value, layer) decides one
+    condition for a player. Ops 1-14 are D2R's; 29-42 are Median's. All stat reads go through D2Common 10973 (total)
+    and `0x100bd7b0` (base). "Value" below is cubemain's `value` (for stat compares `value >> ValShift`, the stat's
+    ItemStatCost record +0x18).
+    - 1/2 date and weekday (D2R has them); 3-14 player stat compares: 3 `>=`, 4 `<=`, 5 `!=`, 6 `==` on the total,
+      7-10 the same on the base value, 11-14 the same on total minus base (layer & 0xffff). The stat is `param`, its
+      layer is the fourth value.
+    - **29** current month (1-12) == param (unused by Median's data).
+    - **30 / 31** the player's level of skill `param` >= value; 30 with item bonuses, 31 without (D2Common 10306).
+    - **32 / 33** the player has / does not have state `param` (D2Common 10494).
+    - **34** the player's area == param. **35** the area's act (levels.txt +3) == param.
+    - **36** the area is a town (levels.txt record +0x14b is nonzero for nine areas: the five act towns and four Median towns); Wirt's leg plus
+      Tome of Town Portal only opens the Cow Level portal in town.
+    - **37** random: passes value% of the time (clamped 0-100; rolled again at each check).
+    - **38 / 39** player craft flag `param` (0-255) is set / clear. **40 / 41** the same for the game-wide flags.
+      The flags live in a structure at game +0x1b30 (a bit array for the game, and a name-keyed map to one bit array per
+      character). Setters are four small output effects at `0x591b0` / `0x59260` (player set / clear) and `0x59300` /
+      `0x59390` (game set / clear), each taking an effect record whose word at +6 is the flag number; they sit in a
+      pointer table at `0x101d90cc`. The caller (which recipe output runs them) is not found, so the port has no
+      setters yet. `0x59120` is the neighbouring effect that takes (word at +6) x 100 gold from carried gold (stat 14)
+      and then the bank (stat 15).
+    - **42** strength + energy (stats 0 and 1) > 9000.
+  - **Median's data** (cubemain op column): 38 x19 (flags 1-19 gate the 19 "useitem" quest-item recipes), 37 x9 (the
+    chance recipes), 33 x6 (not state 893), 34 x2 (area 39, 241), 39 x2, 32 x1, 36 x1, 42 x1.
+  - **The search** (`0x1005a9f5` area, per cubemain record of 0x148 bytes with its cubemainext record of 24 bytes): the
+    record's player condition passes, and if the ext op is nonzero the ext condition passes too, and carried plus
+    banked gold (stats 14 + 15) >= ext +0x00 x 100. Then each input item must pass the record's item condition **and**
+    the ext one (`0x1005a400` returns true for "item fails": ops 15-18 compare the item's total stat to value: `<`, `>`,
+    `==`, `!=` reject, so the item needs `>=`, `<=`, `!=`, `==`; 19-22 the same on the base value, 23-26 on total minus
+    base, 27 compares a per-item property, D2Common 10620, with the param).
+  - **cubemainext record** (24 bytes, one per cubemain row, same index; work/sigma/cubemainext.txt): `+0x00` gold cost in
+    units of 100 gold (65 recipes, 50-10000); `+0x04` op, `+0x08` param, `+0x0c` value of the second condition (ops 3
+    x174, 6 x20, 30 x18, 39 x1, 41 x55 player conditions; 15-18 item conditions on 1,212 recipes); `+0x10` the stat
+    layer of that second condition; `+0x14` the stat layer of cubemain's own condition. Layers are Median's numbers
+    (class/skill/state ids; not migrated).
+  - **D2R side** (found 2026-10-14): cubemain records are **0x16c** bytes at data tables +0x1570 (`0x3e3f60(?, index)`
+    returns record `index`), +0 enabled, +1 min diff, +2 class (-1 any), +3 op (byte), +4 param, +8 value, +0xc
+    numinputs, +0xe version, +0x10/+0x12 ladder seasons. **Recipe search** `0x529090(int *result, game, player, out)`
+    (D2Game PlrTrade.cpp): counts the cube items, walks every record (enabled, version, ladder, difficulty, class,
+    numinputs), then a player condition in a switch on op **1-14 only** (any other op counts as passed), then
+    `0x529d50(game, inventory, record, input#)` for inputs 0..6 (all seven nonzero = found; result = record index).
+    `0x529d50` matches one input and checks the item condition ops on each item. D2R has no layer in its record.
+  - **Port (0.37.0).** `tools/cube_tables.py` (build.py step after txt_migrate) reads cubemain and cubemainext and
+    writes `plugin/src/mxl_cube.h`: 542 recipes with plugin conditions or a cost (main 29-42; ext player ops; main
+    stat compares 3-14 whose record slot an ext item condition takes; costs), params migrated through idmap (skills,
+    states, areas, stats), stat-compare values pre-shifted. It also (1) **moves an ext item condition (ops 15-18) into
+    the cubemain record's op/param/value when the record's own slot is free or holds a player op** (176 recipes), so
+    D2R's matcher checks it, and (2) **remaps the record's stat ids** (ops 3-26: Median row numbers were left as they
+    were, but D2R's stats from 359 on shifted by +29: 2,197 recipes pointed at the wrong stat). Not done: **1,036
+    recipes with an item condition in both slots** (main 15-18 and ext 15-18) keep only the main one; D2R's record has
+    one slot, applying both needs the per-item check inside `0x529d50`.
+    Plugin: `SearchHook` remembers game and player, `MatchHook` answers 0 for input 0 when `Passes()` fails (record
+    index = (record - `0x3e3f60(dataFlag, 0)`) / 0x16c, verified against the getter, else the hook logs once and passes
+    through). Skill level (30/31) uses D2R's base-level calc code 41 for both (no +skills yet). Craft flags exist
+    in the plugin (`SetCraftFlag`) but nothing sets them, so ops 38/40 never pass (the 19 flag recipes stay locked) and
+    39/41 always pass. The gold cost is checked, not paid. **Blocked:** D2R's entry bytes of `0x529090` / `0x529d50`
+    are not recorded (arrays empty in cube_conditions.cpp), so the hooks refuse to install and report why in `mxl`.
+    `mxl-core-off.txt` word `cube`.
 - Skill descriptions (`D2SkillDesc.cpp`).
 - Engine limits: states (below), level types (below).
 

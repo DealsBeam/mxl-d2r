@@ -7,7 +7,8 @@
 //
 // Engine changes: room for more than 512 states (states_fix.cpp), level types above 36 (level_types.cpp),
 // D2Sigma's calc codes (calc_codes.cpp), D2Sigma's added skill server functions (sigma_skills.cpp), D2Sigma's
-// item spells (item_spells.cpp), D2Sigma's mana costs (mana_costs.cpp).
+// item spells (item_spells.cpp), D2Sigma's mana costs (mana_costs.cpp), D2Sigma's cube recipe conditions
+// (cube_conditions.cpp).
 #include <D2RLPlugin/api.h>
 
 #include "sigma_skills.h"
@@ -17,6 +18,7 @@
 #include "item_spells.h"
 #include "missile_hits.h"
 #include "mana_costs.h"
+#include "cube_conditions.h"
 #include "state_trace.h"
 #include "whirlwind.h"
 
@@ -29,7 +31,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.36.0";
+constexpr const char* PluginVersion = "0.37.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -41,6 +43,7 @@ char g_calcReport[160] = "off: not the expected game image";
 char g_itemSpellsReport[160] = "off: not the expected game image";
 char g_manaCostsReport[160] = "off: not the expected game image";
 char g_missileHitsReport[512] = "";
+char g_cubeReport[192] = "off: not the expected game image";
 int g_missileHitsInstalled = 0;
 
 constexpr D2RL::PluginInfo Info {
@@ -65,7 +68,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat whirlwind; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -132,6 +135,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	              g_missileHitsReport[0] ? g_missileHitsReport : " none");
 	command->plugin->WriteConsoleMessage(line);
 	std::snprintf(line, sizeof(line), "mana costs %s", g_manaCostsReport);
+	command->plugin->WriteConsoleMessage(line);
+	std::snprintf(line, sizeof(line), "cube conditions %s", g_cubeReport);
 	command->plugin->WriteConsoleMessage(line);
 	return D2RL::ConsoleCommandResult::Handled;
 }
@@ -223,6 +228,17 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallWhirlwind(context, report, sizeof(report));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: whirlwind %s", report);
+			context->LogInfo(line);
+		}
+		{
+			char report[192];
+			if (Off("cube")) {
+				std::snprintf(report, sizeof(report), "%s", OffNote);
+			} else {
+				InstallCubeConditions(context, report, sizeof(report));
+			}
+			std::snprintf(g_cubeReport, sizeof(g_cubeReport), "%s", report);
+			std::snprintf(line, sizeof(line), "mxl-core: cube conditions %s", report);
 			context->LogInfo(line);
 		}
 		if (Off("trace")) {  // diagnosis word, not a part: turns the state trace on (bug #22)
