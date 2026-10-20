@@ -31,8 +31,8 @@ Format follows [quests-requirements.md](quests-requirements.md) and [npc-hirelin
 - **Trophies, signets, sigils, marks, relics are items, not code.** Signets use the vanilla "add stat" potion spell
   (pSpell 3, data). Trophies/sigils/marks/riftstones are inert `thng` items (help text only); progression is the cube:
   99 recipes feed trophies into the unique `TrophyCarrier2`, others turn riftstones/dimensional keys into flags, all
-  through cube conditions that mxl-core 0.37.0 already evaluates. The missing piece is who **sets** the player craft
-  flags (open in plugin-spec.md "Cube conditions"); the area gating relies on it.
+  through cube conditions that mxl-core 0.37.0 already evaluates. The flags are set by recipe output slots (byte 7 player / 9 game flag; plugin-spec.md "Cube conditions"); they are
+  once-per-game guards on crafts, not area gates, and live in game memory only.
 - Rough total: data/converter ~3-4 days, lockout ~1.5-2 weeks (hook + state + UI), goblins ~3-5 days, Halloween ~1 week,
   everything else cut. Details in section 6.
 
@@ -44,7 +44,7 @@ Format follows [quests-requirements.md](quests-requirements.md) and [npc-hirelin
 | Dungeon lockout clock and sealing | D2Dungeon.cpp 0x5da80..0x5e2d0 (state array at game +0x1b24, 12 bytes per level), start 0x5d9d0 -> 0x5df20, warp check 0x5d810 / 0x5cee0 / 0x5d150 (D2DrlgWarp.cpp) | levels.bin extension fields (section 3) | **open** |
 | Lockout UI | client `DungeonWidget:*` (0xf4bb0, 0xf4fc0), packet 0x88 | UI layout (not in our extract) | **open** |
 | Treasure goblins | D2Goblins.cpp 0x66120 (tick), 0x66070 (chance), 0x65de0 (pick), 0x65be0 (rebuild candidates); tick table 0x101d90ec run by 0x66230 (D2GS.cpp) | levels `GoblinChance` (+0x15c), monstats3 goblin fields (section 4) | **open** (monsters exist) |
-| Trophies, sigils, marks, relics, riftstones | none (items); cube checker 0x10059d00 | misc.txt, cubemain/cubemainext, uniqueitems `TrophyCarrier2`, `Fist *`/`Lab *` treasure classes | cube conditions **ported** 0.37.0; flag setters **open** |
+| Trophies, sigils, marks, relics, riftstones | none (items); cube checker 0x10059d00 | misc.txt, cubemain/cubemainext, uniqueitems `TrophyCarrier2`, `Fist *`/`Lab *` treasure classes | cube conditions **ported** 0.37.0; flag setters = cubemain output slots, spec in plugin-spec.md (needs a D2R hook) |
 | Signets | vanilla pSpell 3 | misc.txt (about 30 rows: gold, experience, the learning family, skill) | **data** (D2R handles pSpell 3; to verify) |
 | Boss rewards (Marks of Victory, trophies, keys) | none | treasureclassex, monstats `TreasureClass1(H)`, superuniques `TC(H)` | **data** |
 | Halloween event | object fns 36 (0x96b40) and 37 (0x969e0), D2SpecialEvents map at game +0x1b2c, currency sync tick 0x5b800 (packet 0x86), HUD `HalloweenCurrencyBalance*` | objects2 `OperateCurrency*` (chest costs 2300 of currency 102024), monstats3 `Currency*` (68 monsters), level 246 | **open / defer** |
@@ -181,7 +181,7 @@ Sizes: S <= 1 day, M 2-4 days, L about 1-2 weeks.
 | 1 | Keep keys/scrolls/riftstones as item spells (done); add a **test list** of the 40 pSpell-16 items -> levels (section 2) | a | S | gives the area-by-area smoke test; levels 215+ need LevelIds |
 | 2 | Converter step `tools/level_ext.py`: levels.bin -> `plugin/src/mxl_levels_ext.h` {lock seconds, lock group, min difficulty, level req x3, class lock, goblin chance} keyed by D2R level id (like `cube_tables.py`) | a | S-M | no data hits D2R's own levels.txt; only the plugin reads it |
 | 3 | Same for goblins: monstats3 -> `mxl_goblins.h` {monster id, rarity, min, max, level restrict, flags} | a | S | uses the monster id map |
-| 4 | Craft-flag setters (who sets flags 1-19): find the recipe output that runs the four effects (0x591b0..0x59390) and give them a D2RLoader path; without it the 19 flag recipes and the area gating stay shut | b/c | M | **blocking for the endgame loop**; owned by the cube lane (plugin-spec "Cube conditions") |
+| 4 | Craft-flag setters: the recipe output slots (slot byte 7 = player flag, 9 = game flag, 6 = pay gold) need a D2R hook on the cube output dispatcher or transmute entry plus a generated `{recipe, kind, param}` table (cube_tables.py reads cubemain.bin); without it the 19 op-38 recipes (6350-6368) stay locked and the once-per-game key crafts can repeat. Area gating is **not** affected | b/c | S-M | spec in plugin-spec "Cube conditions" (Port spec); D2R address to find |
 | 5 | Verify signets (pSpell 3), trophies in `TrophyCarrier2`, "useitem" cube outputs on D2R (the 99 trophy recipes) | a (test) | S | likely works; needs an in-game check |
 | 6 | **Lockout server logic**: per-game state (12 bytes x levels), clock start on portal use, expiry events (D2R timed-event API: to find), sealing, warp test + level / difficulty / class requirements | c | L | hooks: portal-object operate for the red and one-way portals (same hooks as item_spells), the level-entry / warp function (to find), a D2R per-game storage slot (to find; D2Sigma used game +0x1b24) |
 | 7 | **Lockout client**: DungeonWidget (timer, title/caption, lockout popup) + the state packet; D2RLoader packet service or a game-message path (to find) | b + d | L | can ship after 6 with a chat/system message instead of the widget (S) |
@@ -199,7 +199,7 @@ appear from Act 1, so players notice their absence early) -> 7 -> 9. Item 2 is a
 1. **D2R's native uber/Pandemonium code**: D2R spawns its own Uber Tristram bosses from its own keys. With Median's data
    (`pk` codes replaced, rows 704-709 kept, levels 133-136 kept) is any of it reachable or does it misfire? Needs an
    in-game check, and a look at D2R's Pandemonium handler (to find).
-2. **Who sets the craft flags** (bucket item 4). The gating of the endgame depends on it.
+2. ~~Who sets the craft flags~~ answered: recipe output slots (plugin-spec "Cube conditions"). Remaining: the D2R address of the cube output dispatcher / transmute entry.
 3. The unit and meaning of the lock time (seconds in code; are 20 s levels an entry window or a real time limit?) and
    the roles of lock-flag bits 1 and 4: confirm with a test game, or read the DungeonWidget layout strings and the
    `OnEnteringLevelText` string.
