@@ -4,6 +4,7 @@ Report results by item so confirmed checks can move to Confirmed and failures to
 
 ## barby (Barbarian, level 10)
 
+- [ ] **Skill tree look: Median titles, stone, arrows** (data) — Open the skill tree (T) in HD, click all 8 tabs; press G and repeat; try another class too (Sorceress, Paladin). **Expected:** Median's tab titles and arrows per tab, brown stone, sockets lined up with the icons, classic mode with a titled tab column; report any tab that shows no art or the wrong class.
 - [ ] **Median stash size: 14 x 14** (data) — Open personal and shared stash tabs; place items in far corners, switch tabs, leave and reload, then check the shared stash on another character. **Expected:** Median art and grid line up; gold, arrows, tabs and stored items work; D2R material tabs are unchanged.
 - [ ] **Median inventory and cube sizes: 15 x 10** (data) — In HD, open inventory and cube; use new rows, equip each slot, swap weapons, transmute, save/reload, and press G. **Expected:** Both grids and controls line up with Median art; items persist. Classic mode keeps D2R art with the larger grid.
 - [ ] **States fix off by default** (0.35.0) — In Blood Moor, hover and attack monsters, cast Whirlwind, and play with buffs/auras. **Expected:** Monsters are targetable, Whirlwind spins, buffs work, no random states or crash.
