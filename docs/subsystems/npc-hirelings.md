@@ -297,4 +297,4 @@ only a name string key per hiredesc row (`strhirespecial1..9`), already used by 
 
 All 60 converted rows follow D2R's 135-row hireling column layout (including the base bank): no shifted columns. Median's shared Resist and Resist/Lvl land in all four D2R elements; shared row fields, six skills per row, and the nine HireDesc mappings match the named table. Every skill exists in the converted skills.txt, and every NameFirst, NameLast and HireDesc key exists in the mod string JSONs. Act I and Act V equivalentcharclass values are ama and bar.
 
-Mismatches (source row numbers, excluding header; column `equivalentcharclass`): rows 13–30, Act II, are blank instead of `pal`; rows 31–48, Act III, are blank instead of `sor`. No other checked row or column differs.
+Only difference (column `equivalentcharclass`): rows 13–30 (Act II) and 31–48 (Act III) are blank, where Median's hireclasses says `pal` and `sor`. D2R's own hireling.txt leaves Act II and III blank too, so the conversion copied D2R's convention. Open question: set `pal`/`sor` so these mercenaries can equip what Median lets them (needs checking what D2R does with a non-blank value for those acts).
