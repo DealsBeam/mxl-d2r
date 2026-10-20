@@ -59,7 +59,17 @@ build). Every command runs from the repo root.
 - First boot: start `D2RLoader.exe` (never from a script), pick the MedianXL mod.
 - `d2rl compile MedianXL` in the developer console if the game reports a missing or stale compile (Phase 2 item).
 - Test characters: none were on this PC (below). Create new ones; read `save-format.md` before editing saves.
-- Ghidra projects (`..\ghidra\{sigma,d2game,project}`) are not part of this setup; see `tools/ghidra_analyze.ps1`.
+## Ghidra
+
+- Ghidra 12.1.4 (Java 21). The scripts expect it at `..	ools\ghidra_12.1.4_PUBLIC`; on the game PC that is a junction to
+  the install in Downloads.
+- `..\ghidra\sigma` (project `D2Sigma`, `D2Sigma.dll` from the Median install, base 0x10000000) and `..\ghidra\d2game`
+  (project `D2Game`, Median's `D2Game.dll` imported as `D2Game_113.dll`, base 0x6fc20000): `analyzeHeadless` import
+  with auto-analysis, about 1.5 minutes each.
+- `..\ghidra\project` (the D2R image): needs a memory dump of the running game. Start D2RLoader, then
+  `py -3 tools/dump_image.py` -> `..\ghidra\D2RLoader_<time>_dump.exe`, then `tools/ghidra_analyze.ps1` (hours).
+- Parallel lanes each query their own copy of a project (`..\ghidra-lanes\<lane>\sigma`): two headless runs can't
+  open one project at once.
 
 ## Old test characters
 

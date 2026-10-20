@@ -19,6 +19,10 @@ ItemIsModType, MonsterHasMod); none checks a state, so `mxl_hasstate` still need
 - **warn**: D2R's own data has the same value, or the string key is missing from Median's own tables too.
 
 ## Current result (both banks)
+2026-10-20 rebuild on the game PC (docs/setup.md): **0 errors**, 3,994 plugin items (base), 48/89 warnings (base/rotw).
+Not yet checked why this differs from the numbers below (fixes since then, or the restored Median data).
+
+Earlier result:
 **2 errors**: `stat('strength'.320)` in two skills' `prgcalc1` (broken bytecode in Median's own data; the 4
 such cells are listed in work/formulas/report.md and need a manual decision).
 

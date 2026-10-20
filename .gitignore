@@ -42,3 +42,6 @@ __pycache__/
 
 # Regenerable evidence reports (tools/sigma_tables.py evidence)
 /research/sigma_evidence/
+
+# Agent worktrees
+/.claude/
