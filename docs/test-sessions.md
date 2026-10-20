@@ -89,3 +89,49 @@ Report results by item so confirmed checks can move to Confirmed and failures to
 - [ ] **States fix** (0.6.0) — Play with buffs, auras, curses and summons; enter and leave towns and areas. **Expected:** No crash; buffs show and expire normally.
 - [ ] **High-numbered Median states** (0.6.0) — Use a late-list Median buff such as a class aura or shout; check its icon/overlay. **Expected:** Effect applies and ends; no crash.
 - [ ] **Multiplayer** (later) — Host and join through D2RLoader with same mod and plugin version. **Expected:** Both enter game; new skills work for joiner.
+
+## Keys and portals, one by one
+
+Use each item in the listed act; try a second copy in the same game to check the once-per-game limit.
+Level numbers are Median IDs (D2R IDs are one higher here). "Any" means any difficulty.
+
+- [ ] `ktox` Dimensional Link — Act V (Harrogath), any difficulty: level 215 Edge of Nothingness; consumed.
+- [ ] `kbel` Key of Lies — Act IV (Pandemonium Fortress), any difficulty: level 176 Realm of Lies; kept.
+- [ ] `kazm` Key of Sin — Act IV (Pandemonium Fortress), any difficulty: level 166 Realm of Sin; kept.
+- [ ] `kfau` Mind Warp — Act V (Harrogath), any difficulty: level 155 Fauztinville; kept.
+- [ ] `ksco` Gaya Wand — Act V (Harrogath), any difficulty: level 242 The Frozen Crest; consumed.
+- [ ] `tbr` the Black Road — Act V (Harrogath), any difficulty: level 155 Fauztinville; kept.
+- [ ] `cr01` Charged Riftstone 1 — Act II (Lut Gholein), Hell: level 224 The Storm Oasis; consumed.
+- [ ] `cr02` Charged Riftstone 2 — Act III (Kurast Docks), Hell: level 225 The Chamber of Offering; consumed.
+- [ ] `cr03` Charged Riftstone 3 — Act IV (Pandemonium Fortress), Hell: level 226 The Storm Cave; consumed.
+- [ ] `cr04` Charged Riftstone 4 — Act IV (Pandemonium Fortress), Hell: level 227 Court of the Damned; consumed.
+- [ ] `cr05` Charged Riftstone 5 — Act IV (Pandemonium Fortress), Hell: level 228 The Storm Pit; consumed.
+- [ ] `cr06` Charged Riftstone 6 — Act V (Harrogath), Hell: level 229 Dimensional Labyrinth 1; consumed.
+- [ ] `cr07` Charged Riftstone 7 — Act V (Harrogath), Hell: level 230 Dimensional Labyrinth 2; consumed.
+- [ ] `cr08` Charged Riftstone 8 — Act V (Harrogath), Hell: level 231 Dimensional Labyrinth 3; consumed.
+- [ ] `cr09` Charged Riftstone 9 — Act V (Harrogath), Hell: level 232 Dimensional Labyrinth 4; consumed.
+- [ ] `cr10` Charged Riftstone 10 — Act V (Harrogath), Hell: level 233 Dimensional Labyrinth 5; consumed.
+- [ ] `cr11` Charged Riftstone 11 — Act V (Harrogath), Hell: level 234 Dimensional Labyrinth 6; consumed.
+- [ ] `cr12` Charged Riftstone 12 — Act V (Harrogath), Hell: level 235 Dimensional Labyrinth 7; consumed.
+- [ ] `cr13` Charged Riftstone 13 — Act V (Harrogath), Hell: level 236 Dimensional Labyrinth 8; consumed.
+- [ ] `cr14` Charged Riftstone 14 — Act V (Harrogath), Hell: level 237 Dimensional Labyrinth 9; consumed.
+- [ ] `cr15` Charged Riftstone 15 — Act V (Harrogath), Hell: level 238 Dimensional Labyrinth 10; consumed.
+- [ ] `ktpx` Otherworldly Link — Act V (Harrogath), any difficulty: level 240 Dimensional Plane; consumed.
+- [ ] `ir75` Call of the Damned — Act IV (Pandemonium Fortress), any difficulty: level 227 Court of the Damned; consumed.
+- [ ] `cr21` Charged Riftstone 16 — Act V (Harrogath), any difficulty: level 247 Heart of Darkness; consumed.
+- [ ] `b60X` Scroll of Summoning 1 — Act I (Rogue Encampment), any difficulty: level 250 Butcher's Lair 2; consumed.
+- [ ] `b61X` Scroll of Summoning 2 — Act III (Kurast Docks), any difficulty: level 251 Proving Grounds 2; consumed.
+- [ ] `b62X` Scroll of Summoning 3 — Act I (Rogue Encampment), any difficulty: level 252 Infernal Cave 2; consumed.
+- [ ] `b63X` Scroll of Summoning 4 — Act IV (Pandemonium Fortress), any difficulty: level 262 Heroic Library of Fate; consumed.
+- [ ] `b64X` Scroll of Summoning 5 — Act IV (Pandemonium Fortress), any difficulty: level 263 Heroic Library of Fate 2; consumed.
+- [ ] `b65X` Scroll of Summoning 6 — Act IV (Pandemonium Fortress), any difficulty: level 264 Heroic Library of Fate 3; consumed.
+- [ ] `b66X` Scroll of Summoning 7 — Act IV (Pandemonium Fortress), any difficulty: level 265 Heroic Library of Fate 4; consumed.
+- [ ] `b67X` Scroll of Summoning 8 — Act IV (Pandemonium Fortress), any difficulty: level 266 Heroic Library of Fate 5; consumed.
+- [ ] `b68X` Scroll of Summoning 9 — Act IV (Pandemonium Fortress), any difficulty: level 267 Heroic Library of Fate 6; consumed.
+- [ ] `b70X` Scroll of Summoning 10 — Act I (Rogue Encampment), any difficulty: level 273 Heroic Duncraig; consumed.
+- [ ] `b71X` Scroll of Summoning 11 — Act I (Rogue Encampment), any difficulty: level 274 Heroic Duncraig 2; consumed.
+- [ ] `b72X` Scroll of Summoning 12 — Act I (Rogue Encampment), any difficulty: level 275 Heroic Duncraig 3; consumed.
+- [ ] `b73X` Scroll of Summoning 13 — Act I (Rogue Encampment), any difficulty: level 276 Heroic Duncraig 4; consumed; current calc1 formula evaluates to 0, so flag a failure.
+- [ ] `b80X` Scroll of Summoning 14 — Act I (Rogue Encampment), any difficulty: level 277 Mindflayer's Arena; consumed.
+- [ ] `b81X` Scroll of Summoning 15 — Act I (Rogue Encampment), any difficulty: level 279 Eyegouger's Arena; consumed.
+- [ ] `b82X` Scroll of Summoning 16 — Act I (Rogue Encampment), any difficulty: level 278 Bonehexer's Arena; consumed.
