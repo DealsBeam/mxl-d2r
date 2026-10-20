@@ -10,8 +10,8 @@ Neither is committed here. See `.gitignore`.
 | Path | Contents |
 |---|---|
 | `tools/` | Python CLI tools (MPQ/CASC extraction, bin2txt, formula codec, txt migration, validation) |
-| `plugins/` | D2RLoader plugins (C++20, CMake) that reimplement D2Sigma.dll |
-| `mod/` | Generated D2R mod (`mods/MedianXL`) sources: migrated tables, strings, layouts |
+| `plugin/` | D2RLoader plugin (C++20, CMake) that reimplements D2Sigma.dll |
+| `work/mod/` | Generated D2R mod sources: migrated tables, strings, layouts |
 | `docs/` | Plan and one note per D2Sigma subsystem (`docs/subsystems/`) |
 | `research/` | D2R address registry and RE notes (no game binaries) |
 | `third_party/` | StormLib, CascLib (submodules) |
@@ -27,3 +27,5 @@ Ignored working folders: `extract/` (raw game/MXL extractions), `work/` (scratch
 ## Plan
 
 See [docs/PLAN.md](docs/PLAN.md). Handoff notes for porting another classic mod: [docs/porting-playbook.md](docs/porting-playbook.md).
+
+The main remote is [the forge](https://git.werdegames.com/WerdeGames/mxl-d2r); the GitHub copy is kept as `github`. New-PC setup is in [docs/setup.md](docs/setup.md).
