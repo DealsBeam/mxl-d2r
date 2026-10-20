@@ -430,12 +430,48 @@ high one, which mxl-core then writes (0.19.0; the 12 summoning scrolls to levels
       Tome of Town Portal only opens the Cow Level portal in town.
     - **37** random: passes value% of the time (clamped 0-100; rolled again at each check).
     - **38 / 39** player craft flag `param` (0-255) is set / clear. **40 / 41** the same for the game-wide flags.
-      The flags live in a structure at game +0x1b30 (a bit array for the game, and a name-keyed map to one bit array per
-      character). Setters are four small output effects at `0x591b0` / `0x59260` (player set / clear) and `0x59300` /
-      `0x59390` (game set / clear), each taking an effect record whose word at +6 is the flag number; they sit in a
-      pointer table at `0x101d90cc`. The caller (which recipe output runs them) is not found, so the port has no
-      setters yet. `0x59120` is the neighbouring effect that takes (word at +6) x 100 gold from carried gold (stat 14)
-      and then the bank (stat 15).
+      The flags live in a structure at game +0x1b30 (created by `0x594e0` at game start, freed by `0x59bf0`): the game, a
+      32-byte bit array for the game-wide flags, and a name-keyed map (key = the player's name) to one 32-byte bit array
+      per character. The checker tests them with `0x5abd0` (character) and `0x5ab60` (game). **They are never saved**:
+      nothing else reads or writes the structure, so a flag lives for one game only (leave the game and it is gone).
+    - **Who sets them (found 2026-10-21): the recipes' output slots.** Each of a cubemain record's three output slots
+      (record +0x4c, +0xa0, +0xf4; 0x54 bytes each) has a word at +6 (the parameter) and a **special-output byte at +8**.
+      Vanilla uses 1-3 (Cow / Pandemonium portals; the parameter is the level) and D2Game's transmute loop (1.13c
+      D2Game `0x72260..0x72439`) dispatches the byte through a small function-pointer table, calling (ecx = game,
+      edx = player, stack = the output slot). Median's loader patch list (records in D2Sigma's .rdata at `0x1712f0`:
+      D2Game address, new value) edits that code: bound 4 -> 11 (D2Game `0x72418`), table -> D2Sigma `0x101d90b0`
+      (`0x72421`), and a jump (`0x72429`) to the trampoline `0x1009b850`. Table index = the byte:
+
+      | byte | handler | effect (parameter = slot word at +6) | recipes |
+      |---|---|---|---|
+      | 1 | `0x58d20` | portal to level `param` (Cow Level 39; also 163, 192, 214, 242) | 5 (rows 2, 3, 85, 4962, 7453) |
+      | 2-5 | `0x58e60`, `0x58eb0`, `0x58f00`, `0x59030` | other portal / level effects, not identified | 0 |
+      | 6 | `0x59120` | **pay `param` x 100 gold**: from carried gold (stat 14), the rest from the bank (stat 15); `cubemainext`'s cost is only the check in the search | 65 (all gold-cost recipes) |
+      | 7 | `0x591b0` | **set player flag `param`** | 135 |
+      | 8 | `0x59260` | clear player flag `param` | 0 |
+      | 9 | `0x59300` | **set game flag `param`** | 56 |
+      | 10 | `0x59390` | clear game flag `param` | 0 |
+
+      The byte is not in the decoded cubemain.txt (its output cell keeps only the item code); it is in
+      `extract/mxl/data/global/excel/cubemain.bin` (slot byte +8, word +6), which is how the rows below were found.
+      A flag number is 0-255.
+    - **Median's flag uses.** Every setter recipe also checks the same flag first, so a flag is a once-per-game guard;
+      no item use, kill, quest or area event sets one.
+      - Player flags 1-19: 133 class-split "upgrade a quest item" recipes (item e.g. `RathmasSupremacy2`; one recipe per
+        flag and class: rows 6369-6387 assassin, 6388-6406 paladin, 6407-6425 druid, 6426-6444 necromancer, 6445-6463
+        sorceress, 6464-6482 barbarian, 6483-6501 amazon; main op 6 = player stat 202 equals a per-item code, ext op 16
+        = item stat 450; output `useitem` plus the class's property bundle) set flag N. Flag N then opens op-38 recipe
+        `6350 + N - 1` (same input item, `useitem`, item level 100, no mods). **Rows 6350-6368 are the only readers of
+        flags 1-19, so they stay locked until a setter runs.**
+      - Player flags 99 / 100: rows 7383 (`UniqueDemonsbane`) / 6317 (`ZakarumsEar`): op 39 (flag clear) and set the same
+        flag, so once per character per game.
+      - Game flags (cubemainext op 41 = flag clear, output byte 9 sets it): 50-61 and 70-77 (the dungeon-key crafts, rows
+        7100-7163 and 7340-7351: `UpgradedBossKillerRing` / `erun` + `f700` -> `useitem` / `du01`..`du21`), 101-105 (rows
+        6324, 5656, 5667, 5670) and 102 (rows 4749-4755, `ElderVial` per class, min difficulty 2). Each key or reward
+        is craftable **once per game**, not per character. These are anti-repeat guards; they do not open areas
+        (the keys and the dungeon lockout do), so the flags do not block the area progression, only the repeat crafts.
+      - Row 2 (Wirt's leg -> Cow portal) checks *player* flag 69 clear (ext op 39) but sets *game* flag 69; nothing
+        reads game flag 69 and nothing sets player flag 69, so the check always passes (a Median quirk, no effect).
     - **42** strength + energy (stats 0 and 1) > 9000.
   - **Median's data** (cubemain op column): 38 x19 (flags 1-19 gate the 19 "useitem" quest-item recipes), 37 x9 (the
     chance recipes), 33 x6 (not state 893), 34 x2 (area 39, 241), 39 x2, 32 x1, 36 x1, 42 x1.
@@ -469,10 +505,47 @@ high one, which mxl-core then writes (0.19.0; the 12 summoning scrolls to levels
     Plugin: `SearchHook` remembers game and player, `MatchHook` answers 0 for input 0 when `Passes()` fails (record
     index = (record - `0x3e3f60(dataFlag, 0)`) / 0x16c, verified against the getter, else the hook logs once and passes
     through). Skill level (30/31) uses D2R's base-level calc code 41 for both (no +skills yet). Craft flags exist
-    in the plugin (`SetCraftFlag`) but nothing sets them, so ops 38/40 never pass (the 19 flag recipes stay locked) and
+    in the plugin (`SetCraftFlag`) but nothing sets them yet, so ops 38/40 never pass (the 19 flag recipes stay locked) and
     39/41 always pass. The gold cost is checked, not paid. **Blocked:** D2R's entry bytes of `0x529090` / `0x529d50`
     are not recorded (arrays empty in cube_conditions.cpp), so the hooks refuse to install and report why in `mxl`.
     `mxl-core-off.txt` word `cube`.
+  - **Port spec: the output effects (flags 7/9, gold 6; not implemented, needs D2R addresses).**
+    - *Storage.* Nothing to save: Median keeps the flags in game memory only (see above), so no itemstatcost stat or
+      save field is needed (and none would match Median: the flags reset when the game ends). The plugin's maps
+      (`g_playerFlags`, `g_gameFlags`) are right in kind; change them to be keyed per game (a game pointer, cleared when the
+      game is created or freed: hook the game-create / game-free path, address to find, or reset when `SearchHook` sees a
+      new game pointer) and per player **name** (as Median does; the unit pointer changes when a player re-enters), and
+      each flag set 0-255.
+    - *Data.* D2R's cubemain.txt cannot express bytes 6-10: its parser only knows the portal outputs, and the migrated
+      output cell has no place for Median's byte. So the setters need data outside the txt: extend `tools/cube_tables.py`
+      to read `extract/mxl/data/global/excel/cubemain.bin` (record 0x148 bytes after a 4-byte count; slots at +0x4c,
+      +0xa0, +0xf4; byte +8, word +6) and emit, into `mxl_cube.h`, a list `{recipe row, kind (6 pay / 7 set player / 9 set
+      game), parameter}` (256 entries: 65 + 135 + 56; kinds 8 and 10 are unused but cost nothing to accept; the
+      5 portal outputs stay D2R's, via the txt). Row numbers are the cubemain.bin row numbers, equal to the migrated cubemain.txt rows used by `Entries`.
+    - *Hook (D2R, to find).* D2R's transmute runs the same loop as 1.13c's: per output slot it reads the slot byte at +8
+      and, when it is 1-3 (4 for D2R's Red Portal), calls a handler out of a four-entry pointer table (the D2R record is
+      0x16c bytes, 0x24 more than Median's 0x148, so the slot offsets are probably shifted too: read them from the loop).
+      To find: in the D2R Ghidra project take the caller of the Red Portal opener `0x5da800` (the cube's portal output) or
+      the cubemain record walker `0x529090` and look for the function that reads the record's three output slots
+      (stride 0x54 or the D2R equivalent) and indexes a table by a slot byte; the signature is likely (game, player,
+      slot). Two ways to use it:
+      1. *Like Median:* patch the bound and the table (copy the original entries, append the plugin's handlers at indexes
+         6-10) and set the slot byte of the recipes in the table above when the plugin loads (write through
+         `0x3e3f60(dataFlag, row)` + slot offset). The handlers then run in D2R's own flow, in slot order, after the
+         recipe has been accepted. Needs: the dispatcher's bound and table-pointer patch sites, the slot layout.
+      2. *Post-hook:* hook the transmute entry (the function that calls the search and then consumes the inputs; the
+         search result is the record index that `SearchHook` already receives) and, after it returns success, run the
+         recipe's list from the generated table. Needs only that function's entry bytes. Simpler; the effects then run
+         once per transmute, as Median does (it runs them per slot, in the same call).
+      Handlers: set / clear a bit (`SetCraftFlag(playerName-key, flag, game, on)`), and pay gold: take `param * 100` from
+      stat 14 and the rest from stat 15 (D2R stat getters/setters from `cube_conditions.cpp`'s `GetStatRva` family and the
+      add-stat call used elsewhere in the plugin; carried gold first, as Median does) which also closes the "gold cost is
+      checked, not paid" gap for the 65 gold recipes.
+    - *Effort and risk.* S once the transmute function is found (data emitter about 40 lines, handlers about 40). Without it
+      the 19 op-38 recipes (6350-6368) stay locked and the once-per-game guards (ext op 41 recipes) never close, so those
+      recipes can be crafted repeatedly (benign); until gold is paid the 65 gold recipes are free. Test: craft 6369-style
+      item upgrade, then 6350+ must appear; craft a dungeon key twice in one game (second must be refused), leave and
+      re-enter the game (allowed again).
 - Skill descriptions (`D2SkillDesc.cpp`).
 - Engine limits: states (below), level types (below).
 

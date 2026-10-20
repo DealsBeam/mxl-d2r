@@ -74,7 +74,7 @@ D2RLoader's packet services if a ported feature sends them.
 ## Next to read (largest open modules)
 1. ~~D2Quests.cpp + D2Requirements.cpp~~ read (quests-requirements.md). ~~Where the ubers live~~ read ([ubers-events.md](ubers-events.md)):
    they are data plus item spell 16, the dungeon lockout (D2Dungeon.cpp) and goblins; remaining: D2AI.cpp / D2MonDesc.cpp,
-   the Drlg/Landscape files, and finding who sets the cube craft flags.
+   the Drlg/Landscape files. (The cube craft flags are set by recipe output slots, see plugin-spec.md "Cube conditions".)
 2. ~~D2NpcActions.cpp + npcext~~ read (npc-hirelings.md).
-3. ~~D2Craft.cpp (32) + cubemainext~~ read: fields are cost/100, second condition (op, param, value), the two stat layers (plugin-spec.md "Cube conditions"). Open: who runs the craft-flag setters (output effects at 0x591b0..0x59390, 0x59120 pays gold).
+3. ~~D2Craft.cpp (32) + cubemainext~~ read: fields are cost/100, second condition (op, param, value), the two stat layers (plugin-spec.md "Cube conditions"). The craft-flag setters are cubemain output-slot effects (slot byte 7/9 sets a player/game flag, 6 pays gold; flags live in game memory only), found 2026-10-21; port spec in the same section, needs the D2R transmute output dispatcher address.
 4. ~~D2Hirelings.cpp~~ read (npc-hirelings.md).
