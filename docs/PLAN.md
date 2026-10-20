@@ -79,6 +79,17 @@ Smoke tests, saves/reload, TCP/IP, `d2rl pack`.
 
 **First milestone:** a playable vertical slice (one class, its items, Act 1).
 
+## Phase 7: Private realm (after single-player works; preliminary)
+Characters stored on our own server, games hosted through D2RLoader TCP/IP (the D2R Reimagined / Project Lage
+model). Draft plan, edit before starting: [realm-plan.md](realm-plan.md).
+- [ ] 7a `mxl-realm` save sync plugin (download on start, upload `.d2s` + `.d2rl` + `.d2i` on save and exit)
+- [ ] 7b Realm API (accounts, game tokens, save storage with revisions)
+- [ ] 7c Launch script (token file, realm savepath); launcher with signed packages later
+- [ ] 7d Hosting: player-hosted TCP/IP first, an always-on host later
+- [ ] 7e Optional: seasons, chat, death feed, trade listings, server-side save checks
+
+Rule for Phases 4-6 meanwhile: Median logic stays server-side in the plugins, and Median's state lives in the save files.
+
 ## Progress estimate (2026-10-14, updated after the Phase 5/3 hour)
 
 Judgement estimates, not measurements. "Phase done" total is weighted by each phase's share of the work.
@@ -93,6 +104,8 @@ Judgement estimates, not measurements. "Phase done" total is weighted by each ph
 | 5 Graphics | 28% | 27% | 7.6% |
 | 6 Test and release | 10% | 5% | 0.5% |
 | **Total** | **100%** | **~55%** | **~55%** |
+
+Phase 7 (private realm) is outside this estimate.
 
 Open: bug #22 (monsters not targetable, states fix; 0.34.1 under test), the docs/testing.md backlog, Phase 5 HD art,
 Median's remaining systems (Ubers and challenges, cube extras, character and stash screens), Phase 6.
