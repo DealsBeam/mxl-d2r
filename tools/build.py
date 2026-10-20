@@ -6,8 +6,10 @@
   tbl2json.py        strings                  -> work/mod/data/local/lng/
   txt_migrate.py     D2R table layout         -> work/mod/data/global/excel/{base,}
   gfx_placeholders.py  D2R graphics for Median-only monsters (until the art port) + hd/character/monsters.json
+  animdata_merge.py  merge Median animation data into D2R's animdata
+  hd_skill_anims.py  HD skill animation data for Median skills
   missile_hd.py      HD models for Median's missiles (by CelFile) -> hd/missiles/missiles.json
-  item_hd.py         HD inventory pictures for Median's items/uniques/sets -> hd/items/*.json (bug #18)
+  item_hd.py         HD inventory pictures for Median's items/uniques/sets -> hd/items/*.json; also converts Median-owned item art via item_art.py (bug #18)
   skill_icons.py     Median's skill icons as D2R icon sheets (classic + HD) and skilldesc IconCel
   ui_panels.py       Median panel art as HD panel backgrounds (inventory, cube)
   ui_layouts.py      UI layout overrides (8-tab skill tree, 15x10 inventory and cube)
