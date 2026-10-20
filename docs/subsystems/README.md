@@ -23,12 +23,12 @@ size. Buckets from docs/PLAN.md: **(a)** data-only, **(b)** D2RLoader service, *
 | D2MysticOrbs.cpp | 1 | mystic orb rules | c | done | item_spells.cpp |
 | D2Damage.cpp, D2Combat.cpp | 8, 12 | damage rules (area damage, procs) | c | partial | area_damage.cpp (srvdofunc 171), pet procs; the rest to read |
 | D2Stats.cpp, D2ItemStats.cpp, D2Properties.cpp, D2ItemCalc.cpp | 5, 5, 7, 1 | stat/property extensions (propertiesext, layered stats) | c | partial | stat_list.cpp layers; propertiesext not named |
-| D2Requirements.cpp | 42 | requirements (requirements/requirementtypes/requirementnames tables, 34 rows) | c | to read | likely Median's item/quest requirement checks (uber keys, class items) |
-| D2Quests.cpp, D2QuestFlags.cpp | 60, 1 | Median's quests | c | to read | biggest module; probably the uber quests and their rewards (signets, trophies) |
+| D2Requirements.cpp | 42 | boolean condition trees (requirements table, 33 rows; 37 types, Median uses 6) gating NPC services only | c | read | [quests-requirements.md](quests-requirements.md); ships as plugin data |
+| D2Quests.cpp, D2QuestFlags.cpp | 60, 1 | copy of D2Game's act quests plus ~15 reward hooks (Griswold's Heart, catalyst drops, dialog rewards, Baal relic orb) | c | read | [quests-requirements.md](quests-requirements.md); no uber content here |
 | D2SpecialEvents.cpp, D2Events.cpp | 7, 4 | world events | c | to read | |
 | D2Goblins.cpp | 3 | treasure goblins | c | to read | monsters exist in data (treasure_goblin_*) |
 | D2Monsters.cpp, D2MonUMods.cpp, D2AI.cpp, D2MonDesc.cpp | 2, 1, 9, 3 | monster mods, AI, monster tooltips | c | to read | monumodexp/monstats3 partly named |
-| D2Hirelings.cpp | 23 | Median's hirelings (hireclasses, hiredescext) | c | to read | |
+| D2Hirelings.cpp | 23 | hire-time class stat bonuses; the rest is minion scaling (done, pet_scaling.cpp) | a/b | read | [npc-hirelings.md](npc-hirelings.md); hireling.txt already converted |
 | D2Resurrect.cpp | 2 | resurrect | c | done | resurrect_2 -> D2R Revive; Habeas Corpus |
 | D2Experience.cpp | 1 | experience rules | a | to read | |
 | D2Shrines.cpp, D2ObjectFn.cpp, D2Objects.cpp | 2, 10, 5 | object functions (objects2) | c | to read | objects 573+ renumbered (txt-migrate.md) |
@@ -47,7 +47,7 @@ size. Buckets from docs/PLAN.md: **(a)** data-only, **(b)** D2RLoader service, *
 
 | Module | Functions | What it is | Bucket | Status | Notes |
 |---|---|---|---|---|---|
-| D2NPC.cpp, D2NpcActions.cpp, npc_speech.cpp, D2Interact.cpp | 22, 39, 7, 6 | NPC menus and services (npcext, npcactions) | c/d | partial | vendor stock done in data (vendors.md); Atma/Geglash sacred-item service open |
+| D2NPC.cpp, D2NpcActions.cpp, npc_speech.cpp, D2Interact.cpp | 22, 39, 7, 6 | data-driven NPC menus: 16 slots per NPC running npcactions (respec, imbue, sockets, personalize, travel, Cain's gifts), class greetings | c/d | read | [npc-hirelings.md](npc-hirelings.md); vendor stock done (vendors.md); Atma/Geglash shops are gated off (cut); D2Interact n/a |
 | D2Stash.cpp | 21 | Median's stash | n/a | n/a | D2R's shared stash and D2RLoader's save format replace it (bug #20 aside) |
 
 ## Interface (client)
@@ -72,7 +72,8 @@ os_utils.cpp, text_utils.cpp, D2Math.cpp: networking, saves, loading and the lau
 D2RLoader's packet services if a ported feature sends them.
 
 ## Next to read (largest open modules)
-1. D2Quests.cpp (60) with D2Requirements.cpp (42): Median's quest/uber content.
-2. D2NpcActions.cpp (39) + npcext: NPC services beyond shops.
+1. ~~D2Quests.cpp + D2Requirements.cpp~~ read (quests-requirements.md). The ubers, signets and trophies are not in
+   them: find where they live (candidates D2Dungeon, D2SpecialEvents, the object functions).
+2. ~~D2NpcActions.cpp + npcext~~ read (npc-hirelings.md).
 3. ~~D2Craft.cpp (32) + cubemainext~~ read: fields are cost/100, second condition (op, param, value), the two stat layers (plugin-spec.md "Cube conditions"). Open: who runs the craft-flag setters (output effects at 0x591b0..0x59390, 0x59120 pays gold).
-4. D2Hirelings.cpp (23).
+4. ~~D2Hirelings.cpp~~ read (npc-hirelings.md).
