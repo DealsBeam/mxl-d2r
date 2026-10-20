@@ -71,7 +71,7 @@ Status (2026-10-14):
   pages) followed the same day. Open: trade window, classic-mode panels, the cube grid shown inside D2R's stash panel.
 - Next: HD art. items.json / missiles.json / monsters.json use D2R look-alikes today (item_hd.py, missile_hd.py,
   gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
-  backgrounds and tab titles (bug #3) are art too. Deferred checks: Median monster art in classic mode, Median-only
+  backgrounds and tab titles (bug #3): tools/skill_tree_art.py, to test (titles are drawn into per-class 8-frame sprites). Deferred checks: Median monster art in classic mode, Median-only
   areas, Whirlpool (docs/testing.md).
 
 ## Phase 6: Test and release

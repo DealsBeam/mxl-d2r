@@ -2,9 +2,9 @@
 
 skillstreepanelhd.json: Median has 8 skill pages per class (5 trees, masteries, paragon...; D2Sigma's
 skilltabs.bin), each the same 6x3 grid as D2R's tree. D2R's panel has 3 TabWidgets that send
-"SkillsTreePanelMessage:ActivateTab:<n>"; this layout has 8, in one row, labelled 1-8. Whether D2R's panel
-code accepts tabs past 2 is what this tests (EXPERIMENT: if it does not, the extra tabs do nothing).
-The per-tab background frames assume 3 tabs, so tabs here have no background image.
+"SkillsTreePanelMessage:ActivateTab:<n>"; this layout has 8, in one row. The tab pictures (tools/skill_tree_art.py:
+Median's tab titles, sockets and arrows, 8 frames per class in skillBackgroundFile's sprite) are each tab's
+"Background" image, frame n. Classic mode (skillstreepanel.json) gets the same 8 tabs in its tab column.
 
 Inventory and cube (Phase 5): Median's player inventory is a 15 x 10 grid and its Horadric Cube 15 x 10 (D2R: 10 x 4
 and 3 x 4). The HD panels get Median's own art (tools/ui_panels.py, hd/global/ui/panel/mxl/) and Median's classic positions
@@ -12,7 +12,7 @@ and 3 x 4). The HD panels get Median's own art (tools/ui_panels.py, hd/global/ui
 is 66 x 62 and the grid lines up with the art. Equipment slots move to Median's places; the weapon swap tabs sit
 above Median's arm slots. The grid sizes themselves are in inventory.txt (txt_migrate.py, inventory_sizes).
 
-Writes work/mod/data/global/ui/layouts/skillstreepanelhd.json, playerinventoryoriginallayouthd.json,
+Writes work/mod/data/global/ui/layouts/skillstreepanelhd.json, skillstreepanel.json, playerinventoryoriginallayouthd.json,
 playerinventoryexpansionlayouthd.json and horadriccubelayouthd.json (after txt_migrate.py).
 Usage: python tools/ui_layouts.py
 """
@@ -26,6 +26,7 @@ BASE = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "ui" / "layouts"
 GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
 TABS = 8
 LEFT, RIGHT, TOP, HEIGHT = 130, 1018, 160, 99
+CLASSIC_TABS = {"x": 231, "y": -132, "width": 90, "height": 108}  # D2R classic tab column (3 tabs of "height")
 
 
 def baseline(name: str) -> str:
@@ -68,17 +69,9 @@ def tabs_json() -> str:
                 "onClickMessage": "SkillsTreePanelMessage:ActivateTab:{n}",
             }},
             "children": [
-                {{  // the stock code may look this up by name; its art assumes 3 tabs, so it sits off screen
+                {{  // the class's skillBackgroundFile sprite, frame n: tab strip with Median's titles, sockets, arrows
                     "type": "ImageWidget", "name": "Background",
-                    "fields": {{ "frame": {min(n, 2)}, "rect": {{ "x": -5000, "y": -5000 }} }}
-                }},
-                {{
-                    "type": "TextBoxWidget", "name": "Label",
-                    "fields": {{
-                        "rect": {{ "x": {x}, "y": {TOP + 12}, "width": {width - 4}, "height": 76 }},
-                        "style": "$StyleSkillTreeTabs",
-                        "text": "{n + 1}",
-                    }}
+                    "fields": {{ "frame": {n}, "rect": {{ "x": 132, "y": 160 }} }}
                 }},
             ]
         }},""")
@@ -99,6 +92,38 @@ def skill_tree() -> str:
         t = t[:s] + t[e:]
     s, _e = block_span(t, '"name": "Title"')
     return t[:s] + tabs_json().lstrip() + "        " + t[s:]
+
+
+def classic_tabs_json() -> str:
+    c = CLASSIC_TABS
+    step = c["height"] * 3 / TABS
+    out = []
+    for n in range(TABS):
+        out.append(f"""        {{
+            "type": "TabWidget", "name": "Tab{n}",
+            "fields": {{
+                "activationRect": {{ "x": {c["x"]}, "y": {round(c["y"] + n * step)}, "width": {c["width"]}, "height": {round(step)} }},
+                "onClickMessage": "SkillsTreePanelMessage:ActivateTab:{n}",
+            }},
+            "children": [
+                {{  // skltree_<class>_back.dc6: set 0 = panel, sets 1-{TABS} = tab n-1 active (4 tiles each)
+                    "type": "GridImageWidget", "name": "Background",
+                    "fields": {{ "rect": {{ "x": 0, "y": -240 }}, "frames": 4, "rows": 2, "frame": {4 * (n + 1)} }},
+                }},
+            ]
+        }},""")
+    return "\n".join(out) + "\n"
+
+
+def classic_skill_tree() -> str:
+    """D2R's classic skill tree panel with Median's 8 tabs (the stock text boxes and tooltips are for 3 tabs)."""
+    t = baseline("skillstreepanel.json")
+    for n in range(3):
+        s, e = block_span(t, f'"name": "Tab{n}"')
+        t = t[:s] + t[e:]
+        t = set_rect(t, f"TextTab{n}", '{ "x": -5000, "y": -5000, "width": 10, "height": 10 }')
+    s, _e = block_span(t, '"name": "SkillCounter"')
+    return t[:s] + classic_tabs_json().lstrip() + "        " + t[s:]
 
 
 # Median's classic panel (512 x 704) -> D2R HD panel (1162 x 1507)
@@ -231,11 +256,12 @@ def stash() -> str:
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "skillstreepanelhd.json").write_text(skill_tree(), encoding="utf-8")
+    (OUT / "skillstreepanel.json").write_text(classic_skill_tree(), encoding="utf-8")
     (OUT / "playerinventoryoriginallayouthd.json").write_text(inventory_original(), encoding="utf-8")
     (OUT / "playerinventoryexpansionlayouthd.json").write_text(inventory_expansion(), encoding="utf-8")
     (OUT / "horadriccubelayouthd.json").write_text(cube(), encoding="utf-8")
     (OUT / "bankexpansionlayouthd.json").write_text(stash(), encoding="utf-8")
-    print(f"skillstreepanelhd.json: {TABS} tabs; inventory and cube 15 x 10, stash 14 x 14 on Median's panels")
+    print(f"skillstreepanel(hd).json: {TABS} tabs; inventory and cube 15 x 10, stash 14 x 14 on Median's panels")
     return 0
 
 
