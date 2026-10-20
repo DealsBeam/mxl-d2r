@@ -34,7 +34,7 @@ size. Buckets from docs/PLAN.md: **(a)** data-only, **(b)** D2RLoader service, *
 | D2Shrines.cpp, D2ObjectFn.cpp, D2Objects.cpp | 2, 10, 5 | object functions (objects2) | c | to read | objects 573+ renumbered (txt-migrate.md) |
 | D2Dungeon.cpp, D2Drlg.cpp, D2DrlgWarp.cpp, D2DrlgLevel.cpp, D2Landscape.cpp | 11, 4, 2, 1, 1 | Median's levels and dungeons (level types 36+) | c | partial | level_types.cpp (automap rows); Median-only areas untested |
 | D2Town.cpp | 5 | town rules | c | to read | |
-| D2Craft.cpp | 32 | cube recipe conditions: ops 29-42 beyond D2R's 1-28 (41 recipes, incl. the Cow Level), the player's craft flags; cubemainext's fields mirror op/param/value | c | to read | details in plugin-spec.md "Cube conditions" |
+| D2Craft.cpp | 32 | cube recipe conditions: ops 29-42 beyond D2R's 1-28 (41 recipes, incl. the Cow Level), the player's craft flags; cubemainext's fields mirror op/param/value | c | read (2026-10-20) | ported in mxl-core 0.37.0; details in plugin-spec.md "Cube conditions" |
 | D2Runeword.cpp, D2SetItems.cpp | 1, 4 | runeword/set rules | a | to read | |
 | D2ItemGeneration.cpp, D2Items.cpp, D2ItemActions.cpp, D2ItemEventFunc.cpp | 1, 2, 7, 5 | item generation and item events | c | to read | |
 | D2Currency.cpp | 8 | Median's currencies (e.g. arcane shards) | c | partial | containers and shard help done (item_spells.cpp) |
@@ -74,7 +74,5 @@ D2RLoader's packet services if a ported feature sends them.
 ## Next to read (largest open modules)
 1. D2Quests.cpp (60) with D2Requirements.cpp (42): Median's quest/uber content.
 2. D2NpcActions.cpp (39) + npcext: NPC services beyond shops.
-3. D2Craft.cpp (32) + cubemainext: what the recipe extension fields do. Field +0x00 (50-3000) is set on 65
-   recipes, +0x04/+0x08 (small numbers and values that look like sounds.txt rows) on 1,480, +0x10 on 335, +0x14
-   (values that look like string ids, e.g. 12422) on 79. Meanings unconfirmed.
+3. ~~D2Craft.cpp (32) + cubemainext~~ read: fields are cost/100, second condition (op, param, value), the two stat layers (plugin-spec.md "Cube conditions"). Open: who runs the craft-flag setters (output effects at 0x591b0..0x59390, 0x59120 pays gold).
 4. D2Hirelings.cpp (23).
