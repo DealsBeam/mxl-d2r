@@ -25,21 +25,21 @@ size. Buckets from docs/PLAN.md: **(a)** data-only, **(b)** D2RLoader service, *
 | D2Stats.cpp, D2ItemStats.cpp, D2Properties.cpp, D2ItemCalc.cpp | 5, 5, 7, 1 | stat/property extensions (propertiesext, layered stats) | c | partial | stat_list.cpp layers; propertiesext not named |
 | D2Requirements.cpp | 42 | boolean condition trees (requirements table, 33 rows; 37 types, Median uses 6) gating NPC services only | c | read | [quests-requirements.md](quests-requirements.md); ships as plugin data |
 | D2Quests.cpp, D2QuestFlags.cpp | 60, 1 | copy of D2Game's act quests plus ~15 reward hooks (Griswold's Heart, catalyst drops, dialog rewards, Baal relic orb) | c | read | [quests-requirements.md](quests-requirements.md); no uber content here |
-| D2SpecialEvents.cpp, D2Events.cpp | 7, 4 | world events | c | to read | |
-| D2Goblins.cpp | 3 | treasure goblins | c | to read | monsters exist in data (treasure_goblin_*) |
-| D2Monsters.cpp, D2MonUMods.cpp, D2AI.cpp, D2MonDesc.cpp | 2, 1, 9, 3 | monster mods, AI, monster tooltips | c | to read | monumodexp/monstats3 partly named |
+| D2SpecialEvents.cpp, D2Events.cpp | 7, 4 | not events: a per-game join filter (min level, name lists; D2GS) and a "call at frame N" queue | e | read (2026-10-21) | [ubers-events.md](ubers-events.md); cut |
+| D2Goblins.cpp | 3 | treasure goblins: 15 s per-player tick, chance from levels +0x15c, 20 goblin rows in monstats3 | c | read (2026-10-21) | [ubers-events.md](ubers-events.md) section 4; not ported (M) |
+| D2Monsters.cpp, D2MonUMods.cpp, D2AI.cpp, D2MonDesc.cpp | 2, 1, 9, 3 | monster mods, AI, monster tooltips | c | partial | D2Monsters (spawn/death sounds) and D2MonUMods (unique counter) read, [ubers-events.md](ubers-events.md); D2AI, D2MonDesc still to read |
 | D2Hirelings.cpp | 23 | hire-time class stat bonuses; the rest is minion scaling (done, pet_scaling.cpp) | a/b | read | [npc-hirelings.md](npc-hirelings.md); hireling.txt already converted |
 | D2Resurrect.cpp | 2 | resurrect | c | done | resurrect_2 -> D2R Revive; Habeas Corpus |
 | D2Experience.cpp | 1 | experience rules | a | to read | |
-| D2Shrines.cpp, D2ObjectFn.cpp, D2Objects.cpp | 2, 10, 5 | object functions (objects2) | c | to read | objects 573+ renumbered (txt-migrate.md) |
-| D2Dungeon.cpp, D2Drlg.cpp, D2DrlgWarp.cpp, D2DrlgLevel.cpp, D2Landscape.cpp | 11, 4, 2, 1, 1 | Median's levels and dungeons (level types 36+) | c | partial | level_types.cpp (automap rows); Median-only areas untested |
-| D2Town.cpp | 5 | town rules | c | to read | |
+| D2Shrines.cpp, D2ObjectFn.cpp, D2Objects.cpp | 2, 10, 5 | object functions (objects2) | c | read (2026-10-21) | Sigma overrides operate fns 15, 31, 35, 36, 37, 70 (rainbow/one-way portal, Halloween chest/exit, level portal helpers); shrines vanilla; [ubers-events.md](ubers-events.md); objects 573+ renumbered (txt-migrate.md) |
+| D2Dungeon.cpp, D2Drlg.cpp, D2DrlgWarp.cpp, D2DrlgLevel.cpp, D2Landscape.cpp | 11, 4, 2, 1, 1 | D2Dungeon = the dungeon lockout clock (per-level seal after N seconds, lock groups, packet 0x88); D2DrlgWarp = entry requirements (difficulty, level, class); Drlg/Landscape not read | c | partial | lockout read (2026-10-21), [ubers-events.md](ubers-events.md) section 3, **not ported (L)**; level_types.cpp (automap rows); Median-only areas untested |
+| D2Town.cpp | 5 | town rules (act -> town level table) | c | read (2026-10-21) | vanilla; nothing to port |
 | D2Craft.cpp | 32 | cube recipe conditions: ops 29-42 beyond D2R's 1-28 (41 recipes, incl. the Cow Level), the player's craft flags; cubemainext's fields mirror op/param/value | c | read (2026-10-20) | ported in mxl-core 0.37.0; details in plugin-spec.md "Cube conditions" |
 | D2Runeword.cpp, D2SetItems.cpp | 1, 4 | runeword/set rules | a | to read | |
-| D2ItemGeneration.cpp, D2Items.cpp, D2ItemActions.cpp, D2ItemEventFunc.cpp | 1, 2, 7, 5 | item generation and item events | c | to read | |
+| D2ItemGeneration.cpp, D2Items.cpp, D2ItemActions.cpp, D2ItemEventFunc.cpp | 1, 2, 7, 5 | item generation and item events | c | partial | D2ItemActions (inventory/stash/belt moves) and D2ItemEventFunc (skill-on-event chance caps) skimmed, not uber-related; rest to read |
 | D2Currency.cpp | 8 | Median's currencies (e.g. arcane shards) | c | partial | containers and shard help done (item_spells.cpp) |
 | D2Respec.cpp | 4 | respec | c | to read | |
-| D2Achievements.cpp | 2 | achievements | e | open | |
+| D2Achievements.cpp | 2 | achievements: a kill counter (stat 0x58) per flagged monster (monstats3 Achievement, 479 rows) | e | read (2026-10-21) | [ubers-events.md](ubers-events.md); cut |
 | D2Linkers.cpp, linker.cpp, D2TxtCompile.cpp | 45, 1, 10 | Sigma table loading and linking | a | done | decoded by the tools (sigma_tables.py); D2R compiles the TXT |
 | charstats.cpp | 5 | charstatsexp | a | partial | |
 
@@ -72,8 +72,9 @@ os_utils.cpp, text_utils.cpp, D2Math.cpp: networking, saves, loading and the lau
 D2RLoader's packet services if a ported feature sends them.
 
 ## Next to read (largest open modules)
-1. ~~D2Quests.cpp + D2Requirements.cpp~~ read (quests-requirements.md). The ubers, signets and trophies are not in
-   them: find where they live (candidates D2Dungeon, D2SpecialEvents, the object functions).
+1. ~~D2Quests.cpp + D2Requirements.cpp~~ read (quests-requirements.md). ~~Where the ubers live~~ read ([ubers-events.md](ubers-events.md)):
+   they are data plus item spell 16, the dungeon lockout (D2Dungeon.cpp) and goblins; remaining: D2AI.cpp / D2MonDesc.cpp,
+   the Drlg/Landscape files, and finding who sets the cube craft flags.
 2. ~~D2NpcActions.cpp + npcext~~ read (npc-hirelings.md).
 3. ~~D2Craft.cpp (32) + cubemainext~~ read: fields are cost/100, second condition (op, param, value), the two stat layers (plugin-spec.md "Cube conditions"). Open: who runs the craft-flag setters (output effects at 0x591b0..0x59390, 0x59120 pays gold).
 4. ~~D2Hirelings.cpp~~ read (npc-hirelings.md).
