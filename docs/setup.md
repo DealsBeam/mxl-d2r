@@ -61,7 +61,7 @@ build). Every command runs from the repo root.
 - Test characters: none were on this PC (below). Create new ones; read `save-format.md` before editing saves.
 ## Ghidra
 
-- Ghidra 12.1.4 (Java 21). The scripts expect it at `..	ools\ghidra_12.1.4_PUBLIC`; on the game PC that is a junction to
+- Ghidra 12.1.4 (Java 21). The scripts expect it at `..\tools\ghidra_12.1.4_PUBLIC`; on the game PC that is a junction to
   the install in Downloads.
 - `..\ghidra\sigma` (project `D2Sigma`, `D2Sigma.dll` from the Median install, base 0x10000000) and `..\ghidra\d2game`
   (project `D2Game`, Median's `D2Game.dll` imported as `D2Game_113.dll`, base 0x6fc20000): `analyzeHeadless` import
