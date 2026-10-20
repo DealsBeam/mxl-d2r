@@ -79,6 +79,20 @@ Smoke tests, saves/reload, TCP/IP, `d2rl pack`.
 
 **First milestone:** a playable vertical slice (one class, its items, Act 1).
 
+## Next (2026-10-20)
+Work happens on the forge (git.werdegames.com/WerdeGames/mxl-d2r): one branch and PR per lane.
+0. **Setup on this PC** (the game PC lost its generated files): D2RLoader 1.3.1, extractions, `tools/build.py`, plugin build,
+   install, Ghidra projects (`..\ghidra\{sigma,d2game,project}`). Written down in [setup.md](setup.md).
+1. **Test backlog**: ~70 rows wait in [testing.md](testing.md). Played as per-character sessions
+   ([test-sessions.md](test-sessions.md)). No new features once the waiting list passes ~10 rows again.
+2. **Milestone: Barbarian, Act 1**: a new Barbarian to Andariel with its tree (tab titles and backgrounds, bug #3),
+   Act 1 quests and vendors, cube recipes (cube conditions, D2Craft.cpp), save/reload, no crash.
+3. **Engine (Phase 4), in the order players meet it**: requirements + quests/ubers, NPC services, hirelings,
+   monster mods/AI/goblins, damage/combat/properties leftovers, objects/events/respec.
+4. **Graphics/UI (Phase 5)**: skill tree art, character sheet, trade window, HD effects of common skills, Median
+   monster HD models last.
+5. **Phase 6** (TCP/IP, saves, `d2rl pack`), then Phase 7.
+
 ## Phase 7: Private realm (after single-player works; preliminary)
 Characters stored on our own server, games hosted through D2RLoader TCP/IP (the D2R Reimagined / Project Lage
 model). Draft plan, edit before starting: [realm-plan.md](realm-plan.md).
