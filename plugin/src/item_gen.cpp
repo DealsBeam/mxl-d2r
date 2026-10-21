@@ -213,7 +213,7 @@ void MakeEthereal(Unit* item) {
 void EtherealHook(Unit* item) {
 	GenState* state = g_state;
 	if (state == nullptr || state->item == nullptr || *state->item != item || state->touched) {
-		g_originalEthereal(item);
+		MakeEthereal(item);  // outside the generator (cube outputs, ...): Median's +25%, not D2R's +50%
 		return;
 	}
 	state->touched = true;

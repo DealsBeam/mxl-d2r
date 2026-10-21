@@ -41,12 +41,10 @@ constexpr uint64_t BlockChanceRva = 0x450070;  // (unit) -> D2R's block chance i
 constexpr uint64_t GetStatRva = 0x2f5020;      // (unit, stat, layer)
 constexpr uint64_t CalcCodeRva = 0x33b3b0;     // (dataFlag, unit, code, skillId, level)
 constexpr uint64_t CalcCodeBlvl = 41;          // D2R's skill calc code: base level
-constexpr uint64_t EtherealRva = 0x3d3510;     // (item): make ethereal
 constexpr uint64_t BaseStatRva = 0x2f48c0;     // (unit, stat, layer): base value
 constexpr uint64_t SetStatRva = 0x2f7d10;      // (unit, stat, value, layer)
 constexpr uint64_t SetItemFlagRva = 0x36d8f0;  // (item, mask, on)
 constexpr uint64_t IsItemTypeRva = 0x373890;   // (item, type or class id): non-zero when the item is of it
-constexpr int32_t ItemFlagEthereal = 0x400000;
 constexpr int32_t ItemTypeWeaponClass = 0x2d;
 
 // mov [rsp+8],rbx / mov [rsp+0x10],rbp / push rsi / push rdi / push r14 / sub rsp,0x30
@@ -55,7 +53,6 @@ constexpr uint8_t AvoidCheckEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89,
 // jmp qword ptr [rip+disp32]
 constexpr uint8_t BlockChanceEntry[] = {0xff, 0x25};
 // mov [rsp+0x10],rbx / push rdi / sub rsp,0x20 / mov rbx,rcx
-constexpr uint8_t EtherealEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9};
 
 using AvoidCheckFn = int32_t (*)(Game* game, Unit* defender, int32_t missile);
 using BlockChanceFn = int32_t (*)(Unit* unit);
@@ -121,25 +118,6 @@ auto AvoidCheckHook(Game* game, Unit* defender, int32_t missile) -> int32_t {
 	return 0;
 }
 
-// D2R's "make ethereal" 0x3d3510 (item): sets the flag 0x400000 and multiplies the weapon damage stats 0x15-0x18, 0x9f, 0xa0
-// (weapons, item type class 0x2d) or the defense 0x1f by 3/2. Median's is +25% (D2Sigma 0x1007fdd0); same stats, same order.
-void EtherealHook(Unit* item) {
-	if (item == nullptr) {
-		return;
-	}
-	g_setItemFlag(item, ItemFlagEthereal, 1);
-	const auto raise = [item](int32_t stat) {
-		g_setStat(item, stat, mxl_combat::EtherealBonus(g_baseStat(item, stat, 0)), 0);
-	};
-	if (g_isItemType(item, ItemTypeWeaponClass) != 0) {
-		for (const int32_t stat : {0x15, 0x16, 0x17, 0x18, 0x9f, 0xa0}) {
-			raise(stat);
-		}
-	} else {
-		raise(0x1f);
-	}
-}
-
 }  // namespace
 
 auto InstallCombat(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
@@ -161,12 +139,8 @@ auto InstallCombat(const D2RL::PluginContext* context, char* report, size_t repo
 	const bool hooked = context->InstallInlineHook(AvoidCheckRva, AvoidCheckEntry, sizeof(AvoidCheckEntry),
 	                                               reinterpret_cast<void*>(&AvoidCheckHook),
 	                                               reinterpret_cast<void**>(&g_original));
-	// the ethereal bonus is its own hook: a mismatch of 0x3d3510 leaves D2R's +50% and the avoid caps still work
-	const bool ethereal = Matches(base, EtherealRva, EtherealEntry, sizeof(EtherealEntry)) &&
-	                      context->InstallInlineHook(EtherealRva, EtherealEntry, sizeof(EtherealEntry),
-	                                                 reinterpret_cast<void*>(&EtherealHook), nullptr);
-	std::snprintf(report, reportSize, "%s: avoid/dodge/evade cap 60+stat (max 75) and block cap 50+stat (max 80, Indomitable 50) %s; ethereal +25%% %s",
-	              hooked && ethereal ? "on" : "partial", hooked ? "hooked on 0x44ef70" : "NOT hooked",
-	              ethereal ? "hooked on 0x3d3510" : "NOT hooked");
+	// The ethereal +25% lives in item_gen.cpp (one owner of 0x3d3510: Median's ethereal roll and +25% everywhere).
+	std::snprintf(report, reportSize, "%s: avoid/dodge/evade cap 60+stat (max 75) and block cap 50+stat (max 80, Indomitable 50) %s",
+	              hooked ? "on" : "off", hooked ? "hooked on 0x44ef70" : "NOT hooked");
 	return hooked;
 }
