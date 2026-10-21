@@ -88,6 +88,8 @@ class Watchdog(threading.Thread):
         self.samples = 0
         self.cursor_moves = 0
         self._fg = None
+        self.inside_prev = False
+        self.rest_inside = None
 
     def run(self):
         pt = wt.POINT()
@@ -111,8 +113,12 @@ class Watchdog(threading.Thread):
             h = g.find_window()
             if h:
                 l, t, r, b = g.client_rect(h)
-                if l <= cur[0] < r and t <= cur[1] < b and not self.abort:
-                    self.abort = "real cursor %s entered the game window %s" % (cur, (l, t, r, b))
+                inside = l <= cur[0] < r and t <= cur[1] < b
+                if inside and not self.inside_prev and prev is not None and cur != prev and not self.abort:
+                    # the real cursor MOVED into the game window. A cursor the user left resting over the window
+                    # (never moved by this run) is not an abort reason; a move into it is, whoever made it.
+                    self.abort = "real cursor moved %s -> %s into the game window %s" % (prev, cur, (l, t, r, b))
+                self.inside_prev = inside
                 if fg == h and not self.abort:
                     self.abort = "the game window became the foreground window"
             time.sleep(0.025)
