@@ -4,6 +4,7 @@
 # Per process: cpu = share of ONE core in percent (100 = one core busy), ws = working set MB, gpu = GPU engine
 # utilisation summed over the process's engines (3D, copy, compute...), gpumem = dedicated GPU memory MB.
 param([string[]]$Folders = @(), [int]$Interval = 3, [int]$Count = 1000000)
+$Folders = @($Folders | ForEach-Object { $_ -split ',' } | Where-Object { $_ })  # -File passes "a,b" as one string
 $cores = [Environment]::ProcessorCount
 $prev = @{}
 for ($n = 0; $n -lt $Count; $n++) {
@@ -24,7 +25,7 @@ for ($n = 0; $n -lt $Count; $n++) {
     }
     $now = Get-Date
     $procs = @()
-    $games = @(Get-Process D2RLoader, D2R -ErrorAction SilentlyContinue | Where-Object { $p = $_.Path; $p -and ($Folders | Where-Object { $p.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }) })
+    $games = @(Get-Process D2RLoader*, D2R -ErrorAction SilentlyContinue | Where-Object { $p = $_.Path; $p -and ($Folders | Where-Object { $p.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }) })
     foreach ($pr in $games) {
         $id = $pr.Id
         $cpuPct = 0

@@ -227,7 +227,29 @@ client 1600 x 900) and are sent to the bottom of the z-order at launch.
 
 Results 2026-10-21 (RX 9070 XT, 32 logical cores, 64 GB; the user worked on the PC meanwhile):
 
-RESULTS_PLACEHOLDER
+| Run (run folder in `mxl-d2r-runs`) | Slots | Steps passed | Wall time |
+|---|---|---|---|
+| `par-3way-2` | 1, 2, 3 at once | 18/18, 18/18, 18/18 | 212 s (per slot 203 / 206 / 211 s) |
+| `par-3way-1` | 1, 2, 3 | 18/18, 18/18, 0/1 (slot 3's files were being replaced by an install at that moment: that run's own fault) | 207 s |
+| `par-2way-9`, `par-2way-8`, `par-2way-7` | 2, 3 | 18/18 each, all three runs | 206 s, 209 s, 209 s |
+
+The 18 steps per slot are the whole smoke: start, menu, create or enter the character, the plugin `mxl` command, the
+character sheet, the skill tree and its 8 tabs, the inventory, Save and Exit, reload (`report.md` and the PNGs of each
+slot are in `<run>-sN\`; the three games show their own town and panels).
+
+Real mouse and focus (25 ms samples, `input-watch.json`): in the 3-way run the cursor stayed at (2215, 466) for the
+whole 212 s (before = after, range x 2215..2215, y 466..466, the user was away), 0 teleports into a game window, a
+game window was the foreground window in 0 samples. In the runs where the user kept working (par-2way-7, 1,594 moves,
+x 10..3781, y -945..1439) the same: 0 teleports, 0 foreground samples. The plugin trace of every game: D2R called
+`SetCursorPos` 6 times, `ClipCursor` 9-11 times, `SetActiveWindow` once, `SetForegroundWindow` never, all answered by
+the harness (none reached the system). With the windows on the primary monitor a resting cursor can lie under a game
+window rectangle (counted separately, not a violation); an early version of the watcher aborted on that and on a hand
+sweeping through a window, hence the "teleport" rule.
+
+Load, 3 games at once (par-3way-2): machine CPU 26% mean, 57% peak of 32 logical cores; free RAM down to 18.0 GB (about
+33-38 GB with no game); GPU engines (all processes, summed) 53% mean, 99% peak. Per game (par-2way-9, two games): about
+1.5 cores on average and 6.6 cores at the startup peak (the txt compile), 6.6-7.2 GB RAM, 4.1-4.5 GB VRAM, GPU 17-21%
+mean (28-57% peak). The RX 9070 XT (16 GB) has room for three; RAM is the thing to watch (about 7 GB per game).
 
 ## Scripted checks (tools/game_checks.py, 2026-10-21, foreground input)
 
