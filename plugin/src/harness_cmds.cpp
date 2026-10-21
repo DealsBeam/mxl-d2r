@@ -13,6 +13,7 @@
 #include "d2r.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
+#include "quests_act1.h"
 #include "testharness.h"
 
 #define NOMINMAX
@@ -496,6 +497,52 @@ auto CmdMsg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// Walk into a portal object, as the click on it does (the portal object's operate function 0x58f680, ctx {game, portal,
+// player, 0, class}): `enter nearest` (portal classes 59 town portal, 60 red portal, 600 Median one-way) or `enter <object id>`.
+auto CmdEnter(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = -1;
+	if (t.n < 2 || (!hcmd::LowerEq(t.tok[1], "nearest") && !hcmd::ParseInt(t.tok[1], &id))) {
+		return Fail(c, "usage: enter nearest | enter <portal object id>");
+	}
+	Unit* portal = nullptr;
+	double best = 1e18;
+	EachUnit(c->game, HashObjects, [&](Unit* u) {
+		const int32_t cls = ClassOf(u);
+		const bool match = id >= 0 ? IdOf(u) == static_cast<uint32_t>(id) : (cls == 59 || cls == 60 || cls == 600);
+		if (TypeOf(u) == 2 && match && DistTo(c->player, u) < best) {
+			best = DistTo(c->player, u);
+			portal = u;
+		}
+	});
+	if (portal == nullptr) {
+		return Fail(c, "enter: no such portal object");
+	}
+	int64_t ctx[8] = {reinterpret_cast<int64_t>(c->game), reinterpret_cast<int64_t>(portal), reinterpret_cast<int64_t>(c->player), 0,
+	                  ClassOf(portal), 0, 0, 0};
+	const int64_t moved = Fn<int64_t (*)(int64_t*)>(0x58f680)(ctx);
+	Out("enter portal id=%u class=%d: %s", IdOf(portal), ClassOf(portal), moved != 0 ? "moved" : "refused / failed");
+	return true;
+}
+
+// Use the nearest warp tile (stairs, doors to another area): the server's warp action 0x491ff0 (game, player, tile).
+auto CmdTile(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Unit* tile = nullptr;
+	double best = 1e18;
+	int guard = 0;
+	for (auto* u = d2r::At<Unit*>(c->game, 0x3630); u != nullptr && guard < 2000; u = d2r::At<Unit*>(u, UnitNextInHash), ++guard) {
+		if (TypeOf(u) == 5 && DistTo(c->player, u) < best) {
+			best = DistTo(c->player, u);
+			tile = u;
+		}
+	}
+	if (tile == nullptr) {
+		return Fail(c, "tile: no warp tile in this game");
+	}
+	Fn<void (*)(Game*, Unit*, Unit*)>(0x491ff0)(c->game, c->player, tile);
+	Out("tile id=%u class=%d dist %.0f used", IdOf(tile), ClassOf(tile), best);
+	return true;
+}
+
 // Raw client packet to the server's handler table: "pkt 13 02 00 00 00 <id bytes>" (hex bytes, the first is the packet id).
 // For what no verb covers yet (clicking an object or a portal: packet 0x13).
 auto CmdPkt(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
@@ -620,6 +667,17 @@ int g_uniq = -1;
 using ItemDataFn = uint8_t* (*)(Unit*);
 constexpr uint64_t RvaItemData = 0x34a500;  // (item) -> item data (+0 quality, +0x34 unique index)
 
+// `difficulty <0-2>`: the running game's difficulty byte (game +0x104), for checks that need Hell rules without a Hell
+// character. Quest records are per difficulty, so use it for lockout / recipe checks only.
+auto CmdDifficulty(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 0;
+	if (t.n >= 2 && hcmd::ParseInt(t.tok[1], &n) && n >= 0 && n <= 2) {
+		*reinterpret_cast<uint8_t*>(reinterpret_cast<uint8_t*>(c->game) + GameDifficulty) = static_cast<uint8_t>(n);
+	}
+	Out("difficulty = %d", static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)));
+	return true;
+}
+
 // Class change for tests (`class <n>`): cube recipes can be class bound. The save keeps it, put the class back.
 auto CmdClass(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long n = 0;
@@ -642,13 +700,19 @@ auto MakeItem(Ctx* c, uint32_t code, int quality, int ilvl, int page, const int 
 	if (ilvl == 0) {
 		ilvl = Fn<DefaultIlvlFn>(RvaDefaultIlvl)(c->player, 0);
 	}
+	if (g_uniq >= 0) {  // the quest module's generator hook picks the unique (as for Griswold's Heart): quality 7, item level 255
+		quality = 7;
+		ilvl = 255;
+		QuestsWantUnique(g_uniq + 1);
+	}
 	Unit* item = Fn<MakeItemFn>(RvaMakeItem)(c->player, classId, c->game, 4, quality, 0, 1, ilvl, 0, 0, 0);
+	QuestsWantUnique(0);
 	if (item == nullptr) {
 		std::snprintf(why, whySize, "item: creation failed");
 		return nullptr;
 	}
 	if (g_uniq >= 0) {  // a named unique (the cube matches uniques by index): item data +0 quality, +0x34 unique index
-		if (auto* data = Fn<ItemDataFn>(RvaItemData)(item)) {
+		if (auto* data = Fn<ItemDataFn>(RvaItemData)(item); data != nullptr && *reinterpret_cast<int32_t*>(data + 0x34) != g_uniq) {
 			*reinterpret_cast<int32_t*>(data) = 7;
 			*reinterpret_cast<int32_t*>(data + 0x34) = g_uniq;
 		}
@@ -682,7 +746,7 @@ auto MakeItem(Ctx* c, uint32_t code, int quality, int ilvl, int page, const int 
 	void* inv = Fn<InventoryFn>(RvaInventory)(c->player, "harness", 0);
 	const int32_t record = Fn<InvRecordFn>(RvaInvRecord)(c->player, page == 3 ? 3 : 0, d2r::At<uint8_t>(c->game, 0x106) != 1);
 	uint16_t x = 0, y = 0;
-	if (inv == nullptr || Fn<FindSpotFn>(RvaFindSpot)(inv, item, record, &x, &y, 0) == 0) {
+	if (inv == nullptr || Fn<FindSpotFn>(RvaFindSpot)(inv, item, record, &x, &y, page) == 0) {
 		Fn<FreeItemFn>(RvaFreeItem)(c->game, item);
 		std::snprintf(why, whySize, "item: no room in %s", page == 3 ? "the cube" : "the inventory");
 		return nullptr;
@@ -743,6 +807,27 @@ auto CmdItem(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `cuberec <index>`: hex dump of a cubemain record (0x16c bytes) for diagnosing a recipe that does not match.
+auto CmdCuberec(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long index = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &index)) {
+		return Fail(c, "usage: cuberec <recipe index>");
+	}
+	const uint8_t* rec = Fn<CubeRecordFn>(RvaCubeRecord)(c->dataFlag, static_cast<int32_t>(index));
+	if (rec == nullptr) {
+		return Fail(c, "cuberec: no such record");
+	}
+	for (int row = 0; row < 0x16c; row += 32) {
+		char line[200];
+		int n = std::snprintf(line, sizeof(line), "rec %04x:", row);
+		for (int i = row; i < row + 32 && i < 0x16c; ++i) {
+			n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " %02x", rec[i]);
+		}
+		Out("%s", line);
+	}
+	return true;
+}
+
 auto CmdCubecraft(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	int32_t result[8] = {};
 	alignas(16) uint8_t ctx[512] = {};
@@ -753,8 +838,9 @@ auto CmdCubecraft(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	const int32_t index = result[0];
 	const uint8_t* record = Fn<CubeRecordFn>(RvaCubeRecord)(c->dataFlag, index);
 	Unit* out = record != nullptr ? Fn<CubeExecFn>(RvaCubeExec)(c->game, c->player, record, ctx) : nullptr;
-	if (out == nullptr) {
-		return Fail(c, "cubecraft: recipe %d matched but made no output", index);
+	if (out == nullptr) {  // portal / useitem outputs return no unit: `state` shows the effect
+		Out("cubecraft recipe %d ran, returned no item (portal and special outputs return none; a failed recipe puts the inputs back)", index);
+		return true;
 	}
 	char code[5];
 	ItemCode(c, out, code);
@@ -804,6 +890,42 @@ auto CmdUse(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `cubeclear`: removes every item from the Horadric Cube (page 3), so a recipe test starts from an empty cube.
+auto CmdCubeclear(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Unit* batch[64];
+	int n = 0;
+	EachItem(c, [&](Unit* it) {
+		if (n < 64 && Fn<ItemByteFn>(RvaItemPage)(it) == 3) {
+			batch[n++] = it;
+		}
+	});
+	int removed = 0;
+	for (int i = 0; i < n; ++i) {
+		removed += RemoveItem(c, batch[i]) ? 1 : 0;
+	}
+	Out("cubeclear: %d items removed", removed);
+	return true;
+}
+
+// `packclear`: removes every backpack item except the Horadric Cube, so created items always find room.
+auto CmdPackclear(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Unit* batch[200];
+	int n = 0;
+	EachItem(c, [&](Unit* it) {
+		char code[5];
+		ItemCode(c, it, code);
+		if (n < 200 && Fn<ItemByteFn>(RvaItemPage)(it) == 0 && std::strcmp(code, "box") != 0) {
+			batch[n++] = it;
+		}
+	});
+	int removed = 0;
+	for (int i = 0; i < n; ++i) {
+		removed += RemoveItem(c, batch[i]) ? 1 : 0;
+	}
+	Out("packclear: %d items removed", removed);
+	return true;
+}
+
 auto CmdRemove(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (t.n < 2) {
 		return Fail(c, "usage: remove <item code> [count]");
@@ -827,7 +949,7 @@ auto CmdRemove(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
 	Out("verbs: state | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel | "
-	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | "
+	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
 	return true;
 }
@@ -887,7 +1009,7 @@ struct Verb {
 const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
-    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
+    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
     {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 

@@ -8,3 +8,6 @@
 // Hooks three quest handlers (a1q4 event 11, a1q6 events 8 and 0) and the item generator's request field. True when
 // all four installed.
 auto InstallQuestsAct1(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;
+
+// Test harness: the next item generated on this thread becomes the unique with this index + 1 (0 clears it).
+void QuestsWantUnique(int indexPlusOne) noexcept;

@@ -265,6 +265,43 @@ Load, 3 games at once (par-3way-2): machine CPU 26% mean, 57% peak of 32 logical
 1.5 cores on average and 6.6 cores at the startup peak (the txt compile), 6.6-7.2 GB RAM, 4.1-4.5 GB VRAM, GPU 17-21%
 mean (28-57% peak). The RX 9070 XT (16 GB) has room for three; RAM is the thing to watch (about 7 GB per game).
 
+## Harness commands (gameplay without input; plugin/src/harness_cmds.cpp)
+
+World clicks do not register in background mode, so the plugin's test harness (only active while `mxl-testharness.txt`
+sits next to `mxl-core.dll`; never in normal play) has gameplay commands that call the game's own functions. They use
+the console mailbox that already carries `mxl`: `py -3 tools/game_ctl.py` / `game_ctl.hcmd("kill nearest 156")` writes
+`h kill nearest 156`; the answer lines (`h: ...`, ending in `h: <verb> OK` or `h: <verb> FAIL <reason>`) are appended to
+`mxl-testharness-console.txt`, and `hcmd` returns `(ok, lines)`. Server-side verbs are queued and run on the game thread
+inside the server frame (a hook in `goblins.cpp` calls `HarnessGameFrame` after `0x406550`); the UI thread must not wait
+for them (the server frames are driven from it). `menu` runs on the UI thread. A bad pointer inside a verb is caught
+(`FAIL crashed`), it does not take the game down.
+
+| Command | What it does |
+|---|---|
+| `state` | player (id, class, level, life, area, x, y, gold, bank, difficulty, frame), every inventory / cube / equipped item (`code`, `page` 0 backpack 3 cube 4 stash 255 equipped, position, quality, unique index), monsters within 40 (class, mode, distance, NPC flag), objects within 30 (portals are class 60 / 600), plugin counters (goblins, lockout), NPC menu globals |
+| `kill <unit id>` / `kill nearest [class]` | the unit-death function `0x44db20(game, victim, player, 1)`, the player is the killer, so the quest kill hooks (`0x515640`) fire |
+| `spawn <class> [n]` | `0x4929e0` next to the player (monsters and NPCs, e.g. 156 Andariel, 148 Akara) |
+| `interact nearest` / `interact <npc class>` | stands next to the NPC (move `0x491ca0`) and sends the server packet 0x2f (start talking) through the packet handler table `0x1d2a790`: the NPC speaks, quest event 0 runs, the server answers 0x27 and the client opens the menu through its builder `0x1147a0` when the speech is over (up to ~30 s for a first talk) |
+| `msg nearest\|<npc class> <message id>` | packet 0x31 (a dialog line ended): quest event 11 (Akara `0x76` = Griswold's Heart) |
+| `menu list` / `menu <line>` / `menu cancel` | client side: the open NPC menu's record (`0x2a48830`, 48 x 0x48), line string ids and handler (`plugin@` = a plugin line); `menu <line>` calls that line's click handler |
+| `quest <id> <bit> set\|clear\|get`, `quest <id> dump` | quest bits (`0x325c00` / `0x325990` / `0x325c50`) of the game's difficulty |
+| `item <code> [stat=value ...] [q=n] [ilvl=n] [uniq=n] [inv\|cube\|ground]` | creates the item in the backpack, the Horadric Cube or on the ground (port of `0x517530` with the page chosen and the stats set before the client is told); `uniq=<row>` makes a named unique (the generator hook of quests_act1.cpp picks it; unique index = `uniqueitems.txt` line - 2); answers with the item's id, page, position, quality, unique index |
+| `cubecraft` / `cubeclear` / `cuberec <n>` | the transmute on the cube contents (`0x529090` search, then `0x5269c0`), prints the recipe row (`FAIL no recipe matches` when none does; portal outputs return no item, look at `state`); empties the cube; hex dump of a cubemain record |
+| `flag player\|game <n> get\|set\|clear` | the craft flags (craft_flags.cpp) |
+| `gold get` / `gold set <carried> <bank>` | gold stats 14 / 15 |
+| `stat player\|<item id>\|<item code> <stat> [layer] [set <value>]` | read or set any unit stat (`0x2f5020` / `0x2f7d10`) |
+| `level <id>` | the NPC travel `0x4f2e40`: works across acts; inside an act it only opens a portal, use D2R's `cheat goto <id>` there. Do not send further commands for about 5 s (a second travel while one loads can hang the game) |
+| `use <item code>` | the item-use check and use functions (`0x5817f0` / `0x581680`), the item is removed unless the item spell keeps it (keys and scrolls) |
+| `remove <code> [n]` | takes items out of the inventory |
+| `enter nearest\|<object id>` | walks into a portal object (`0x58f680`, as the click does, so the dungeon lockout hook sees it); the first call right after `use` can fail, repeat it |
+| `tile` | uses the nearest warp tile (`0x491ff0`) |
+| `difficulty <0-2>` | writes the running game's difficulty byte (checks that need Hell rules without a Hell character; quest records are per difficulty) |
+| `class <0-6>` | sets the player's class field (class bound recipes; set it back, the save keeps it) |
+| `pkt <hex bytes>` | any client packet into the server handler table |
+
+Where the answers cannot come from a call they come from the screenshot: the NPC popup text (`cain_menu.png`) and
+D2R's own cheat output.
+
 ## Scripted checks (tools/game_checks.py, 2026-10-21, foreground input)
 
 Console commands and measured coordinates: [dev-console.md](dev-console.md). Results of the partial run (the run was
