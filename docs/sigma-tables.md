@@ -42,7 +42,7 @@ Ranked by size. "Named" is named fields / all fields, counting every byte column
 | missiles2 | 5609 | 1 | extends `missiles` | 0/1 | structure only |
 | objpreset | 750 | 4 |  | 1/1 | done |
 | stateicons | 236 | 8 | mem +0x84/+0x134 | 5/5 | done |
-| propertiesext | 437 | 4 | extends `properties` | 0/1 | structure only |
+| propertiesext | 437 | 4 | extends `properties`: default skill parameter, 4 rows non-zero ([combat-stats.md](subsystems/combat-stats.md)) | 0/1 | done (txt_migrate.py property_defaults) |
 | npcactions | 31 | 52 | mem +0x48/+0xfc | 13/13 | done |
 | requirements | 33 | 44 | mem +0x74/+0x124 | 11/11 | done |
 | pettypeext | 83 | 14 | extends `pettype`, mem +0x60 | 8/8 | done |

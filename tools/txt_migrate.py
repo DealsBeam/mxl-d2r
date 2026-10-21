@@ -974,6 +974,44 @@ class Migrator:
         self.report.append("\nproperty parameters: Median skill/monster row numbers -> migrated IDs: " +
                            ", ".join(f"{t} {n}" for t, n in counts.items() if n))
 
+    def property_defaults(self) -> None:
+        """propertiesext (work/sigma/propertiesext.txt, one i32 per properties row, 4 of 437 non-zero) is a default
+        parameter: D2Sigma wraps the property functions that take a skill (11, 22, 24; D2Sigma 0x1009d020, 0x1009d0e0,
+        0x1009ce00) so that an empty parameter becomes this skill row before D2Common's function runs (the wrapper
+        also checks that the id is a valid skill row). item_mana_bytime_2/_3 and properties_360/_362 use it (skills
+        547/548, Median's periodic mana effects), 33 monprop rows of bosses such as Radament and the Countess among
+        them. D2R's functions have no such wrapper, so the skill is written into every empty parameter cell of
+        those properties (docs/subsystems/combat-stats.md). After remap_property_params: the ids are migrated here."""
+        h, rows = read_tsv(ROOT / "work" / "sigma" / "propertiesext.txt")
+        defaults = {r[1]: int(r[2]) for r in rows if len(r) > 2 and r[2].lstrip("-").isdigit() and int(r[2]) != 0}
+        skill_ids = self.median_ids("skills")
+        counts: Counter = Counter()
+        for table in PROPERTY_TABLES:
+            named = NAMED / f"{table}.txt"
+            if not named.exists():
+                continue
+            median_keys = None if table in REPLACE else {r[0] for r in read_tsv(named)[1] if r}
+            for bank in ("base", ""):
+                p = OUT / "data" / "global" / "excel" / bank / f"{table}.txt"
+                if not p.exists():
+                    continue
+                th, trows = read_tsv(p)
+                groups = self.property_columns(th)
+                changed = 0
+                for r in trows:
+                    if not is_record(r) or (median_keys is not None and r[0] not in median_keys):
+                        continue
+                    for code, par, _lo, _hi in groups:
+                        value = defaults.get(r[code])
+                        if value is not None and par is not None and r[par] == "":
+                            r[par] = str(skill_ids.get(value, value))
+                            changed += 1
+                write_tsv(p, th, trows)
+                if bank == "base":
+                    counts[table] = changed
+        self.report.append("\nproperty default parameters (propertiesext): " +
+                           (", ".join(f"{t} {n}" for t, n in counts.items() if n) or "none"))
+
     def item_spell_tables(self) -> None:
         """plugin/src/mxl_items.h: the items behind PLUGIN_SPELL (item_spells) and D2Sigma's mysticorbs table
         (work/sigma/mysticorbs.txt, 143-byte records; docs/plugin-spec.md, Item spells), with every id migrated."""
@@ -1754,6 +1792,7 @@ def main() -> int:
     m.item_spells()
     m.help_tooltips()
     m.remap_property_params()
+    m.property_defaults()
     m.missile_functions()
     m.item_spell_tables()
     m.pet_tables()

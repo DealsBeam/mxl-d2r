@@ -21,8 +21,8 @@ size. Buckets from docs/PLAN.md: **(a)** data-only, **(b)** D2RLoader service, *
 | D2MissileDo.cpp, D2MissileCltDo.cpp, D2Missiles.cpp | 3, 3, 4 | missile do functions | c | done | phalanx (srvdo 46, cltdo 14) |
 | D2ItemSpell.cpp | 16 | item use functions (orbs, dyes, keys, containers) | c | done | item_spells.cpp (bugs #10, #11) |
 | D2MysticOrbs.cpp | 1 | mystic orb rules | c | done | item_spells.cpp |
-| D2Damage.cpp, D2Combat.cpp | 8, 12 | damage rules (area damage, procs) | c | partial | area_damage.cpp (srvdofunc 171), pet procs; the rest to read |
-| D2Stats.cpp, D2ItemStats.cpp, D2Properties.cpp, D2ItemCalc.cpp | 5, 5, 7, 1 | stat/property extensions (propertiesext, layered stats) | c | partial | stat_list.cpp layers; propertiesext not named |
+| D2Damage.cpp, D2Combat.cpp | 8, 12 | damage block, hit rolls, mitigation: D2Sigma's copy of the vanilla server rules | c | read (2026-10-21) | [combat-stats.md](combat-stats.md); deltas ported (avoid/dodge/evade and block caps, mxl-core combat.cpp); absorb stats 184/189/417 and the max-resist cap open |
+| D2Stats.cpp, D2ItemStats.cpp, D2Properties.cpp, D2ItemCalc.cpp | 5, 5, 7, 1 | resist limits, ethereal, requirements; 9 replaced property functions; propertiesext = default skill parameter | c | read (2026-10-21) | [combat-stats.md](combat-stats.md); property funcs 27-29 (properties_ext.cpp), ethereal +25% (combat.cpp), propertiesext defaults (txt_migrate.py); stat_list.cpp layers |
 | D2Requirements.cpp | 42 | boolean condition trees (requirements table, 33 rows; 37 types, Median uses 6) gating NPC services only | c | read | [quests-requirements.md](quests-requirements.md); ships as plugin data |
 | D2Quests.cpp, D2QuestFlags.cpp | 60, 1 | copy of D2Game's act quests plus ~15 reward hooks (Griswold's Heart, catalyst drops, dialog rewards, Baal relic orb) | c | read | [quests-requirements.md](quests-requirements.md); no uber content here |
 | D2SpecialEvents.cpp, D2Events.cpp | 7, 4 | not events: a per-game join filter (min level, name lists; D2GS) and a "call at frame N" queue | e | read (2026-10-21) | [ubers-events.md](ubers-events.md); cut |
@@ -38,7 +38,7 @@ size. Buckets from docs/PLAN.md: **(a)** data-only, **(b)** D2RLoader service, *
 | D2Runeword.cpp, D2SetItems.cpp | 1, 4 | runeword/set rules | a | to read | |
 | D2ItemGeneration.cpp, D2Items.cpp, D2ItemActions.cpp, D2ItemEventFunc.cpp | 1, 2, 7, 5 | item generation and item events | c | partial | D2ItemActions (inventory/stash/belt moves) and D2ItemEventFunc (skill-on-event chance caps) skimmed, not uber-related; rest to read |
 | D2Currency.cpp | 8 | Median's currencies (e.g. arcane shards) | c | partial | containers and shard help done (item_spells.cpp) |
-| D2Respec.cpp | 4 | respec | c | to read | |
+| D2Respec.cpp | 4 | respec | c | read (2026-10-21) | [combat-stats.md](combat-stats.md) 1.6: the same sequence as D2R's `0x580f20`; nothing to port |
 | D2Achievements.cpp | 2 | achievements: a kill counter (stat 0x58) per flagged monster (monstats3 Achievement, 479 rows) | e | read (2026-10-21) | [ubers-events.md](ubers-events.md); cut |
 | D2Linkers.cpp, linker.cpp, D2TxtCompile.cpp | 45, 1, 10 | Sigma table loading and linking | a | done | decoded by the tools (sigma_tables.py); D2R compiles the TXT |
 | charstats.cpp | 5 | charstatsexp | a | partial | |
