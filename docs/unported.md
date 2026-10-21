@@ -56,7 +56,9 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 
 | Area | Median | Port now | Status | Needs / notes |
 |---|---|---|---|---|
-| Skill effects (missiles, overlays): 217 missile + 113 overlay animations | own art | D2R look-alikes | open | flipbook path built (tools/missile_art.py) but no effect confirmed in game ([hd-effects.md](hd-effects.md)) |
+| Skill effects: Median-only missile art (926 rows, 251 animations) | own art | **custom art, last**: closest D2R HD effect per row by element/shape words, colour and size of the DCC frames, moving/hit/loop role; scaled to the art size (tools/effects_hd.py, work/mod/effects_hd.md lists row -> effect, confidence) | approx | custom HD art (last step); a real recolour needs particle editing ([hd-effects.md](hd-effects.md) section 6) |
+| Skill effects: Median-only overlay art (192 rows, 172 animations) | own art | **custom art, last**: closest D2R HD overlay (cast/aura/hit), same scoring; overlay.txt `Character` points at its folder | approx | custom HD art (last step) |
+| Skill effects: Median rows that reuse D2R art (4,029 missile incl. 2,684 without art, 127 overlay) | D2R art with Median's own light, speed, range, transparency per row | the D2R HD effect of the D2R row with the same art and the most alike behaviour; per-row light colour/radius, transparency, speed and animation timing are not carried (an HD definition only has transform scale, one spot light, fade-in alpha) | approx | engine may still read light from missiles.txt; verify in game |
 | Median-only monsters (1,193) | own art | family/size/animation-matched D2R donor + scale + colour tint per monster (tools/hd_monsters.py, docs/hd-monsters.md); 23 fully borrow a donor | approx | real models (mesh, skeleton, animations) |
 | Median monster looks, low confidence (85) | own art | donor chosen without a family hint | open | review work/mod/hd_monsters.md; real models |
 | Missing missile/overlay CelFiles (11 + 15) | n/a | none | open | [PLAN.md](PLAN.md) Phase 5 |
