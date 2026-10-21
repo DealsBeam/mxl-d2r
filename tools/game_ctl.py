@@ -12,6 +12,10 @@ Run with `py -3 tools/game_ctl.py <command>`. Commands:
   smoke                 full scenario, writes report.md in the run folder
 Run folders: %USERPROFILE%\\mxl-d2r-runs\\<run>; the current run name is kept in runs\\current.txt.
 Privacy: only the game window client rect is ever captured, never the whole desktop.
+Input modes: background (default) posts window messages to the game window, captures it with PrintWindow and
+never moves the real cursor, sends global keys or takes focus. `--foreground` (anywhere on the command line) or
+env MXL_INPUT=sendinput selects the old SendInput + SetCursorPos + SetForegroundWindow path.
+MXL_RUN=<name> pins the run folder (instead of runs\\current.txt, which is shared between lanes).
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -34,6 +38,11 @@ TITLE = "Diablo II: Resurrected"
 CLIENT_W, CLIENT_H = 1600, 900
 CHAR_NAME = "MxlBarb"
 
+if "--foreground" in sys.argv:
+    sys.argv.remove("--foreground")
+    os.environ["MXL_INPUT"] = "sendinput"
+BG = os.environ.get("MXL_INPUT", "").lower() != "sendinput"
+
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 try:
@@ -47,6 +56,10 @@ except Exception:
 def current_run(create=False):
     os.makedirs(RUNS, exist_ok=True)
     cur = os.path.join(RUNS, "current.txt")
+    if os.environ.get("MXL_RUN"):
+        d = os.path.join(RUNS, os.environ["MXL_RUN"])
+        os.makedirs(d, exist_ok=True)
+        return d
     if create or not os.path.exists(cur):
         name = datetime.datetime.now().strftime("run-%Y%m%d-%H%M%S")
         open(cur, "w").write(name)
@@ -123,6 +136,8 @@ def client_rect(h):
 
 
 def focus(h):
+    if BG:
+        return  # background mode never takes focus
     if user32.IsIconic(h):
         user32.ShowWindow(h, 9)
     # Alt-key trick so SetForegroundWindow is allowed
@@ -135,15 +150,19 @@ def focus(h):
 
 def fit_window(h, x=100, y=60):
     """Resize so the client area is CLIENT_W x CLIENT_H, placed at (x, y) on the primary monitor."""
-    user32.ShowWindow(h, 1)
-    user32.SetWindowPos(h, 0, x, y, CLIENT_W + 40, CLIENT_H + 80, 0x0004)
+    fl = 0x0004 | (0x0010 if BG else 0)  # SWP_NOZORDER (| SWP_NOACTIVATE in background mode)
+    if user32.IsIconic(h):
+        user32.ShowWindow(h, 4 if BG else 1)  # SW_SHOWNOACTIVATE / SW_SHOWNORMAL
+    elif not BG:
+        user32.ShowWindow(h, 1)
+    user32.SetWindowPos(h, 0, x, y, CLIENT_W + 40, CLIENT_H + 80, fl)
     time.sleep(0.5)
     l, t, r, b = client_rect(h)
     wr = wt.RECT()
     user32.GetWindowRect(h, ctypes.byref(wr))
     dw = (wr.right - wr.left) - (r - l)
     dh = (wr.bottom - wr.top) - (b - t)
-    user32.SetWindowPos(h, 0, x, y, CLIENT_W + dw, CLIENT_H + dh, 0x0004)
+    user32.SetWindowPos(h, 0, x, y, CLIENT_W + dw, CLIENT_H + dh, fl)
     time.sleep(0.8)
     return client_rect(h)
 
@@ -158,12 +177,59 @@ def need_window():
 # ---------------------------------------------------------------- screenshots
 
 
-def shot(name):
+class _BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG), ("biPlanes", wt.WORD),
+                ("biBitCount", wt.WORD), ("biCompression", wt.DWORD), ("biSizeImage", wt.DWORD),
+                ("biXPelsPerMeter", wt.LONG), ("biYPelsPerMeter", wt.LONG), ("biClrUsed", wt.DWORD),
+                ("biClrImportant", wt.DWORD)]
+
+
+def grab_printwindow(h):
+    """Client area of window h via PrintWindow(PW_RENDERFULLCONTENT): works with the window behind others or on
+    another monitor, needs no focus and never touches the desktop. Returns an RGB PIL image."""
+    from PIL import Image
+    gdi = ctypes.windll.gdi32
+    wr = wt.RECT()
+    user32.GetWindowRect(h, ctypes.byref(wr))
+    W, H = wr.right - wr.left, wr.bottom - wr.top
+    cr = wt.RECT()
+    user32.GetClientRect(h, ctypes.byref(cr))
+    pt = wt.POINT(0, 0)
+    user32.ClientToScreen(h, ctypes.byref(pt))
+    ox, oy = pt.x - wr.left, pt.y - wr.top
+    if W <= 0 or H <= 0 or cr.right <= 0 or user32.IsIconic(h):
+        raise RuntimeError("game window minimized or has no size: cannot capture")
+    dc = user32.GetDC(h)
+    mdc = gdi.CreateCompatibleDC(dc)
+    bmp = gdi.CreateCompatibleBitmap(dc, W, H)
+    gdi.SelectObject(mdc, bmp)
+    try:
+        user32.PrintWindow(h, mdc, 2)
+        bi = _BITMAPINFOHEADER(40, W, -H, 1, 32, 0, 0, 0, 0, 0, 0)
+        buf = ctypes.create_string_buffer(W * H * 4)
+        gdi.GetDIBits(mdc, bmp, 0, H, buf, ctypes.byref(bi), 0)
+    finally:
+        gdi.DeleteObject(bmp)
+        gdi.DeleteDC(mdc)
+        user32.ReleaseDC(h, dc)
+    img = Image.frombuffer("RGBA", (W, H), buf, "raw", "BGRA", 0, 1).convert("RGB")
+    return img.crop((ox, oy, ox + cr.right, oy + cr.bottom))
+
+
+def grab_client(h=None):
+    """Client-area image of the game window (background: PrintWindow; foreground: desktop grab of the client rect)."""
+    h = h or need_window()
+    if BG:
+        return grab_printwindow(h)
     from PIL import ImageGrab
-    h = need_window()
     focus(h)
     l, t, r, b = client_rect(h)
-    img = ImageGrab.grab(bbox=(l, t, r, b), all_screens=True)
+    return ImageGrab.grab(bbox=(l, t, r, b), all_screens=True)
+
+
+def shot(name):
+    h = need_window()
+    img = grab_client(h)
     path = os.path.join(current_run(), name if name.lower().endswith(".png") else name + ".png")
     img.save(path)
     log(f"shot {os.path.basename(path)} {img.size}")
@@ -220,7 +286,55 @@ def _send_key(sc, ext, up):
     user32.SendInput(1, ctypes.byref(i), ctypes.sizeof(INPUT))
 
 
-def press(key, hold=0.06, mods=()):
+WM_KEYDOWN, WM_KEYUP, WM_CHAR, WM_SYSKEYDOWN, WM_SYSKEYUP = 0x100, 0x101, 0x102, 0x104, 0x105
+WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP = 0x200, 0x201, 0x202, 0x204, 0x205
+
+# name -> virtual key (background mode)
+VK = {"esc": 0x1B, "enter": 0x0D, "tab": 0x09, "space": 0x20, "backspace": 0x08, "ctrl": 0x11, "shift": 0x10,
+      "alt": 0x12, "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28, "`": 0xC0, "-": 0xBD, "=": 0xBB,
+      ".": 0xBE, ",": 0xBC, "/": 0xBF, ";": 0xBA, "'": 0xDE}
+for _i in range(1, 11):
+    VK[f"f{_i}"] = 0x6F + _i
+for _c in "abcdefghijklmnopqrstuvwxyz0123456789":
+    VK[_c] = ord(_c.upper())
+
+
+def _lparam(vk, ext, up, repeat=1):
+    sc = user32.MapVirtualKeyW(vk, 0)
+    lp = (repeat & 0xFFFF) | (sc << 16) | ((1 if ext else 0) << 24)
+    if up:
+        lp |= (1 << 30) | (1 << 31)
+    return lp
+
+
+def _post_key(hwnd, name, up, ext=0):
+    vk = VK[name]
+    user32.PostMessageW(hwnd, WM_KEYUP if up else WM_KEYDOWN, vk, _lparam(vk, ext, up))
+
+
+def press_bg(key, hold=0.06, mods=(), char=None):
+    """Key press as window messages (no global input). char: also post WM_CHAR (text fields)."""
+    hwnd = need_window()
+    key = key.lower() if len(key) > 1 or key.isalpha() else key
+    ext = SC[key][1] if key in SC else 0
+    _set_mods(mods)  # GetKeyState answers for the modifiers come from the plugin's virtual block (when it is on)
+    for m in mods:
+        _post_key(hwnd, m, False)
+    time.sleep(0.03)
+    _post_key(hwnd, key, False, ext)
+    if char:
+        user32.PostMessageW(hwnd, WM_CHAR, ord(char), _lparam(VK[key], ext, False))
+    time.sleep(hold)
+    _post_key(hwnd, key, True, ext)
+    for m in reversed(mods):
+        _post_key(hwnd, m, True)
+    _set_mods(())
+    time.sleep(0.15)
+
+
+def press(key, hold=0.06, mods=(), char=None):
+    if BG:
+        return press_bg(key, hold, mods, char)
     key = key.lower() if len(key) > 1 or key.isalpha() else key
     sc, ext = SC[key]
     for m in mods:
@@ -248,16 +362,84 @@ def key(*names, focus_first=True):
 def type_text(s):
     for ch in s:
         if ch == " ":
-            press("space")
+            press("space", char=ch)
         elif ch.isupper():
-            press(ch.lower(), mods=("shift",))
+            press(ch.lower(), mods=("shift",), char=ch)
         elif ch in SHIFT_CHARS:
-            press(SHIFT_CHARS[ch], mods=("shift",))
+            press(SHIFT_CHARS[ch], mods=("shift",), char=ch)
         else:
-            press(ch)
+            press(ch, char=ch)
+
+
+_VIN = None
+
+
+def vinput():
+    """The plugin's virtual input block ('Local\\mxl-testharness-input', plugin/src/testharness.cpp) as an int32[8]:
+    [magic, active, x, y, buttons, mods, seq, 0]. D2R reads the mouse position with GetCursorPos and the buttons and
+    modifiers with GetKeyState; with the harness on the plugin answers those from this block, so the real cursor
+    never has to move. None when the plugin's test harness is off (no mxl-testharness.txt next to mxl-core.dll)."""
+    global _VIN
+    if _VIN is None:
+        kernel32.OpenFileMappingW.restype = ctypes.c_void_p
+        kernel32.MapViewOfFile.restype = ctypes.c_void_p
+        kernel32.MapViewOfFile.argtypes = [ctypes.c_void_p, wt.DWORD, wt.DWORD, wt.DWORD, ctypes.c_size_t]
+        hm = kernel32.OpenFileMappingW(0xF001F, False, "Local\\mxl-testharness-input")
+        if not hm:
+            return None
+        p = kernel32.MapViewOfFile(ctypes.c_void_p(hm), 0xF001F, 0, 0, 576)
+        if not p:
+            return None
+        _VIN = (ctypes.c_int32 * 144).from_address(p)
+        if _VIN[0] != 0x4d58:
+            _VIN = None
+        elif not _VIN[1]:
+            _VIN[7] = 1  # D2R may not bring its own window to the front (SetForegroundWindow suppressed)
+            _VIN[2], _VIN[3], _VIN[1] = 800, 450, 1  # from now on the real mouse and modifier keys are ignored by D2R
+    return _VIN
+
+
+def _set_mods(mods):
+    v = vinput()
+    if v is not None:
+        bits = {"shift": 1, "ctrl": 2, "alt": 4}
+        v[5] = sum(bits[m] for m in mods)
+
+
+def click_bg(fx, fy, button="left", move_only=False):
+    """Mouse without the real mouse: the virtual cursor in the plugin's input block (position and button state as
+    D2R's GetCursorPos / GetKeyState see them) plus WM_MOUSEMOVE / WM_xBUTTON messages with client coordinates.
+    Messages alone are ignored by D2R (it takes the position from GetCursorPos, not from lParam)."""
+    h = need_window()
+    cr = wt.RECT()
+    user32.GetClientRect(h, ctypes.byref(cr))
+    x, y = int(fx * cr.right), int(fy * cr.bottom)
+    lp = lambda a, b: ((b & 0xFFFF) << 16) | (a & 0xFFFF)
+    v = vinput()
+    if v is None:
+        raise SystemExit("background mouse needs the plugin test harness (mxl-testharness.txt next to mxl-core.dll, "
+                         "plugin >= test-harness build); use --foreground otherwise")
+    v[2], v[3], v[1] = x - 4, y - 4, 1  # D2R buttons ignore a click that arrives without a hover first
+    user32.PostMessageW(h, WM_MOUSEMOVE, 0, lp(x - 4, y - 4))
+    time.sleep(0.2)
+    v[2], v[3] = x, y
+    user32.PostMessageW(h, WM_MOUSEMOVE, 0, lp(x, y))
+    time.sleep(0.4)
+    if move_only:
+        return
+    down, up, bit, mk = (WM_LBUTTONDOWN, WM_LBUTTONUP, 1, 1) if button == "left" else (WM_RBUTTONDOWN, WM_RBUTTONUP, 2, 2)
+    v[4] |= bit
+    user32.PostMessageW(h, down, mk, lp(x, y))
+    time.sleep(0.08)
+    v[4] &= ~bit
+    user32.PostMessageW(h, up, 0, lp(x, y))
+    time.sleep(0.4)
+    log(f"click(bg) {fx:.3f},{fy:.3f} -> client {x},{y} {button}")
 
 
 def click(fx, fy, button="left", move_only=False):
+    if BG:
+        return click_bg(fx, fy, button, move_only)
     h = need_window()
     focus(h)
     l, t, r, b = client_rect(h)
@@ -298,11 +480,14 @@ def _read_from(p, off):
         return ""
 
 
-def wait_log(needle, timeout=90, off=0):
+def wait_log(needle, timeout=90, off=0, since=None):
+    """since: 'YYYY-MM-DD HH:MM:SS' local time; only lines stamped at or after it count (the loader log may still
+    hold the previous run's lines for a moment after launch)."""
     t0 = time.time()
     while time.time() - t0 < timeout:
-        if needle in _read_from(LOADER_LOG, off):
-            return True
+        for ln in _read_from(LOADER_LOG, off).splitlines():
+            if needle in ln and (since is None or ln[1:20] >= since):
+                return True
         time.sleep(1)
     return False
 
@@ -344,15 +529,41 @@ def logscan(update=True):
 # ---------------------------------------------------------------- start / stop / console
 
 
+def _keep_out_of_front(prev_fg, wait=60):
+    """D2R activates its window as soon as it is created, whatever the launch flags. Right after it appears,
+    send it to the bottom of the z-order (no activation) and hand the foreground back to the window that had it
+    before the launch. This is the only SetForegroundWindow in background mode (it gives focus back, it never
+    takes it) and only runs once, at launch."""
+    t0 = time.time()
+    while time.time() - t0 < wait:
+        h = find_window()
+        if h:
+            user32.SetWindowPos(h, 1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)  # HWND_BOTTOM, NOSIZE|NOMOVE|NOACTIVATE
+            if prev_fg and user32.GetForegroundWindow() == h:
+                user32.SetForegroundWindow(prev_fg)
+            log(f"game window {h} sent to the back, foreground given back to {prev_fg}")
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def start(timeout=120):
     if game_pids():
         log("game already running")
     else:
         snapshot_marks()
         off = _size(LOADER_LOG)
-        subprocess.Popen([LOADER], cwd=GAME_DIR)
+        since = time.strftime("%Y-%m-%d %H:%M:%S")
+        prev_fg = user32.GetForegroundWindow()
+        si = subprocess.STARTUPINFO()
+        if BG:
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 4  # SW_SHOWNOACTIVATE (the loader re-launches itself, D2R still activates its window)
+        subprocess.Popen([LOADER], cwd=GAME_DIR, startupinfo=si)
         log("launched D2RLoader")
-        if not wait_log("D2R startup complete.", timeout, off):
+        if BG:
+            _keep_out_of_front(prev_fg)
+        if not wait_log("D2R startup complete.", timeout, off, since):
             log("TIMEOUT waiting for startup line")
             return False
     t0 = time.time()
@@ -395,7 +606,46 @@ def stop(timeout=20):
     log("stopped")
 
 
+def console_bg(cmd, timeout=10):
+    """Run a developer-console line through the plugin (D2RCore's ExecuteConsoleCommand on the game's UI thread).
+    D2R takes no Ctrl+` from posted messages, so the panel is never opened: the command runs, its output is only
+    visible when the panel is open (it stays closed here). Returns True when the console handled the line."""
+    v = vinput()
+    if v is None:
+        raise SystemExit("background console needs the plugin test harness (mxl-testharness.txt next to mxl-core.dll)")
+    data = cmd.encode("utf-8")[:500] + b"\0"
+    ctypes.memmove(ctypes.addressof(v) + 64, data, len(data))
+    seq = (v[8] + 1) & 0x7FFFFFFF
+    v[8] = seq
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if v[9] == seq:
+            log(f"console(bg) {cmd!r} -> {v[10]}")
+            return v[10] == 1
+        time.sleep(0.05)
+    log(f"console(bg) {cmd!r} -> no answer in {timeout}s (not in the game window thread's message loop?)")
+    return False
+
+
+HARNESS_CONSOLE = os.path.join(GAME_DIR, r"mods\MedianXL\d2rloader\plugins\mxl-testharness-console.txt")
+
+
+def console_text(cmd, settle=0.6):
+    """console_bg() plus the lines the plugin's own `mxl` command printed for it (the plugin appends them to
+    mxl-testharness-console.txt). Output of D2R / D2RLoader commands (cheats, help) is not captured: it only goes to
+    the console panel, which cannot be opened without Ctrl+`."""
+    mark = _size(HARNESS_CONSOLE)
+    console_bg(cmd)
+    time.sleep(settle)
+    text = _read_from(HARNESS_CONSOLE, mark)
+    if text:
+        log(f"console(bg) output of {cmd!r}:\n" + text.rstrip())
+    return text
+
+
 def console(cmd):
+    if BG:
+        return console_text(cmd)
     focus(need_window())
     press("`", mods=("ctrl",))
     time.sleep(0.5)
@@ -423,13 +673,24 @@ UI = {  # fractions of the 1600 x 900 client rect, measured 2026-10-21
 }
 
 
+UI["difficulty_normal"] = (0.500, 0.421)  # "Select Difficulty" dialog after Play (shown when the character has more than one)
+
+
+def play_selected():
+    """Play the selected character; answer the difficulty dialog with Normal (a click on empty menu scenery when
+    the dialog is not there)."""
+    click(*UI["menu_play"])
+    time.sleep(1.5)
+    click(*UI["difficulty_normal"])
+
+
 def in_game() -> bool:
     """The red life orb (bottom left of the HUD) is on screen."""
-    from PIL import ImageGrab, ImageStat
-    l, t, r, b = client_rect(need_window())
-    w, h = r - l, b - t
-    box = (l + int(.235 * w), t + int(.87 * h), l + int(.265 * w), t + int(.92 * h))
-    rr, gg, bb = ImageStat.Stat(ImageGrab.grab(bbox=box, all_screens=True).convert("RGB")).mean
+    from PIL import ImageStat
+    img = grab_client()
+    w, h = img.size
+    box = (int(.235 * w), int(.87 * h), int(.265 * w), int(.92 * h))
+    rr, gg, bb = ImageStat.Stat(img.crop(box).convert("RGB")).mean
     return rr > 90 and rr > 2 * gg and rr > 2 * bb
 
 
@@ -455,12 +716,12 @@ class Report:
 def clear_intro():
     """Calibration screens (every launch), skippable intro cinematics (hold a key), title screen.
     Returns False if the game quit (license check dialog: OK closes the game)."""
-    from PIL import ImageGrab, ImageStat
+    from PIL import ImageStat
     def button_visible():
-        l, t, r, b = client_rect(need_window())
-        w, h = r - l, b - t
-        box = (l + int(.45 * w), t + int(.82 * h), l + int(.55 * w), t + int(.86 * h))
-        return ImageStat.Stat(ImageGrab.grab(bbox=box, all_screens=True).convert("L")).mean[0] > 50
+        img = grab_client()
+        w, h = img.size
+        box = (int(.45 * w), int(.82 * h), int(.55 * w), int(.86 * h))
+        return ImageStat.Stat(img.crop(box).convert("L")).mean[0] > 50
 
     def wait_button(sec):
         t0 = time.time()
@@ -542,7 +803,7 @@ def run_smoke():
         click(0.62, 0.40)  # warm-up on empty scenery: the menu swallows its first click
         time.sleep(1)
         if os.path.exists(os.path.join(SAVES, CHAR_NAME + ".d2s")):
-            click(*UI["menu_play"])  # the character exists and is selected
+            play_selected()  # the character exists and is selected
         else:
             click(*UI["char_create"]); time.sleep(3)
             click(*UI["barb_class"]); time.sleep(2)
@@ -551,11 +812,14 @@ def run_smoke():
             click(*UI["create_ok"])
         time.sleep(16)
         if not in_game() and os.path.exists(os.path.join(SAVES, CHAR_NAME + ".d2s")):
-            click(*UI["menu_play"]); time.sleep(16)  # retry once
+            play_selected(); time.sleep(16)  # retry once
         ok = in_game()
         rep.add("2 enter game", ok, [os.path.basename(shot("town"))], "" if ok else "life orb not found: not in game")
         if not ok:
             return
+        if BG:  # the console panel cannot be opened without Ctrl+`: the plugin runs the line and records mxl's output
+            txt = console_text("mxl")
+            rep.add("3a console command mxl (plugin harness)", "mxl-core" in txt, [], txt.splitlines()[0][:100] if txt else "no output")
         step_shot(rep, "3b character sheet (C)", "charsheet", "c")
         key("esc"); time.sleep(0.8)
         step_shot(rep, "3c skill tree (T)", "skilltree", "t")
@@ -571,7 +835,7 @@ def run_smoke():
         click(*UI["save_exit"]); time.sleep(8)
         saved = os.path.exists(os.path.join(SAVES, CHAR_NAME + ".d2s")) and not in_game()
         rep.add("4a save and exit", saved, [os.path.basename(shot("charselect2"))])
-        click(*UI["menu_play"]); time.sleep(16)
+        play_selected(); time.sleep(16)
         ok = in_game()
         rep.add("4b reload", ok, [os.path.basename(shot("town_reload"))], "" if ok else "life orb not found")
         if ok:
