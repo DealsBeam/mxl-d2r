@@ -21,6 +21,10 @@ gets that art, grid and tabs, and its repair / refresh buttons move below the gr
 Stash: its materials tab shows the Horadric Cube as a 3 x 4 recess (D2R), now 15 x 10 over Median's grid picture
 (ui_panels.py, CUBE_VIEW), the inventory being the same 15 x 10 cube.
 
+Classic mode (G): playerinventoryoriginallayout.json, playerinventoryexpansionlayout.json, horadriccubelayout.json,
+bankexpansionlayout.json, tradelayout.json, vendorpanellayout.json and characterstatspanel.json get the same Median art
+(tools/ui_panels.py, 320 x 432 DC6) and positions scaled by CK = 432 / 704 (see the classic block below).
+
 Writes work/mod/data/global/ui/layouts/skillstreepanelhd.json, skillstreepanel.json, playerinventoryoriginallayouthd.json,
 playerinventoryexpansionlayouthd.json, horadriccubelayouthd.json, bankexpansionlayouthd.json, tradelayouthd.json and
 vendorpanellayouthd.json (after txt_migrate.py).
@@ -367,7 +371,7 @@ def put(text: str, name: str, x: int, y: int, w: int | None = None, h: int | Non
             r = r[:-2] + f', "scale": {scale} }}'
         b = RECT.sub(lambda _m: f'"rect": {r}', b, count=1)
         if size:
-            b = re.sub(r'"pointSize":\s*"\$\w+"', f'"pointSize": {size}', b)
+            b = re.sub(r'"pointSize":\s*(?:"\$\w+"|\d+)', f'"pointSize": {size}', b)
         if align:
             b = re.sub(r'("alignment":\s*\{\s*"h":\s*)"\w+"', rf'\1"{align}"', b)
         if label:
@@ -436,8 +440,215 @@ def char_sheet() -> str:
     return t
 
 
+# ---- classic mode (G): D2R's 640 x 480 layouts on Median's panels ---------------------------------------------------------
+# Median's classic panel (512 x 704) becomes D2R's 320 x 432 one at CK (tools/ui_panels.py: 314 x 432 art, at the outer
+# edge: right panels at x 0, left panels GAP pixels in). Grids and equipment slots keep D2R's 29-pixel cells and get
+# "scale": CK, so they line up with the art; buttons keep their size.
+CK = 432 / 704
+GAP = 6
+CLOSE_XY = (275, 394)          # D2R's close button sat at y 383-385, where Median's gold bars are
+CSTASH_NAV = (78, 344)         # shared stash arrows and page text (164 x 32): between the grid and the gold box
+CSTASH_TABS_W = 80
+CTRADE_BAR_Y = (135, 176)
+
+
+def cpos(x: float, y: float, left: bool = True) -> tuple[int, int]:
+    return round(x * CK) + (GAP if left else 0), round(y * CK)
+
+
+def cbox2(b: tuple, left: bool = True) -> tuple[int, int, int, int]:
+    x, y = cpos(b[0], b[1], left)
+    return x, y, round((b[2] - b[0]) * CK), round((b[3] - b[1]) * CK)
+
+
+def cgrid(x: int, y: int, cols: int, rows: int) -> str:
+    return (f'{{ "rect": {{ "x": {x}, "y": {y}, "scale": {CK:.4f} }}, "cellCount": {{ "x": {cols}, "y": {rows} }}, '
+            f'"cellSize": "$ItemCellSize", "gemSocketFilename": "PANEL\\\\gemsocket" }}')
+
+
+def place(text: str, name: str, value: str, n: int = 0) -> str:
+    """Sets the rect of the widget called name, adding one if it has none."""
+    s, e = span_n(text, f'"name": "{name}"', n)
+    b = text[s:e]
+    if RECT.search(b):
+        b = RECT.sub(lambda _m: f'"rect": {value}', b, count=1)
+    else:
+        b = b.replace('"fields": {', f'"fields": {{ "rect": {value},', 1)
+    return text[:s] + b + text[e:]
+
+
+def crect(x: int, y: int, w: int | None = None, h: int | None = None, scale: float | None = None) -> str:
+    r = rect(x, y, w, h)
+    return r[:-2] + f', "scale": {scale} }}' if scale else r
+
+
+def hide(text: str, name: str, n: int = 0) -> str:
+    return place(text, name, '{ "x": -5000, "y": -5000, "width": 10, "height": 10 }', n)
+
+
+def close_button(t: str, name: str, left: bool) -> str:
+    return place(t, name, crect(CLOSE_XY[0] + (GAP if left else 1) - 1, CLOSE_XY[1]))
+
+
+def classic_inventory_original() -> str:
+    t = baseline("playerinventoryoriginallayout.json")
+    t = t.replace('"PANEL\\\\invchar"', '"PANEL\\\\mxl\\\\inventory"')
+    t = set_fields(t, "grid", cgrid(*cpos(INV_GRID[0] - 512, INV_GRID[1], False), 15, 10))
+    for widget, (l, r, top, b) in INV_SLOTS.items():  # D2R's slot size scaled by CK, centred on Median's slot
+        x, y = cpos(l - 512, top, False)
+        x2, y2 = cpos(r - 512, b, False)
+        s_, e_ = block_span(t, f'"name": "{widget}"')
+        m = re.search(r'"width":\s*(\d+),\s*"height":\s*(\d+)', t[s_:e_])
+        w, h = int(m.group(1)), int(m.group(2))
+        cx, cy = round((x + x2 - w * CK) / 2), round((y + y2 - h * CK) / 2)
+        t = set_rect(t, widget, f'{{ "x": {cx}, "y": {cy}, "width": {w}, "height": {h}, "scale": {CK:.4f} }}')
+    bx, by = cpos(*GOLD_ICON, False)
+    tx, _ty = cpos(*GOLD_TEXT, False)
+    t = set_rect(t, "gold_button", crect(bx, by + 2, scale=0.75))
+    t = set_rect(t, "gold_amount", rect(tx, by + 1))
+    return close_button(t, "close", False)
+
+
+def classic_inventory_expansion() -> str:
+    """Weapon swap: D2R's tab pictures (67 x 141 behind the arm slot) are dropped, the click areas sit just above
+    Median's arm slots."""
+    t = baseline("playerinventoryexpansionlayout.json")
+    t = t.replace('"PANEL\\\\invchar6"', '"PANEL\\\\mxl\\\\inventory"')
+    for side in ("right", "left"):
+        l, r, top, _b = INV_SLOTS[f"slot_{side}_arm"]
+        x, y = cpos(l - 512, top, False)
+        t = hide(t, f"background_{side}_arm")
+        t = place(t, f"weaponswap_{side}_arm", rect(x, y - 15, round((r - l) * CK), 14))
+    return t
+
+
+def classic_cube() -> str:
+    t = baseline("horadriccubelayout.json")
+    t = t.replace('"PANEL\\\\supertransmogrifier"', '"PANEL\\\\mxl\\\\cube"')
+    t = set_fields(t, "grid", cgrid(*cpos(*CUBE_GRID), 15, 10))
+    t = set_rect(t, "convert", crect(*cpos(*CUBE_BUTTON), scale=0.75))
+    t = hide(t, "flourish")  # D2R's cube animation would play over Median's grid
+    return close_button(t, "close", True)
+
+
+def classic_stash() -> str:
+    """The expansion layout (personal and shared tabs; classic mode has no extra tabs). The gold box is at the
+    bottom (tools/ui_panels.py MOVES), the arrows of the shared stash between it and the grid."""
+    t = baseline("bankexpansionlayout.json")
+    t = t.replace('"PANEL\\\\expandedstash"', '"PANEL\\\\mxl\\\\stash"')
+    t = t.replace('"PANEL\\\\additionalstash"', '"PANEL\\\\mxl\\\\stash"')  # the shared stash's page
+    t = set_fields(t, "grid", cgrid(*cpos(*STASH_GRID), 14, 14))
+    x0, y0 = cpos(*STASH_TABS[:2])
+    x1, y1 = cpos(*STASH_TABS[2:])
+    t = place(t, "BankTabs", rect((x0 + x1) // 2 - CSTASH_TABS_W, (y0 + y1) // 2 - 12))
+    gx, gy = cpos(*STASH_GOLD)
+    t = set_rect(t, "gold_withdraw", crect(gx, gy + 2, scale=0.75))
+    t = set_rect(t, "gold_amount", rect(gx + 22, gy + 1))
+    t = hide(t, "gold_max")
+    t = place(t, "StashNavigation", rect(CSTASH_NAV[0], CSTASH_NAV[1], 164, 32))
+    return close_button(t, "close", True)
+
+
+def classic_trade() -> str:
+    t = baseline("tradelayout.json")
+    t = t.replace('"PANEL\\\\trade"', '"PANEL\\\\mxl\\\\trade"')
+    y0, y1 = (round(v * CK) for v in CTRADE_BAR_Y)
+    for who, (gx, gy) in TRADE_GRIDS.items():
+        t = set_fields(t, f"grid_{who}", cgrid(*cpos(gx, gy), 7, 15))
+        bx0, bx1 = (round(v * CK) + GAP for v in TRADE_BARS[who])
+        t = place(t, f"ready_{who}", crect(bx0 + 3, y0 + 3, scale=0.6))
+        t = place(t, f"name_{who}", rect(bx0 + 26, y0, bx1 - bx0 - 30, y1 - y0))
+        t = hide(t, f"gold_{who}")
+        w = round(7 * 29 * CK)
+        t = place(t, f"gold_amount_{who}", rect(cpos(gx, 0)[0], round(TRADE_GOLD_Y * CK), w, 16))
+    return close_button(t, "close", True)
+
+
+def classic_vendor() -> str:
+    t = baseline("vendorpanellayout.json")
+    t = t.replace('"PANEL\\\\buysell"', '"PANEL\\\\mxl\\\\store"')
+    tx, ty0 = cpos(*STORE_TABS[:2])
+    th = round((STORE_TABS[3] - STORE_TABS[1]) * CK)
+    t = hide(t, "gamble_tab")  # D2R's stand-alone tab picture would sit at the panel's corner
+    t = place(t, "tabs", rect(tx, ty0 + (th - 24) // 2))
+    tab_w = round((STORE_TABS[2] - STORE_TABS[0]) * CK / 4) - 1
+    t = t.replace('"tabSize": { "x": 79, "y": 24 }', f'"tabSize": {{ "x": {tab_w}, "y": 24 }}', 1)
+    t = set_fields(t, "grid", cgrid(*cpos(*STORE_GRID), 15, 15))
+    gx, gy = cpos(STORE_GOLD[0], STORE_GOLD[1])
+    bar_w = round((STORE_GOLD[2] - STORE_GOLD[0]) * CK)
+    t = hide(t, "gold_label")
+    t = place(t, "gold_amount", rect(gx + 22, gy + 4, bar_w - 30, 16))
+    return t
+
+
+CS_LEVEL = (40, 45, 120, 127)  # the square at the top left of Median's statsheet: the level goes in it
+
+
+def classic_char_sheet() -> str:
+    """D2R's classic character panel on Median's statsheet page 0 (same boxes as the HD panel, char_sheet()). Its
+    text is D2R's small bitmap font, so the boxes get values only where they are narrow."""
+    t = re.sub(r'"name":\s+"', '"name": "', baseline("characterstatspanel.json"))
+    t = t.replace('"$CharacterStatsBackground"', '"PANEL\\\\mxl\\\\charsheet"')
+    x, y, w, h = cbox2(CS_NAME)
+    t = put(t, "CharacterName", x + 2, y, w - 4, h, size=24)
+    t = hide(t, "ClassInfo")  # the level box shows the level; the class is on the character select screen
+    x, y, w, h = cbox2(CS_LEVEL)
+    t = put(t, "LevelTitle", x, y + h // 2 - 16, w, 16, size=16)
+    t = put(t, "Level", x, y + h // 2 - 2, w, 16, size=24)
+    for key, (cur, mx, title) in {"hp": ("CurrentHP", "MaxHP", "HPTitle"), "mana": ("CurrentMana", "MaxMana", "ManaTitle"),
+                                  "stamina": ("CurrentStamina", "MaxStamina", "StaminaTitle")}.items():
+        X, Y, W, H = cbox2(CS_VITALS[key])
+        t = hide(t, title)  # the boxes are too narrow for a title and two numbers: current value only
+        t = hide(t, mx)
+        t = put(t, cur, X, Y, W, H, size=16, align="center")
+    X, Y, W, H = cbox2(CS_XP)
+    t = put(t, "CurrentXP", X, Y, W, H, size=14, align="center")
+    for name in ("CurrentXPTitle", "NextLevelXP", "NextLevelXPText"):
+        t = hide(t, name)
+    done: list[str] = []  # the +1 buttons are 30 pixels wide and do not scale: a row of them under the attributes
+    for (title, stat, button), (r0, r1) in zip(CS_ATTRS, CS_ROWS):
+        t = put(t, title, *cbox2((CS_ATTR_LABEL[0], r0, CS_ATTR_LABEL[1], r1)), size=14)
+        t = put(t, stat, *cbox2((CS_ATTR_VALUE[0], r0, CS_ATTR_VALUE[1], r1)), size=16)
+        t = place(t, button, crect(GAP + 34 + 36 * len(done), cpos(0, CS_ROWS[3][1])[1] + 10))
+        done.append(button)
+    for name in ("ButtonBackgroundStrength", "ButtonBackgroundDexterity", "ButtonBackgroundVitality",
+                 "ButtonBackgroundEnergy"):
+        t = hide(t, name)
+    for (title, text, label), (r0, r1) in zip(CS_RES, CS_ROWS):
+        t = put(t, title, *cbox2((CS_RES_LABEL[0], r0, CS_RES_LABEL[1], r1)), size=14, label=label)
+        t = put(t, text, *cbox2((CS_RES_VALUE[0], r0, CS_RES_VALUE[1], r1)), size=16)
+    t = put(t, "ArmorClass", *cbox2(CS_DEFENSE), size=16)
+    t = put(t, "ArmorClassTitle", *cbox2(CS_DEFENSE_TITLE), size=14)
+    for n, (side, left) in enumerate(CS_SKILLS.items()):
+        t = put(t, f"{side.capitalize()}SkillStats", 0, 0)
+        for group, (r0, r1) in CS_SKILL_ROWS.items():
+            X, Y, W, H = cbox2((left, r0, left + 99, r1))
+            t = put(t, group, X, Y, W, H, n=n)
+            half = H // 2
+            t = put(t, f"Attack{group}Stat", 0, 0, W, H, n=n, size=14)
+            t = put(t, f"Attack{group}StatTop", 0, 0, W, half, n=n, size=12)
+            t = put(t, f"Attack{group}StatBottom", 0, half, W, H - half, n=n, size=12)
+            t = hide(t, f"Attack{group}Title", n)
+    x, y, w, h = cbox2(CS_POINTS)
+    y += 18
+    t = hide(t, "UnusedPointsBackground")
+    t = put(t, "UnusedPointsText", x, y, w - 40, h, size=14)
+    t = put(t, "UnusedPoints", x + w - 40, y, 40, h, size=16)
+    return close_button(t, "CloseButton", True)
+
+
+def classic_layouts() -> dict[str, str]:
+    return {"characterstatspanel.json": classic_char_sheet(),
+"playerinventoryoriginallayout.json": classic_inventory_original(),
+            "playerinventoryexpansionlayout.json": classic_inventory_expansion(),
+            "horadriccubelayout.json": classic_cube(), "bankexpansionlayout.json": classic_stash(),
+            "tradelayout.json": classic_trade(), "vendorpanellayout.json": classic_vendor()}
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
+    for name, text in classic_layouts().items():
+        (OUT / name).write_text(text, encoding="utf-8")
     (OUT / "characterstatspanelhd.json").write_text(char_sheet(), encoding="utf-8")
     (OUT / "skillstreepanelhd.json").write_text(skill_tree(), encoding="utf-8")
     (OUT / "skillstreepanel.json").write_text(classic_skill_tree(), encoding="utf-8")

@@ -64,6 +64,8 @@ types use Median's own tiles, which the mod did not ship. The log also listed lo
   mapped back to codes; D2R allows unique/set item names in TCs; Median's D2Sigma-generated classes
   (`sarm93`, `swea93`) and missing names are cleared and reported; a case-only mismatch is fixed.
 - **MonStatsEx** blank means monstats2 row 0 (the first decoder wrote 0 as blank).
+- **Monster AI** must be one of the first 155 monai rows (the engine's AI table has 155 entries; a later row runs "None" and the monster stands still). Median's
+  `andariel_ai` (47 monsters) is mapped to D2R's `Andariel` by tools/monster_ai_data.py (docs/subsystems/monsters-ai.md); the validator errors if any other AI lands past the table.
 - **Sets:** "Orphan's Call" has 9 items (D2R: 6); items 7+ go to "Orphan's Call (2)" until a plugin exists.
 - **Inventory:** D2R's own rows for now (2 per page, one per screen resolution).
 - The validator now checks all of these (formula/name lengths, TC entries, set sizes, MonStatsEx, mercenary
