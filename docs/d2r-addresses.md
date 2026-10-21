@@ -8,8 +8,9 @@ All addresses are **RVAs** in the D2R image (`D2RLoader_6ab3782c_dump.exe` memor
 strings, callers); *likely* = structure matches but one link rests on inference; *guess* = anchor only.
 
 Everything here was found with `tools/d2r_find.py` (string search, RIP-relative xrefs, `.pdata` bounds, callers,
-disassembly; see its docstring) plus Median's 1.13c D2Game decompile (`ghidra-lanes/addr/d2game` copy). The D2R Ghidra
-project was still being analysed, so no D2R decompile was used; read the disassembly notes with that in mind.
+disassembly; see its docstring) plus Median's 1.13c D2Game decompile (`ghidra-lanes/addr/d2game` copy). Sections 4, 5 and 7-11 (lane
+d2r-addresses-2) were read from the analysed Ghidra project (decompiles via `tools/ghidra_scripts/DecompOut.java`, `tools/ghidra_lane.ps1` for worktrees) plus
+`tools/d2r_scan.py`; sections 1-3 and 6 are the earlier disassembly-only pass.
 
 Reading aids that apply everywhere:
 
@@ -48,9 +49,29 @@ Reading aids that apply everywhere:
 | 3 | NPC click packet (server; calls quest event 0) | block `0x4c26a7` of a PlrMsg handler | likely |
 | 3 | NPC dialog-message packet (server; calls quest event 11) | `0x4c33e0` | likely |
 | 3 | Client NPC menu module (`D2Client\src\UI\npcmenu.cpp`) | functions `0x10a520`-`0x117634` | likely (module only) |
-| 4 | Warp interact packet (server) and the warp action it calls | `0x4adbb0` -> `0x491ff0` | likely |
-| 5 | Monster spawn / goblin tick | not found | unknown |
+| 4 | Warp interact packet (server) and the warp action it calls | `0x4adbb0` -> `0x491ff0` | verified (section 4, rewritten) |
+| 4 | **Warp / use-level-tile action, the lockout hook** `(game, player, tile unit)` | `0x491ff0` | verified |
+| 4 | Warp quest-lock test `(game, player, srcLevel, dstLevel)` -> nonzero refuses (the vanilla twin of Sigma `0x5d810`) | `0x516a50` (one caller, call at `0x49218c`) | verified |
+| 4 | Teleport unit into a room at x,y (the level change itself) | `0x491ca0` | verified |
+| 4 | Linked destination tile of a warp tile / room level id | `0x2efee0` / `0x2efc10` | verified / verified |
+| 5 | **Server game frame** `(Game*)`, frame counter `game+0x170` (Median's `0x2e15a` tick) | `0x406550` | verified |
+| 5 | Process all games (timer entry, loops the 1024 game slots) | `0x406400`, slots `0x2a9c020`, `0x4062f0(id)` = game | verified |
+| 5 | **Spawn monster at room/x/y** `(game, room, x, y, class, ...)` | `0x4929e0` (core `0x493cc0(spawn struct*)`) | verified |
+| 5 | Spawn N monsters around a unit | `0x4934d0` | verified |
 | 6 | Requirement gates for NPC services | NPC table bytes +7/+8/+9/+0x10/+0x11 (section 6) | verified |
+| 7 | **Treasure-class executor** (1.13c `0x12380`) | `0x4404f0` | verified |
+| 7 | TC drop wrapper by TC index (1.13c `0x12d60`) | `0x441300` | verified |
+| 7 | TC record getter by index, level-stepped | `0x397290` | verified |
+| 7 | Create item from an item-gen struct (1.13c `0x11490`) | `0x43cd50` | verified |
+| 7 | Create item of a class (struct builder, quality / ilvl / flags) | `0x43d530` | verified |
+| 7 | Unique-item-by-index creator | not found: no equivalent function; see section 7 | open |
+| 8 | **Game destroy** `(u64 game id)` ("Deallocate game %p") | `0x4057c0` (called by the idle sweep `0x406e40`) | verified |
+| 8 | **Game create** (name, password, ... 14 args) | `0x4049d0` (no direct callers) | likely |
+| 9 | Client NPC menu table (48 x 0x48 bytes, heap, global ptr) | pointer `0x2a48830`, count `0x2a48838`, filled by `0x360d0` | verified |
+| 9 | Client menu builder / NPC row index / click-send | `0x1147a0` / `0x113990` / `0x117510` | verified |
+| 9 | Server handler of the menu packet 0x38 `(kind, npc id)` | `0x4b0470` | verified |
+| 10 | Gold stat 14/15 client sync | no explicit packet needed (section 10) | likely |
+| 11 | Quest handlers 13, 14, 25, 38, 40 | section 11 | verified |
 
 ## 1. Cube output / recipe result
 
@@ -125,10 +146,9 @@ Gold stats: carried 14, bank 15 (`0x2f5020(unit, stat, layer)` total, `0x2f7d10(
 start with a `jmp [rip+..]` thunk, entry bytes `ff 25 f2 51 b3 03 90 90 90 90 ...` and `ff 25 32 25 b3 03 90 90 90 90
 56 57 41 54 41 56`, already used by existing plugin code). The cost is checked by the search; the payment is the
 post-hook's job: take `param*100` from stat 14 first, the rest from stat 15. Whether the client sees the new gold
-without an extra packet was not tested (vendor purchases in D2R go through the same setter; verify in game).
+without an extra packet: probably yes, no explicit update is needed (evidence in section 10; not tested in game).
 Flags: nothing to find in D2R, they live in plugin memory keyed per game pointer and player name (see the port spec).
-Game create/destroy hooks for clearing the flags were not located; clearing when the game pointer changes (seen in the
-search/executor hook) is enough.
+Clear the flags in the game-destroy hook `0x4057c0` (section 8); clearing when the game pointer changes is also enough.
 
 ## 2. Act 1 quest rewards (Barbarian milestone)
 
@@ -191,8 +211,8 @@ adds, in Normal, a once-per-player drop of TC "Quest Cata Disenchant" and sets a
 **Simplest port:** at `0x515640` (kill) or in a detour of `0x5e1f00`, when the victim class is 156, the game
 difficulty `game[0x104] == 0`, and the killer has not yet got the flag, create the catalyst item directly in the
 killer's inventory with `0x517530` (code `'3o[ '` = `0x205b6f33`) instead of rolling a treasure class. This avoids needing
-D2R's treasure-class executor, which was **not located** (1.13c `0x12380`; the item-create step of a monster drop is
-`0x43fbf0`, below). Store the per-player flag as a plugin-owned bit in the player's quest record (e.g. quest 6,
+D2R's treasure-class executor, now found at `0x4404f0` (section 7; 1.13c `0x12380`). `0x43fbf0` below is not the TC path: it
+picks a gold / fallback item (`gld `, `0x443f40`) and creates it at the monster's position. Store the per-player flag as a plugin-owned bit in the player's quest record (e.g. quest 6,
 bit 0xc) with the set function.
 
 ### Cain re-issue and Akara's reward
@@ -252,42 +272,142 @@ The NPC dialog UI is in **`D2Client\src\UI\npcmenu.cpp`** (string `0x1cc78a0`): 
 them call the NPC-table getter `0x3971a0` (`0x1147a0`, `0x1162f0`, `0x117510`; `0x117510` is the "click a menu item"
 sender: it reads record byte `+0xb` and sends packet 0x2e through `0xec820`). **The menu is built from the same static
 NPC table** as the server checks; so editing that table (section 6) changes both the buttons and the server answer.
-How the visible list of lines is composed (the loop over trade / gamble / hire / quest lines, and where a 16-slot
-action list could be added) is not traced; start at the other npcmenu functions listed by
-`d2r_find.py xref 0x1cc78a0`. Layout (sprites, JSON panels) is separate and not in this lane.
+How the visible list is composed (a heap table of 48 records, 5 lines per record), where extra lines can be added and
+what the server does with a chosen line: section 9. Layout (sprites, JSON panels) is separate and not in this lane.
 
 ## 4. Level entry / warp (dungeon lockout)
 
-- **`0x4adbb0`** `(game, player, packet*, size)`: the server handler of the "use warp" packet
-  (`D2Game\src\Player\PlrMsg.cpp`, strings "Warp object not found", "Unable to do warp interact", "Can't warp now due to
-  hostility"). Entry bytes `40 55 53 57 41 54 41 56 41 57 48 8d 6c 24 d1 48`. After the checks (distance
-  `0x325140(player, target) <= 0x32`, hostility `0x42bfb0`) it calls **`0x491ff0(game, player, warp)`**
-  (`D2Game\src\Unit\SUnit.cpp`, 0x90 bytes plus chained parts; entry bytes
-  `48 8b c4 53 55 57 41 56 48 83 ec 68 49 8b d8 4c`) which is the warp/level-change action; four more callers exist
-  (`0x58e2ce`, `0x590251`, `0x5907f4`, `0x5a11a0`). Confidence: likely (the call chain is read; the call that actually
-  changes the player's level inside `0x491ff0` and the level id of the destination were not isolated).
-- **Plugin plan:** to implement Median's lockout, hook `0x491ff0` (or `0x4adbb0` before it): read the target warp's
-  destination level, check the per-game lockout map and the levels extension (difficulty, level, class), and either
-  refuse (return without calling the original) or call it and then start the clock. The destination-level read still
-  needs a follow-up (the warp unit's object data holds it; the portal object code in the plugin, `0x432ce0` family, uses
-  `0x34e9d0` to write the level byte, so the reader is nearby).
-- The client's entry-requirements text (Sigma `0x5d150`) is client UI and does not exist in D2R.
-- D2Common keeps the vanilla warp data in `D2Common\src\Drlg\DrlgWarp.cpp` (string `0x1d0dac0`); the vanilla level-record
-  extension fields (levels.bin +0x14b..+0x15f) are Median's, so D2R does not read them; the plugin owns that table.
+Read from the Ghidra decompile (lane d2r-addresses-2, 2026-10-21). Entry bytes in the table at the end of this section.
 
-## 5. Monster spawning (treasure goblins)
+### Flow (verified)
 
-Not found. What was established:
+```
+0x4adbb0  packet handler "use warp" (game, player, packet*, size = 5)   PlrMsg.cpp
+   finds the clicked tile unit (type 5, id = packet dword), checks hostility 0x42bfb0 and the distance
+   (0x325140(player, tile) < 0x33 then again < 5), then
+-> 0x491ff0 (game, player, tile)                                     SUnit.cpp   <-- the warp action
+   other callers: object-operate functions of stairs / ladders / trapdoors (0x58e230 -> 0x58e2d8, 0x590160, 0x5906e0,
+   0x5a11a0): they look for the type-5 tile in the object's room and call 0x491ff0 with it
+```
 
-- Median's tick is a per-game-frame call (Sigma patches 1.13c `D2Game+0x2e15a`, the end of the game frame function
-  `0x2e050`, which increments `game+0xa8` and runs the subsystem updates). D2R's game frame function was not located
-  (candidates are in `0x403000`-`0x40a000`, where `D2Game\src\Game\Game.cpp` is referenced; none confirmed).
-- **Alternative that needs no tick:** roll the goblin chance on each monster death. The kill wrapper `0x515640`
-  `(game, victim, killer)` (section 2) sees every kill with the killer player; "last kill within 15 s" is then implicit.
-  This changes the spawn rate model (per kill instead of one roll per 15 s per active player); tune the chance down.
-- Spawn call: D2R's monster-spawn code lives in `D2Game\src\Monster\MonsterSpawn.cpp` (functions `0x4929e0`, `0x492e70`,
-  `0x4934d0`, `0x493870`, `0x4945c0`, `0x495110`); the summon routine `0x4350e0` (plugin-known) creates a monster
-  for an owner. Which of them takes `(game, room, x, y, class)` was not decided.
+`0x491ff0(Game* rcx, Unit* rdx = player, Unit* r8 = tile)`; body (decompiled):
+
+1. `room = 0x34b440(tile)`; `cls = 0x349860(tile, "SUnit.cpp", 0x133)` (= `*(u32*)(tile+4)`, the tile's class / link id).
+2. `dst = 0x2efee0(game[0x106], room, cls, &out)`: **the linked tile unit in the destination room** (D2Common `Dungeon.cpp`
+   walk of the room's unit list for a type-5 unit with the same class), `out` points at a record whose `+0x40/+0x44` are
+   the x/y offsets to land at. `dst == 0` -> nothing happens.
+3. `dstRoom = 0x34b440(dst)`; `(x, y)` = the tile's position (`unit data +0x10/+0x14`).
+4. `landing = 0x362f90(dstRoom, &xy, size, 0x1c09, 1)` (find a free spot, unit size `0x34b580(player)`); null -> return.
+5. `srcLevel = 0x2efc10(room)`, `dstLevel = 0x2efc10(landing)` (level id of a room, entry bytes in the table).
+6. **Quest lock**: if `dstLevel - 0x49 < 0x3c` and bit `dstLevel-0x49` of `0x880200008000001` is set (levels 73, 100, 118, 128,
+   132; 73 = Duriel's Lair, 100 = Durance of Hate 1, 132 = Worldstone Chamber, and 118 / 128 only when the source level is
+   120 = the Ancients' gates) then `0x516a50(game, player, srcLevel, dstLevel)`; a nonzero result **refuses** (the code jumps to the end, `0x492295`).
+   `0x516a50` is a small switch calling the quest checks (`0x59ec70` Duriel, `0x1405e99e0` level 100, `0x546b20`, `0x546c90`).
+   It has exactly one caller (the call at `0x49218c`), and it is the vanilla twin of D2Sigma's replacement `0x5d810`
+   `(game, player, srcLevel, dstLevel)` which returns 1 to refuse.
+7. Otherwise `0x491ca0(game, player, dstRoom, x, y, 0, 0)` does the move (SetPos / room change; 25 callers: every teleport
+   uses it); on success `0x42d2c0(game, player, 0, 2, x, y, 0, 0)` sets the walk mode and `0x47abc0(client, 0x0d, ...)`
+   sends the position packet (id 0x0d) to the player.
+
+### Where to refuse and how (answer)
+
+- **Best hook: detour `0x491ff0` itself** (5 callers, one prologue, no mid-function patching). Compute the destination level
+  before calling the original:
+  ```
+  room    = GetRoom(tile)                          // 0x34b440
+  cls     = *(uint32_t*)(tile + 4)                 // what 0x349860 returns (the file/line args are only for asserts)
+  dstTile = FindTile(game[0x106], room, cls, &out) // 0x2efee0
+  dstLvl  = LevelOfRoom(GetRoom(dstTile))          // 0x2efc10(0x34b440(dstTile))
+  srcLvl  = LevelOfRoom(room)
+  ```
+  then run the Median logic (sealed? difficulty / level / class requirements from `mxl_dungeons.h`, unlocking only by the
+  lock group). To **refuse, return without calling the original**. That is the vanilla refusal path (`0x492295`): nothing
+  is sent and the player stays where he is, the same as an unfinished Duriel quest. The client has no pending state for
+  the click (it only sent "use tile"), so there is no hang.
+- Alternative (smaller): patch the call at `0x49218c` to a plugin function with the `0x516a50` signature (return 1 to refuse)
+  and also bypass the range test in front of it (it only calls `0x516a50` for the five levels above); a detour of
+  `0x491ff0` avoids both.
+- **Signalling to the player.** The vanilla path is silent. A message needs a server -> client packet. No ready-made
+  "send system message" function was located (the telemetry lines in these handlers only log). Raw send works: the game
+  has a network service singleton `0x649610()` (`lea rax, [global]; ret`), and a packet is sent with
+  `(*(void(**)(void*, uint32_t conn, Span*))(*svc + 0x28))(svc, *client, &span)` where `span = {begin, end}` points at the
+  packet bytes (see `0x47abc0`, which sends packet 0x0d this way; `client = *(Client**)(0x34b240(player) + 0xf0)`, `*client` is the
+  connection id). For the lockout message use a chat / game-message packet (0x26 or 0x5a) built by hand, or let the
+  D2RLoader client plugin show the text (it knows the level id).
+- **Portals (red portal / town portal) do not go through `0x491ff0`** (their object functions place the player with their own
+  code); Median starts the lockout clock in the portal-object operate functions (item_spells hooks), which are not part of
+  this section.
+
+The dungeon `Entry` table (`mxl_dungeons.h`) is plugin-owned: D2R's levels table has no +0x14b..+0x15f extension. Per-game
+lockout state: use the game pointer as key and reset in the game-destroy hook (section 8).
+
+| Function | RVA | Entry bytes |
+|---|---|---|
+| warp action | `0x491ff0` | `48 8b c4 53 55 57 41 56 48 83 ec 68 49 8b d8 4c` |
+| quest-lock test | `0x516a50` | `45 8b d1 41 83 ea 49 74 33 41 83 ea 1b 74 28 41` |
+| teleport into room | `0x491ca0` | `40 55 53 56 57 41 54 41 55 41 56 41 57 48 8d 6c` |
+| linked tile finder | `0x2efee0` | `48 89 5c 24 18 56 48 83 ec 30 48 8b 52 18 48 8d` |
+| room -> level id | `0x2efc10` | `48 85 c9 75 03 33 c0 c3 48 8b 49 18 e9 9f 13 07` |
+| unit -> room | `0x34b440` | `40 53 48 83 ec 20 48 8b d9 48 85 c9 75 13 88 4c` |
+| unit class id (assert args) | `0x349860` | `48 83 ec 28 48 85 c9 75 1d 88 4c 24 30 48 8d 4c` |
+
+Confidence: verified (every step read in the decompile; the five quest-lock levels are decoded from the bit mask). The client's
+entry-requirements text (Sigma `0x5d150`) is client UI and does not exist in D2R. The 1.13c function matching `0x491ff0` was not
+named by address (D2Game's warp lives next to the quest-lock test that Sigma replaces).
+
+## 5. Monster spawning and the game tick (treasure goblins)
+
+### The server game frame (verified)
+
+`0x406550(Game* game)` is the per-game frame, 25 Hz, called for every live game by `0x406400(tickMs)` ("int SrvProcessAllGames(unsigned
+long)", global slot array `0x2a9c020`, 1024 u64 game ids, `0x4062f0(id)` -> `Game*`). It increments the frame counter
+**`game+0x170`** (1.13c `+0xa8`), runs the subsystem updates (client list update, `0x516e40` every 20 frames, `0x4088c0` every 12 frames,
+the per-player pass every 11 frames) and returns. This is the exact twin of 1.13c `0x2e050`, and Median patches the end of it
+(`0x2e15a`). Hook: detour `0x406550`, call the original, then run the plugin's 15 s goblin tick
+(`frame % 375 == 0`). Entry bytes `48 89 74 24 20 55 57 41 57 48 8d 6c 24 b9 48 81`. Found with `tools/d2r_scan.py pat2 "e9 a2 8b 2e"
+"ab aa aa 2a" "67 66 66 66"` (the x%11, x%12, x%20 magic multipliers all in one function).
+
+Useful game offsets from this function: `game+0x138` first client (linked via `client+0x628`, `client+4 == 4` is "in game",
+`0x484c90(client, 0)` = the client's player unit), `game+0x190` vector of per-act level data, `game+0x106` expansion
+flag, `game+0x104` difficulty, `game+0x1aaa0` the telemetry object. The frame counter is the clock for the "last kill within 375
+frames" test (player's last-kill frame goes into plugin state; there is no D2R field for it).
+
+### Spawn (verified)
+
+All spawns go through **`0x493cc0(SpawnInfo* rcx)`** (returns the monster `Unit*`, null on failure). `SpawnInfo` (stack struct,
+filled identically by `0x4929e0`, `0x4934d0` and `0x492e70`):
+
+| Offset | Field |
+|---|---|
+| `+0x00` | `Game*` |
+| `+0x08` | room (`Room*`) |
+| `+0x10` | related unit (owner / summoner; 0 for a plain spawn) |
+| `+0x18` | **monster class id** (monstats row, `0x1400976e0(game[0x106], class)` is the record getter) |
+| `+0x1c` | u32, passed to unit creation (1 in observed calls) |
+| `+0x20` | 0 |
+| `+0x24` / `+0x28` | **x / y** (sub-room coordinates, absolute) |
+| `+0x2c` | i32; -1 normally (negative = default) |
+| `+0x30` | u16 flags (0x40 seen with minions; bit 0x80 tested) |
+
+The simplest call is the wrapper **`0x4929e0(Game* game, Room* room, int x, int y, int classId, int a6 = 1, int a7 = -1, int a8 = 0, uint16 flags = 0)`**
+(entry bytes `4c 8b dc 49 89 5b 08 57 48 83 ec 70 8b 84 24 a0`): it builds the struct, calls `0x493cc0`, and on success finishes the
+monster with `0x4a5800(game, monster, unitId, 1, 1, a8)` (adds to the game / sends it to clients). Returns the monster or null.
+`0x4934d0(game, nearUnit, classId, a4 = 1, a5, count, flags)` spawns `count` copies around a unit (used by Diablo's minion calls with
+class ids 0x1c5, 0x185, 0x17d). The 1.13c spawn Median uses (`0x10042630(id, x, y)`) maps to `0x4929e0`.
+The room for a goblin: `0x34b440(playerUnit)`; position near the player: `0x34a040(player, &xy)` (unit position as two ints) plus an offset,
+checked with `0x38dfb0(room, x, y)` ("is this position inside the room", returns the room or null) like `0x43fbf0` does.
+
+| Function | RVA | Entry bytes |
+|---|---|---|
+| game frame | `0x406550` | `48 89 74 24 20 55 57 41 57 48 8d 6c 24 b9 48 81` |
+| process all games | `0x406400` | `48 89 5c 24 18 48 89 6c 24 20 56 57 41 57 48 83` |
+| game by id | `0x4062f0` | `4c 8b 05 19 5d 69 02 48 8b d1 4d 85 c0 74 77 4d` |
+| spawn core | `0x493cc0` | `48 89 5c 24 10 48 89 74 24 18 48 89 7c 24 20 55` |
+| spawn at room x,y | `0x4929e0` | `4c 8b dc 49 89 5b 08 57 48 83 ec 70 8b 84 24 a0` |
+| spawn N around unit | `0x4934d0` | `40 53 55 41 54 41 57 48 83 ec 78 45 8b f9 45 8b` |
+| monster post-init / add | `0x4a5800` | `48 89 6c 24 18 57 41 56 41 57 48 83 ec 30 4c 8b` |
+
+The "goblin sighted" notice (Median packet 0x5a type 0x15) has no D2R counterpart; use the raw send in section 4 or a client-side message.
 
 ## 6. Item / skill requirement checks (the requirements evaluator)
 
@@ -311,6 +431,153 @@ NPC table**, and its checks run on both client and server:
   player argument, so prefer `0x4b0470` for denial and the client menu functions for display.
 - Item level/class requirement checks for equipment and skills (strength, level, class) are not gated by Median's
   evaluator; D2R's own `0x376de0(item, player)` (item level requirement, plugin-known) is the call to reuse.
+
+## 7. Treasure classes and item creation
+
+### Treasure-class executor (verified)
+
+**`0x4404f0`** is 1.13c `0x12380`: same ten parameters, same algorithm (NoDrop float pow, pick count, `0x6ac690c5` LCG,
+recursion stack, up to 6 results by default), `D2Game\src\Items\Items.cpp`, log line "Spawn From %d".
+
+`void TCExec(Game* game /*rcx*/, Unit* monster /*rdx, rng owner and drop origin*/, Unit* killer /*r8, player (may be null)*/, TcRecord* tc /*r9*/, int quality /*5th, 0 = roll*/, int a6 /*6th, quality-roll input (1.13c: param_6 of the quality roll)*/, int force /*7th, nonzero skips the NoDrop roll*/, Unit** out /*8th: items array, or null*/, int* outCount /*9th*/, int max /*10th*/)`
+
+(args 1-4 in registers, 5-10 at the caller's `[rsp+0x20]` ... `[rsp+0x48]`; entry `4c 8b dc 55 53 49 8d ab 08 f7 ff ff 48 81 ec e8`; the 5th-10th
+meanings are taken from the identical 1.13c body, the D2R body keeps the same order: `out`/`max` are tested as `param_8`/`param_10` and `*outCount` as `param_9`).
+With `out == null` up to 6 items (`max <= 0`) are created via the item-gen path around `monster`; with `out` they are returned in the array.
+TC record (D2R, `0x397290` hands them out): `+0x10` total probability (classic), `+0x14` (expansion), `+0x18` picks (negative =
+"all" mode), `+0x24` flags (0x40 = conditional), `+0x38` entries pointer, `+0x40` entry count; entry stride **0x20**: `+0` prob (classic),
+`+4` prob (expansion), `+8` item id or TC id, `+0xc` flags (1 = item code, 2 = TC, 4 = unique/set class, 0x10 = "always", 0x40 = conditional).
+
+**Wrapper by TC index: `0x441300(Game*, Unit* monster, Unit* killer, u16 tcIndex /*r9w*/, int quality, ...)`** (1.13c `0x12d60`): it
+adds the monster's level (stat 12, or the area level) to select the right level step of the TC with **`0x397290(dataFlag, tcIndex, level)`**
+(returns the TC record; group array `*(base ptr from 0x300a90() + 0xd78)`, count at `+0xd80`, stride `0x150`; if the group has level
+steps the one whose `+2` level bound is not exceeded wins), then calls `0x4404f0`. Entry bytes `0x441300` `40 53 55 56 57 41 54 41 55 41 56 41 57 48 81 ec`;
+`0x397290` `48 89 5c 24 08 55 56 57 48 83 ec 30 41 8b d8 0f`. Callers of `0x4404f0`: `0x441300` and `0x5932ec` (inside `0x5930b0`, a
+monster-side caller, presumably the death drop; not read), exactly the two callers 1.13c `0x12380` has.
+
+For the catalyst: `tcIndex` is the index of the named TC ("Quest Cata Disenchant") in the TreasureClassEx group array; resolve it once by scanning
+`0x300a90()+0xd78` (stride 0x150) for the plugin's row (the name string is in the record), or take the index from the monstats row
+(`TreasureClass1` field) like Median does. Not all of this has been exercised in game.
+
+### Item creation (verified for the primitives, open for "unique by index")
+
+Item-gen struct `ItemGen` (0xc8 bytes, zeroed by the builders): `+0x00` owner Unit* (the receiver), `+0x10` `Game*`, `+0x18` item level,
+**`+0x20` base item class id**, `+0x24` mode (3 = on the ground, 4 = inventory), `+0x28`/`+0x2c` x/y, `+0x30` room, `+0x38` u16 = 1,
+`+0x3a` u16 = `game[0x128]`, **`+0x3c` explicit-fields flag** (nonzero: the next fields are applied), `+0x40` quality / drop kind chosen by the caller
+(2 in the quest creators, 5 or 6 at `0x541cec`; `0x43fbf0` re-rolls the base item until it can be magic when it is 4; **no reader of `+0x40` was found in
+`0x43cd50`**, so how D2R applies it is open), `+0x44` stat 0x46 (defense) or gold amount, `+0x48` / `+0x4c` durability (0x48) / max durability (0x49)
+(explicit mode), `+0x54` item flag word, `+0x58` unit seed, `+0x5c` item init seed, `+0x60` ear name.
+
+- **`0x43cd50(Game* rcx, ItemGen* rdx, int applyExplicit /*r8d*/)`** = 1.13c `0x11490`: creates the item (`0x490410`), sets flags, level, stats,
+  adds the ear owner for kind 7; returns the item or null. Entry `40 55 53 56 41 54 41 57 48 8d 6c 24 c9 48 81 ec`.
+- **`0x43d530(Unit* owner, int classId, Game* game, int mode /*4*/, int quality, int bitA, int bitB, int ilvl, int applyExplicit,
+  int seed, int initSeed)`** = a struct builder + `0x43cd50`; the 8 existing callers pass mode 4 and quality 2 (`0x4fa8fd`, `0x4fb843`, `0x4404a2`), a computed
+  5 / 6 (`0x541cec`) or a variable. Entry `40 55 53 56 57 48 8d 6c 24 f8 48 81 ec 08 01 00`.
+  `0x517530` (create by code in a player's inventory, section 2) is its main wrapper.
+- **Unique item by index (open)**: Median's `D2UniqueItems.cpp` `0xbb330(game, owner, uniqueIdx)` (name lookup `0xbb4d0`, table at txt +0xc24, stride 0x14c)
+  zeroes a 0x84-byte struct and sets owner, game, ilvl = unique row `+0x34`, class = the row's code (`+0x28`), mode 4, word 1 / game word, **quality 7
+  at struct `+0x30`** and **unique row + 1 at struct `+0x40`**, then calls 1.13c `0x11490`. With the same layout shift as the other fields
+  (1.13c `+0x2c` explicit flag = D2R `+0x3c`, `+0x30` = `+0x40`), the D2R slots would be quality `+0x40` and unique row + 1 at `+0x50`. **D2R's `0x43cd50` reads neither**
+  (`+0x58` / `+0x5c` turned out to be seeds, `FUN_14034edd0` stores the unit seed), so there is no function taking a unique index that I could confirm; the
+  quality / unique choice sits deeper in the unit creation (`0x490410` -> `0x1404905a0`), which was not read. Practical routes for Griswold's Heart:
+  (1) create the unique's base item with `0x517530` / `0x43d530` with quality 7 in the 5th argument and **test in game** whether the struct's `+0x40`/`+0x50` slots
+  select the row (run `0x43d530` and then patch the item data), (2) run a one-entry TC (`0x4404f0` with a TC whose only entry is the unique class).
+  Route 2 reuses the vanilla unique roll and needs only TC data (unique drops by TC pick the unique whose base matches; if Griswold's Heart is the only unique
+  of its base in the data it is deterministic). Confidence: primitives verified, unique-by-index open.
+
+## 8. Game create and destroy (server)
+
+- **Destroy: `0x4057c0(u64 gameId)`** (log "Deallocate game %p"): looks the game up in the id hash map (`0x2a9c010`), tells the network service,
+  clears the id in the slot array (`0x2a9c020`, 1024 entries), frees per-game subsystems (`0x5128d0`, `0x513e20`, `0x5026f0`, `0x486be0`, `0x488bf0`...), then
+  the node. The `Game*` is the map node + 0x10: get it with `0x4062f0(id)` **before** calling the original. Hook this to clear any per-game state
+  (craft flags, dungeon lockout clocks, goblin timers). Entry bytes `40 53 48 81 ec 80 00 00 00 48 8b 15 40 68 69 02`. The only caller is the idle sweep
+  **`0x406e40(tickMs)`** (`48 89 5c 24 18 89 4c 24 08 55 56 57 41 54 41 55`): it destroys a game 300 s after the last client left (`game+0x140 == 0`) or when
+  `game+0x1a5d8 != 0`.
+- **Create: `0x4049d0`** (14 arguments: name, password, description, ... difficulty, flags; frame of 0x14ec8 bytes, `D2Game\src\Game\Game.cpp`
+  strings in the chunk `0x404b9a`): allocates the game, registers it in the slot array and the id map, initializes the subsystems. No direct
+  callers (entered through a job / pointer). Entry `40 55 53 56 57 41 55 41 56 41 57 48 8d ac 24 70`. Likely: the function reads the
+  game name for the duplicate check and registers the game; the `Game*` is not returned. A first frame hook (`0x406550` seeing a new pointer) is
+  an equivalent create hook with no extra risk.
+- Per-client join / leave states are handled in `0x408ea0(Game*)` (strings "[JOIN 5] %u clientid, SrvJoinAct: Added to game.", "[JOIN 6]").
+
+## 9. Client NPC menu (npcmenu.cpp)
+
+### Composition (verified)
+
+The menu is **data driven**. `0x360d0` (a CRT static initializer, entry `48 89 5c 24 08 48 89 74 24 10 48 89 7c 24 18 55`) copies a stack image
+into a heap array and stores it in the globals **`0x2a48830` (pointer)** and **`0x2a48838` / `0x2a48840` (count 0x30 / capacity)**.
+`NpcMenu` records, **stride 0x48**, 48 of them:
+
+| Offset | Field |
+|---|---|
+| `+0x00` u16 | NPC class id |
+| `+0x04` u32 | line count **including the final Cancel** (3 = two lines + Cancel) |
+| `+0x08` u16[8] | string table ids per line: **0xd35 Talk, 0xd44 Trade, 0xd46 Gamble, 0xd45 Hire, 0xd06 Repair, 0xfb4 Identify**, 0xd37 / 0xd39 two special lines |
+| `+0x18` qword[5] | click handlers per line: **`0x112eb0` Talk, `0x112f30` Trade (sends 0x38 kind 1), `0x112c80` Gamble (0x38 kind 2), `0x112620` Hire, `0x114000` Identify, `0x1162f0` special (quest-gated)**, `0x112c30` Cancel (implicit) |
+| `+0x40` u8 | flag (1 for all NPCs that talk) |
+
+Key functions: **`0x1147a0(dataFlag)`** builds the visible list (reads record `0x113990(npcUnit)` = record index by class id; loops `count - 1`
+lines, special-casing ids 0x1507, 0xfb4, 0x2ba0 and quest bits 0x29 / 1; line text = `0x143e2b730(stringId)`; adds each line to the list widget
+`DAT_142a487b0` with `0x1401e9030`; the last line is always Cancel `0x102e` -> `0x112c30`); **`0x117510(param)`** sends packet 0x2e (the
+NPC interact packet, built by `0xec820`); **`0xec730(id, a, b)`** builds the 9-byte client packets (the menu uses `0x38`).
+The sprite / frame layout is separate. Records read from the initializer (class: lines): 148 Akara Talk+Trade; 147 Gheed and 199 Talk+Trade+Gamble;
+154 Charsi Talk+Repair; 150 Kashya Talk; 198 Greiz and 252 Asheara have Hire (Asheara Talk+Hire+Trade); 244, 245, 246, 265 (0x109) and 520 (0x208), the Cains, are
+Talk+Identify; 255 Ormus Talk+Trade; 511 Larzuk Talk+Repair; 512 Anya Talk+Trade+Gamble; 513 Malah Talk+Trade; 175 and 264 Talk plus one special line (0xd37 / 0xd39,
+handler `0x1162f0`); 257 (first record) Repair only. All records can be listed again by decompiling `0x360d0` and reading the stack image
+(`DecompOut.java 0x360d0`); the field layout is the table above. Maximum **5 lines per record** (the `+0x18` handler array has 5 slots, the id array 8);
+there are no spare slots for 16 actions.
+
+### Adding Median's action lines
+
+Two options, both client-side data edits at load time (the table is on the heap, patch it after the process static-init, e.g. at the first
+`0x1147a0` call or when `*(void**)(base+0x2a48830) != 0`):
+
+1. **Edit the record** of the NPC (e.g. Cain 0xf4 / 0x109: Talk, Identify, +up to 3 actions): bump `+4`, write a string id in `+8` (use a plugin-added
+   string, the string table id space is the same `tbl` lookup `0x143e2b730`), and put a plugin handler (`bool __fastcall (void)`, shaped like `0x112f30`)
+   in `+0x18`. The handler sends the action: `0xec730(0x38, kind, npcUnitId)` with `npcUnitId = *(u32*)0x2a4875c` (current NPC) and kind >= 0x10.
+2. **One "More..." line** (Median has 16 slots) whose handler opens a plugin list; avoids the 5-line cap.
+
+### Server handler of a chosen custom line
+
+The packet is `0x38 [kind u32][npc unit id u32]` (9 bytes) handled by **`0x4b0470(Game*, Unit* player, packet*, size = 9)`** (section 3). It finds the NPC
+(`0x53b8f0`), its row `0x3971a0`, and branches on `kind`: 1 trade, 2 gamble, 3 hire (anything else is logged and dropped). Hook `0x4b0470`: if
+`kind >= 0x10`, run the plugin action for `(player, npc, kind - 0x10)` (the requirements evaluator in `mxl_requirements.h`, then the action: cube
+craft, catalyst, etc.) and return; otherwise call the original. The "Talk" line goes through the dialog-message packet and the quest wrappers
+(`0x4c33e0`, `0x516940`, section 3), not through `0x38`.
+
+## 10. Gold stat changes and the client
+
+`0x2f7d10(unit, stat, value, layer)` and `0x2f5020` start with a 10-byte `jmp [rip+x]` (the D2RLoader / protection thunk) followed by the real body
+(`0x2f7d1a`, sets the stat in the unit's stat list; asserts `0x2f1dc0`, calls `0x2f9b10`, `0x2f3030` and the stat-change path). The stat engine
+itself is not readable (the dump holds the thunk target in `0x3e2a248`). Evidence for "no explicit client update needed": the game's own gold
+changes do not send anything: the gold pickup code (`PlrModes.cpp`, function `0x42c110`) does `0x2f5020(unit, 14)`, compares with the cap
+(`0x2f5c60` family), then `0x2f7d10(unit, 14, newGold)` and **no packet call follows** (its only network calls are the item pickup packet `0x535f60`);
+the same `0x2f7d10(unit, 0xe, ...)` is used by item creation for stackable gold (`0x43cd50`, `0x43ef10`). In 1.13c the stat list of a player
+has the "send to client" callback installed, which makes the set function emit the 0x1d / 0x1e / 0x1f attribute packets itself. So the post-hook's
+payment (`0x2f7d10(player, 14, gold - cost, 0)`, bank `15`) should show up on the client without extra work; **not tested in game**. If a
+refresh is ever needed, the cheapest forcing step is to re-set the stat (set 14 to the old value and then to the new one). The stat-update packet
+sender itself was not located (no packet-id constant for 0x1d-0x1f near the network service in 102 sender functions; the builder is behind the
+stat callback). Confidence: likely.
+
+## 11. Quest handlers (read)
+
+D2R's quest objects keep the 1.13c private data **inline from `quest+0x20`** (1.13c: a separate block at `quest+0x18`): the Median flag offsets do not
+carry over (fields moved: a2q5 uses +0x20/+0x28 (a pointer)/+0x30/+0x31), so keep Median's "once per player" flags in the plugin, keyed by game and player (or
+use quest-record bits as in section 2).
+
+| Quest | Event | D2R | Entry bytes | Read / matches | Median's use (1.13c) |
+|---|---|---|---|---|---|
+| 13 `a2q5` (Summoner) | 8 kill | **`0x5a5490`** | `48 89 5c 24 08 57 48 83 ec 20 80 79 11 00 48 8b` | string "killed summoner for quest"; sets state 2, `quest+0x20 = 1`; same as `0xc66b0` (line-for-line) | Nightmare: drop TC "Quest Cata Learning" (once per player), flag |
+| 13 | 0 NPC activate | **`0x5a5360`** | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48` | tests quest-13 bits 1 / 0xd, `0x1405184b0` (npc is Drognan?), picks a dialog state | re-issue `0o[ ` |
+| 14 `a2q6` (Duriel) | 11 NPC message | **`0x5a66b0`** | `48 89 5c 24 18 48 89 74 24 20 57 48 83 ec 50 48` | NPC `0xc9` = 201 (Jerhyn), message `0x1ba`: `0x325c50(rec, 0xe, 3)`, `0x325c00(rec, 0xe, 4)`, `0x325990(rec, 0xe, 3)`; the same constants as `0xc8050` | Jerhyn gives one Arcane Crystal `qum ` on `0x1ba` |
+| 25 `a4q1` (Izual) | 8 kill | **`0x5e67c0`** | `48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 20 48` | string "Finished quest", state 4, sets quest-25 bits 0xd and 1 when 0 and 1 are clear: `0xbabf0` line-for-line | Nightmare: TC "Quest Cata Jewelcraft" once per player |
+| 25 | 0 NPC activate | **`0x5e6660`** | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48` | NPC class `0x196` (406, Tyrael), bits 0 / 5 / 1 / 0xd of the quest in `quest+0x2f0` | re-issue `jcat` |
+| 38 `a5q4` | 2 | **`0x54dd30`** | `48 89 5c 24 08 57 48 83 ec 30 48 8b fa 48 8b d9` | `if NPC class == 0x200 (Anya, 512)`: `if (quest+0xa6) { quest+0x1c = 0; re-arm via 0x517b40; quest+0xa6 = 0 }`, `if (+0xa7 && !+0xa8) 0x550570`. Median's `0x9f960` uses the same fields (data+0x86/+0x88) = quest+0xa6/+0xa8 here (**the +0x20 inline shift holds for this quest**) | re-arm Anya's quest when byte +0x86 is set, keep +0x88 as done |
+| 38 | init | `0x548590` | `4c 8b dc 48 81 ec c8 00 00 00 48 8b c1 48 8d 15` | stores event 0 `0x54ddc0`, 2 `0x54dd30`, 3 `0x54dc90`, 8 `0x54df80`, 10 `0x54e070`, 11 `0x54e570`, 13 `0x54e0d0` (the earlier note "init stores by another pattern" was a plain `*(code**)(q+0x270+8n)` store, ordered differently) | |
+| 40 `a5q6` (Baal) | 8 kill | **`0x54fa70`** | `48 89 5c 24 20 55 56 57 41 56 41 57 48 81 ec 80` | `0x517db0(game, 0x13)`; reads the killed unit's room; quest-0x28 (40) bit tests; spawns the Baal clone path; same shape as `0x5fe30` | after the vanilla handler: Hell, players in level 132 above level 109 get a relic orb once (bit 0xb of quest 40) |
+
+The quest-bit helpers in these handlers are the section 2 ones (`0x325c50` test, `0x325c00` set, `0x325990` clear). Quest 40 in D2R keeps vanilla
+bit 0xb unused as far as read; the plugin can set it itself.
 
 ## Appendix A. Quest descriptor table (D2R, verified)
 
@@ -448,12 +715,16 @@ handlers); `0x2e15a` = the end of the game frame function (the goblin / D2GS tic
 
 ## Unknown / next steps
 
-1. D2R's treasure-class executor (1.13c `0x12380`) and the unique-by-index item creator (1.13c `0x11490`): needed to
-   drop "TC X" or create Griswold's Heart as a unique. Workaround for the Act 1 milestone: create items by code
-   (`0x517530`); the unique needs the item-generation core (`0x43d530` / `0x43cd50`, signatures not read).
-2. Quest handlers for 13, 14, 25, 40 are known only from the init stores (not read); 38 is not listed.
-3. The client NPC menu line composition (where Median's 16 action slots would be added) and the UI layout.
-4. The destination-level read inside `0x491ff0` and the exact refusal point for the dungeon lockout.
-5. The D2R game frame function (goblin tick) and the monster-spawn call `(game, room, x, y, class)`.
-6. A game create / destroy hook for the cube flag storage (workaround: reset when the game pointer changes).
-7. Whether the post-hook's gold payment (`0x2f7d10` set stat 14 / 15) needs an explicit client update packet.
+Solved in lane d2r-addresses-2 (sections 4, 5, 7-11): warp destination and the lockout refusal point, game frame, spawn, TC executor,
+game destroy / create, client menu composition, quest handlers 13 / 14 / 25 / 38 / 40, gold sync (by evidence).
+
+1. **Unique item by index** (Griswold's Heart): no D2R function found that takes a unique row; see section 7 for the two workarounds (base item
+   via `0x43d530`, or a one-entry treasure class through `0x4404f0`). Needs a look at the unit creation `0x490410` -> `0x1404905a0` or an in-game test.
+2. Portal objects (red portal, town portal): the position-placing code of the portal object functions was not read; Median's lockout *clock start* sits
+   there (item_spells hooks). `0x491ff0` covers the tile / stair warps only.
+3. A ready-made server -> client **system message** sender was not located; use the raw packet send of section 4 or a D2RLoader client-side message.
+4. Stat-update packet sender (0x1d-0x1f family) not located; gold sync argued from the game's own gold code (section 10), **untested**.
+5. The game create function `0x4049d0` has no direct callers (called through a job pointer); the destroy hook covers the reset need, so this is
+   cosmetic. The monster death drop caller `0x5930b0` (the other caller of `0x4404f0`) was not read.
+6. Client: the string ids for new menu lines (tbl lookup `0x143e2b730`) and the layout / frame of a longer menu are untested; records hold only 5 lines.
+7. Everything above is static analysis: none of the hooks has been run in the game yet.
