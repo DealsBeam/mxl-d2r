@@ -54,3 +54,48 @@ First set (`--class bar`, wired into `tools/build.py` after `missile_hd.py`): th
 missile animations and 1 overlay (greencurseMissle: Snake Bite, LightningExplosion: Thunderstorm,
 SomeBlueThing: Deep Freeze / Primordial Strike, FireCracker: Shamanic Trance, ...); every other Barbarian effect
 already uses D2R art (Median reuses vanilla art for most skills), which has HD models through missile_hd.py.
+
+## 3. Status and in-game test (2026-10-21)
+
+Verified offline: `tools/dcc.py` decodes Median's DCCs (checked visually on greencurseMissle, LightningExplosion,
+SomeBlueThing, FireCracker; ported from the DCC spec), `tools/d2r_texture.py` reproduces D2R's `.texture` header
+byte for byte (rewrote `T_FX_fireFlipbook_64x64` with an identical 128-byte header, pixels within 0.001), the atlases
+and gradients look right when decoded, the patched particles differ from the template only in the path strings.
+
+In-game (MxlBarb, level 126, 107 spare skill points; files copied into the installed mod and restored afterwards):
+**not confirmed.** The game started cleanly with the new `hd/vfx`, `hd/missiles`, `hd/overlays/mxl` files and the
+overlay.txt `Character` edit (no new log errors), but no effect of ours was positively identified:
+- Town is the only place reachable without walking (the Rogue Encampment exit was not found by blind clicking), and
+  no Barbarian skill with a Median-only *missile* can be cast in town. Overlays on town-castable skills were tried:
+  `warcry` (Guardian/Defender/Protector Spirit) replaced by D2R's own unpatched campfire effect, `handofathena`
+  (Wolf Companion) replaced by our patched effect, then by a synthetic marker sheet (magenta ring, green frame, frame
+  number). Neither showed; the white glow at the wolf's spawn point was D2R's own. So either the replaced overlay
+  JSONs are not used for the cast overlay of these skills, or the replaced effect needs state the overlay does not
+  give it (the campfire template has `ObjectState` events and an `Atlas.Flipbook` layer we cannot inspect).
+- Not tested: missile effects in flight, `shamanic_trance` (FireCracker, town-castable; its skill icon was not
+  identified in the 18-slot skill list in time).
+
+Next test, cheapest first: (1) learn `shamanic_trance` and cast it in town (real FireCracker overlay through the
+`mxl` Character folder); (2) walk out to the Blood Moor and let quill rats shoot (`spike_1..5` remapped to our model
+in a test missiles.json) or use Stampede/Overkill; (3) calibrate `CELL_WORLD` (tools/missile_art.py `--scale`).
+If the campfire template never plays as a one-shot (ObjectState), the fallback is below.
+
+## 4. Limits and fallback
+
+- The flipbook template is a UI campfire: continuous emission, fixed 8 x 8 grid, one channel + gradient. Colour is
+  reduced to a per-brightness gradient; direction and per-frame offsets are lost. Good for glows, fire, lightning,
+  novas; poor for multi-colour sprites. Several arts per template layer cannot be combined.
+- To get arbitrary sprite effects properly someone needs a PopcornFX editor (or the baked-format spec) to author a
+  one-shot billboard with `Atlas.SubDiv` and a frame cursor driven by `LifeRatio` or `MissileCurrentFrame`; the rest
+  of this pipeline (DCC decode, atlas, textures, JSON) stays as is.
+- Fallback that already works: look-alike D2R models (`tools/missile_hd.py`) and classic mode (G) for exact Median art.
+
+## 5. Plan for all classes
+
+`python tools/missile_art.py --class sor` (etc.), `--all` for everything. Counts of Median-only art reachable from
+the player skills: ama 9 missile + 2 overlay, sor 13 + 7, nec 10 + 5, pal 9 + 6, bar 6 + 1, dru 11 + 2, ass 11 + 2
+(57 + 19 distinct); all Median-only animations 217 missile CelFiles + 113 overlay files (303 DCCs, 19 MB source).
+Output size: 0.7 MB (<= 96 px art) to 2.8 MB (larger) per animation, about 500 MB for all; gate `--all` on in-game
+confirmation. Effort: after the first confirmed effect, wiring all classes is a data run (hours); calibrating scale,
+height and timing per art (looks, not code) is the real cost, roughly 1-2 days for the 330 animations, less with a
+per-class review sheet. Monster-only missile art and the 11 missing CelFiles are out of scope.

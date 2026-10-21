@@ -61,6 +61,7 @@ T_HIDE = ["data/hd/vfx/textures/mask/T_FX_radialGradient_Mask_soft_02.texture",
 # one yard); tuned in game (docs/hd-effects.md).
 CELL_WORLD = 4.0
 PIXEL_WORLD = 1 / 32
+SCALE_MULT = 1.0  # --scale: multiplier on the effect scale (calibration)
 CLASSES = {"ama": "amazon", "sor": "sorceress", "nec": "necromancer", "pal": "paladin", "bar": "barbarian",
            "dru": "druid", "ass": "assassin"}
 
@@ -203,7 +204,7 @@ def vfx_json(kind: str, name: str, particles: str, textures: list[str], k: float
         return {"dependencies": deps, "type": "UnitDefinition", "name": name,
                 "entities": [root, {"type": "Entity", "name": "entity_vfx1", "id": eid + 1, "components": [tr, vfx]}]}
     return {"dependencies": deps, "type": "OverlayDefinition", "name": name,
-            "entities": [{"type": "Entity", "name": "entity_root", "id": eid, "components": [vfx]}]}
+            "entities": [{"type": "Entity", "name": "entity_root", "id": eid, "components": [tr, vfx]}]}
 
 
 # ---------------------------------------------------------------- what to convert
@@ -290,7 +291,13 @@ def convert(kind: str, art: str, users: set[str], out: Path, template: bytes, pa
         log.append(f"| {kind} | {art} | missing in Median's files | |")
         return None
     frames, size, anchor = render_frames(path, pal)
-    atlas, grad, px_per_cell = build_sheet(frames, size, is_additive(trans) or kind == "overlay")
+    return emit(kind, art, users, out, template, frames, size, anchor, is_additive(trans) or kind == "overlay", hide, log)
+
+
+def emit(kind: str, art: str, users: set[str], out: Path, template: bytes, frames: list[Image.Image],
+         size: tuple[int, int], anchor: tuple[int, int], additive: bool, hide: dict[str, str], log: list[str]) -> str:
+    """Writes the textures, the patched particles and the JSON for one animation; returns the model/overlay name."""
+    atlas, grad, px_per_cell = build_sheet(frames, size, additive)
     key = key_of(art)
     t_atlas = tex_name("a_" + key, len(T_ATLAS), "atlas" + art)
     t_grad = tex_name("g_" + key, len(T_GRADIENT), "grad" + art)
@@ -301,18 +308,17 @@ def convert(kind: str, art: str, users: set[str], out: Path, template: bytes, pa
     dest = out / particles.replace("data/", "", 1)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(patch_particles(template, repl))
-    scale = px_per_cell * PIXEL_WORLD / CELL_WORLD
+    scale = px_per_cell * PIXEL_WORLD / CELL_WORLD * SCALE_MULT
     height = (size[1] - anchor[1]) * PIXEL_WORLD * 0.5  # centre of the sprite above the origin (classic: y down)
     name = f"mxl_{key}"
-    if kind == "missile":
-        target = out / "hd" / "missiles" / f"{name}.json"
-    else:
-        target = out / "hd" / "overlays" / OVERLAY_FOLDER / f"{key}.json"
-        name = key
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(vfx_json(kind, name, particles, [t_atlas, t_grad], scale, max(height, 0.0)),
-                                 separators=(",", ":")), encoding="utf-8")
-    log.append(f"| {kind} | {art} | {len(frames)} frames {size[0]}x{size[1]}, additive={is_additive(trans) or kind == 'overlay'} "
+    # a missile model is shared by every missile using the CelFile; an overlay JSON is named after its overlay.txt row
+    targets = ([(name, out / "hd" / "missiles" / f"{name}.json")] if kind == "missile" else
+               [(u.lower(), out / "hd" / "overlays" / OVERLAY_FOLDER / f"{u.lower()}.json") for u in sorted(users)])
+    for jname, target in targets:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(vfx_json(kind, jname, particles, [t_atlas, t_grad], scale, max(height, 0.0)),
+                                     separators=(",", ":")), encoding="utf-8")
+    log.append(f"| {kind} | {art} | {len(frames)} frames {size[0]}x{size[1]}, additive={additive} "
                f"| {', '.join(sorted(users))[:80]} |")
     return name
 
@@ -323,7 +329,10 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="every Median-only animation, all classes")
     ap.add_argument("--only", action="append", default=[], help="only these CelFiles / overlay filenames")
     ap.add_argument("--out", default=str(MOD), help="mod data folder (default work/mod/data)")
+    ap.add_argument("--scale", type=float, default=1.0, help="multiplier on the effect scale (calibration)")
     args = ap.parse_args()
+    global SCALE_MULT
+    SCALE_MULT = args.scale
     out = Path(args.out)
     cels, fnames = all_art() if args.all else art_of_classes(args.classes or ["bar"])
     if args.only:
@@ -368,10 +377,11 @@ def main() -> int:
             count += 1
     mj.parent.mkdir(parents=True, exist_ok=True)
     mj.write_text(json.dumps(hd, separators=(",", ":")), encoding="utf-8")
-    # overlay.txt: Character folder
-    ov = out / "global" / "excel" / "overlay.txt"
+    # overlay.txt (both banks): Character folder
     changed = 0
-    if ov.exists() and overlay_done:
+    for ov in (out / "global" / "excel" / "overlay.txt", out / "global" / "excel" / "base" / "overlay.txt"):
+        if not ov.exists() or not overlay_done:
+            continue
         text = ov.read_text("utf-8-sig")
         nl = "\r\n" if "\r\n" in text[:4096] else "\n"
         rows = [l.split("\t") for l in text.split(nl)]
