@@ -15,6 +15,7 @@
   animdata_merge.py  merge Median animation data into D2R's animdata
   hd_skill_anims.py  HD skill animation data for Median skills
   missile_hd.py      HD models for Median's missiles (by CelFile) -> hd/missiles/missiles.json
+  terror_zones.py    D2R terror zones off for now (all difficulty flags false in desecratedzones.json)
   (missile_art.py    Median's own missile/overlay animations as HD flipbook effects; not a step until confirmed in game,
                      docs/hd-effects.md; run it by hand)
   item_hd.py         HD inventory pictures for Median's items/uniques/sets -> hd/items/*.json; also converts Median-owned item art via item_art.py (bug #18)
@@ -33,7 +34,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decode"], ["tbl2json.py"],
-         ["txt_migrate.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"],
+         ["txt_migrate.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
          ["validate.py"]]
 
 
