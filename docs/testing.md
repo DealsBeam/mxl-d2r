@@ -95,3 +95,19 @@ Use [test-sessions.md](test-sessions.md) to run these checks by character.
 | Skill points can be spent; 8-tab skill tree; skill icons | |
 | Potions (bug #10) | |
 | Flamefront needs Molten Core first (bug #13) | Median's rule, not a bug |
+
+## Automated smoke run (tools/game_ctl.py)
+
+`py -3 tools/game_ctl.py smoke` launches D2RLoader (windowed, resized to a 1600x900 client area), clears the
+calibration screens and intro, creates an offline Barbarian `MxlBarb`, and takes window-only screenshots (never the
+desktop) of town, the character sheet (C), the skill tree (T) and its tabs, the inventory (I), then Save and Exit and
+re-enter (save/reload check), stops the game and scans the logs. Output goes to
+`%USERPROFILE%\mxl-d2r-runs\<run>\` (`report.md`, PNGs, `logscan.txt`, `game_ctl.log`); look at the PNGs yourself.
+Single steps: `start`, `shot NAME`, `key KEY..`, `click FX FY`, `console CMD`, `logscan`, `stop`.
+
+Covers: startup log (known 3 asserts only), the skill tree look row, inventory and (when reachable) character-sheet
+panels, and the save/reload basics. Does not cover combat, vendors, stash, cube or anything needing a walk.
+
+Status 2026-10-21: the run stops at D2R's "You have not been online in the last 30 days. Please start the game
+while online to verify the product license." dialog (OK quits the game). One online launch is needed first. Everything
+after the main menu in `run_smoke` (click fractions marked `guess` in `UI`) is untested.
