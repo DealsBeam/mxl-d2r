@@ -88,5 +88,18 @@ int RunDungeonTests() {
 	Check(l.Sealed(157, 99999999), "frame moving on keeps the seal");
 	l.Touch(&g, 50);
 	Check(!l.Sealed(157, 99999999), "frame counter went back: new game");
+
+	// the game-end hook: only the ended game's clocks go
+	dungeon::Lockout f;
+	f.Touch(&g, 10);
+	Check(f.Start(157, 0) && f.Sealed(157, 99999999), "clock for the game-end check");
+	f.Forget(&g2);
+	Check(f.Sealed(157, 99999999), "another game's end keeps the clocks");
+	f.Forget(nullptr);
+	Check(f.Sealed(157, 99999999), "a null game is ignored");
+	f.Forget(&g);
+	Check(!f.Sealed(157, 99999999), "the game's end clears its clocks");
+	f.Touch(&g, 500);
+	Check(!f.Sealed(157, 99999999), "a reused pointer starts clean");
 	return failures;
 }

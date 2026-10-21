@@ -277,11 +277,14 @@ Costs per type 100-32,000 gold (sample); Median fills Share (0-6, the vanilla un
 | +0 u16 | act index | 0, 1, 2, 4 |
 | +2 u16 | flag 0/1 | 1 only for the iron-wolf-like class (act 3); read by 0x100fcb80 on the client (likely "uses mana" or a panel variant) |
 | +4 i8 | character class the mercenary equips as | 0 amazon, 3 paladin, 1 sorceress, 4 barbarian (this is D2R's `equivalentcharclass`: ama, pal, sor, bar) |
-| +5, +0x11 | two lists of 6 u16 state ids | A = 27 / 33, 34 / 30, 2 / 30; B = 112 / 212 / 198 |
+| +5, +0x11 | two lists of 6 u16 **item type ids** (the extraction names them StateListA/B; they are not states) | A (allowed) = 27 bow / 33 spea, 34 pole / 30 swor, 2 shie / 30 swor; B (excluded) = 112 scyh / 212 2hsd / 198 scrd |
 
-Use of the lists: 0x10066fd0 returns true when the player has any of the fixed states (0x...cc0 list plus 15, 12)
-or a state of list A with none of list B; 0x10067220 (hire test) and 0x1007e470 (D2Items.cpp, "can this merc
-equip this item") call it. The state ids are not fully understood (open question 5). **hiredescext** (10 rows):
+Use of the lists (corrected 2026-10-22, lane merc-drops): 0x10066fd0(unit, item) returns true when the item is of one of
+the fixed types {3 tors, 37 hlm1, 19 belt, 16 glov, 15 boot, 12 amul}, or of a type of list A with none of list B (B is
+tested first and wins), and the item is identified and not broken (`0x100bf680` / `0x100bf340` read the item flags
+`+0x18` bits 4 and 8). Every `0x100bf950(item, id)` in these functions is D2Common's "item is of type" (ordinal 10744;
+D2R `0x373890`), with the ids of work/named/itemtypes.txt (hpot 76, apot 80, wpot 81, bow 27, ...). 0x10067220 and
+0x1007e470 (D2Items.cpp, "can this merc equip this item") call it. **hiredescext** (10 rows):
 only a name string key per hiredesc row (`strhirespecial1..9`), already used by the converter.
 
 ### 2.2 What code does
@@ -289,10 +292,13 @@ only a name string key per hiredesc row (`strhirespecial1..9`), already used by 
 1. **Class index of a monster** (0x10068930): short at +0x2a of the monster record (monstats3-style extension) is the
    hireclasses index (0 = not a hireling). The same record family answers "is this unit a mercenary"
    (0x100bf9e0) and gives the class row (0x100bde30). In D2R: monstats `hcIdx` (to find).
-2. **Hire** (0x100672a0): refuses when the player already carries one of three blocking states (0x4c, 0x51, 0x50),
-   requires the target to be a hireable unit, calls the game's hire function through a pointer (0x101f1ae8),
-   prints one of three messages (0x55 can't, 0x56 fails, 0x57 hired), then 0x10066900. When the blocking state is
-   set it dismisses the unit instead (0x10042060). 0x10067220 is the matching "may hire" test. Confirmed.
+2. **Item given to the mercenary** (0x100672a0; first read as "hire", corrected 2026-10-22: its first argument is an
+   item, tested with `0x100bf680` / `0x100bf340` and for item types 0x4c, 0x51, 0x50 = health, antidote and thawing
+   potion). A potion goes down the branch that ends in `0x1007f1c0` / `0x10042060` (not read further); any other item
+   goes through a check (`0x100bd4d0`) and the game's equip function through a pointer (0x101f1ae8), prints one of three
+   messages (0x55 can't, 0x56 fails, 0x57 equipped) and then runs 0x10066900 again. 0x10067220 is the matching "may the
+   mercenary use this item" test (0x1007e470 + 0x10066fd0). D2R has its own potion and equip paths (packet 0x51 ->
+   `0x4c0e20`, which asks `0x36bc50` whether the item may be worn: that is where the plugin hooks in).
 3. **Class bonuses after hire** (0x10066900) = the one hard-coded Median mercenary rule. On the new mercenary:
    - always: poison length resist (stat 0x6e) 200; item_addexperience (0x55) = 10 x level;
    - rogue (271): damage resist (0x24) = level/4; damage% (0x19) = dexterity/2; hp regen (0x4a) = 0.8 x dexterity (x256);
@@ -343,9 +349,9 @@ D2Items.cpp equip test read again; D2R's hire path read in the dump (packet 0x36
 | 4 | Class bonuses on hire: damage resist, damage %, life regeneration, speed, dodge, energy, masteries, skill armor, crushing blow, slows attacker, extra experience, poison length resist (values below) | 0x10066900, called only by the hire function 0x100672a0 | **plugin, done**: `hirelings.cpp` |
 | 5 | Minion scaling (`mnhp`, `mnar`, resist and proc copy) | 0x100683d0 and callees | **already ported** (`pet_scaling.cpp`); summons only, hirelings do not use it |
 | 6 | Hire availability: hirer flag (npcext bit 2), quest requirement (Kashya row 9, Qual-Kehk row 14), resurrect entry (bit 3: the four hirers and Tyrael of act 4) | npcext, requirements | **mostly already in D2R's NPC table** (`+7` hire, `+4` resurrect, `+0x10` quest gate: the same five NPCs, the same quests). One difference, fixed: D2R also lets a character of level 8 hire from Kashya without Blood Raven (`+0x11`, read by `0x4b0470` and `0x53d350`); the plugin clears that byte so the quest alone opens her, as in Median |
-| 7 | Hire and equip tests: refuse while the player has state 0x4c, 0x51 or 0x50; mercenary equip test (class, strength, dexterity, level, plus a fixed list of eight states and the hireclasses state lists) | 0x100672a0, 0x10067220, 0x10066fd0, 0x1007e470 | **cut** for now: the state ids are unresolved (open question 5); D2R keeps its own requirement and class checks, which `equivalentcharclass` feeds |
+| 7 | Hire and equip tests: refuse while the player has state 0x4c, 0x51 or 0x50; mercenary equip test (class, strength, dexterity, level, plus a fixed list of eight states and the hireclasses state lists) | 0x100672a0, 0x10067220, 0x10066fd0, 0x1007e470 | **ported as item types** (2026-10-22): the "state" numbers are item type ids, not states. `0x4c`, `0x50`, `0x51` are potion types, the hireclasses lists are item types the class may (A) or may not (B) wield; the plugin refuses weapons and shields in the `0x36bc50` hook (`item_gen.cpp`, `MercRequirement`) by `MercClasses` of `mxl_hirelings.h`. Class-locked items (stat 492) check the merc's `equivalentcharclass` |
 | 8 | Revive cost | no D2Sigma code; the cost is D2Common's, and D2R's columns `resurrectcostmultiplier/divisor/max` (15 / 2 / 50000) copy the vanilla formula | **same as D2R**, nothing to do |
-| 9 | Median's `Head`, `Torso`, `Weapon`, `Shield` columns (0 to 2, 48 rows) and `Share` (55 rows) | hireling.txt overflow | **cut / unknown**: D2R's table has no such columns and the rule for a new hire's starting gear is not found. In game: does a fresh hire carry gear? |
+| 9 | Median's `Head`, `Torso`, `Weapon`, `Shield` columns (0 to 2, 48 rows) and `Share` (55 rows) | hireling.txt overflow | **cut** (checked in game 2026-10-22): a fresh Rogue has 0 items (`h merc`) and still draws its bow, so D2R's hire look is not made of items; there is no gear to create from these columns. `Share` is converted |
 | 10 | Death / revive stat handling (`0x10068020`, `0x10067e20`) | read again: 0x10068020 is the pet attribute copy (energy, strength, ... in full, masteries halved), not a death penalty | **n/a**, part of the minion scaling; the note in 2.2 step 4 is superseded |
 | 11 | Hireling skill use | skills are table data; no D2Hirelings code touches skill use | **data** |
 
@@ -441,9 +447,8 @@ or harmful, take it out of `hireling_tables` (the only line that writes it).
    entries)? A test with a copy named without ".template" would settle it.
 4. Requirement types 9-35 and their meaning (quest, difficulty, item): needed to port travel and Cain; owner is the
    requirements/quests lane. Types 36 and 37 are the constants false and true.
-5. What are the state ids in hireclasses lists A/B and the six-state list in 0x10066fd0 (taunt, might, prayer,
-   energy shield, poison, rabies, two Median states): equip gating, aura-type buffs of the hired unit, or "already
-   hired" markers?
+5. (answered 2026-10-22) The ids in hireclasses lists A/B and in 0x10066fd0 are item type ids (the migrated item type
+   ids equal Median's, row order is kept): equip gating, ported in `item_gen.cpp`.
 6. Does the class bonus function run on every merc spawn (load from the save) or only at hire? Callers found:
    only 0x100672a0. If only at hire, D2Sigma must persist the stats in the save; check the Median save format
    (docs/save-format.md) before choosing where the plugin applies them.

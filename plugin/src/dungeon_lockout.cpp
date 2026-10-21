@@ -11,8 +11,8 @@
 //
 // Allowed entries that did move the player (his room's level differs afterwards) start the level's clock, as D2Sigma's
 // warp (0x5cf90) and portal (0x96e80) functions call 0x5d9d0 after the move. State: dungeon::Lockout, per game
-// pointer, reset when the pointer or the frame counter (game+0x170) changes; no game-destroy hook (another lane may
-// use 0x4057c0). Not ported: Sigma's quest-table condition in 0x5d810 (levelDef +4), the 0x7fb70 item teleport, the
+// pointer, reset when the game ends (game_end.cpp) and, as a fallback, when the pointer or the frame counter
+// (game+0x170) changes. Not ported: Sigma's quest-table condition in 0x5d810 (levelDef +4), the 0x7fb70 item teleport, the
 // client DungeonWidget and the 0x88 state packet.
 #include "dungeon_lockout.h"
 
@@ -20,6 +20,7 @@
 #include "client_messages_logic.h"
 #include "d2r.h"
 #include "dungeon_logic.h"
+#include "game_end.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -210,6 +211,11 @@ int64_t PortalHook(int64_t* ctx) {
 	return moved;
 }
 
+void ForgetGame(const void* game) noexcept {
+	std::lock_guard<std::mutex> lock(g_mutex);
+	g_lockout.Forget(game);
+}
+
 }  // namespace
 
 void DungeonLockoutCounts(int* refused, int* started) noexcept {
@@ -220,6 +226,7 @@ void DungeonLockoutCounts(int* refused, int* started) noexcept {
 
 auto InstallDungeonLockout(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	g_context = context;
+	RegisterGameEnd(&ForgetGame);
 	const uint64_t base = context->exeBase;
 	g_findTile = reinterpret_cast<FindTileFn>(base + FindTileRva);
 	g_roomLevel = reinterpret_cast<RoomLevelFn>(base + RoomLevelRva);

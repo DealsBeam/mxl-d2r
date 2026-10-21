@@ -1,7 +1,8 @@
 // Craft flag storage and gold split: the pure part of craft_flags.cpp (unit-tested in tests/craft_test.cpp).
 // Median keeps 256 player flags per character and 256 game flags in game memory only (docs/plugin-spec.md,
-// "Cube conditions"); nothing is saved. Here: flags belong to one game pointer (cleared when it changes) and, for the
-// player flags, to a player id.
+// "Cube conditions"); nothing is saved. Median finds a player's flags by the character name; so do we. Flags belong to
+// one game pointer: cleared when the game ends (Forget, from the game-end hook) and, as a fallback, when the pointer
+// changes.
 #pragma once
 
 #include "mxl_cube_effects.h"
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <bitset>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 
 namespace craft {
@@ -23,7 +25,15 @@ public:
 			players_.clear();
 		}
 	}
-	auto Test(bool gameWide, uint32_t player, int flag) const noexcept -> bool {
+	// The game is over: its flags go (only if they are that game's).
+	void Forget(const void* game) noexcept {
+		if (game != nullptr && game == game_) {
+			game_ = nullptr;
+			game_flags_.reset();
+			players_.clear();
+		}
+	}
+	auto Test(bool gameWide, const std::string& player, int flag) const noexcept -> bool {
 		if (flag < 0 || flag > 255) {
 			return false;
 		}
@@ -33,7 +43,7 @@ public:
 		const auto it = players_.find(player);
 		return it != players_.end() && it->second.test(static_cast<size_t>(flag));
 	}
-	void Set(bool gameWide, uint32_t player, int flag, bool on) noexcept {
+	void Set(bool gameWide, const std::string& player, int flag, bool on) noexcept {
 		if (flag < 0 || flag > 255) {
 			return;
 		}
@@ -43,7 +53,7 @@ public:
 private:
 	const void* game_ = nullptr;
 	std::bitset<256> game_flags_;
-	std::unordered_map<uint32_t, std::bitset<256>> players_;
+	std::unordered_map<std::string, std::bitset<256>> players_;
 };
 
 // The recipe's output effects in slot order (empty range for recipes without one).
