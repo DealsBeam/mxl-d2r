@@ -21,6 +21,7 @@
 #include "quests_act1.h"
 
 #include "d2r.h"
+#include "quests_common.h"
 #include "quests_logic.h"
 
 #define NOMINMAX
@@ -38,10 +39,6 @@ constexpr uint64_t HandlerHeartRva = 0x5e0830;     // a1q4 event 11
 constexpr uint64_t HandlerKillRva = 0x5e1f00;      // a1q6 event 8
 constexpr uint64_t HandlerActivateRva = 0x5e1d30;  // a1q6 event 0
 constexpr uint64_t ItemGenRva = 0x43cd50;          // (game, block*, int): item generator core
-constexpr uint64_t CreateQuestItemRva = 0x517530;  // (game, player, code, ilvl, quality, dropIfFull) -> item or null
-constexpr uint64_t FindItemRva = 0x441980;         // (game, player, code) -> item or null
-constexpr uint64_t QuestBitTestRva = 0x325c50;     // (record, quest, bit)
-constexpr uint64_t QuestBitSetRva = 0x325c00;
 constexpr uint64_t ItemUniqueIdRva = 0x36ce70;     // (item) -> unique index (0x443910 reads it back after choosing)
 
 // 0x5e0830: push rbx / push rbp / push rsi / push rdi / push r14 / sub rsp,0x60 / movzx r14d,word [rdx+0x28]
@@ -54,32 +51,28 @@ constexpr uint8_t ActivateEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0
 constexpr uint8_t ItemGenEntry[] = {0x40, 0x55, 0x53, 0x56, 0x41, 0x54, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xc9,
                                     0x48, 0x81, 0xec, 0x90, 0x00, 0x00, 0x00};
 
-constexpr int GameDifficulty = 0x104;  // byte
-constexpr int UnitClass = 0x04;        // u32 (0x349860)
-constexpr int UnitPlayerData = 0x10;   // player: data block (0x34b240); +0x40 + difficulty * 8 -> quest record
-constexpr int EventUnit = 0x10;
-constexpr int EventPlayer = 0x18;
-constexpr int EventNpcClass = 0x28;
-constexpr int EventMessage = 0x30;
+using questeng::Bit;
+using questeng::Difficulty;
+using questeng::EventMessage;
+using questeng::EventNpcClass;
+using questeng::EventPlayer;
+using questeng::EventUnit;
+using questeng::Record;
+using questeng::UnitClass;
+using questeng::api;
+
 constexpr int GenQuality = 0x40;  // item-generator block: quality (7 = unique)
 constexpr int GenFixed = 0x3c;    // non-zero: "fixed properties" path, no chooser
 constexpr int GenUnique = 0x50;   // unique index + 1 asked for
 
 using HandlerFn = void (*)(void* quest, uint8_t* event);
 using ItemGenFn = uint64_t (*)(Game* game, uint8_t* block, int32_t flag);
-using CreateItemFn = Unit* (*)(Game* game, Unit* player, uint32_t code, int32_t itemLevel, int32_t quality, int32_t dropIfFull);
-using FindItemFn = Unit* (*)(Game* game, Unit* player, uint32_t code);
-using BitFn = int32_t (*)(void* record, int32_t quest, int32_t bit);
 using UniqueIdFn = uint32_t (*)(Unit* item);
 
 HandlerFn g_heartOriginal = nullptr;
 HandlerFn g_killOriginal = nullptr;
 HandlerFn g_activateOriginal = nullptr;
 ItemGenFn g_itemGenOriginal = nullptr;
-CreateItemFn g_createItem = nullptr;
-FindItemFn g_findItem = nullptr;
-BitFn g_bitTest = nullptr;
-BitFn g_bitSet = nullptr;
 UniqueIdFn g_uniqueId = nullptr;
 const D2RL::PluginContext* g_context = nullptr;
 
@@ -92,20 +85,6 @@ void Log(const char* what, int a, int b) noexcept {
 	char line[160];
 	std::snprintf(line, sizeof(line), "mxl-core: quests: %s (%d, %d)", what, a, b);
 	g_context->LogInfo(line);
-}
-
-auto Difficulty(Game* game) noexcept -> int {
-	return d2r::At<uint8_t>(game, GameDifficulty);
-}
-
-// Quest record of the player for the game's difficulty (the argument of the quest bit functions), or null.
-auto Record(Game* game, Unit* player) noexcept -> void* {
-	const auto* data = player != nullptr ? d2r::At<const uint8_t*>(player, UnitPlayerData) : nullptr;
-	return data != nullptr ? d2r::At<void*>(data, 0x40 + Difficulty(game) * 8) : nullptr;
-}
-
-auto Bit(void* record, int quest, int bit) noexcept -> bool {
-	return record != nullptr && g_bitTest(record, quest, bit) != 0;
 }
 
 uint64_t ItemGenHook(Game* game, uint8_t* block, int32_t flag) {
@@ -131,7 +110,7 @@ void GiveHeart(Game* game, Unit* player) noexcept {
 	}
 	g_wantUnique = heart->uniqueIndex + 1;
 	// item level 255 passes the unique row's "lvl" (255); quality 7 = unique
-	Unit* item = g_createItem(game, player, heart->baseCode, 255, 7, 1);
+	Unit* item = api.createItem(game, player, heart->baseCode, 255, 7, 1);
 	g_wantUnique = 0;
 	if (item == nullptr) {
 		Log("Griswold's Heart not created, base code", static_cast<int>(heart->baseCode), heart->uniqueIndex);
@@ -169,8 +148,8 @@ void KillHook(void* quest, uint8_t* event) {
 			const bool flag = Bit(record, quests::FlagQuest, quests::FlagCatalyst);
 			const auto monster = static_cast<int32_t>(d2r::At<uint32_t>(victim, UnitClass));
 			if (record != nullptr && quests::ShouldGiveCatalystOnKill(Difficulty(game), monster, flag)) {
-				if (g_createItem(game, player, quests::CodeCatalyst, 0, 2, 1) != nullptr) {
-					g_bitSet(record, quests::FlagQuest, quests::FlagCatalyst);
+				if (api.createItem(game, player, quests::CodeCatalyst, 0, 2, 1) != nullptr) {
+					api.bitSet(record, quests::FlagQuest, quests::FlagCatalyst);
 				}
 			}
 		}
@@ -188,9 +167,9 @@ void ActivateHook(void* quest, uint8_t* event) {
 			const auto npcClass = static_cast<int32_t>(d2r::At<uint32_t>(npc, UnitClass));
 			if (record != nullptr && npcClass == quests::NpcWarriv) {
 				const bool flag = Bit(record, quests::FlagQuest, quests::FlagCatalyst);
-				const bool has = flag && g_findItem(game, player, quests::CodeCatalyst) != nullptr;
+				const bool has = flag && api.findItem(game, player, quests::CodeCatalyst) != nullptr;
 				if (quests::ShouldReissueCatalyst(npcClass, flag, has)) {
-					g_createItem(game, player, quests::CodeCatalyst, 0, 2, 1);
+					api.createItem(game, player, quests::CodeCatalyst, 0, 2, 1);
 				}
 			}
 		}
@@ -203,10 +182,7 @@ void ActivateHook(void* quest, uint8_t* event) {
 auto InstallQuestsAct1(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;
 	g_context = context;
-	g_createItem = reinterpret_cast<CreateItemFn>(base + CreateQuestItemRva);
-	g_findItem = reinterpret_cast<FindItemFn>(base + FindItemRva);
-	g_bitTest = reinterpret_cast<BitFn>(base + QuestBitTestRva);
-	g_bitSet = reinterpret_cast<BitFn>(base + QuestBitSetRva);
+	questeng::Bind(base);
 	g_uniqueId = reinterpret_cast<UniqueIdFn>(base + ItemUniqueIdRva);
 	int ok = 0;
 	ok += context->InstallInlineHook(ItemGenRva, ItemGenEntry, sizeof(ItemGenEntry), reinterpret_cast<void*>(&ItemGenHook),

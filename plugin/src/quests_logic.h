@@ -63,4 +63,139 @@ constexpr auto ShouldReissueCatalyst(int32_t npcClass, bool flagSet, bool hasCat
 	return flagSet && npcClass == NpcWarriv && !hasCatalyst;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Acts 2-5 (quests_act2_5.cpp). Sources: D2Sigma D2Quests.cpp 0x9ed00 / 0x9ee40 (Summoner), 0x9ef90 (Jerhyn), 0x9f030 /
+// 0x9f110 (Ormus), 0x9f340 (Cain), 0x9f3f0 / 0x9f530 (Izual), 0x9f7c0 (Qual-Kehk), 0x9fa80 / 0x9e580 (Baal), 0x9e600
+// (quest 41). NPC and monster class ids are the same rows in Median's and D2R's monstats (checked for each in D2R's
+// extracted monstats.txt).
+
+constexpr uint16_t NpcJerhyn = 201;        // 0xc9
+constexpr uint16_t NpcOrmus = 255;         // 0xff
+constexpr uint16_t NpcCainAct3 = 245;      // 0xf5
+constexpr uint16_t NpcQualKehk = 515;      // 0x203
+constexpr int32_t NpcTyraelAct4 = 367;     // 0x16f (monstats tyrael2; D2Sigma 0xbfd80(3))
+constexpr int32_t MonsterSummoner = 250;   // 0xfa
+constexpr int32_t MonsterIzual = 256;      // 0x100
+constexpr int32_t MonsterBaal = 544;       // 0x220 (baalcrab)
+
+constexpr uint16_t MsgJerhynCrystal = 0x1ba;
+constexpr uint16_t MsgOrmusShrines = 0x251;
+constexpr uint16_t MsgCainCrystal = 0x272;
+constexpr uint16_t MsgQualKehkRunes = 0x4e8e;
+
+constexpr uint32_t CodeCatalystLearning = Code("0o[ ");
+constexpr uint32_t CodeCatalystJewelcraft = Code("jcat");
+constexpr uint32_t CodeArcaneCrystal = Code("qum ");
+constexpr uint32_t CodeRelicOrb = Code("qrel");
+
+constexpr int QuestDuriel = 14;       // a2q6; bit 3 = Duriel dead, talk to Jerhyn (the vanilla handler clears it)
+constexpr int BitDurielTalk = 3;
+constexpr int QuestBlade = 19;        // a3q3 (Blade of the Old Religion)
+constexpr int BitBladeReturned = 6;   // handed over to Ormus
+constexpr int BitBladeRewarded = 8;   // the vanilla handler sets it after the hand-over
+constexpr int BitBladeDone = 0;
+constexpr int QuestKhalimsWill = 21;  // a3q5
+constexpr int BitKhalimDone = 0;
+constexpr int BitKhalimTalk = 4;      // the vanilla handler accepts Cain's message 0x272 only with it set
+constexpr int QuestRescue = 36;       // a5q2 (Rescue on Mount Arreat)
+constexpr int BitRescueDone = 0;
+constexpr int BitRescueReady = 1;     // set when the barbarians are free; the vanilla handler pays out and swaps the bits
+constexpr int BitRescueTwo = 6;
+constexpr int BitRescueOne = 7;
+constexpr int QuestBaal = 40;         // a5q6
+constexpr int BitBaalRelic = 0xb;     // Median's own once-per-player mark (unused by D2R)
+constexpr int QuestRespec = 41;       // Median's level flag (respec token: bit 1; bit 0 = used)
+constexpr int BitRespecUsed = 0;
+constexpr int BitRespecReady = 1;
+constexpr int BitRespecKeep = 0xf;
+constexpr int QuestRespecObject = 0x1e;  // quest object that the bookkeeping switches off (0x518220 looks it up by id)
+
+// Plugin-owned "bonus catalyst handed out" flags: bits of quest record 47 (bit 0 is Act 1's Andariel flag). Each
+// difficulty has its own record, so a Nightmare flag lives in the Nightmare record only.
+constexpr int FlagLearning = 1;    // Summoner, Nightmare
+constexpr int FlagJewelcraft = 2;  // Izual, Nightmare
+
+constexpr int RespecLevelAbove = 50;  // D2Sigma 0x9e600: player level > 0x32
+constexpr int RelicLevelAbove = 109;  // 0x9e580: level > 0x6d
+constexpr int AreaWorldstoneChamber = 132;
+constexpr int RelicItemLevel = 125;   // 0x7d
+
+// Quest 13 event 8: the Summoner dies in Nightmare, once.
+constexpr auto ShouldGiveLearningOnKill(int difficulty, int32_t monsterClass, bool flagSet) noexcept -> bool {
+	return difficulty == 1 && monsterClass == MonsterSummoner && !flagSet;
+}
+
+// Quest 25 event 8: Izual dies in Nightmare, once.
+constexpr auto ShouldGiveJewelcraftOnKill(int difficulty, int32_t monsterClass, bool flagSet) noexcept -> bool {
+	return difficulty == 1 && monsterClass == MonsterIzual && !flagSet;
+}
+
+// Quest 13 event 0 (any NPC of the act is activated; D2Sigma 0x9ee40 tests no class): flag set and catalyst missing.
+constexpr auto ShouldReissueLearning(bool flagSet, bool hasCatalyst) noexcept -> bool {
+	return flagSet && !hasCatalyst;
+}
+
+// Quest 25 event 0: flag set, the NPC is Tyrael (D2Sigma 0xbfd80(3)), catalyst missing.
+constexpr auto ShouldReissueJewelcraft(int32_t npcClass, bool flagSet, bool hasCatalyst) noexcept -> bool {
+	return flagSet && npcClass == NpcTyraelAct4 && !hasCatalyst;
+}
+
+// Quest 14 event 11: Jerhyn's message 0x1ba. D2Sigma gives the crystal without looking at the quest; the vanilla handler
+// acts only when bit 3 is set (and clears it), so the reward follows that to stay one per quest.
+constexpr auto ShouldGiveCrystalJerhyn(uint16_t npcClass, uint16_t message, bool talkBit) noexcept -> bool {
+	return npcClass == NpcJerhyn && message == MsgJerhynCrystal && talkBit;
+}
+
+// Quest 19 event 11: Ormus, message 0x251, "returned" bit 6. The vanilla handler also needs the quest open (bit 0
+// clear) and the reward bit 8 clear; D2Sigma tests only bit 6.
+constexpr auto ShouldGiveShrines(uint16_t npcClass, uint16_t message, bool returnedBit, bool rewardedBit, bool doneBit) noexcept -> bool {
+	return npcClass == NpcOrmus && message == MsgOrmusShrines && returnedBit && !rewardedBit && !doneBit;
+}
+
+// Number of shrine items by difficulty (1 / 3 / 5).
+constexpr auto ShrineCount(int difficulty) noexcept -> int {
+	return difficulty == 0 ? 1 : difficulty == 1 ? 3 : difficulty == 2 ? 5 : 0;
+}
+
+// The 16 shrine consumables (misc rows of item type 244 "flsh", the *_shrine_10 items), codes padded with a space.
+constexpr int ShrineCodeCount = 16;
+constexpr uint32_t ShrineCodes[ShrineCodeCount] = {Code("A0+ "), Code("B0+ "), Code("C0+ "), Code("D0+ "), Code("E0+ "), Code("F0+ "),
+                                                   Code("G0+ "), Code("H0+ "), Code("I0+ "), Code("J0+ "), Code("K0+ "), Code("M0+ "),
+                                                   Code("N0+ "), Code("O0+ "), Code("Q0+ "), Code("R0+ ")};
+
+// Quest 21 event 11: Cain (act 3), message 0x272. D2Sigma: quest bit 0 clear; the vanilla handler also needs bit 4.
+constexpr auto ShouldGiveCrystalCain(uint16_t npcClass, uint16_t message, bool doneBit, bool talkBit) noexcept -> bool {
+	return npcClass == NpcCainAct3 && message == MsgCainCrystal && !doneBit && talkBit;
+}
+
+// Quest 36 event 11: Qual-Kehk, message 0x4e8e, bit 0 clear and bit 1 set.
+constexpr auto ShouldGiveRunes(uint16_t npcClass, uint16_t message, bool doneBit, bool readyBit) noexcept -> bool {
+	return npcClass == NpcQualKehk && message == MsgQualKehkRunes && !doneBit && readyBit;
+}
+
+// Runes of the difficulty: three each (r08 r09 r10 / r15 r16 r17 / r22 r23 r24).
+constexpr uint32_t RescueRunes[3][3] = {{Code("r08 "), Code("r09 "), Code("r10 ")},
+                                        {Code("r15 "), Code("r16 "), Code("r17 ")},
+                                        {Code("r22 "), Code("r23 "), Code("r24 ")}};
+
+// How many of the three: 3, 2 with bit 6, one less with bit 7 (D2Sigma 0x9f7c0).
+constexpr auto RuneCount(bool bitTwo, bool bitOne) noexcept -> int {
+	return (bitTwo ? 2 : 3) - (bitOne ? 1 : 0);
+}
+
+// Quest 40 event 8, after the vanilla handler: Baal dies in Hell.
+constexpr auto IsBaalHellKill(int difficulty, int32_t monsterClass) noexcept -> bool {
+	return difficulty == 2 && monsterClass == MonsterBaal;
+}
+
+// D2Sigma 0x9e580, for each player of the game: level above 109, in the Worldstone Chamber, mark not yet set.
+constexpr auto ShouldGiveRelic(int level, int area, bool markSet) noexcept -> bool {
+	return level > RelicLevelAbove && area == AreaWorldstoneChamber && !markSet;
+}
+
+// D2Sigma 0x9e600 (replaces the respec bookkeeping 0x5d9ae0): above level 50 the respec token is put back.
+constexpr auto RespecRearms(int level) noexcept -> bool {
+	return level > RespecLevelAbove;
+}
+
 }  // namespace quests
