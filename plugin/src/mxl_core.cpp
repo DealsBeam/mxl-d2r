@@ -33,6 +33,7 @@
 #include "skill_tree.h"
 #include "state_trace.h"
 #include "testharness.h"
+#include "waypoints.h"
 #include "whirlwind.h"
 
 #include <windows.h>
@@ -69,6 +70,7 @@ char g_reqGatesReport[256] = "off: not the expected game image";
 char g_combatReport[192] = "off: not the expected game image";
 char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
+char g_waypointsReport[256] = "off: not the expected game image";
 int g_missileHitsInstalled = 0;
 
 constexpr D2RL::PluginInfo Info {
@@ -195,6 +197,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "requirement gates %s", g_reqGatesReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "hirelings %s", g_hirelingsReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "waypoints %s", g_waypointsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "combat %s", g_combatReport);
 	Say(command, line);
@@ -383,6 +387,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallHirelings(context, g_hirelingsReport, sizeof(g_hirelingsReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: hirelings %s", g_hirelingsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("waypoints")) {
+				std::snprintf(g_waypointsReport, sizeof(g_waypointsReport), "%s", OffNote);
+			} else {
+				VerifyWaypoints(context->exeBase, g_waypointsReport, sizeof(g_waypointsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: waypoints %s", g_waypointsReport);
 			context->LogInfo(line);
 		}
 		{
