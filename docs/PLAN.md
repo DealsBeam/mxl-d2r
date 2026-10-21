@@ -83,7 +83,8 @@ Status (2026-10-14):
   pages) followed the same day. Trade window, NPC stores and the cube view in the stash followed (2026-10-21): Median's inventory.bin has
   Trade Page 1/2 as two 7 x 15 grids side by side (trade.dc6) and "Monster", the stores' grid, as 15 x 15 (store.dc6);
   inventory.txt, three HD layouts and panel art (tools/ui_panels.py: trade, store with its pressed tab replaced,
-  stash materials tab with a cube grid pasted over D2R's 3 x 4 recess) done, in-game check pending. Open: classic-mode panels.
+  stash materials tab with a cube grid pasted over D2R's 3 x 4 recess) done, in-game check pending.
+- Classic-mode panels (G, 2026-10-21): inventory, cube, stash (personal + shared page), trade, stores and the character sheet use Median's art scaled to D2R's 320 x 432 classic panel (x 0.6136, DC6 in ui/panel/mxl/, quantized to the UI palette: indices 225-254 are hot pink there) with Median's grid / slot / box positions at the same factor; grids and slots take "scale" (items shrink with them). Checked in game (screenshots in mxl-d2r-runs/classic-work/shots) except the trade window (needs two players). Known: the +1 stat buttons of the character sheet do not scale, so they sit in a row under the attributes; vitals show the current value only; D2R's close button moved to the bottom right; classic stash has no extra tabs.
 - Character sheet (2026-10-21, in-game check pending): Median's statsheet page 0 (stat-screen.dc6: name bar, life / mana /
   stamina / experience bars, 4 attributes, 4 resistances, defense, damage + attack rating of the left and right skill)
   is D2R's HD panel background (ui_panels.py 'charsheet') and tools/ui_layouts.py char_sheet() moves D2R's stat widgets
