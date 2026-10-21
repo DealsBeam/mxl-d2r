@@ -269,8 +269,8 @@ quest object (its data block is full); it is quest id 47, bit 0 of the player's 
 (D2Sigma loses its flag when the game ends). Quest-record bit helpers `0x325c50` (test) and `0x325c00` (set) take `(record, quest, bit)` with
 `record = *(playerdata + 0x40 + difficulty * 8)`, no bounds check.
 
-TODO (not done): D2Sigma drops the treasure class once per player in the game on the ground; here only the killer gets one (the TC executor
-is still unlocated). Notice 0x61 (`0xb15d0`) after the Heart. Requirement rows 26 (Akara level-51 slot), quest 41 level flag (`0x9e600`), Cain
+Bonus drop: the treasure class is now dropped once per player in the game on the ground through D2R's `0x441300` (`DropBonusPerPlayer`
+in `quests_common.h`; the class index is the monstats word at +0xc0 + difficulty * 0x10), the inventory item stays as the fallback. Notice 0x61 (`0xb15d0`) after the Heart. Requirement rows 26 (Akara level-51 slot), quest 41 level flag (`0x9e600`), Cain
 and Akara/Charsi/Warriv/Meshif/Larzuk/Drehya action buttons (NPC lane). Quest 5 repeat guard `0x9e8b0` (a1q5 event 8 `0x5e10c0`): purpose
 unconfirmed, deferred. The requirements evaluator (`requirements.cpp`) gates nothing in Act 1 yet; its only Act 1 consumers are the NPC action rows.
 
@@ -304,7 +304,7 @@ tyrael2 367, baalcrab 544, jerhyn 201, ormus 255, cain3 245, qual-kehk 515; **no
 - Empty act-intro event-2 handlers (`0x9e5f0`, quests 0, 8, 16, 24): D2R's quests 16 and 24 have no event-2 handler; quest 8's is `0x5a2830`
   (purpose not read). Left alone; if an Act 2 intro dialog plays wrongly, this is the place to look.
 - Notices 0x5f-0x61 (D2Sigma `0xb15d0`): client strings, not found in D2R; the rewards just appear in the inventory.
-- D2Sigma drops the TC once per player in the game on the ground; the killer alone gets the item (as Act 1).
+- The TC is dropped once per player in the game on the ground (Summoner: Learning TC 177, Jewelcraft TC 367, as Act 1).
 
 ## 6. Open questions
 

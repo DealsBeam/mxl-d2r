@@ -353,6 +353,13 @@ def items(st, code, page=None):
     return [i for i in st["items"] if str(i.get("code")) == code and (page is None or i.get("page") == page)]
 
 
+def ground_count(code):
+    """Items of this code lying on the ground (`h dump ground` lists every item unit; mode 3 / 5 = on the ground): the quest
+    bonus drops land there (one per player)."""
+    ok, lines = H("dump ground")
+    return len([l for l in lines if l.startswith("ground ") and ("code=%s " % code) in l and re.search(r"mode=[35] ", l)])
+
+
 def stat_of(lines):
     m = re.search(r"= (-?\d+)", lines[0]) if lines else None
     return int(m.group(1)) if m else None
@@ -599,12 +606,12 @@ def check_catalyst():
     ok1, l1 = H("kill nearest 156")
     time.sleep(1)
     st1 = hstate()
-    n1 = len(items(st1, "3o["))
+    n1 = len(items(st1, "3o[")) + ground_count("3o[")
     H("spawn 156")
     H("kill nearest 156")
     time.sleep(1)
     st2 = hstate()
-    n2 = len(items(st2, "3o["))
+    n2 = len(items(st2, "3o[")) + ground_count("3o[")
     H("remove 3o[ 5")
     H("spawn 155")
     ok3, l3 = H("interact 155")
@@ -614,7 +621,7 @@ def check_catalyst():
     _, q = H("quest 47 dump")
     ok = ok1 and n1 == 1 and n2 == 1 and n3 == 1
     add(name, "PASS" if ok else "FAIL",
-        "catalysts in the inventory: after kill 1 %d, after kill 2 %d (must stay 1), after removing it and talking to Warriv "
+        "catalysts in the inventory or on the ground: after kill 1 %d, after kill 2 %d (must stay 1), after removing it and talking to Warriv "
         "%d (re-issued); flag quest 47 %s" % (n1, n2, n3, q[0]), [sh("catalyst")], l1 + l3)
     close_menu()
 

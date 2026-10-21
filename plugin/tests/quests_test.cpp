@@ -127,6 +127,12 @@ int RunQuestsTests() {
 	// quest 41
 	Check(RespecRearms(51) && !RespecRearms(50) && !RespecRearms(1), "respec re-arm above level 50");
 
+	// bonus drops: once per player on the ground, rows of the NPCs that carry the classes
+	Check(DropCount(0) == 1 && DropCount(1) == 1 && DropCount(3) == 3 && DropCount(8) == 8 && DropCount(40) == 8, "drops per player");
+	Check(TcCatalyst.row == 155 && TcCatalyst.difficulty == 0 && TcLearning.row == 177 && TcLearning.difficulty == 1 &&
+	          TcJewelcraft.row == NpcTyraelAct4 && TcJewelcraft.difficulty == 1,
+	      "bonus class rows");
+
 	if (failures == 0) {
 		std::printf("quests: all tests passed\n");
 	}

@@ -120,6 +120,41 @@ inline auto Compute(Kind kind, int32_t level, int32_t hirelingId, int32_t streng
 	return b;
 }
 
+// Median's mercenary equip rules (D2Items 0x1007e470, docs/subsystems/npc-hirelings.md 2.4 item 7). Beyond the ordinary
+// requirements the item must pass the hire class's lists (0x10066fd0): an item of an excluded type (hireclasses list B) is
+// refused, an item of a listed type (list A) is allowed, anything else is refused. The class lock (item stat 492) is
+// compared with the class the mercenary equips as (hireclasses +4) instead of a player's class.
+constexpr auto MercClassOf(int32_t monsterClass) noexcept -> const mxl_hirelings::MercClass* {
+	for (const auto& c : mxl_hirelings::MercClasses) {
+		if (c.monsterClass == monsterClass) {
+			return &c;
+		}
+	}
+	return nullptr;
+}
+
+// isType(typeId): the item is of that item type (D2R's 0x373890, which follows the parent types)
+template <typename IsType>
+constexpr auto MercMayWield(const mxl_hirelings::MercClass& c, IsType&& isType) -> bool {
+	for (const int32_t t : c.deny) {
+		if (t < 0) {
+			break;
+		}
+		if (isType(t)) {
+			return false;
+		}
+	}
+	for (const int32_t t : c.allow) {
+		if (t < 0) {
+			break;
+		}
+		if (isType(t)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // Kashya's hire gate. D2R's NPC table (0x237ea60, 0x1c bytes per NPC) lets a hirer through when the quest is done or the
 // player is at least the level in byte +0x11; Median's hirer gate is the quest alone (npcext requirement 9 for Kashya).
 // Clears that level byte for the NPC class when it holds the value D2R ships, and says whether it did.

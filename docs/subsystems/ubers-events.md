@@ -182,8 +182,8 @@ Left:
   PluginSDK OverlayService (drawText from a frame callback) fed by a NetworkService channel (`sendToClient`, 224 bytes); popup art is
   custom art (last).
 - Quest-table condition (3) and the 0x7fb70 item teleport (clock start only; find the D2R item spell that teleports).
-- Game-destroy hook 0x4057c0 (state resets on game pointer or frame regress instead; a new game at the same address whose first
-  lockout event comes after a frame count above the old game's last one would keep stale seals).
+- Per-game reset: the seals are dropped on the game-end event (`game_end.cpp`, client teardown `0x486be0`; `0x4057c0` itself
+  has a rip-relative prologue). The game pointer / frame regress reset stays as a second guard.
 - Confirmed in game (lane client-ui): 0x14 shows "Impossible." in the log. Still open: the one-way portal object.
 
 ## 4. Treasure goblins (D2Goblins.cpp)
@@ -226,7 +226,8 @@ Left:
   in `0x38dfb0(room, x, y)`, then `0x4929e0(game, room, x, y, class, 1, 2, 0, 0)` (radius arg 2 lets `0x493cc0` search rings of 3 and 6 sub-tiles
   for a free spot; Median's call is the exact point). Drops: the monster's own monstats treasure classes, nothing hooked.
 - State: last-kill frames per player id (16 slots), reset when the game pointer changes or the frame counter goes backwards (a new game on a
-  reused address). The game-destroy hook `0x4057c0` was not used: its entry has a rip-relative load inside the first 14 bytes.
+  reused address). The game-end event of `game_end.cpp` (`0x486be0`) is not wired in here yet; `0x4057c0` has a rip-relative
+  load inside its first 14 bytes.
 - Not ported: the "goblin sighted" packet. Testing aid: environment variable `MXL_GOBLINS_FORCE=1` (every roll passes) or `=2` (also no
   last-kill requirement).
 
