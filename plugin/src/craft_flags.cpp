@@ -23,7 +23,7 @@ constexpr uint64_t ExecRva = 0x5269c0;     // (game, player, record, ctx) -> fir
 constexpr uint64_t RecordRva = 0x3e3f60;   // (dataFlag, index) -> cubemain record (stride 0x16c)
 constexpr uint64_t GetStatRva = 0x2f5020;  // (unit, stat, layer)
 constexpr uint64_t SetStatRva = 0x2f7d10;  // (unit, stat, value, layer)
-constexpr uint64_t UnitIdRva = 0x34ab60;   // (unit) -> unit id
+constexpr uint64_t UnitIdRva = 0x34a330;   // (unit, file, line) -> unit +8, the unit id (0x34ab60 is +0xc, the mode)
 constexpr int RecordSize = 0x16c;
 constexpr int32_t StatGold = 14, StatGoldBank = 15;
 
@@ -36,7 +36,7 @@ using ExecFn = void* (*)(Game* game, Unit* player, const uint8_t* record, void* 
 using RecordFn = const uint8_t* (*)(uint32_t dataFlag, int32_t index);
 using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
 using SetStatFn = void (*)(Unit* unit, int32_t stat, int32_t value, int32_t layer);
-using UnitIdFn = int32_t (*)(Unit* unit);
+using UnitIdFn = uint32_t (*)(Unit* unit, const char* file, int32_t line);
 
 ExecFn g_execOriginal = nullptr;
 RecordFn g_record = nullptr;
@@ -48,7 +48,7 @@ craft::State g_state;
 bool g_warned = false;
 
 auto PlayerKey(const void* player) noexcept -> uint32_t {
-	return player != nullptr && g_unitId != nullptr ? static_cast<uint32_t>(g_unitId(const_cast<Unit*>(static_cast<const Unit*>(player))))
+	return player != nullptr && g_unitId != nullptr ? static_cast<uint32_t>(g_unitId(const_cast<Unit*>(static_cast<const Unit*>(player)), "mxl-core craft_flags", 0))
 	                                                : 0;
 }
 

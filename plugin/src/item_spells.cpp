@@ -59,9 +59,9 @@ constexpr uint64_t GetUnitStatRva = 0x2f5020;    // (unit, stat, layer) -> total
 constexpr uint64_t ItemStatListRva = 0x3d5230;   // (owner, item, state, flags) -> stat list, created if missing
 constexpr uint64_t StatListAddRva = 0x2f3330;    // (dataFlag, list, stat, value, layer)
 constexpr uint64_t ApplyPropertyRva = 0x3d4620;  // (type, unit, item, mods, index, set, &property, state, flags, 0)
-constexpr uint64_t SendItemRva = 0x535f60;       // (game, player, item, 1, 0, unit id, byte, byte, position):
+constexpr uint64_t SendItemRva = 0x535f60;       // (game, player, item, 1, 0, unit mode, byte, byte, position):
                                                  // the item update D2R sends after identifying (0x46e8c0)
-constexpr uint64_t UnitIdRva = 0x34ab60;         // (unit) -> unit id
+constexpr uint64_t UnitModeRva = 0x34ab60;       // (unit) -> unit +0xc, the mode
 constexpr uint64_t ItemByte55Rva = 0x36cfe0;     // (item) -> item data +0x55
 constexpr uint64_t ItemByte54Rva = 0x36ca10;     // (item) -> item data +0x54
 constexpr uint64_t UnitPositionRva = 0x34a110;   // (unit) -> packed position
@@ -91,7 +91,7 @@ constexpr uint64_t InventoryFirstRva = 0x388c10; // (inventory) -> first item
 constexpr uint64_t InventoryNextRva = 0x38aba0;  // (item) -> next item in the owner's inventory
 constexpr uint64_t RoomIsTownRva = 0x2f0750;     // (room) -> non-zero in town
 constexpr uint64_t ItemLocationRva = 0x382d20;   // (int32 location[4], item): unit id, page, packed x/y, ...
-constexpr uint64_t UnitClassIdRva = 0x34a330;    // (unit, file, line) -> unit +8
+constexpr uint64_t UnitIdRva = 0x34a330;         // (unit, file, line) -> unit +8, the unit id
 constexpr uint64_t InventoryChangeRva = 0x472590;  // (player, adds, removes, addIds, removeIds, nAdds, nRemoves, 0)
                                                    // -> bool: validated inventory change (as in 0x4712a0)
 constexpr uint64_t SetItemByte5cRva = 0x36dea0;  // (item, byte): item data +0x5c
@@ -125,8 +125,8 @@ using StatListAddFn = void (*)(uint32_t dataFlag, void* list, int32_t stat, int3
 using ApplyPropertyFn = void (*)(int32_t type, d2r::Unit* unit, d2r::Unit* item, void* mods, int32_t index,
                                  int32_t set, const Property* property, int32_t state, int32_t flags, void* extra);
 using SendItemFn = void (*)(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, int32_t mode, int32_t zero,
-                            int32_t unitId, uint8_t byte55, uint8_t byte54, uint32_t position);
-using UnitIdFn = int32_t (*)(d2r::Unit* unit);
+                            int32_t unitMode, uint8_t byte55, uint8_t byte54, uint32_t position);
+using UnitModeFn = int32_t (*)(d2r::Unit* unit);
 using ItemByteFn = uint8_t (*)(d2r::Unit* item);
 using UnitPositionFn = uint32_t (*)(d2r::Unit* unit);
 using UnitStatsChangedFn = void (*)(d2r::Unit* unit, int32_t on);
@@ -147,7 +147,7 @@ using InventoryFirstFn = d2r::Unit* (*)(void* inventory);
 using InventoryNextFn = d2r::Unit* (*)(d2r::Unit* item);
 using RoomIsTownFn = int64_t (*)(void* room);
 using ItemLocationFn = int32_t* (*)(int32_t* location, d2r::Unit* item);
-using UnitClassIdFn = uint32_t (*)(d2r::Unit* unit, const char* file, int32_t line);
+using UnitIdFn = uint32_t (*)(d2r::Unit* unit, const char* file, int32_t line);
 using InventoryChangeFn = uint8_t (*)(d2r::Unit* player, int32_t* adds, int32_t* removes, uint32_t* addIds,
                                       uint32_t* removeIds, uint64_t addCount, uint64_t removeCount, uint8_t zero);
 using SetItemByteFn = void (*)(d2r::Unit* item, uint8_t value);
@@ -165,7 +165,7 @@ ItemStatListFn g_itemStatList = nullptr;
 StatListAddFn g_statListAdd = nullptr;
 ApplyPropertyFn g_applyProperty = nullptr;
 SendItemFn g_sendItem = nullptr;
-UnitIdFn g_unitId = nullptr;
+UnitModeFn g_unitMode = nullptr;
 ItemByteFn g_itemByte55 = nullptr;
 ItemByteFn g_itemByte54 = nullptr;
 UnitPositionFn g_unitPosition = nullptr;
@@ -185,7 +185,7 @@ InventoryFirstFn g_inventoryFirst = nullptr;
 InventoryNextFn g_inventoryNext = nullptr;
 RoomIsTownFn g_roomIsTown = nullptr;
 ItemLocationFn g_itemLocation = nullptr;
-UnitClassIdFn g_unitClassId = nullptr;
+UnitIdFn g_unitId = nullptr;
 InventoryChangeFn g_inventoryChange = nullptr;
 SetItemByteFn g_setItemByte5c = nullptr;
 FreeItemFn g_freeItem = nullptr;
@@ -253,7 +253,7 @@ auto CanDye(d2r::Unit* target) noexcept -> bool {
 
 // Resend the changed item, as D2R does after identifying one.
 void SendItem(d2r::Game* game, d2r::Unit* player, d2r::Unit* item) noexcept {
-	g_sendItem(game, player, item, 1, 0, g_unitId(item), g_itemByte55(item), g_itemByte54(item), g_unitPosition(item));
+	g_sendItem(game, player, item, 1, 0, g_unitMode(item), g_itemByte55(item), g_itemByte54(item), g_unitPosition(item));
 	g_unitStatsChanged(player, 1);
 }
 
@@ -386,8 +386,8 @@ auto ContainerOf(const mxl_items::SigmaItem& entry) noexcept -> const mxl_items:
 auto RemoveItem(d2r::Game* game, d2r::Unit* player, d2r::Unit* item) noexcept -> bool {
 	int32_t location[8] = {};
 	g_itemLocation(location, item);
-	uint32_t classId = g_unitClassId(item, "mxl-core item_spells", 0);
-	if (g_inventoryChange(player, nullptr, location, nullptr, &classId, 0, 1, 0) == 0) {
+	uint32_t unitId = g_unitId(item, "mxl-core item_spells", 0);
+	if (g_inventoryChange(player, nullptr, location, nullptr, &unitId, 0, 1, 0) == 0) {
 		return false;
 	}
 	g_setItemByte5c(item, 0);
@@ -545,7 +545,7 @@ auto InstallItemSpells(const D2RL::PluginContext* context, char* report, size_t 
 	g_statListAdd = reinterpret_cast<StatListAddFn>(base + StatListAddRva);
 	g_applyProperty = reinterpret_cast<ApplyPropertyFn>(base + ApplyPropertyRva);
 	g_sendItem = reinterpret_cast<SendItemFn>(base + SendItemRva);
-	g_unitId = reinterpret_cast<UnitIdFn>(base + UnitIdRva);
+	g_unitMode = reinterpret_cast<UnitModeFn>(base + UnitModeRva);
 	g_itemByte55 = reinterpret_cast<ItemByteFn>(base + ItemByte55Rva);
 	g_itemByte54 = reinterpret_cast<ItemByteFn>(base + ItemByte54Rva);
 	g_unitPosition = reinterpret_cast<UnitPositionFn>(base + UnitPositionRva);
@@ -565,7 +565,7 @@ auto InstallItemSpells(const D2RL::PluginContext* context, char* report, size_t 
 	g_inventoryNext = reinterpret_cast<InventoryNextFn>(base + InventoryNextRva);
 	g_roomIsTown = reinterpret_cast<RoomIsTownFn>(base + RoomIsTownRva);
 	g_itemLocation = reinterpret_cast<ItemLocationFn>(base + ItemLocationRva);
-	g_unitClassId = reinterpret_cast<UnitClassIdFn>(base + UnitClassIdRva);
+	g_unitId = reinterpret_cast<UnitIdFn>(base + UnitIdRva);
 	g_inventoryChange = reinterpret_cast<InventoryChangeFn>(base + InventoryChangeRva);
 	g_setItemByte5c = reinterpret_cast<SetItemByteFn>(base + SetItemByte5cRva);
 	g_freeItem = reinterpret_cast<FreeItemFn>(base + FreeItemRva);

@@ -678,6 +678,10 @@ levels.bin rows are 0x220 bytes; the generator reads the extension +0x151..+0x15
 section 3). `mxl_dungeons::Entry` `{level (D2R id), lockSeconds, lockGroup, minDifficulty, levelReq[3], classLock,
 unk152, unk155, portalObject, unk15b}`, one entry per level where any of them is non-zero (141 levels).
 
+**Used by** plugin/src/dungeon_lockout.cpp + dungeon_logic.h (lane dungeon-lockout): the clock starts when a player enters a level with a lock time
+(stairs, tile or portal), seals it for the rest of the game when it runs out; entry also needs minDifficulty, levelReq[difficulty] and the class lock.
+Status and what is left: docs/subsystems/ubers-events.md section 3a.
+
 | Field | Offset | Meaning |
 |---|---|---|
 | lockSeconds | +0x153 u16 | seconds until the level seals after a portal into it is used (0 = no clock). +0x154, listed separately in the research doc, is its high byte (values up to 1200 need it) |
@@ -690,13 +694,13 @@ unk152, unk155, portalObject, unk15b}`, one entry per level where any of them is
 
 ### Treasure goblins (`mxl_goblins.h`)
 
-`Chance {level (D2R id), chance}` for the 161 levels with GoblinChance (levels +0x15c u16, 4-16; rolled against 1024
-after a per-player reduction whose formula is not decoded). `Goblin {monster (D2R monstats id), flags, rarity,
+`Chance {level (D2R id), chance, monLevel[3]}` for the 161 levels with GoblinChance (levels +0x15c u16, 4-16; rolled
+against 1024 after a 10%-per-extra-player reduction; monLevel = levels +0x16 + 2 x difficulty, u16 x3), `Towns[]` (levels
+with the town flag +0x14b) and `NoKill[]` (monstats3 +0x20 set: kills that do not stamp the player). Logic: plugin/src/goblins_logic.h. `Goblin {monster (D2R monstats id), flags, rarity,
 minLevel, maxLevel, levelRestrict}` for the 21 monstats3 rows (44 bytes) whose flag word (+0) has bit 0x400 (goblin)
 or 0x1000 (rainbow, Halloween only): rarity u16 at +0x17, min / max monster level u16 at +0x19 / +0x1b (0 = no bound),
 level restriction u16 at +0x1d (0xffff -> -1 any, else the level row mapped to its D2R id). `flags` keeps the whole
-word; its other bits are not understood. The area's monster level (also needed by the pick) is not copied: read it from
-D2R's levels table. Rarity 2325 for the common goblin is unconfirmed (docs/subsystems/ubers-events.md, open question 5).
+word; its other bits are not understood. Rarity is the row's weight in the draw (confirmed, docs/subsystems/ubers-events.md section 4).
 
 ## Diagnosis switch and state trace
 

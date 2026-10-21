@@ -41,7 +41,7 @@ Format follows [quests-requirements.md](quests-requirements.md) and [npc-hirelin
 | Piece | D2Sigma code | Tables / data | State today |
 |---|---|---|---|
 | Keys, scrolls of summoning, riftstones, links (open an area) | item spell 16: handler 0x1007f720, red portal 0x10097870 -> 0x10097750 (object 0x24a = 586 one-way portal, once per level and game via DRLG level +0x230 bit 4), object fns 15/35 (0x96fa0/0x96e80) | misc.txt `pSpell 16`, calc1 = level, misc2 | **ported** (plugin 0.13.0, 0.19.0) |
-| Dungeon lockout clock and sealing | D2Dungeon.cpp 0x5da80..0x5e2d0 (state array at game +0x1b24, 12 bytes per level), start 0x5d9d0 -> 0x5df20, warp check 0x5d810 / 0x5cee0 / 0x5d150 (D2DrlgWarp.cpp) | levels.bin extension fields (section 3) | **open** |
+| Dungeon lockout clock and sealing | D2Dungeon.cpp 0x5da80..0x5e2d0 (state array at game +0x1b24, 12 bytes per level), start 0x5d9d0 -> 0x5df20, warp check 0x5d810 / 0x5cee0 / 0x5d150 (D2DrlgWarp.cpp) | levels.bin extension fields (section 3) | **server rules ported** (plugin/src/dungeon_lockout.cpp, lane dungeon-lockout; section 3a); timer UI open |
 | Lockout UI | client `DungeonWidget:*` (0xf4bb0, 0xf4fc0), packet 0x88 | UI layout (not in our extract) | **open** |
 | Treasure goblins | D2Goblins.cpp 0x66120 (tick), 0x66070 (chance), 0x65de0 (pick), 0x65be0 (rebuild candidates); tick table 0x101d90ec run by 0x66230 (D2GS.cpp) | levels `GoblinChance` (+0x15c), monstats3 goblin fields (section 4) | **open** (monsters exist) |
 | Trophies, sigils, marks, relics, riftstones | none (items); cube checker 0x10059d00 | misc.txt, cubemain/cubemainext, uniqueitems `TrophyCarrier2`, `Fist *`/`Lab *` treasure classes | cube conditions **ported** 0.37.0; flag setters = cubemain output slots, spec in plugin-spec.md (needs a D2R hook) |
@@ -136,6 +136,50 @@ AlwaysDisplayName, GoblinChance); the **meaning below is from how the code uses 
   the 600-1200 s levels (World Stone 1200, Dimensional Plane 600, Uldyssian's Tomb 900, Heart of Darkness 840) look like
   time limits. Same mechanism, different values; the unit is seconds in the code (checked in 0x5df20).
 
+### 3a. Port status (lane dungeon-lockout)
+
+Corrections found while reading the code for the port (all from the D2Sigma decompile):
+- **The clock starts on every successful entry**, not only on portals: the tile warp function 0x5cf90 (calls the warp test
+  0x5d810, then moves the player, then 0x5d9d0), the portal object function 0x96e80 (fn 35; test 0x5d810, set the move
+  message, 0x5d9d0) and the item teleport 0x7fb70 (no test) all call 0x5d9d0 with the destination level. A level with a lock
+  time therefore counts down from the first player who walks in, by stairs, tile or portal.
+- **Per game, not per player.** The 12-byte records are at game +0x1b24; any player entering starts the clock for everybody.
+  Sealed = flag 2 set when the first timed event (0x5e180) fires; the second event (0x5e2d0) only clears the "starting" bit 4.
+  Players already inside stay; the clock does not eject anybody. It only refuses entry (stairs, tiles, portals) afterwards.
+  Leaving and coming back during the countdown is allowed.
+- **Test 0x5d810 (player entering level `dst`)** refuses when: (1) 0x5cee0 fails: player level (stat 12, capped by an engine value)
+  below the level's requirement for the game difficulty (+0x158 + difficulty), difficulty below +0x151, or class lock (+0x15e)
+  not equal to class + 1; (2) the level has a lock time (+0x153 non-zero) and its flag 2 is set; (3) a quest-table condition:
+  the 0x9c-byte table at TxtRecords +0xc60 (vanilla LevelDefBin, row = level) has a non-zero quest id at +4 and the player
+  has none of quest bits 1, 0, 0xe, 0xf for it. (3) is not ported: D2R has no such table access found and the five
+  vanilla quest levels keep D2R's own check (0x516a50). The three Sigma special cases (73, 100, 132) are D2R's own.
+- **What the player sees**: a refusal sets the player's pending unit message 0x13 (0x100b15d0 stores it at +0x6e / +0x70 and
+  sets flag 0x400), which the client turns into its lockout popup; the clock and its title text are the client
+  `DungeonWidget` fed by packet 0x88 (type 1 flags, type 2 milliseconds left, 60 levels per packet, sent on join and on
+  every change). The 20-second levels are real timers with the same widget.
+
+Implemented (mxl-core, switch word `lockout`, report on the `mxl` command and the log):
+- Hook 0x491ff0 (warp action, entry `48 8b c4 53 55 57 41 56 48 83 ec 68 49 8b d8`, 15 bytes): works out the destination level
+  from the linked tile, refuses (returns without the original) when Median's test refuses, and starts the clock when the
+  player's level changed afterwards.
+- Hook 0x58f680 (portal object operate function, entry `48 89 4c 24 08 55 53 56 57 41 56 41 57 48 8b ec`, 16 bytes): same
+  test on the portal's destination word (0x34ad40); refusal = D2R's failure exit (unit message 0x14, return 0); clock starts
+  after a successful move. Town portals and red portals use it. The one-way portal (object 600) uses it only if its operate
+  function in objects.txt is the same one: to confirm in game.
+- Rules in plugin/src/dungeon_logic.h (141 levels from mxl_dungeons.h): requirements, seal, group locking (levels with the same
+  non-zero group take the starter's end time), per-game reset by game pointer or frame counter going backwards. The seal is
+  checked lazily against GetTickCount64 (Median: game events, same wall clock; only difference: Median's events are frame
+  based, so a paused server would differ). Unit tests: plugin/tests/dungeon_test.cpp.
+- Message: the generic failure message 0x14 only (`0x491960`). Median's 0x13 has no D2R counterpart (no D2R caller uses it);
+  no packet is invented.
+
+Left:
+- Timer / popup UI and packet 0x88 (client; needs a D2RLoader client plugin or UI layout).
+- Quest-table condition (3) and the 0x7fb70 item teleport (clock start only; find the D2R item spell that teleports).
+- Game-destroy hook 0x4057c0 (state resets on game pointer or frame regress instead; a new game at the same address whose first
+  lockout event comes after a frame count above the old game's last one would keep stale seals).
+- Confirm in game: hook parameter layout of 0x58f680, the one-way portal object, whether 0x14 produces a visible reaction.
+
 ## 4. Treasure goblins (D2Goblins.cpp)
 
 - **Tick**: D2GS.cpp 0x66230 runs a table of four periodic functions at 0x101d90ec once per game frame:
@@ -144,8 +188,9 @@ AlwaysDisplayName, GoblinChance); the **meaning below is from how the code uses 
 - **0x66120 (per player, every 15 s)**: skips dead or dying players (0xbf440), players in a town (0xbf8a0) and players who have not killed anything in the last 375 frames (15 s; the player's last-kill frame sits in the player data +0x28, `NoKillTimestampUpdate` in monstats opts a monster out of updating it). If the chance roll passes it picks
   a goblin, finds a spot near the player (radius 8), spawns it (`0x10042630`, monster id, x, y) and sends the
   client a 0x28-byte packet 0x5a type 0x15 with the new unit id (the "goblin sighted" notice).
-- **Chance (0x66070)**: GoblinChance of the area (+0x15c) reduced by a per-player term, at least 1, rolled against 1024 (`rand < chance`
-  with `0x400`; the reduction formula `a*b/c` of 0x88e50 is not decoded: open question).
+- **Chance (0x66070)** (decoded 2026-10-21): `chance - chance * (10 * players - 10) / 100` (0x88e50 is `a * b / 100`; `players` = game +0x8c,
+  the player count), at least 1; the roll is `rand < chance` out of 0x400 (1024). So 10% less per extra player (the tick is per player).
+  Area monster level for the pick = levels +0x16 + 2 x difficulty (u16 x3: Blood Moor 1 / 51 / 100; copied into `mxl_goblins.h` as `monLevel`).
 - **Pick (0x65de0)**: from a candidate list of monstats rows (rebuilt by 0x65be0) whose monstats3 flag word has bit 0x400
   set (and not bit 0x1000 = rainbow/Halloween only), with the area's monster level (levels record +0x16 + 2 x
   difficulty) within [min +0x19, max +0x1b] (0 = no bound) and level restrict (+0x1d: -1 any, else that level id).
@@ -154,7 +199,30 @@ AlwaysDisplayName, GoblinChance); the **meaning below is from how the code uses 
   voided_spawn (0), arcane_collector (300), glowing_baron (553, max 99), relic_thief (4, 100-119), relic_thief_2 (10, 120+),
   rainbow_goblin (flag 0x1000), rift_inspector 1-12 (restrict to levels 139, 39, 140, 141, 146, 148, 150, 151, 270, 154,
   155; the 5th at monster levels 116-117). The goblin treasure classes are `Goblin`, `Gob Rainbow`, `SoH Design`.
-- Rarity numbers need confirming (2325 for the common goblin looks high; the u16 at +0x17 may overlap a neighbour).
+- Rarity confirmed from 0x65de0: the u16 at +0x17 is the number of times the row is added to the draw list (a plain weight; 2325 vs 184 / 300 / 553
+  makes the treasure goblin about 69% of the draws below monster level 100). The pick is uniform over that list.
+- **Last-kill stamp** (D2Achievements.cpp 0x49c40, called per kill): when a player (or the owner of a minion, walked up the owner chain) kills a
+  monster whose monstats3 byte +0x20 (`NoKillTimestampUpdate`, 177 rows incl. the goblins themselves and summons) is 0, the frame goes into
+  the player data +0x28 (0xc04c0). The tick needs `frame - stamp < 0x177`.
+- Drops and behaviour after the spawn are pure data (monstats `TreasureClass1` "Goblin", "Goblin (N)/(H)", AI `OblivionKnight`, velocity 7);
+  D2Goblins.cpp has no despawn, flee or death code. The client notice (packet 0x5a type 0x15, "goblin sighted") is Median-client only.
+
+### D2R port (plugin 0.40.0, `plugin/src/goblins.cpp`, switch word `goblins`)
+
+- Tick: detour of the server game frame `0x406550` (14 entry bytes `48 89 74 24 20 55 57 41 57 48 8d 6c 24 b9`), original first, then
+  `game+0x170 % 375 == 0` runs the per-player turn. Chosen over a kill-wrapper roll because it is the exact twin of Median's table entry (a
+  15 s clock independent of kills, all players of the game) and the hook sits at a plain prologue; if the install fails the kill wrapper runs
+  the same tick once per 375-frame bucket (implemented as the fallback).
+- Stamp: pre-hook of the kill wrapper `0x515640` (15 bytes `48 89 5c 24 10 48 89 6c 24 18 57 48 83 ec 70`); the owner of a minion killer is
+  found with `0x4a5480(unit, &id, &err)` + `0x48fe80(game, 0, id)` exactly as the wrapper does.
+- Turn per player: not dead (unit mode `+0xc` is 0 / 17; `0x34ab60` reads the mode, **not** the unit id), room `0x34b440`, level `0x2efc10`, not in
+  a town (levels with the town flag: 1, 40, 75, 103, 109, 138, 139, 242, 243), recent kill, chance roll, pick, spot = player position + (8, 8)
+  in `0x38dfb0(room, x, y)`, then `0x4929e0(game, room, x, y, class, 1, 2, 0, 0)` (radius arg 2 lets `0x493cc0` search rings of 3 and 6 sub-tiles
+  for a free spot; Median's call is the exact point). Drops: the monster's own monstats treasure classes, nothing hooked.
+- State: last-kill frames per player id (16 slots), reset when the game pointer changes or the frame counter goes backwards (a new game on a
+  reused address). The game-destroy hook `0x4057c0` was not used: its entry has a rip-relative load inside the first 14 bytes.
+- Not ported: the "goblin sighted" packet. Testing aid: environment variable `MXL_GOBLINS_FORCE=1` (every roll passes) or `=2` (also no
+  last-kill requirement).
 
 ## 5. Halloween event and currency (D2Currency.cpp, object functions 36/37)
 
@@ -205,7 +273,7 @@ appear from Act 1, so players notice their absence early) -> 7 -> 9. Item 2 is a
    `OnEnteringLevelText` string.
 4. Level extension +0x154/+0x155/+0x156: portal level / portal object / flags (which one the red portal uses; plugin
    uses object 60 or the one-way portal today).
-5. Goblin chance reduction term (0x88e50 arguments) and the rarity field offset (+0x17 vs a neighbour).
+5. (answered, see section 4) Goblin chance reduction term and rarity field.
 6. What switches the Halloween event on (date, realm setting, quest flag?) and what the currency 102024 item is.
 7. How the three ubers and the Fist bosses are placed and phase-chained (DS1 presets and `BossEventMode` /
    `BossEventMissile1/2` fields in monstats; not read). Probably asset work, but the phase change of
