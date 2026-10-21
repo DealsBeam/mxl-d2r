@@ -18,6 +18,7 @@
 #include "item_spells.h"
 #include "missile_hits.h"
 #include "mana_costs.h"
+#include "craft_flags.h"
 #include "cube_conditions.h"
 #include "state_trace.h"
 #include "whirlwind.h"
@@ -44,6 +45,7 @@ char g_itemSpellsReport[160] = "off: not the expected game image";
 char g_manaCostsReport[160] = "off: not the expected game image";
 char g_missileHitsReport[512] = "";
 char g_cubeReport[192] = "off: not the expected game image";
+char g_craftReport[96] = "off: not the expected game image";
 int g_missileHitsInstalled = 0;
 
 constexpr D2RL::PluginInfo Info {
@@ -68,7 +70,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat whirlwind cube; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -137,6 +139,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "mana costs %s", g_manaCostsReport);
 	command->plugin->WriteConsoleMessage(line);
 	std::snprintf(line, sizeof(line), "cube conditions %s", g_cubeReport);
+	command->plugin->WriteConsoleMessage(line);
+	std::snprintf(line, sizeof(line), "craft flags %s", g_craftReport);
 	command->plugin->WriteConsoleMessage(line);
 	return D2RL::ConsoleCommandResult::Handled;
 }
@@ -239,6 +243,17 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			}
 			std::snprintf(g_cubeReport, sizeof(g_cubeReport), "%s", report);
 			std::snprintf(line, sizeof(line), "mxl-core: cube conditions %s", report);
+			context->LogInfo(line);
+		}
+		{
+			char report[96];
+			if (Off("craftflags")) {
+				std::snprintf(report, sizeof(report), "%s", OffNote);
+			} else {
+				InstallCraftFlags(context, report, sizeof(report));
+			}
+			std::snprintf(g_craftReport, sizeof(g_craftReport), "%s", report);
+			std::snprintf(line, sizeof(line), "mxl-core: craft flags %s", report);
 			context->LogInfo(line);
 		}
 		if (Off("trace")) {  // diagnosis word, not a part: turns the state trace on (bug #22)

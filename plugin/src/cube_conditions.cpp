@@ -10,17 +10,16 @@
 // Entry bytes of both functions verified against a memory dump of the running image (docs/plugin-spec.md, "Cube conditions").
 #include "cube_conditions.h"
 
+#include "craft_flags.h"
 #include "d2r.h"
 #include "mxl_cube.h"
 
 #define NOMINMAX
 #include <windows.h>
 
-#include <bitset>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
-#include <unordered_map>
 
 namespace {
 
@@ -87,15 +86,6 @@ struct Search {
 	Unit* player;
 };
 thread_local Search g_search {};
-
-std::unordered_map<const void*, std::bitset<256>> g_playerFlags;
-std::unordered_map<const void*, std::bitset<256>> g_gameFlags;
-
-auto FlagSet(const std::unordered_map<const void*, std::bitset<256>>& map, const void* key, int32_t flag) noexcept
-	-> bool {
-	const auto it = map.find(key);
-	return flag >= 0 && flag < 256 && it != map.end() && it->second.test(static_cast<size_t>(flag));
-}
 
 auto AreaOf(Unit* player, void** roomOut) noexcept -> int32_t {
 	void* room = g_unitRoom(player);
@@ -174,10 +164,10 @@ auto Check(const mxl_cube::Cond& c, Unit* player) noexcept -> bool {
 		uint32_t* seed = d2r::api.unitSeed(player);
 		return seed != nullptr && d2r::RandomBelow(seed, 100) < chance;
 	}
-	case 38: return FlagSet(g_playerFlags, player, c.param);
-	case 39: return !FlagSet(g_playerFlags, player, c.param);
-	case 40: return FlagSet(g_gameFlags, g_search.game, c.param);
-	case 41: return !FlagSet(g_gameFlags, g_search.game, c.param);
+	case 38: return CraftFlagTest(player, c.param, false);
+	case 39: return !CraftFlagTest(player, c.param, false);
+	case 40: return CraftFlagTest(player, c.param, true);
+	case 41: return !CraftFlagTest(player, c.param, true);
 	case 42: return static_cast<int64_t>(g_getStat(player, StatStrength, 0)) + g_getStat(player, StatEnergy, 0) > 9000;
 	default: return true;  // ops D2R handles itself
 	}
@@ -229,6 +219,7 @@ auto RecipeIndex(Game* game, const uint8_t* record) noexcept -> int32_t {
 uint64_t SearchHook(int32_t* result, Game* game, Unit* player, void* out) {
 	const Search before = g_search;
 	g_search = {game, player};
+	CraftTouchGame(game);
 	const uint64_t r = g_searchOriginal(result, game, player, out);
 	g_search = before;
 	return r;
@@ -252,16 +243,10 @@ uint64_t MatchHook(Game* game, void* inventory, const uint8_t* record, int32_t i
 
 }  // namespace
 
-void SetCraftFlag(const void* player, int flag, bool game, bool on) noexcept {
-	if (flag < 0 || flag > 255) {
-		return;
-	}
-	(game ? g_gameFlags : g_playerFlags)[player].set(static_cast<size_t>(flag), on);
-}
-
 auto InstallCubeConditions(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;
 	g_context = context;
+	CraftBind(base);
 	g_record = reinterpret_cast<RecordFn>(base + RecordRva);
 	g_getStat = reinterpret_cast<StatFn>(base + GetStatRva);
 	g_baseStat = reinterpret_cast<StatFn>(base + BaseStatRva);
