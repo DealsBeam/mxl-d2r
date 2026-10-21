@@ -2207,30 +2207,91 @@
   "count": "0x138",
   "fields": [
    {
+    "off": 0,
+    "type": "u8",
+    "name": "Page",
+    "note": "0 main sheet, 1 and 2 extra pages, 255 every page (docs/subsystems/stat-screen.md)"
+   },
+   {
+    "off": 1,
+    "type": "u32",
+    "name": "Type",
+    "note": "1 label, 2 stat, 4 resist, 0x12 class layer, 0x15 stat/10, 0x17 str/dex damage bonus, 0x19 shifted + capped, 0x0d-0x11 page 0 and buttons (draw loop 0x117dc0)"
+   },
+   {
     "off": 5,
     "type": "u16",
     "name": "X",
-    "note": "position on the stat screen (probable)"
+    "note": "classic pixel of the 512 x 704 sheet"
    },
    {
     "off": 7,
     "type": "u16",
     "name": "Y",
-    "note": "position on the stat screen (probable)"
+    "note": "classic pixel of the 512 x 704 sheet"
    },
    {
     "off": 9,
     "type": "strid",
     "name": "Label",
-    "note": "5382 = none"
+    "note": "text of a type 1 row; 5382 = none"
+   },
+   {
+    "off": 11,
+    "type": "u8",
+    "name": "Font",
+    "note": ""
+   },
+   {
+    "off": 12,
+    "type": "u8",
+    "name": "Color",
+    "note": "1 red, 4 gold, 6 white"
+   },
+   {
+    "off": 13,
+    "type": "u16",
+    "name": "Stat",
+    "note": "Median itemstatcost row (value rows)"
+   },
+   {
+    "off": 15,
+    "type": "u16",
+    "name": "Layer",
+    "note": "stat parameter"
+   },
+   {
+    "off": 17,
+    "type": "u8",
+    "name": "Base",
+    "note": "1 = base value instead of the total"
+   },
+   {
+    "off": 18,
+    "type": "u8",
+    "name": "Percent",
+    "note": "1 = append %"
+   },
+   {
+    "off": 19,
+    "type": "u32",
+    "name": "Align",
+    "note": "0 right, 1 left, 2 centre"
    },
    {
     "off": 23,
     "type": "strid",
-    "name": "Label2",
-    "note": "5382 = none"
+    "name": "Tooltip",
+    "note": "hover text of a label row; 5382 = none"
+   },
+   {
+    "off": 29,
+    "type": "u32",
+    "name": "Cap",
+    "note": "0 none; value = min(value, cap)"
    }
-  ]
+  ],
+  "note": "Median's character sheet as a table (ui/StatScreen.cpp, draw loop 0x117dc0). Decoded in docs/subsystems/stat-screen.md."
  },
  "uniqueitems2": {
   "rowsize": 4,

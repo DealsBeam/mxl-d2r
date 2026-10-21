@@ -23,6 +23,7 @@
 #include "craft_flags.h"
 #include "cube_conditions.h"
 #include "quests_act1.h"
+#include "quests_act2_5.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
 #include "hirelings.h"
@@ -33,6 +34,7 @@
 #include "skill_tree.h"
 #include "state_trace.h"
 #include "testharness.h"
+#include "waypoints.h"
 #include "whirlwind.h"
 
 #include <windows.h>
@@ -59,6 +61,7 @@ char g_missileHitsReport[512] = "";
 char g_cubeReport[192] = "off: not the expected game image";
 char g_craftReport[96] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
+char g_quests2Report[224] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
 char g_goblinsReport[192] = "off: not the expected game image";
 char g_npcReport[256] = "off: not the expected game image";
@@ -69,6 +72,7 @@ char g_combatReport[192] = "off: not the expected game image";
 char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
 char g_itemGenReport[320] = "off: not the expected game image";
+char g_waypointsReport[256] = "off: not the expected game image";
 int g_missileHitsInstalled = 0;
 
 constexpr D2RL::PluginInfo Info {
@@ -93,7 +97,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc reqgates hirelings skilltree combat props runewords xp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags quests quests2 lockout goblins npc reqgates hirelings skilltree combat props runewords xp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -174,6 +178,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "act 1 quests %s", g_questsReport);
 	Say(command, line);
+	std::snprintf(line, sizeof(line), "act 2-5 quests %s", g_quests2Report);
+	Say(command, line);
 	{
 		int refused = 0, started = 0;
 		DungeonLockoutCounts(&refused, &started);
@@ -193,6 +199,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "requirement gates %s", g_reqGatesReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "hirelings %s", g_hirelingsReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "waypoints %s", g_waypointsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "combat %s", g_combatReport);
 	Say(command, line);
@@ -334,6 +342,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 		{
+			if (Off("quests2")) {
+				std::snprintf(g_quests2Report, sizeof(g_quests2Report), "%s", OffNote);
+			} else {
+				InstallQuestsAct2To5(context, g_quests2Report, sizeof(g_quests2Report));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: act 2-5 quests %s", g_quests2Report);
+			context->LogInfo(line);
+		}
+		{
 			if (Off("lockout")) {
 				std::snprintf(g_lockoutReport, sizeof(g_lockoutReport), "%s", OffNote);
 			} else {
@@ -376,6 +393,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallHirelings(context, g_hirelingsReport, sizeof(g_hirelingsReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: hirelings %s", g_hirelingsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("waypoints")) {
+				std::snprintf(g_waypointsReport, sizeof(g_waypointsReport), "%s", OffNote);
+			} else {
+				VerifyWaypoints(context->exeBase, g_waypointsReport, sizeof(g_waypointsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: waypoints %s", g_waypointsReport);
 			context->LogInfo(line);
 		}
 		{

@@ -55,6 +55,7 @@ size. Buckets from docs/PLAN.md: **(a)** data-only, **(b)** D2RLoader service, *
 | Module | Functions | What it is | Bucket | Status | Notes |
 |---|---|---|---|---|---|
 | D2GameInterface.cpp, D2InventoryScreen.cpp, D2InventoryGrid.cpp, D2InventorySort.cpp | 16, 6, 19, 1 | Median's panels (themes/*/game/panels) | d | open | D2R layouts; skill tree has 8 tabs (ui_layouts.py) but no tab titles/backgrounds yet (bug #3) |
+| StatScreen.cpp | 12 | the character sheet's text rows from the `statscreen` table (pages 0-2, 242 rows, one handler per row type) | d | read (2026-10-21) | [stat-screen.md](stat-screen.md); page 0 is the HD sheet, pages 2-3 are rows of D2R's Advanced Stats panel (itemstatcost.advdisplay, txt_migrate.py advanced_stats) |
 | infographics.cpp | 4 | help panels (infographics) | d | open | |
 | D2ItemDesc.cpp | 5 | item tooltips | d | partial | help lines in tooltips (item_spells.cpp) |
 | D2Lifebars.cpp, D2Notifications.cpp, D2Chat.cpp, D2ChatCommands.cpp | 9, 6, 13, 1 | HUD, messages, chat | d/e | open | D2R has its own |

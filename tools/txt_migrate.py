@@ -548,6 +548,47 @@ class Migrator:
 
     CLASS_IDS = {"ama": 0, "sor": 1, "nec": 2, "pal": 3, "bar": 4, "dru": 5, "ass": 6}
 
+    def advanced_stats(self) -> None:
+        """D2R's Advanced Stats panel lists every itemstatcost row whose advdisplay column is 2 (value not zero; the
+        text is the stat's own description) in row order. Median's two extra stat pages (statscreen.bin pages 1 and 2,
+        docs/subsystems/stat-screen.md) show about 95 stats: advdisplay is 2 for exactly those and empty for the rest
+        (D2R's own list has 97, among them knockback, howl and other stats Median does not use)."""
+        import stat_screen
+        wanted = set(stat_screen.advanced_stat_rows())
+        always = set(stat_screen.ALWAYS_LISTED)
+        texts: dict[str, str] = {}  # string key -> enUS, from the files tbl2json.py wrote
+        for f in (OUT / "data" / "local" / "lng" / "strings").glob("*.json"):
+            for e in json.loads(f.read_text("utf-8-sig")):
+                texts[e.get("Key", "")] = e.get("enUS", "")
+        found: set[str] = set()
+        fixed = 0
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "itemstatcost.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            col, fn, val, pos, neg = (h.index(c) for c in ("advdisplay", "descfunc", "descval", "descstrpos", "descstrneg"))
+            found, fixed = set(), 0
+            for r in rows:
+                if not is_record(r):
+                    continue
+                r[col] = ("1" if r[0] in always else "2") if r[0] in wanted else ""
+                if r[0] not in wanted:
+                    continue
+                found.add(r[0])
+                # D2R keeps its own text where Median's has no printf placeholders (tbl2json.py): "%+d to Strength" with
+                # Median's function 1 (value first, then the text) reads "+5 %+d to Strength". Function 19 is D2R's
+                # own (the text formats the value itself).
+                if "%" in texts.get(r[pos], "") and r[fn] != "19":
+                    r[fn], r[val] = "19", ""
+                    r[neg] = r[neg] or r[pos]
+                    fixed += 1
+            write_tsv(p, h, rows)
+        missing = sorted(wanted - found)
+        self.report.append(f"\nadvanced stats (itemstatcost.advdisplay): {len(found)} stats listed ({len(always & wanted)} always, "
+                           f"the rest while not 0), Median's stat pages name {len(wanted)}; {fixed} get descfunc 19 for D2R's "
+                           "printf text" + (f"; not in the table: {', '.join(missing)}" if missing else ""))
+
     def tab_tables(self) -> None:
         """plugin/src/mxl_tabs.h: D2Sigma's formula function tabpoints(tab) (0x100a6a70 -> D2Skills.cpp 0x100aefe0) sums
         the base levels of the unit's class skills (D2Common 10044, the class skill list) whose skilldesc SkillPage is
@@ -1833,6 +1874,7 @@ def main() -> int:
     m.aura_tables()
     m.damage_tables()
     m.tab_tables()
+    m.advanced_stats()
     m.automap_tables()
     m.extra_calc_codes()
     m.formula_proxies()

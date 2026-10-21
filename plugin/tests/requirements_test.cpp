@@ -16,6 +16,7 @@ int RunHirelingsTests();  // hirelings_test.cpp
 int RunCombatTests();  // combat_test.cpp
 int RunItemsExtTests();  // items_ext_test.cpp
 int RunItemGenTests();  // item_gen_test.cpp
+int RunWaypointsTests();  // waypoints_test.cpp
 
 namespace {
 
@@ -126,6 +127,7 @@ int main() {
 	failures += RunCombatTests();
 	failures += RunItemsExtTests();
 	failures += RunItemGenTests();
+	failures += RunWaypointsTests();
 	std::printf(failures == 0 ? "requirements: all tests passed\n" : "requirements: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }

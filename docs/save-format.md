@@ -12,6 +12,13 @@ up first (`Saved Games/Diablo II Resurrected/mxl-manual-backups/`) and edit only
   holds a SHA-256 of the whole `.d2s` at +0x3c. After an edit update all four (checksum, size, save hash, then the
   body hash); a mismatch makes the character silently disappear from character select.
 
+## Waypoints ("WS")
+`WS`, u32 1 (version), u16 0x50 (size), then 3 x 24 bytes, one per difficulty: u16 `0x0102`, 5 bytes of Diablo II's 39 bits
+(little-endian, bit n = waypoint n), 17 spare bytes. D2R 3.3 keeps a 112-bit record: it reads and writes the first 16 bytes
+(header + 14 bytes = waypoint numbers 0-111; number n is bit `n % 16` of the u16 at +2 + 2 * (n / 16)) and writes zeros in the
+other 8. Median's numbers 50-90 are stored there like any other (docs/subsystems/areas-drlg.md, "Waypoints"); the `.d2rl`
+sidecar does not carry them. Bit 0 (Rogue Encampment) is set on every load.
+
 ## Character stats ("gf")
 16-bit stat id, then the value in itemstatcost **CSvBits** (Median: strength-statpts 11, newskills 9, level 8,
 experience 32, ...); the list ends with 0xffff.

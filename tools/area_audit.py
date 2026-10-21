@@ -30,7 +30,8 @@ IDMAP = ROOT / "work" / "named" / "idmap.json"
 
 MAX_LEVEL_ID = 0x10001          # D2R asserts levelDataTbl.size() < MAX_LEVEL_ID (0x330446)
 D2R_AUTOMAP_LEVEL_TYPES = 36    # AutoMap.txt names (plugin level_types.cpp)
-D2R_WAYPOINTS = 39              # waypoint numbers 0..38 fit the character file's bit field
+D2R_WAYPOINTS = 112             # the waypoint record keeps 112 bits (table 0x2389010; the save keeps all of them)
+PANEL_SLOTS = 9                # waypoint1..waypoint9 per act in actinfo.txt: the only levels the waypoint panel lists
 # Maze.cpp post-generation switch on the level type (0x3e69e0); any other type hits the default arm, which asserts and exits
 MAZE_LEVEL_TYPES = {3, 4, 7, 8, 10, 13, 14, 15, 17, 18, 19, 22, 23, 24, 25, 28, 32, 33, 34, 35}
 MAX_PRESET_FILES = 6            # LvlPrest File1..File6
@@ -149,6 +150,15 @@ def main():
     if sorted(type_ids) != list(range(len(types))):
         rep.add("PROBLEM", "lvltypes: Ids not contiguous", f"{len(types)} rows")
 
+    # waypoint panel: the levels named in actinfo.txt (the mod's, else D2R's)
+    wp_numbers = {}
+    panel_levels = set()
+    act_file = ex / "actinfo.txt" if (ex / "actinfo.txt").exists() else D2R_EXCEL / "actinfo.txt"
+    if act_file.exists():
+        for a in rd(act_file)[1]:
+            panel_levels.update(a.get(f"waypoint{k}", "") for k in range(1, PANEL_SLOTS + 1))
+        panel_levels.discard("")
+
     prest_by_level = defaultdict(list)
     for p in prest:
         lid = num(p.get("LevelId"), 0)
@@ -210,9 +220,15 @@ def main():
                 rep.add("PROBLEM", "levels: Warp points at a missing lvlwarp row", f"{tag} Warp{k}={wp}", sc)
             if vis is not None and vis in lv and not any((num(lv[vis].get(f"Vis{q}"), 0) or 0) == i for q in range(8)):
                 rep.add("WARN", "levels: one-way Vis link", f"{tag} Vis{k}={vis} ({lv[vis]['Name']}) does not link back", sc)
-        wpn = num(r.get("Waypoint"))
-        if wpn is not None and wpn != 255 and wpn >= D2R_WAYPOINTS:
-            rep.add("WARN", f"levels: Waypoint number >= {D2R_WAYPOINTS} (the character file stores 39)", f"{tag} Waypoint={wpn}", sc)
+        wpn = num(r.get("Waypoint"), 0)   # blank = 0
+        if wpn != 255:
+            if wpn >= D2R_WAYPOINTS:
+                rep.add("PROBLEM", f"levels: Waypoint number >= {D2R_WAYPOINTS} (past the waypoint record)", f"{tag} Waypoint={wpn}", sc)
+            if wpn in wp_numbers:
+                rep.add("PROBLEM", "levels: Waypoint number used twice", f"{tag} Waypoint={wpn} (also {wp_numbers[wpn]})", sc)
+            wp_numbers[wpn] = r["Name"]
+            if panel_levels and r["Name"] not in panel_levels:
+                rep.add("WARN", "levels: waypoint level with no button in the waypoint panel (actinfo.txt lists 9 per act)", f"{tag} Waypoint={wpn}", sc)
         for col in [f"{p}mon{k}" for p in ("", "n", "u") for k in range(1, 26)] + [f"cmon{k}" for k in range(1, 5)]:
             v = r.get(col, "").strip()
             if v and v.lower() not in mon_ids:
