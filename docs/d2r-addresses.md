@@ -545,6 +545,20 @@ The packet is `0x38 [kind u32][npc unit id u32]` (9 bytes) handled by **`0x4b047
 craft, catalyst, etc.) and return; otherwise call the original. The "Talk" line goes through the dialog-message packet and the quest wrappers
 (`0x4c33e0`, `0x516940`, section 3), not through `0x38`.
 
+### NPC actions lane (2026-10-21; plugin/src/npc_actions.cpp)
+
+| What | Address | Notes |
+|---|---|---|
+| Menu builder hook | `0x1147a0` | entry `40 55 53 57 41 54 41 56 48 8d ac 24 10 fc ff ff 48 81 ec f0 04 00 00` (23 bytes, no rip-relative). The loop adds `count - 1` lines; the Identify line (id 0xfb4) overwrites the record's `+4` with 3 or 2 on every build, so lines behind it vanish and a skipped Identify is never retried: the plugin keeps its lines in front of Identify and re-sets the count on each call |
+| Menu packet hook | `0x4b0470` | entry `40 55 53 56 57 41 54 41 55 48 8d 6c 24 d1 48 81 ec c8 00 00 00` (21 bytes). Packet: `u8 0x38, u32 kind, u32 npc unit id` (9 bytes). The NPC is found with `0x53b8f0(player, unit id, 0x32)` (distance 50), its class is `[unit+4]` |
+| Packet sender | `0xec730(u8 id, u32 a, u32 b)` | builds the 9-byte packet; `0xec820` is the 0x2e variant |
+| Cancel handler | `0x112c30` | closes the list widget (`0x1e9390`), clears `0x2a486a4`, calls `0x10de80(npc id)` and `0xc7d30(8)`; returns 1 |
+| Vanilla respec packet | `0x4b2530` = packet 0x39 (`CCMD_RESPEC`; 0x38 is `CCMD_SUBSCRIBE_TO_VENDOR`) | requires NPC table byte `+5`, and the quest `byte[+0x10] - 1` bit 1; then `0x580f20(game, player, 0)` and, when `+0x10 != 0`, `0x5d9ae0(game, player)` |
+| Respec | `0x580f20` | `0x4360f0` (skills: refunds into stat 5, `0x46f220`, `0x474d20`), `0x52ddf0` (stat points back to the charstats start values), `0x470c90` (equipment re-check), `0x2f3760`, `0x474d60`, `0x491960(player, 2, player)` |
+| Respec bookkeeping | `0x5d9ae0` | quest 41: sets bit 0, clears bit 1; if bit 0xf is clear the respec quest (a1q1 `+0x12`) is deactivated ("deactivated respec quest") |
+| Imbue / sockets / personalize panel | panel 0xd = `ImbueItemsPanel` (`0xc7aa0`) | client opener `0x1e3e20` (mode 1 at `0x2a96960`, then `0x1e5b20`), called by `0x10dd30` (an NPC-menu function) and from the server-to-client message handler `0x1e3c00` (byte `+5`: 0 open, 4, 5, 6/7 close). Class check `0x10d150` (current NPC class): 0x9a Charsi, 0x1ff Larzuk, 0x200 Anya. Server per-NPC checks `0x36aed0`, `0x36b410`, `0x36b1d0` |
+| Travel | client special line handler `0x1162f0` sends packet 0x37 with the NPC table `+0xc` destination | D2R's own; Median only adds the waypoint grant |
+
 ## 10. Gold stat changes and the client
 
 `0x2f7d10(unit, stat, value, layer)` and `0x2f5020` start with a 10-byte `jmp [rip+x]` (the D2RLoader / protection thunk) followed by the real body

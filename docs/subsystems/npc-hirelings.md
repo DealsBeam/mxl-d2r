@@ -143,6 +143,73 @@ a gossip hook; whether D2R 3.3 actually reads them is unknown (open question 3).
 | Cain's materials | | server: create item on request, requirement on inventory contents | one submenu |
 | Requirements | | the evaluator is shared with quests (another lane) | |
 
+### 1.5 Median's NPC menu actions: the list and the port (lane npc-actions, 2026-10-21)
+
+**The list** (npcext slots, 34 over 14 NPCs; npcactions rows; requirement rows are mxl_requirements.h, quest bit rows read
+the game's difficulty unless a difficulty is named; D2R string ids come from tools/npc_actions_data.py). Slots with sub = 10 are
+entries of the submenu that the top-level slot before them opens.
+
+| NPC (class id) | Label (Median string id, D2R id, text) | Requirement | npcactions row (type) | What Median does server-side | Port |
+|---|---|---|---|---|---|
+| Akara (148) | 11168 / 33257 "Reset Stat/Skill Points" | 26 = AND(8: quest 1 bit 0 Den of Evil done; 15: quest 41 bit 1 respec available) | 19 (14) | D2Respec.cpp `0xa2330`: refunds every skill point (stat 5), puts the stat points back to the class start values, re-checks equipment (same sequence as D2R's `0x580f20`) | **done** |
+| Cain, five classes (244, 245, 246, 265, 520) | 28640 / 40516 "crafting materials" (opens the submenu) | 31 = OR(27, 28, 29, 30) | 26 (3, text page) | none; the entries below | **done** (one line; see below) |
+| ... Cain sub 1 | 28641 / 40517 "horadric cube" | 27 = AND(10: quest 4 bit 0 Search for Cain done; 22: player lacks `box `) | 27 -> 15 (17) | creates `box ` at the player (quality 1, item level 1) | **done** |
+| ... Cain sub 2 | 28642 / 40518 "catalyst of disenchantment" | 28 = AND(10; 19: quest 6 bit 0 on Normal; 23: lacks `3o[ `) | 28 -> 16 (17) | creates `3o[ ` | **done** |
+| ... Cain sub 3 | 28643 / 40519 "catalyst of learning" | 29 = AND(10; 20: quest 13 bit 0 on Nightmare; 24: lacks `0o[ `) | 29 -> 17 (17) | creates `0o[ ` | **done** |
+| ... Cain sub 4 | 28644 / 40520 "catalyst of jewelcraft" | 30 = AND(10; 21: quest 25 bit 0 on Nightmare; 25: lacks `jcat`) | 30 -> 18 (17) | creates `jcat` | **done** |
+| Charsi (154) | 4017 / 28265 "imbue" | 16 (quest 3 bit 1) | 20 (11) | client: opens the imbue page, mode 1 | stub |
+| Larzuk (511) | 22748 / 22748 "add sockets" | 17 (quest 35 bit 1) | 22 (13) | client: opens the sockets page | stub |
+| Drehya / Anya (512) | 22749 / 22749 "personalize" | 18 (quest 38 bit 1) | 21 (12) | client: opens the personalize page | stub |
+| Warriv act 1 (155) | 3382 "go east" | 11 (quest 6 bit 0) | 23 (1) = rows 5 (8: travel to level 40) + 1 (16: continue) + 9 (15: waypoint 40) | grants the Lut Gholein waypoint, moves the player there | stub (D2R's own) |
+| Warriv act 2 (175) | 3383 "go west" | none | 4 (8) | travel to level 1 | stub (D2R's own) |
+| Meshif act 2 (210) | 3384 "sail east" | 12 (quest 14 bit 0) | 24 (1) = rows 6 (level 75) + 2 + 10 (waypoint 75) | Kurast Docks + waypoint | stub (D2R's own) |
+| Meshif act 3 (264) | 3385 "sail west" | none | 5 (8) | travel to level 40 | stub (D2R's own) |
+| Tyrael act 4 (367) | 22738 "travel to harrogath" | 13 (quest 28 bit 0) | 25 (1) = rows 8 (level 109) + 3 + 12 (waypoint 109) | Harrogath + waypoint | stub (D2R's own) |
+
+Everything else in npcactions is client-side confirmation: rows 13 (type 18, string 321) and 14 (type 20, string 3650) sit
+in front of every Cain item row and only show a client message; types 4-7, 9, 10, 21 are used by no slot. Charsi's
+mode 1, Anya's mode 3 and Larzuk's mode 2 in 1.2 are the client pages; in the data Charsi has type 11, Anya 12 and Larzuk 13.
+The Median-only NPCs (Atma, Geglash, ...) have no slots.
+
+**Why Cain is one line.** D2R's menu record allows five lines and the builder has no submenu. Median's page shows the entries
+whose requirement holds. The port shows one "crafting materials" line; the server gives every material whose row holds
+(cube after the rescue, each catalyst once its quest is done and while the player lacks it), so a Cain click is
+"give me what I am owed". A real submenu needs a second dialog page and is not worth it (open question 10).
+Item quality 1 in the rows is mapped to normal (2); the item level is the row's (1).
+
+**Why travel is a stub.** D2R already has the travel lines (client records 175 and 264: a special line with handler `0x1162f0`
+that sends packet 0x37 and reads the destination from the NPC table `+0xc`; Warriv act 1 and Tyrael talk through the dialog).
+Median adds only a waypoint grant and its own gating; both belong with the warp/lockout work, not with the menu.
+
+**Why Imbue / sockets / personalize are stubs.** D2R's `ImbueItemsPanel` (panel 0xd) is one widget for Charsi, Larzuk (0x1ff)
+and Anya (0x200), picked by the NPC class (`0x10d150`). The client can open it (`0x1e3e20` sets the mode and calls
+`0x1e5b20`; the NPC-menu function `0x10dd30` is the existing caller), but the server side of the panel (item drop,
+confirmation) checks the vanilla quest state (`0x36aed0`, `0x36b410`, `0x36b1d0` per NPC) and the reward is a one-time
+quest reward. Median's lines are repeatable under rows 16-18, so the server checks must be replaced first. Not done; the
+lines are not shown (a visible button that does nothing is worse than none).
+
+**Design (npc_actions.cpp, npc_actions_logic.h, mxl_npc_actions.h).**
+
+- `tools/npc_actions_data.py` turns npcext + npcactions into `mxl_npc_actions.h` (build.py step after sigma_data.py):
+  `Actions[31]`, `Slots[34]` with the D2R class id and the D2R string id of the label. Wire format: packet 0x38, kind
+  `0x10 + npcRow * 16 + slot` (the game uses kinds 1, 2, 3).
+- Client (hook `0x1147a0`, the menu builder): before the original runs, the NPC's record in the heap table is patched:
+  string id into the next free id slot, a handler pointer into the next free handler slot (at most five lines), before
+  "Identify" (0xfb4) when the record has it, count = lines + 1 on every call. The Identify branch of the builder writes the
+  count (2 or 3) back into the record, which would drop lines behind it, hence the re-set on every call and the position.
+  Handlers are 16 thunks (`LineHandler<I>`), each sends `0x38 (kind, current NPC id)` through `0xec730`, then calls the
+  Cancel handler `0x112c30` to close the menu. Only the lines the server can run are drawn.
+- Server (hook `0x4b0470`, the packet 0x38 handler): size 9 and kind >= 0x10 are Median's; the NPC unit must be within 50
+  of the player (`0x53b8f0`, the original's own check), the NPC's class must own the slot, then
+  `mxl_requirements::Evaluate` (quest bit through `0x325c50` on the player's quest record of the game difficulty, class,
+  item through `0x441980`) and the action: create item via `0x517530` (as the Act 1 quests do), respec via `0x580f20` and
+  then `0x5d9ae0` (what the vanilla respec packet `0x4b2530` does: the reset, then quest 41 loses bit 1 and the respec
+  quest is deactivated, so the respec is used up exactly as in D2R). Every outcome (not found, denied, done, nothing,
+  stub) goes to the log with the kind and the NPC class.
+- Requirement rows are not drawn on the client (the realm rule: Median logic is server-side). A line can therefore show
+  while its requirement fails; the server then logs "requirement not met" and does nothing. Known cost; a server-to-client
+  visibility message would fix it.
+
 ## 2. Hirelings
 
 ### 2.1 Data
@@ -227,9 +294,9 @@ only a name string key per hiredesc row (`strhirespecial1..9`), already used by 
 | NPC store init | 0x10093710, 0x10093fb0 | D2Game NPC init from npc.txt and the item vendor columns | to find |
 | Restock | 0x10093a30 | D2Game NPC inventory fill (item level, qualities) | to find |
 | Gamble selection | 0x100933d0, 0x10093e50 | D2Game gamble list (gamble.txt) | to find |
-| Open trade / gamble / menu slot packets | 0x1009a850 (0x38-style NPC packet), 0x1009a9d0 | D2Game packet handlers for NPC trade and hire | to find |
+| Open trade / gamble / menu slot packets | 0x1009a850 (0x38-style NPC packet), 0x1009a9d0 | D2Game packet handlers for NPC trade and hire | `0x4b0470` (hooked by npc_actions.cpp: kinds >= 0x10) |
 | Click on a unit | 0x1006aef0 and small ones | D2Game interact handler | n/a |
-| NPC menu build (client) | 0x10107b40, 0x10107400 (`ui\NpcMenu.cpp`) | D2Client NPC menu (Talk, Trade, Gamble, Hire, ...) | to find |
+| NPC menu build (client) | 0x10107b40, 0x10107400 (`ui\NpcMenu.cpp`) | D2Client NPC menu (Talk, Trade, Gamble, Hire, ...) | `0x1147a0` builder, table `0x2a48830` (hooked by npc_actions.cpp) |
 | Greeting and idle lines | 0x100484a0, 0x10048660 | D2Client/D2Game NPC speech by class | to find |
 | Hire, hire test | 0x100672a0, 0x10067220 | D2Game hire merc (cost, level limits) | to find |
 | Equip test for mercenary | 0x1007e470 (D2Items.cpp) | D2Common item requirement test for the merc's class | to find |
@@ -292,6 +359,8 @@ only a name string key per hiredesc row (`strhirespecial1..9`), already used by 
 8. Cain rows 244, 245, 246, 265, 520 all share the same five slots: which Cain appears in which act and whether D2R's
    Cain has the same monster ids (monstats rows 244-246, 265, 520 in the converted data).
 9. 0x10067e20 (stat layer scaling by count): which minions it applies to.
+10. A real Cain submenu (one entry per missing material, as Median draws it) needs a second menu page; D2R has no such widget in the NPC menu. Worth it only if the one-line "give what I am owed" feels wrong.
+11. Imbue / sockets / personalize: what must change on the server side of D2R's ImbueItemsPanel (per-NPC checks `0x36aed0`, `0x36b410`, `0x36b1d0`, one-time quest reward) so Median's repeatable lines can use it; then the client opener (mode 1, `0x1e3e20` and `0x1e5b20`) is the line handler.
 
 ## Hireling data check (2026-10-21)
 
