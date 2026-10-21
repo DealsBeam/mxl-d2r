@@ -1,0 +1,260 @@
+# Items, runewords, sets and experience (research + port lane, 2026-10-21)
+
+Source: `D2Sigma.dll` (1.10, base 0x10000000, Ghidra read-only copy), tables from `work/named`, `work/sigma`, the D2Game
+1.13c copy for what Median replaced, and the D2R dump (image 0x6ab3782c, RVAs relative to the base) for the other side.
+Addresses are D2Sigma RVAs (`0x7e470` = VA `0x1007e470`) unless marked D2R. Format follows
+[ubers-events.md](ubers-events.md) and [npc-hirelings.md](npc-hirelings.md). Confidence tags: **read** (decompiled and
+checked against the call sites), **inferred** (the function is clear, the game meaning is a reading), **open**.
+
+Modules: D2Experience.cpp is one function plus its penalty helper; D2Runeword.cpp is one matcher; D2SetItems.cpp is four
+count helpers; the item modules are D2Game's code compiled into Sigma with a handful of Median changes.
+
+## Short version
+
+- **D2Sigma is D2Game + D2Common merged into one DLL, patched into 1.13c.** Besides the 520 D2Game patch records
+  (docs/d2r-addresses.md Appendix B) there is a second table at VA `0x10173b90` of the same 5-dword records
+  `{rva, 0, value, flag (0 constant / 1 rel32), module}` for the other modules (module 5 and 3 appear; which is
+  D2Common / D2Client is **open**). The item functions below are reached through those records: the requirement check
+  (`0x7e470`) from module-5 RVA `0x26db0`, the runeword matcher (`0xa2b60`) from module-5 `0x26ba0`, the item colour
+  (`0x7e6d0`) from module-5 `0x213fd`, `0x2155e` and four module-3 sites.
+- **Most of these modules are vanilla.** The packet handlers of D2ItemActions.cpp, the four set counters of
+  D2SetItems.cpp and half of D2ItemEventFunc.cpp are 1.13c with extra anti-hack log lines or immunity checks; D2R has its
+  own server for those. What Median really changed is five things (section 8): the **runeword table** (13 property
+  slots instead of 7, **Jewel padding** of the rune list), the **kill-experience penalty**, the **party split of kill
+  experience**, a handful of **item event functions** (ids 11, 12, 32, 33, 34 and the monster immunity checks of 15/16)
+  and the **item generation** details (ethereal roll, socket roll, item level 100+).
+- **Shipped here** (plugin `items_ext.cpp`, `tools/items_data.py`, off words `runewords` and `xp`, no version bump):
+  runeword properties 8-13 (197 of 237 runewords had lost properties), Jewel padding in the runeword matcher, and the
+  kill-experience penalty. Everything else is classified in the tables and left for the next lane with a spec.
+- **Nothing in these modules gates the ubers or the endgame areas** (that was ubers-events.md). The generator keeps
+  1.13c's branch for item level above 99 (ethereal roll) but with Median's own roll (`0x7e120`).
+
+## 1. Function table
+
+Bucket: **a** data-only, **b** D2RLoader service, **c** native hook, **d** UI, **e** cut / D2R covers it. Status:
+**done** (ported or already data), **shipped** (this lane), **open**.
+
+### D2Experience.cpp (region 0x5e7b0..0x5e940)
+
+| Address | What it does | Bucket | Status | Content that depends on it |
+|---|---|---|---|---|
+| 0x5e7b0 | kill experience penalty for the level gap (formula in section 2). **read** | c | **shipped** (`xp`) | every kill; all of Median's leveling, the high-level farming areas |
+| 0x5e900 | thunk (ecx/edx shuffle) that replaces the 1.13c call at D2Game `0xdc076`. read | c | n/a (D2R: hook the callee) | |
+| 0x5e830 | party experience: collects the party members in range (D2Multiplayer callback `0x8f7f0`, up to 18), then for each gives `D2Game 0xdc030(xp, member, level)` (the per-player award with level cap and the +x% bonus) and `0xde6d0` (send). No division by the party size. Replaces the 1.13c function `0xde8f0`, which splits by weights (`__adj_fdiv` / ftol, single player short-circuit). **read; the split rule of 0xde8f0 is inferred from its shape** | c | open (multiplayer only; solo is identical) | parties / the test realm |
+| 0x5e910 | thunk for the call above (D2Game `0xde8f1`). read | | | |
+
+### D2ItemActions.cpp (0x6f240..0x70080)
+
+| Address | What it does | Bucket | Status | Content |
+|---|---|---|---|---|
+| 0x6f240 | item spell 18 (containers): absorb matching items from the inventory into the clicked container (`gc01..` arcane shard containers), caps from `misc.txt len` | c | done (`item_spells.cpp`) | Median's shard containers, currencies |
+| 0x6f460 | destination page of a quick move from the page the item is on (inventory / stash / cube / belt), returns 1/2/3/4 or -1; caller is the inventory screen (client) | d | n/a | |
+| 0x9a720 | not in the module list but their dispatcher: client packet, action byte +1 picks the handler, item id at +2, NPC id at +7 | | | |
+| 0x6f500 | action 0: move the item to a free inventory spot, resend the grid. inferred | e | n/a (D2R's server) | |
+| 0x6f790 | action 1: move the item into the cube; logs "moved an item to cube from outside of town with no cube in inventory" (hack log) | e | n/a | |
+| 0x6fd80 | action 2: move the item to the stash; logs "... to stash from outside of town" | e | n/a (D2R shared stash) | |
+| 0x6ffd0 | action 3: sell the item to the vendor (id at +7); logs "sold an item to vendor from outside of town" | e | n/a | |
+| 0x6fb30 | action 4: move the item to the inventory from stash / cube | e | n/a | |
+| 0x70080 | list iterator helper | | | |
+
+The anti-hack lines and the "town only" checks are the only Median additions; the 15 x 10 cube / 14 x 14 stash grids are
+data (inventory.txt, `inventory_sizes` in txt_migrate.py).
+
+### D2ItemEventFunc.cpp (0x7d570..0x7df20)
+
+The functions are the `itemeventfunc1/2` columns of itemstatcost.txt. Sigma's table is at VA `0x101d94e8 + 4 * id`
+(ids from the table positions: 0x1d9500 = id 6, 0x1d9534 = id 19, 0x1d9560 = id 30 agree with the data below). Median's
+data uses ids 6-21, 28-31, 33 and 34; D2R's own itemstatcost uses 6-10, 13-21, 28-31.
+
+| Id | Address | What it does | Status |
+|---|---|---|---|
+| 6, 10, 11, 12, 32 | 0x7d920, 0x7d760, 0x7d680, 0x7d5a0, 0x7d840 | "attacker takes damage" family: physical (target stat 0x24), lightning (0x29), fire (0x27), cold (0x2b), magic (0x25). Skips targets with flag `0x10000`, dead / inert modes (player 0 and 0x11, monster 0 and 0xc) and monsters whose resistance is 100 or more; then builds a 0x70-byte damage block from the stat and applies it. read | 6 and 10 are 1.13c's; **11, 12 and 32 are not in D2R's data**; Median's data uses 11 and 12 (attacker takes fire / cold damage). Whether D2R's table has code for them is **open (check in game)** |
+| 15, 16 | 0x7de40, 0x7db40 | open wounds / crushing blow: skip monsters with stat 0xbd (Median-only monster stat, D2R 373: immune to both), else call 1.13c's function | open, c; D2R applies them to everything |
+| 18 | 0x7db90 | wraps 1.13c's "heal after demon kill": nothing for dead / inert units | vanilla enough |
+| 19 | 0x7df20 | slow: amount from the stat, capped at 50 for players; monsters: 25 when the unit flag `0x100bf030(0xc)` or the monster record flag `0x40` is set (meaning of both open, probably bosses), 50 for the flag of `0x100bf9e0`, else 90, and 50 when `0x100bf030(2)` and the amount is above 50; then stats 0x44 and 0x45 (attack rate, other anim rate) are lowered by the amount. read, meaning of the flags inferred | caps differ from 1.13c? **open**; D2R's value unknown |
+| 28 | 0x7dbf0 | life per kill: `min(stat * 256, maxhp - hp)` when at least 1 life, through the owner chain (a pet's kill credits the player), then stat update 0x97. read | vanilla shape; owner chain **open** in D2R |
+| 30 | 0x7da00 | chance to cast a skill on an event: stat -> skill and level, event table `0x101df948`. read | vanilla |
+| 33 | 0x7dd40 | flat life on an event for players, not while the unit is in state 92 (`death_delay`); same arithmetic as 28. read | Median-only id (itemstatcost row 33's help text "item_absorb_slash_percent" is a renamed row) |
+| 34 | 0x7de90 | wrapper of 30 with the same player-only / state-92 gate ("chance to cast on kill") | Median-only id |
+| | 0x7d570 | small helper (`rand` style, -1 on failure) | |
+
+Native port of 33 / 34 and the monster-immunity checks needs D2R's event table (the 8-byte function table is not found;
+the dispatcher is reached from the property function `0x3d4620`). Only 1 + 1 stats use ids 33 / 34.
+
+### D2ItemGeneration.cpp, D2Items.cpp (0x7e0f0..0x7e8c0)
+
+| Address | What it does | Bucket | Status | Content |
+|---|---|---|---|---|
+| 0x7e0f0 | byte 0 of the qualities row for a quality below 10 (`work/sigma/qualities.txt`, 5-byte rows [0] used here, [1] 1 for qualities 1-3 = runewords allowed (section 3), [2] 25 for most qualities, [4] 1 from quality 5) | a | open | |
+| 0x7e120 | Median's ethereal roll after generation: items with durability (`0x7fff0`: base flags, stat 0x49 non-zero, not indestructible stat 0x98) of item type 45 or 50: if a 1000-sided die passes, or the item is already ethereal, or the generator flag 4 is set, `0x7fdd0` makes it ethereal (flag `0x400000` set, `0x100000` cleared, +25 percent on type 45's five stats or on stat 0x1f) and durability and maximum durability become 75 percent (minimum 1). inferred | c | open | ethereal drops |
+| 0x7e3b0 | thunk for 7e120, patched over the call at D2Game `0x10c88`: 1.13c's own branch of the generator `0x10a20` for item level above 99. read | | | |
+| 0x7e240 | Median's version of the call 1.13c makes for quality 1-3 items at D2Game `0x106b0` / `0x10ca9` (old target `0x6fc2ec90`): looks like a socket roll (base flag `+0x137`, quality row byte 4 clear, generator flag 8 clear, a time-seeded `rand`, then `0x800b0` writes stat 0xc2 clipped to the base's maximum). inferred (the arithmetic `rand() / 7` is odd) | c | open | sockets on normal items |
+| 0x7e3c0, 0x7e3e0 | pick one of two 1.13c functions by the flags `0x1000000` / `0x10000000` (thunks to D2Game) | | | |
+| 0x7e400 | qualities row accessor (table at +0x68, 5-byte rows) | a | n/a | |
+| 0x7e450, 0x7e830 | read / set-clear a mask in the item data flags (+0x18) | | | |
+| 0x7e470 | **item requirement check** `(player, item, &strOk, &dexOk, &lvlOk)`: strength, dexterity and level against the item's requirements (`0x7ff70` / `0x7fef0`: record values plus stat 91 `item_req_percent`, minus 10 when ethereal), then **Median's class lock**: item stat 463 (D2R 492) gives class + 1; the player must be that class, and the base's class requirement (7 = none) must match too; a second branch for the other unit kind (`0x100bf9e0`) checks the same two conditions against the base class from the item type table. read | c | open | the 14 cube recipes `properties_422` (7 classes x 2: unique conversions that lock an item to a class). D2R keeps stat 492 but nobody reads it |
+| 0x7e670 | pack a 1-4 character code into a dword, padding spaces | | n/a | |
+| 0x7e6c0 | colour index clamp: 1..21 -> 0..20, else 0 | | | |
+| 0x7e6d0 | item colour: if stat 183 (D2R 368) is above 0 the dye (1..21) is the palette index, else 1.13c's. Patched at 2 module-5 and 4 module-3 sites. read | d | open (item_spells.cpp sets the stat; whether D2R paints with it is **untested**) | dyes (bug #11) |
+| 0x7e750 | weapon Strength / Dexterity damage bonus of an item record (u16 at `+0x106` / `+0x108`, 1 means 100), default 50 for non-items; used by the damage code (`0x8adac`, `0x8ade4`) | a | n/a (the other lane's D2Damage; the columns are in weapons.txt) | |
+| 0x7e7d0 | bit 2 of the item record's flags dword `+0xdc` (assert D2Items.cpp 0x19c); patched at D2Game `0x11e8f` / `0x4ee05` | | | |
+| 0x7e860 | range check on the sets table | | | |
+| 0x7e880 | range check on the items table | | | |
+
+### D2Runeword.cpp (0xa2a70..0xa3130) and D2SetItems.cpp (0xa5580..0xa5960)
+
+| Address | What it does | Bucket | Status | Content |
+|---|---|---|---|---|
+| 0xa2b60 | **runeword matcher** (section 3). read | c | **shipped** (Jewel padding, `runewords`) | all 237 runewords, Jewelwords |
+| 0xa2a70, 0xa2ab0, 0xa2b30 | list equality, push, constructor (MSVC `std::list<int>`) | | | |
+| 0xa30e0 | runes row `n` (stride 0x180, 13 property slots) | a | n/a | |
+| 0xa3130 | compares two lazily evaluated optional values (unit callbacks) | | | |
+| 0xa5580 | the stat list of a unit that carries set `n` (list type 5) | e | n/a | set bonus tooltips |
+| 0xa55f0 | does the player own the set's item `idx` (other than the one shown): tooltip colouring of the "other pieces" | d | n/a (D2R colours them) | |
+| 0xa5710 | the player owns item row `n` of a set (unit scan lambda `0xa5960`) | d | n/a | |
+| 0xa57f0 | number of the set's items the player wears (loops the 6 slots at `+0x110`, unit scan lambda `0xa59c0`) | e | n/a | set bonuses (D2R counts the same way) |
+| 0xa57b0, 0xa58e0 | bounds checks of the sets / setitems tables | | | |
+
+Sets need no code: `split_large_sets` already moves items 7+ of Orphan's Call into "(2)" sets; the other sets fit 6.
+
+## 2. Experience
+
+Median (`0x5e7b0`, called as `xp = f(xp, playerLevel, monsterLevel)`): symmetric, no free pass for stronger monsters.
+
+| Gap g = abs(plvl - mlvl) | share |
+|---|---|
+| 0..5 | 100% |
+| 6 and up, plvl below 100 | (15 - g) * 10 %, 3% at g = 15 and above |
+| 6 and up, plvl 100 or more | (10 - g) * 20 %, 3% at g = 10 and above |
+
+The result is `xp * share / 100` (64-bit product, truncated). 1.13c (`D2Game 0xdaa40`) and D2R (`0x44fef0`) use two
+11-entry tables in 1/256 steps (D2R `0x1d1ac38`: monster below the player, 100% up to a gap of 5 then 81, 62, 43, 24, 5%
+from a gap of 10; `0x1d1ac68`: monster above the player, only for player level below 25: 88, 68, 36, 15, 2%), flat from
+a gap of 10, and a level-25+ player gets a **bonus** from stronger monsters (`0x44a0b0(xp, plvl, mlvl)`, which I read as
+`xp * mlvl / plvl`; not verified). So in D2R an endgame player gets 5% from every low monster where Median gives 90% at
+gap 6 falling to 3% at gap 15, and from a monster 20 levels above D2R pays more than full experience where Median gives 3%.
+
+Shipped: hook of `0x44fef0` (rcx player level, rdx monster level, r8d experience, called once from the kill function
+`0x44ece0`); `items_ext_logic.h` `XpSharePercent` / `PenalizedXp`, 12 test lines. The caller clamps the experience to
+0x7fffff and compares the player with the class's maximum level first, as 1.13c does; Median's `experience.txt` rows
+(99 levels) are data.
+
+## 3. Runewords
+
+D2R side (verified in the dump): the table is a vector `{records, count}` per data bank (`0x3143b0(dataFlag)`), records of
+**0xe8** bytes: `+0x44` row in use, `+0x4a` 6 x int16 item types it fits, `+0x56` 3 x int16 it does not fit, `+0x5c`
+6 x int32 item class ids of the runes, `+0x74` 7 x `{prop, param, min, max}`. The matcher is `0x372260(item)`
+(returns the record or null; 15 callers: socketing, loading, tooltips, `0x3d44c0`); the properties are applied by
+`0x3d44c0(item, owner)`: runeword record -> item flag `0x4000000` -> stat list state `0xab` flags `0x40` -> the seven
+properties through `0x3d4620(6, item, owner, 0, index, 0, &prop, 0xab, 0x40, 0)` -> `0x2f3d00` (finish) with
+D2RLoader's snapshot pair `0x2f8120/0x2f8290/0x2f81a0` around it. `0x3d3670` is the general "apply mods of kind"
+function (kinds 0-5: affixes, unique `0x15c`-byte records with 12 properties at `+0x98`, set items with 9 + 10 bonus
+properties, ...); the runeword is not among its callers.
+
+D2Sigma side (`0xa2b60`, records of 0x180 bytes: `+0x86` 6 itypes, `+0x92` 3 etypes, `+0x98` 6 runes, 13 property
+slots): the same rules as 1.13c (all sockets filled, rune ids in order, an excluded type rejects, one included type
+accepts) plus
+
+1. **Jewel padding.** The record's rune list is padded at the **front** with the class of the first rune of row 0
+   (Jewelword1's `jew`) up to the number of sockets, then compared with the socketed items in socket order. A 1-rune
+   runeword on a 3-socket item works with `[jewel, jewel, rune]`.
+2. Quality: the qualities table byte 1 (low, normal, superior only) or item stat 294 > 0. No data sets stat 294 (it is
+   the renamed row `item_regenstamina_bytime`; with it the runeword's runes must not exceed that rune level). D2R rejects
+   qualities 4-9 in the matcher, which is the same rule.
+3. The base's flag `+0x12a` (D2R `+0x13a`) forbids runewords on the base.
+
+**What was lost and what is shipped.**
+
+- Properties 8-13: 197 of the 237 runewords have them (630 properties, e.g. Gehenna: `kill-skill` and `ltng-fx`);
+  `txt_migrate` kept them in `work/mod/overflow/runes.txt` and D2R's record cannot hold them. `tools/items_data.py`
+  writes `plugin/src/mxl_runewords.h` (row, first rune's item code, up to 6 properties with D2R property rows and
+  migrated skill / monster parameters), `items_ext.cpp` hooks `0x3d44c0` (entry `40 55 57 41 57 48 83 ec 60 4c 8b fa 48
+  8b f9`, no rip-relative) and applies them after the seven with the same call, list and snapshot. The record is found
+  by `(record - table) / 0xe8`; a row is only extended when the first rune of the live record has the item code
+  the generator saw (`refused` counts the others), so a differently ordered table cannot get wrong properties.
+- Jewel padding: hook of `0x372260` (entry bytes `48 89 5c 24 10 48 89 74 24 18 48 89 7c 24 20 55`): the original runs
+  first; when it finds nothing the same checks run with a padded list (`PaddedRunesMatch`): item type 4, quality not 4-9,
+  base flag `+0x13a` clear, every socket filled, then each row in use, its excluded types, its included types (item data
+  flag bit 31 skips the type checks, as in D2R). Rows made only of Jewels are not padded: Sigma pads every row, which
+  makes Jewelword1 (row 0) match every all-Jewel item and leaves Jewelword2-6 dead; the exact match keeps counting the
+  Jewels. The matcher returns the record of the *unpadded* runeword, so item names, the saved runeword id and the
+  properties are the same as for an exact socketing.
+
+## 4. Sets
+
+D2SetItems.cpp has four helpers (count worn pieces of a set, a piece's presence, the stat list of a set) over 1.13c's
+6-slot set record (`+0x110`); D2R does the same. Median's sets are data only: no `setitems` / `sets` columns overflow,
+Orphan's Call is split. Nothing to port. Tooltip colouring of the other pieces is the client (D2ItemDesc).
+
+## 5. Item colour, generation and flags (not shipped)
+
+Specs for the next lane:
+
+- **Class lock (0x7e470).** Hook D2R's requirement check (the function that reads `item class requirement` and the three
+  `StatStrReq/Dex/Level` values; not located yet, `0x376de0` is only the level requirement and has 3 callers) and deny
+  when `GetStat(item, 492)` is non-zero and not class + 1. Only 14 recipes set it.
+- **Dye paint (0x7e6d0).** Check in game whether a dyed item changes colour in D2R (stat 368 holds 1..21).
+- **Ethereal and sockets (0x7e120, 0x7e240).** The two D2Game call sites differ; D2R's analogue is the generator function
+  behind `0x43cd50`/`0x43d530` (docs/d2r-addresses.md). Compare the ethereal and socket rates in game before porting.
+- **Immunity checks and ids 11 / 12 / 32 / 33 / 34 (item events).** Find D2R's event function table first.
+- **Party experience (0x5e830).** Find the multiplayer branch of the kill function `0x44ece0` (the share loop) and give
+  every member in range the full award instead of a split.
+
+## 6. D2R addresses found here
+
+| What | D2R RVA | Notes |
+|---|---|---|
+| runeword apply | `0x3d44c0` | `(item, owner)`; 1 when applied; entry above |
+| runeword matcher | `0x372260` | `(item)` -> record or null |
+| runes table | `0x3143b0(dataFlag)` -> `{records, count}`; record 0xe8 | layout in section 3 |
+| property apply | `0x3d4620` | types: 3 unique, 4 set item, 6 runeword (1 property per call), 0/1/2/5 affixes |
+| kill experience penalty | `0x44fef0` | `(plvl, mlvl, xp)`; tables `0x1d1ac38`, `0x1d1ac68` (11 x int32, 1/256) |
+| kill experience function | `0x44ece0` | caller of the above; clamps the experience to 0x7fffff |
+| item data | `0x34a500(item)` | `+0` quality, `+0x18` flags |
+| item type test | `0x373890(item, type)` | |
+| item inventory (sockets) | `0x34a360`, `0x388c10`, `0x38aab0`, `0x38aba0` | (unit, file, line), first node, node unit, next node |
+| unit data bank | `0x34a0e0(unit)` -> byte | `unit + 0x1bd` |
+| stat list lookup | `0x2f5b80(unit, state, flags)` | state 0xab = runeword |
+| item flag set | `0x36d8f0(item, mask, on)` | `0x4000000` runeword |
+
+## 7. Tools
+
+`tools/ghidra_scripts/ListFuncs.java` (functions in an RVA range), `ScanStarts.java` (16-aligned starts after INT3
+padding: with `-noanalysis` the Sigma project knows only some of the functions), `ByteCallers.java` (rel32 and absolute
+references by raw bytes, which finds callers in code Ghidra did not disassemble), `DumpDwords.java` (the patch tables).
+`DecompOut.java` creates the function at an address, so a start from `ScanStarts` is enough.
+
+## 8. Summary of the work
+
+| Piece | Bucket | Where it stands |
+|---|---|---|
+| Runeword properties 8-13 | c + data | shipped: `items_data.py`, `items_ext.cpp` |
+| Runeword Jewel padding | c | shipped |
+| Kill experience penalty | c | shipped |
+| Party experience split | c | open (multiplayer) |
+| Item events 11/12/32/33/34, immunity of 15/16 | c | open (D2R event table) |
+| Class lock stat 463 | c | open (14 recipes) |
+| Ethereal / socket / ilvl 100 generation | c | open (compare in game) |
+| Dye colour | d | open (check in game) |
+| Item actions, sets | e | D2R covers them |
+
+## 9. In-game checks (none done)
+
+1. `mxl` shows `items on: ...` with both hooks "hooked"; each failure names the entry that differed.
+2. Make Gehenna (or any runeword whose row has extras, e.g. rows 6-11) and read the tooltip: the lines of slots 8-13
+   must be there; `mxl` counts `runewords with extra properties`; the log prints the first six (`row`, `7 + n properties`).
+3. A 1-rune runeword on a 3-socket base with two Jewels in the first two sockets: it must complete; with the Jewels
+   behind the rune it must not. `found by Jewel padding` counts them. Jewelword rows must keep counting their Jewels.
+4. Kill a monster 10 levels below the player at level 60 (expect half the experience of an equal-level kill), 20 levels
+   below (3%), and one 10 levels above at level 60 (50% in Median; D2R's bonus would pay about 117%).
+5. `mxl-core-off.txt` with `runewords` and `xp` restores D2R's behaviour.
+
+## 10. Uncertainties
+
+- The compiled item event ids (the base 0x101d94e8 comes from three matching positions, the behaviour of 11, 12, 32 in D2R
+  is unknown).
+- The `0x7e240` socket arithmetic and `0x7e120` die are read from decompiler output with register arguments; treat as
+  inferred.
+- Whether D2R's inline hook relocates the `jg rel32` that follows the first 9 bytes of `0x44fef0` (the SDK source is
+  not in the repository); if the hook crashes on the first kill, `xp` in `mxl-core-off.txt` removes it.
+- Whether Jewelword1 shadowing is Median's behaviour or a side effect; the port keeps the counting rows.
