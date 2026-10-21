@@ -585,6 +585,7 @@ def start(timeout=120):
 def stop(timeout=20):
     pids = game_pids()
     if not pids:
+        harness_switch(False)  # also when the game already ended: normal play never runs with the harness on
         log("not running")
         return
     h = find_window()
