@@ -619,7 +619,7 @@ mode == 0 (after a mode 10-12 state test):  ai = u16 monstats[+0x52]
                                             return (0 <= ai < 0x9b) ? 0x2396e90 + ai*0x20 : 0x2396e90   // out of range = "None"
 mode != 0:                                  return 0x23981f0 + mode*0x20
 ```
-So a monai row at index 155 or higher (Median's `andariel_ai` as txt_migrate appends it) runs entry 0, whose think function `0x78d20` is a bare `ret`.
+So a monai row at index 155 or higher (Median's `andariel_ai` as txt_migrate appends it) runs entry 0, whose think function `0x78d20` is a bare `ret`. `plugin/src/monster_ai.cpp` detours the getter (entry bytes above, 15 bytes = 4 whole instructions) and, when it returns entry 0 for a monster whose `+0x52` is 155, returns its own `{1, 0, think, 0}` entry. Init (`+8`) is `init(game, unit, args)` with `ctl = *args`; entry 83 (MosquitoNest) gets one written by the plugin (`0x23978f8`).
 The tables are plain `.data` pointers; entries 0-154 line up one to one with `monai.txt` rows 0-154 (checked by name: Idle 1, Summoner 53,
 Hireable 61, FetishShaman 65, MosquitoNest 83, Nihlathak 128, ColBarbFrenzy 154) and the table ends exactly where the mode table begins
 (`0x2396e90 + 0x9b * 0x20 = 0x23981f0`), so it cannot grow in place.
@@ -646,8 +646,9 @@ Game frame `game+0x170` (Sigma `+0xa8`). Random: seed pointer `0x34a1e0(unit)` (
 | `0x4a6d10` | wait `(game, unit, frames)`, 0 frames = 1 | `0x4b270` (D2AI.cpp:0xb4) |
 | `0x4a7bc0` | use skill `(game, unit, u8 mode (< 0x10), skill id, target unit, x, y, flag)`; refused -> waits 10 | `0x4b310` (:0x116) |
 | `0x4a7df0` | move away / flee `(game, unit, target, u8 mode, n)` | Sigma thunk `0x422e0` |
-| `0x4a78e0` | set a mode action `(game, unit, mode, target)` | Sigma thunk `0x422c0` |
-| `0x595f80` | nearest suitable target `(game, unit, &u8 difficulty, 0)` | Sigma `0x41c50` (returns the distance too) |
+| `0x4a78e0` | set a mode action `(game, unit, mode, target)`: mode 4 = attack, 8 = the S1 "charge" (D2R's AIs call it with 8 at `0x5ae373`) | Sigma thunks `0x422c0` / `0x422e0` |
+| `0x595f80` | nearest suitable target `(game, unit, int* outDistance, u32* aux) -> Unit*` (`outDistance` = `0x7fffffff` when none; `aux` 0 is fine; verified in the Summoner and in `andariel_ai`'s port) | Sigma `0x41c50` (`(unit-in-eax) (&distance, 0)`) |
+| `0x4a7270` / `0x4a8740` | walk towards a target: `0x4a7270(unit, 1, 0, 0)` then `0x4a8740(game, unit, target, 7)` (D2R's Andariel think ends with exactly this) | Sigma `0x4b110` `AiMove(.., target, 2, 0, 0, 1, 7)` |
 | `0x5a0b80` | Summoner AI init (Act 2 quest 5 hook, `Quests\a2q5.cpp`) | Sigma `0x41c70` |
 | `0x4a3680` | the **Idle** think: `if room: wait(200)` | `0x4a210`: `wait(250)` |
 | `0x5af320` | alt think of Hireable, FetishShaman, Nihlathak, mode 4: clear state 0xc, AiSet, wait(1) | `0x4a280`, identical |

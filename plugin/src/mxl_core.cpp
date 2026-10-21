@@ -26,6 +26,7 @@
 #include "quests_act2_5.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
+#include "monster_ai.h"
 #include "hirelings.h"
 #include "items_ext.h"
 #include "item_gen.h"
@@ -64,6 +65,7 @@ char g_questsReport[192] = "off: not the expected game image";
 char g_quests2Report[224] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
 char g_goblinsReport[192] = "off: not the expected game image";
+char g_monsterAiReport[192] = "off: not the expected game image";
 char g_npcReport[256] = "off: not the expected game image";
 char g_hirelingsReport[192] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
@@ -97,7 +99,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags quests quests2 lockout goblins npc reqgates hirelings skilltree combat props runewords xp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags quests quests2 lockout goblins medianai npc reqgates hirelings skilltree combat props runewords xp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -190,6 +192,12 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		char status[160] = "";
 		GoblinsStatus(status, sizeof(status));
 		std::snprintf(line, sizeof(line), "goblins %s | %s", g_goblinsReport, status);
+		Say(command, line);
+	}
+	{
+		char status[256] = "";
+		MonsterAiStatus(status, sizeof(status));
+		std::snprintf(line, sizeof(line), "monster ai %s | %s", g_monsterAiReport, status);
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "skill tree %s", g_skillTreeReport);
@@ -366,6 +374,12 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallGoblins(context, g_goblinsReport, sizeof(g_goblinsReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: goblins %s", g_goblinsReport);
+			context->LogInfo(line);
+		}
+		{
+			// "medianai" off: AI 155 stays alive with D2R's Andariel think; Summoner and MosquitoNest stay D2R's.
+			InstallMonsterAi(context, !Off("medianai"), g_monsterAiReport, sizeof(g_monsterAiReport));
+			std::snprintf(line, sizeof(line), "mxl-core: monster ai %s", g_monsterAiReport);
 			context->LogInfo(line);
 		}
 		{
