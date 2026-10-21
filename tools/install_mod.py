@@ -32,21 +32,45 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", default=DEFAULT_GAME)
     ap.add_argument("--name", default="MedianXL")
+    ap.add_argument("--slot", help="game slot 1..3 or 'all' (tools/game_slots.py); overrides --game")
+    ap.add_argument("--savepath", help="save folder name written to modinfo.json (default <name>/, slots: <name>-sN/)")
     args = ap.parse_args()
 
     if not (SRC / "global" / "excel").exists():
         print("work/mod/data is missing: run tools/build.py first")
         return 1
-    game = Path(args.game)
+    import game_slots
+    if not args.slot:
+        n = game_slots.slot_of_game_dir(args.game)  # --game / MXL_D2R_GAME pointing at a slot keeps its save folder
+        default = f"{args.name}/" if n in (None, 1) else f"{args.name}-s{n}/"
+        return install_one(Path(args.game), args.name, args.savepath or default)
+    slots = [n for n in game_slots.DEFAULTS if (Path(game_slots.slot_dir(n)) / "D2RLoader.exe").exists()]         if args.slot == "all" else [int(args.slot)]
+    rc, first = 0, None
+    for n in slots:
+        savepath = args.savepath or (f"{args.name}/" if n == 1 else f"{args.name}-s{n}/")
+        print(f"== slot {n}: {game_slots.slot_dir(n)} (saves {savepath})")
+        rc |= install_one(Path(game_slots.slot_dir(n)), args.name, savepath, first)
+        first = first or Path(game_slots.slot_dir(n)) / "mods" / args.name / f"{args.name}.mpq" / "data"
+        if n != 1:
+            game_slots.setup(n)  # d2rloader.toml of the main install, own save folder
+    return rc
+
+
+def install_one(game: Path, name: str, savepath: str, copy_data_from: Path = None) -> int:
+    """Install into one game folder. copy_data_from: the data folder of an install made a moment ago (skips the
+    ds1 renumbering and the file merging, copies the finished tree)."""
     if not (game / "D2R.exe").exists() or not (game / "D2RLoader.exe").exists():
         print(f"{game} does not look like a D2R folder with D2RLoader installed")
         return 1
 
-    mod = game / "mods" / args.name
-    mpq = mod / f"{args.name}.mpq"
+    mod = game / "mods" / name
+    mpq = mod / f"{name}.mpq"
     data = mpq / "data"
     if data.exists():
         shutil.rmtree(data)
+    if copy_data_from is not None:
+        shutil.copytree(copy_data_from, data)
+        return finish_install(game, name, savepath, mod, mpq, data)
     shutil.copytree(SRC, data)
     shutil.copy2(BUILD, data / "global" / "dataversionbuild.txt")
     # Classic map tiles and presets (.dt1/.ds1): D2R loads them for map layout even in HD mode, and Median's
@@ -71,10 +95,13 @@ def main() -> int:
                 dest = data / "global" / p.relative_to(MXL_GLOBAL)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(p, dest)
+    return finish_install(game, name, savepath, mod, mpq, data)
 
+
+def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, data: Path) -> int:
     # D2R (and D2RLoader's mod detection) read modinfo.json inside the folder-style MPQ; the copy at the mod
     # root follows the D2RLoader guide's layout and is harmless.
-    modinfo = json.dumps({"name": args.name, "savepath": f"{args.name}/"}, indent=2)
+    modinfo = json.dumps({"name": name, "savepath": savepath}, indent=2)
     for target in (mpq / "modinfo.json", mod / "modinfo.json"):
         target.write_text(modinfo, encoding="utf-8")
     d2rl = mod / "d2rloader"

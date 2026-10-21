@@ -76,6 +76,24 @@ build). Every command runs from the repo root.
 - Parallel lanes each query their own copy of a project (`..\ghidra-lanes\<lane>\sigma`): two headless runs can't
   open one project at once.
 
+## Slot copies for parallel test games
+
+Up to three games can run side by side (docs/testing.md, "Parallel slots"). Slot 1 is the Battle.net install; slots 2
+and 3 are full copies of the same build 93847 folder (29 GB each) on any drive (D: here; the harness reports C:'s
+volume serial so the Battle.net session cookie still decrypts):
+
+```
+robocopy "C:\Program Files (x86)\Diablo II Resurrected" D:\D2R-93847     /E /MT:8 /XD logs     :: slot 2 (an older copy was already there)
+robocopy "C:\Program Files (x86)\Diablo II Resurrected" D:\D2R-93847-s3  /E /MT:8 /XD logs     :: slot 3 (about 5 minutes)
+py -3 tools/game_slots.py setup          :: modinfo savepath MedianXL-s2 / -s3, toml from slot 1, save folders, D2RLoader-sN.exe
+py -3 tools/install_mod.py --slot all    :: mod data + plugin into every slot (built once, copied)
+py -3 tools/game_slots.py status
+```
+
+Other folders: env `MXL_SLOT2_DIR` / `MXL_SLOT3_DIR` (also `MXL_SLOT1_DIR`). `MXL_D2R_GAME` / `install_mod.py --game`
+pointing at a slot folder keeps that slot's save folder. Never run two slots on one folder. A slot needs
+`D2R.exe`, `D2RLoader.exe`, `D2RCore.dll`, `d2rloader.mpq`, `.build.info` and the `Data` folder, which the robocopy gives it.
+
 ## Old test characters
 
 No `mxl-manual-backups` folder and no `MedianXL` save folder exist on the game PC: not in `Saved Games\Diablo II Resurrected`
