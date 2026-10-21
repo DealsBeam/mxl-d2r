@@ -187,3 +187,19 @@ in background mode once `lane/bg-input` is on main). Evidence is in `%USERPROFIL
 | Cube gold payment, craft flags (6327-6329, 7100, 6369 -> 6350) | BLOCKED: the recipes need items with Median stats (stat 532, `UpgradedBossKillerRing`, `RathmasSupremacy2`) and no console cheat sets an item's stat or spawns these as upgraded; also `cubeinputs`/`cubestuff` failed for recipes 2, 3 | dev-console.md |
 | Dungeon lockout (refusal, clock, seal) | BLOCKED: `spawn b61X` did not yield a usable scroll/portal in the script; not seen manually. The `mxl` command shows counters `refused N, clocks started N` that the check should read | `checks-20261021-163305\lock_normal_portal.png`, `lock_mxl.png` |
 | Warriv re-issue | BLOCKED with the catalyst check | - |
+
+### Background-mode run (2026-10-21 18:42, `py -3 tools/game_checks.py all ...`, plugin 0.46.0)
+
+Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261021-184217\` (report.md, screenshots). Real-input watchdog (cursor
+and foreground sampled every 25 ms for 10 minutes, 23,303 samples): the game window was never the foreground window and
+the run never moved the real cursor into it (the cursor values in the report are the user's own mouse, x 0..5819,
+y -1417..2159); no abort. Console lines go through the plugin harness; D2R's cheat output is not readable in this mode, so
+cheats are verified by their effect in the screenshots.
+
+| Row | Result | Note |
+|---|---|---|
+| `mxl` command | PASS | 14 feature lines read through `console_text` (`mxl_town.png`); the whirlwind line no longer exists in 0.46.0 |
+| Goblins, Akara respec, Griswold's Heart, Andariel catalyst | FAIL / BLOCKED in this run: **clicks on the game world do not register in background mode** (a left click on a monster does not attack it, a click on Akara does not open her menu, the character does not walk; UI clicks on menus, the inventory and the cube panel do work). `goblin_scene.png` shows 14 spawned Fallen around the character, none hurt; `respec_3_menu.png` shows no menu after the click on Akara. The earlier foreground results above stand. Not yet verified why (hypothesis: world clicks need the button state to be held across several game frames or a hovered-unit update the virtual cursor does not provide); `lane/bg-input` needs to make `click()` work in the world, or the harness needs `interact <unit>` / `attack <unit>` / `move x y` commands |
+| Cow portal recipe, lockout (refusal, clock, seal) | BLOCKED: after `cheat itemgridclear` the `cheat spawn box,inv` / `leg,inv` / `tbk,inv` lines through the harness put nothing into the inventory (`cow_normal_town_spawn_failed.png`); the same lines typed in the console panel in the foreground run did. The lockout needs the scroll in the inventory, the counters (`refused N, clocks started N` in `mxl`) are readable already |
+| Cube gold payment, craft flags | BLOCKED: needs harness commands `item <code> [stat=value ...]` (item with stats in the inventory), `flag player\|game N get\|set\|clear`, `gold get` |
+| Andariel kill (catalyst, Warriv) | BLOCKED: needs a harness command `kill <monster>` or world clicks that work, plus `quest <id> <state>` to put quest 6 in progress |
