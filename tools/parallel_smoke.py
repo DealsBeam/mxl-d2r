@@ -11,6 +11,7 @@ run `game_ctl.py smoke --slot N` with MXL_RUN=<NAME>-sN. Meanwhile
   - tools/resource_sample.ps1 samples CPU, RAM and GPU of the machine and of every game process every few seconds.
 Writes %USERPROFILE%\\mxl-d2r-runs\\<NAME>\\parallel-summary.md (steps per slot, timings, resources, cursor evidence).
 """
+import argparse
 import json
 import os
 import subprocess
@@ -36,10 +37,33 @@ def read_steps(run_dir):
     return rows
 
 
-def main():
-    a = sys.argv[1:]
-    slots = [int(x) for x in a[a.index("--slots") + 1].split(",")] if "--slots" in a else [1, 2, 3]
-    name = a[a.index("--name") + 1] if "--name" in a else time.strftime("parallel-%Y%m%d-%H%M%S")
+def ensure_report(run_dir, slot, out, code):
+    """A slot that died before (or without) writing its report still gets a report.md, so the summary can say why."""
+    p = os.path.join(run_dir, "report.md")
+    if os.path.exists(p):
+        return
+    os.makedirs(run_dir, exist_ok=True)
+    try:
+        tail = open(os.path.join(out, f"smoke-s{slot}.out"), encoding="utf-8", errors="replace").read()[-3000:]
+    except OSError:
+        tail = "(no output file)"
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(f"# Smoke run {os.path.basename(run_dir)}\n\n"
+                f"No step report was written: game_ctl.py smoke exited with code {code}.\n\n"
+                f"## Output tail\n\n```\n{tail}\n```\n")
+
+
+def parse_args(argv):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--slots", default="1,2,3", help="comma-separated slot numbers to run (default: 1,2,3)")
+    ap.add_argument("--name", default=None, help="run name; folder under the runs directory (default: parallel-<time>)")
+    return ap.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    slots = [int(x) for x in args.slots.split(",")]
+    name = args.name or time.strftime("parallel-%Y%m%d-%H%M%S")
     runs = game_slots.RUNS
     out = os.path.join(runs, name)
     os.makedirs(out, exist_ok=True)
@@ -56,7 +80,9 @@ def main():
         return 1
     folders = [game_slots.slot_dir(n) for n in active]
     watcher = Watcher(os.path.join(out, "input-watch.json"), folders=folders).start()
-    sampler = subprocess.Popen(["powershell", "-NoProfile", "-File", os.path.join(HERE, "resource_sample.ps1"),
+    # -ExecutionPolicy Bypass applies to this powershell process only; the machine policy is left alone
+    sampler = subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                os.path.join(HERE, "resource_sample.ps1"),
                                 "-Folders", ",".join(folders), "-Interval", "3"], stdout=subprocess.PIPE, text=True)
     samples = []
 
@@ -69,12 +95,13 @@ def main():
 
     threading.Thread(target=read_samples, daemon=True).start()
     t0 = time.time()
-    procs, ends = {}, {}
+    procs, ends, outs = {}, {}, {}
     for n in active:
-        env = dict(os.environ, MXL_RUN=f"{name}-s{n}")
+        env = dict(os.environ, MXL_RUN=f"{name}-s{n}", PYTHONIOENCODING="utf-8")
         env.pop("MXL_D2R_GAME", None)
+        outs[n] = open(os.path.join(out, f"smoke-s{n}.out"), "w", encoding="utf-8", errors="replace")
         procs[n] = subprocess.Popen([sys.executable, os.path.join(HERE, "game_ctl.py"), "--slot", str(n), "smoke"], env=env,
-                                    stdout=open(os.path.join(out, f"smoke-s{n}.out"), "w"), stderr=subprocess.STDOUT)
+                                    stdout=outs[n], stderr=subprocess.STDOUT)
         time.sleep(4)  # stagger the launches a little so the three loaders do not compile at the same instant
     aborted = None
     while len(ends) < len(procs):
@@ -94,16 +121,25 @@ def main():
     wall = time.time() - t0
     cursor = watcher.stop()
     sampler.terminate()
+    codes = {}
     for n in active:
+        try:
+            procs[n].wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            procs[n].kill()
+            procs[n].wait()
+        codes[n] = procs[n].returncode
+        outs[n].close()
+        ensure_report(os.path.join(runs, f"{name}-s{n}"), n, out, codes[n])
         game_slots.release(n, f"{name}-s{n}")
 
     lines = [f"# Parallel smoke {name}", "", f"slots {active}, wall time {wall:.0f} s" + (f", ABORTED: {aborted}" if aborted else ""), ""]
-    lines += ["## Steps per slot", "", "| Slot | Time | Steps | Detail |", "|---|---|---|---|"]
+    lines += ["## Steps per slot", "", "| Slot | Exit | Time | Steps | Detail |", "|---|---|---|---|---|"]
     for n in active:
         rows = read_steps(os.path.join(runs, f"{name}-s{n}"))
         passed = sum(1 for r in rows if r[1] == "PASS")
         bad = "; ".join(f"{r[0]}: {r[1]} {r[2]}" for r in rows if r[1] != "PASS") or "-"
-        lines.append(f"| {n} | {ends.get(n, wall):.0f} s | {passed}/{len(rows)} passed | {bad} |")
+        lines.append(f"| {n} | {codes[n]} | {ends.get(n, wall):.0f} s | {passed}/{len(rows)} passed | {bad} |")
     c = cursor
     lines += ["", "## Real cursor and focus (every 25 ms)", "",
               f"- samples {c['samples']} over {c.get('seconds')} s, longest gap {c['max_gap_ms']} ms, game windows seen {c['game_windows_seen']}",
