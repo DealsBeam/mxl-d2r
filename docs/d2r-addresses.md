@@ -686,6 +686,15 @@ Ready-made path, called not hooked, verified in game (slot 2, background mode):
 - **Chat types seen on screen** (harness verb `sysmsg <type> <colour> <text>`): 4 = a line in the message log at the bottom left
   coloured by the colour byte (used for every notice); 1 = the same; 5 = overhead bubble above the player; 0, 2, 3, 6-9 show nothing.
   Colours (byte +8): 0 white, 1 red, 2 green, 3 blue, 4 tan, 8 orange, 9 yellow. Inline `Ã¿c1` colour codes are not interpreted.
+- **A chat line during an NPC's speech freezes the speech** (found 2026-10-22, regression hunt `respec` on 0.49.0): while Akara's
+  quest text scrolls (about 40 s with the Den of Evil and Cain speeches), any packet 0x26 of type 1, 4 or 5 stops it for good and the
+  NPC menu never opens (the builder 0x1147a0 is never called, the subtitle box stays up). Type 0 (shows nothing) does not; a line
+  that arrives with the menu already open does not either; the speaker fields and the delay (12 server frames) made no difference.
+  The speech ends when the client's menu-open flag (`0x2a486a4`, u32, 1 while the menu is up) turns 1. So the notices of quest
+  dialog handlers (the Heart is sent from the handler that the speech's own message 0x76 fires, in the middle of the speech) go
+  through `SendClientNotice`: held until that flag is 1 for 2 server frames, sent anyway after 120 s. Lockout and goblin lines
+  stay immediate (no NPC speech there). Limit: the flag is the local client's; a remote player of a TCP game gets the line after
+  the 120 s fallback.
 - Used for: Median's dungeon lockout texts (refusal "(Required Level: N)", "Requires Hell difficulty", "This area is locked / Join
   another game to enter again", clock "Closing in: mm:ss" and "ONCE YOU EXIT YOU CANNOT GO BACK" to every player of the game),
   the quest reward notices (Akara's Heart, Jerhyn / Cain crystals, Ormus shrines) and the goblin "sighted" line. All shown in

@@ -46,6 +46,18 @@ inline void BuildChat(uint8_t* rec, uint8_t type, uint8_t colour, uint32_t speak
 	}
 }
 
+// A line sent while an NPC is speaking stops the speech: a chat line of type 1, 4 or 5 that reaches the client during an
+// NPC's speech (the scrolling quest text) freezes it, the speech never ends and the NPC menu never opens (harness
+// experiment 2026-10-22, Akara's Cain speech; type 0, which shows nothing, does not). The client opens the menu when the
+// speech is over, so the notices of quest dialog handlers wait for the NPC menu to be up (the client's menu-open flag),
+// then a few frames, and go out anyway when it never opens.
+constexpr int NoticeSettleFrames = 2;
+constexpr uint64_t NoticeExpireMs = 120000;
+constexpr uint64_t NoticeDropMs = 150000;  // the client is gone or in another game: give up
+constexpr auto NoticeDue(bool menuOpen, int framesOpen, uint64_t waitedMs) noexcept -> bool {
+	return (menuOpen && framesOpen >= NoticeSettleFrames) || waitedMs >= NoticeExpireMs;
+}
+
 // "mm:ss" like D2Sigma's DungeonWidget timer (wsprintfW "%02d:%02d", Dungeon.cpp 0xf4fc0).
 inline void FormatClock(uint32_t seconds, char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize, "%02u:%02u", seconds / 60, seconds % 60);

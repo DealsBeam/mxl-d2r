@@ -215,7 +215,7 @@ void TyraelActivateHook(void* quest, uint8_t* event) {
 void Notice(Unit* player, const char* what, int count) noexcept {
 	char line[96];
 	clientmsg::RewardLine(what, count, line, sizeof(line));
-	SendClientMessage(player, line, clientmsg::Tan);
+	SendClientNotice(player, line, clientmsg::Tan);
 }
 
 void JerhynHook(void* quest, uint8_t* event) {

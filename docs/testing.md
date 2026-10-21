@@ -376,6 +376,18 @@ portal recipes; look at `h state`. Observed, not fixed (docs/bugs.md #24): enter
 can crash the client after a few area changes in one game (assert `asset cache exceeded`, null call), so the lockout clock
 check runs first and the full run ends with a crash on some runs.
 
+### Regression hunt 0.49.0 (2026-10-22, lane regress049, slot 3)
+
+Two checks of `game_checks.py all` failed on 0.49.0 and passed on 0.48.0.
+
+| Check | Before (0.49.0) | Cause | After |
+|---|---|---|---|
+| `respec` | FAIL: Akara's menu had Talk and Trade only, no plugin line | Not the menu code, not quest 41. The Heart notice added in 0.49.0 (client messages, PR #55) is sent from the quest handler of Akara's speech, in the middle of the speech, and a chat line (types 1, 4, 5) during an NPC speech freezes it: the NPC menu never opens, the menu builder `0x1147a0` is never called (so the plugin's lines are never added). `mxl-core-off.txt` word `clientmsg` made the check pass; `h sysmsg 4/1/5` during the speech reproduced it, type 0 and a line after the menu is open do not. Details docs/d2r-addresses.md section 13 | PASS: notices of quest dialog handlers are held until the client's menu is open (`SendClientNotice`); the screenshot shows the menu and "You have received: Griswold's Heart" |
+| `casts` | FAIL: Bash showed no cast animation / mana drop | The check, not the plugin: `cast` at a monster 5-8 sub-tiles away only walks to it (mode 3); the Fallen wander, so the same cast failed for Bash in one run and for earthquake_2 in the next (three runs on the same build, a different case each time). Bash's mana cost and animation are as before (mana 15 -> 12, mode 7) | PASS: `cast_and_watch(approach=True)` moves next to the monster before every try of a melee cast (10 tries) |
+
+`py -3 tools/game_checks.py all mxl respec casts --slot 3` after the fix: all three PASS (`checks-20261022-033532-s3`). The
+`respec` check now puts the unused stat points back (each run had raised them by the refunded 60 in the saved test character).
+
 ## Scripted checks (tools/game_checks.py, 2026-10-21, foreground input)
 
 Console commands and measured coordinates: [dev-console.md](dev-console.md). Results of the partial run (the run was

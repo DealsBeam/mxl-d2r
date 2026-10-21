@@ -36,6 +36,15 @@ int main() {
 	BuildChat(rec, TypeOverhead, 0, 1, nullptr);
 	Check(rec[1] == 5 && rec[0x47] == 0, "null text, overhead type");
 
+	// quest notices wait for the NPC menu (a chat line during the speech freezes it)
+	Check(!NoticeDue(false, 0, 0), "held while the speech runs");
+	Check(!NoticeDue(false, 0, NoticeExpireMs - 1), "held until the expiry");
+	Check(!NoticeDue(true, 0, 10), "the menu just opened: settle frames first");
+	Check(!NoticeDue(true, NoticeSettleFrames - 1, 10), "one frame short");
+	Check(NoticeDue(true, NoticeSettleFrames, 10), "sent when the menu has been up for the settle frames");
+	Check(NoticeDue(false, 0, NoticeExpireMs), "sent anyway after the expiry");
+	Check(NoticeDropMs > NoticeExpireMs, "drop after expiry");
+
 	// Median's lockout texts
 	char out[64];
 	FormatClock(600, out, sizeof(out));
