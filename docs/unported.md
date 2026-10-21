@@ -57,5 +57,6 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 | Area | Median | Port now | Status | Needs / notes |
 |---|---|---|---|---|
 | Skill effects (missiles, overlays): 217 missile + 113 overlay animations | own art | D2R look-alikes | open | flipbook path built (tools/missile_art.py) but no effect confirmed in game ([hd-effects.md](hd-effects.md)) |
-| Median-only monsters (1,193) | own art | D2R look-alike models; 24 fully borrow a donor | approx | lane hd-monsters (tints/scale/better donors); real models later |
+| Median-only monsters (1,193) | own art | family/size/animation-matched D2R donor + scale + colour tint per monster (tools/hd_monsters.py, docs/hd-monsters.md); 23 fully borrow a donor | approx | real models (mesh, skeleton, animations) |
+| Median monster looks, low confidence (85) | own art | donor chosen without a family hint | open | review work/mod/hd_monsters.md; real models |
 | Missing missile/overlay CelFiles (11 + 15) | n/a | none | open | [PLAN.md](PLAN.md) Phase 5 |
