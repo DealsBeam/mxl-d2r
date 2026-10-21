@@ -31,6 +31,7 @@
 #include "requirement_gates.h"
 #include "skill_tree.h"
 #include "state_trace.h"
+#include "testharness.h"
 #include "whirlwind.h"
 
 #include <windows.h>
@@ -129,6 +130,13 @@ auto Off(const char* part) noexcept -> bool {
 	return false;
 }
 
+// Console line; with the test harness on it is also appended to mxl-testharness-console.txt (the console panel cannot
+// be opened by an unattended run, see testharness.cpp).
+void Say(const D2RL::ConsoleCommandContext* command, const char* text) noexcept {
+	command->plugin->WriteConsoleMessage(text);
+	HarnessEcho(text);
+}
+
 auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* command, void* userData) noexcept
 	-> D2RL::ConsoleCommandResult {
 	(void)client;
@@ -141,60 +149,60 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	              PluginVersion, g_context->buildVersion ? g_context->buildVersion : "?", ImageStamp(g_context),
 	              ExpectedImage, BuildMatches(g_context) ? "match" : "MISMATCH, hooks off",
 	              static_cast<unsigned long long>(g_context->exeBase));
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "states fix %s", g_statesReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "level types %s", g_levelTypesReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "calc codes %s", g_calcReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "skill functions %d/%d:%s", g_skillsInstalled, SigmaSkillCount(),
 	              g_skillsReport[0] ? g_skillsReport : " none");
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "item spells %s", g_itemSpellsReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "missile hits %d/%d:%s", g_missileHitsInstalled, MissileHitCount(),
 	              g_missileHitsReport[0] ? g_missileHitsReport : " none");
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "mana costs %s", g_manaCostsReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "cube conditions %s", g_cubeReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "craft flags %s", g_craftReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "act 1 quests %s", g_questsReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	{
 		int refused = 0, started = 0;
 		DungeonLockoutCounts(&refused, &started);
 		std::snprintf(line, sizeof(line), "dungeon lockout %s (refused %d, clocks started %d)", g_lockoutReport, refused, started);
-		command->plugin->WriteConsoleMessage(line);
+		Say(command, line);
 	}
 	{
 		char status[160] = "";
 		GoblinsStatus(status, sizeof(status));
 		std::snprintf(line, sizeof(line), "goblins %s | %s", g_goblinsReport, status);
-		command->plugin->WriteConsoleMessage(line);
+		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "skill tree %s", g_skillTreeReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "npc actions %s", g_npcReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "requirement gates %s", g_reqGatesReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "hirelings %s", g_hirelingsReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "combat %s", g_combatReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "property functions %s", g_propsReport);
-	command->plugin->WriteConsoleMessage(line);
+	Say(command, line);
 	{
 		int extended = 0, refused = 0, changed = 0, seen = 0, padded = 0;
 		ItemsExtCounts(&extended, &refused, &changed, &seen, &padded);
 		char text[480];
 		std::snprintf(text, sizeof(text), "items %s | runewords with extra properties %d (refused %d), found by Jewel padding %d | kills with a changed experience %d of %d",
 		              g_itemsExtReport, extended, refused, padded, changed, seen);
-		command->plugin->WriteConsoleMessage(text);
+		Say(command, text);
 	}
 	return D2RL::ConsoleCommandResult::Handled;
 }
@@ -409,9 +417,17 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 	}
+	{
+		char report[192];  // off unless mxl-testharness.txt exists next to the DLL (unattended test input, testharness.cpp)
+		if (InstallTestHarness(context, report, sizeof(report))) {
+			std::snprintf(line, sizeof(line), "mxl-core: test harness %s", report);
+			context->LogInfo(line);
+		}
+	}
 	return context->RegisterConsoleCommand("mxl", MxlCommand, "Median XL core plugin status.");
 }
 
 D2RL_PLUGIN_EXPORT void D2RLoaderUnloadPlugin() noexcept {
+	StopTestHarness();
 	g_context = nullptr;
 }

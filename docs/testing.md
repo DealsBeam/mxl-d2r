@@ -110,15 +110,54 @@ Use [test-sessions.md](test-sessions.md) to run these checks by character.
 ## Automated smoke run (tools/game_ctl.py)
 
 `py -3 tools/game_ctl.py smoke` launches D2RLoader (windowed, resized to a 1600x900 client area), clears the
-calibration screens and intro, creates an offline Barbarian `MxlBarb`, and takes window-only screenshots (never the
-desktop) of town, the character sheet (C), the skill tree (T) and its tabs, the inventory (I), then Save and Exit and
-re-enter (save/reload check), stops the game and scans the logs. Output goes to
-`%USERPROFILE%\mxl-d2r-runs\<run>\` (`report.md`, PNGs, `logscan.txt`, `game_ctl.log`); look at the PNGs yourself.
-Single steps: `start`, `shot NAME`, `key KEY..`, `click FX FY`, `console CMD`, `logscan`, `stop`.
+calibration screens and intro, plays the selected character (difficulty dialog: Normal), takes window-only screenshots
+(never the desktop) of town, the character sheet (C), the skill tree (T) and its tabs, the inventory (I), runs the
+console command `mxl`, then Save and Exit and re-enter (save/reload check), stops the game and scans the logs. Output
+goes to `%USERPROFILE%\mxl-d2r-runs\<run>\` (`report.md`, PNGs, `logscan.txt`, `game_ctl.log`); look at the PNGs
+yourself. Single steps: `start`, `shot NAME`, `key KEY..`, `click FX FY`, `console CMD`, `logscan`, `stop`.
+`MXL_RUN=<name>` pins the run folder (instead of the shared `runs\current.txt`), so two lanes do not mix.
 
-Covers: startup log (known 3 asserts only), the skill tree look row, inventory and (when reachable) character-sheet
-panels, and the save/reload basics. Does not cover combat, vendors, stash, cube or anything needing a walk.
+Covers: startup log (known asserts only), the skill tree look row, inventory and character-sheet panels, the plugin
+status line, and the save/reload basics. Does not cover combat, vendors, stash, cube or anything needing a walk.
 
-Status 2026-10-21: the run stops at D2R's "You have not been online in the last 30 days. Please start the game
-while online to verify the product license." dialog (OK quits the game). One online launch is needed first. Everything
-after the main menu in `run_smoke` (click fractions marked `guess` in `UI`) is untested.
+### Background mode (default): the user's mouse, keyboard and focus stay free
+
+Unattended runs must not steal the real cursor, send global keys or take the foreground. Background mode is the
+default; `--foreground` (anywhere on the command line) or env `MXL_INPUT=sendinput` selects the old SendInput +
+SetCursorPos + SetForegroundWindow path (it needs the window in front and the user's hands off the PC).
+
+It needs the plugin test harness (plugin/src/testharness.cpp, off in normal play): create an empty
+`mxl-testharness.txt` next to `mxl-core.dll` (`...\mods\MedianXL\d2rloader\plugins\`) before the game starts and
+delete it afterwards. With it on, D2R takes no mouse, modifier state or focus from the real devices at all. Without
+it the background mouse and console are unavailable (keys and screenshots still work).
+
+What was measured (D2R 3.3.0 build 93847, D2RLoader 1.3.1, game window behind the user's windows on another monitor):
+
+| Input | By window messages alone | How it works in background mode |
+|---|---|---|
+| Keys: Esc, Enter, letters (I, C, T), digits, F-keys, arrows | works (`PostMessage` WM_KEYDOWN/WM_KEYUP with scancode lParam) | same, no harness needed |
+| Text typing (names) | WM_KEYDOWN + WM_CHAR, same path as keys | same (typing a character name is untested in game) |
+| Mouse move / click / right click | does NOT work: D2R reads the position with GetCursorPos and the buttons with GetKeyState and ignores WM_MOUSEMOVE / WM_xBUTTON lParam, with or without focus | plugin harness: game_ctl writes a virtual cursor and button state into a shared block, the plugin answers GetCursorPos / GetKeyState from it, and the WM_ messages are posted as well; hover and ImGui menus work |
+| Ctrl+` (developer console panel) | does NOT work (the console is a D2R input action; modifiers from posted messages are ignored, also with real focus) | plugin harness runs the line through D2RCore's `ExecuteConsoleCommand` on the UI thread; the panel stays closed |
+| Modifier state (Shift/Ctrl/Alt) | not seen by D2R | virtual state in the shared block (GetKeyState) |
+
+Other things the harness keeps off the user's desktop: D2R's own `SetCursorPos` (called once at start in a normal run)
+and `ClipCursor` calls become no-ops (otherwise the real cursor jumps and is confined to the game window),
+`SetForegroundWindow` and `SetActiveWindow` from the game do nothing, and top-level windows get WS_EX_NOACTIVATE so the
+game window is never made the foreground window at launch (without it D2R sits in front for about a second, whatever
+the STARTUPINFO show flag says: D2RLoader relaunches itself and the flag is lost).
+
+Capture: `PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)` of the game window, cropped to the client area. It returns the
+D2R DX12 window live (animations move) while it is behind other windows or on another monitor, and never touches the
+desktop. (`PW_CLIENTONLY` returns black.) A minimized window cannot be captured: the script refuses, so the window must
+stay un-minimized. D2R keeps rendering at 60 FPS when not in front; no D2R option had to be changed.
+
+Limits: the output of D2R / D2RLoader commands (cheats, `help`) goes only to the console panel, so it cannot be read in
+background mode (the effect of a cheat shows in game; the plugin's own `mxl` output is written to
+`mxl-testharness-console.txt` and returned by `console_text()`). While the harness is on the game ignores the real
+mouse and modifiers (no manual play). `mxl-testharness-trace.log` (rewritten every 3 s) lists the Windows input calls D2R
+makes and who calls them, for finding what else needs faking.
+
+Status 2026-10-21: the full smoke passes in background mode while the user worked on the same PC: the real cursor
+never entered the game window, the game window was never the foreground window (sampled every 25 ms), and D2R's
+`SetCursorPos` never reached the system.
