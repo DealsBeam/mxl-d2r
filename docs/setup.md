@@ -56,8 +56,13 @@ build). Every command runs from the repo root.
 
 ## By hand
 
-- First boot: start `D2RLoader.exe` (never from a script), pick the MedianXL mod.
-- `d2rl compile MedianXL` in the developer console if the game reports a missing or stale compile (Phase 2 item).
+- D2RLoader settings for unattended runs (`<game>\d2rloader\config\d2rloader.toml`):
+  `default_mod = "MedianXL"`, `launch_arguments = "-w -txt"`, `skip_title_screen = true`,
+  `check_for_updates = false`, `write_crash_dumps = true`, `developer.enable_console = true`,
+  and developer logs enabled for `excel_files`, `bin_validation`, `extension_details`, `archive_mounts`.
+  The original is kept as `d2rloader.toml.orig`; `check_for_updates = false` keeps the pinned 1.3.1.
+- `-txt` compiles all 380 tables at start (about 15 s total), this launch only; no manual `d2rl compile MedianXL` is needed.
+- mxl-core 0.37.0 loads (ABI 4). Three startup asserts are expected; see [plugin-spec.md](plugin-spec.md).
 - Test characters: none were on this PC (below). Create new ones; read `save-format.md` before editing saves.
 ## Ghidra
 
@@ -67,7 +72,7 @@ build). Every command runs from the repo root.
   (project `D2Game`, Median's `D2Game.dll` imported as `D2Game_113.dll`, base 0x6fc20000): `analyzeHeadless` import
   with auto-analysis, about 1.5 minutes each.
 - `..\ghidra\project` (the D2R image): needs a memory dump of the running game. Start D2RLoader, then
-  `py -3 tools/dump_image.py` -> `..\ghidra\D2RLoader_<time>_dump.exe`, then `tools/ghidra_analyze.ps1` (hours).
+  `py -3 tools/dump_image.py` -> `..\ghidra\D2RLoader_<time>_dump.exe`, then `tools/ghidra_analyze.ps1 -MaxMem 16G` (hours; worked on the 64 GB machine).
 - Parallel lanes each query their own copy of a project (`..\ghidra-lanes\<lane>\sigma`): two headless runs can't
   open one project at once.
 
