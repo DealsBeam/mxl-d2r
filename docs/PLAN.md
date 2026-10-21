@@ -95,10 +95,12 @@ Status (2026-10-14):
   is D2R's HD panel background (ui_panels.py 'charsheet') and tools/ui_layouts.py char_sheet() moves D2R's stat widgets
   into its boxes. The doubled "ATTACK Damage / Attack Rating" rows were not a string bug: D2R's panel shows the left
   skill's and the right skill's stats; in Median's layout they sit beside the two weapon portraits as value-only
-  boxes. Not done: Median's pages 2 and 3 (stat-screen.dc6 pages 1-2: ~60 boxes of extra stats such as resistances
-  by type, damage and speed modifiers, find / absorb values) need either code that fills D2R's Advanced Stats panel
-  (advancedstatspanelhd.json, opened by the button on the sheet's right edge; its rows are code-driven) or a plugin
-  stat sheet; the page buttons and the text of those pages live in D2Sigma's code. Also missing: the portrait.
+  boxes. Median's pages 2 and 3 (stat-screen.dc6 pages 1-2: ~60 boxes of extra stats such as resistances
+  by type, damage and speed modifiers, find / absorb values; table decoded in docs/subsystems/stat-screen.md): D2R's
+  Advanced Stats panel (the button on the sheet's right edge) lists itemstatcost rows by their `advdisplay` column, so
+  the 96 stats of those pages are rows of that panel by data (txt_migrate.py advanced_stats; checked in game: 13 stats always,
+  the others while not 0). Not done: Median's page art and grouping as a second panel (plugin), the computed Str / Dex damage
+  bonus. Also missing: the portrait.
 - HD skill effects (2026-10-21, docs/hd-effects.md): D2R HD effects are PopcornFX particles plus JSON, no sprite component; only
   flipbook sprite effect is the UI campfire. tools/dcc.py + d2r_texture.py + missile_art.py turn Median DCCs into patched
   flipbook effects (Barbarian first); not in build.py until an effect is confirmed in game (python tools/missile_art.py runs it).
