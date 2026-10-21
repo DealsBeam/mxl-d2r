@@ -7,7 +7,7 @@
   py -3 tools/d2r_find.py dis  0x529090 [--max N] [--func]   # disassemble; --func = to the end of the function
   py -3 tools/d2r_find.py callers 0x5da800         # direct E8/E9 callers of a function
   py -3 tools/d2r_find.py around 0x526d55 [before] [after]   # disassemble around an address (resyncs from the function start)
-  py -3 tools/d2r_find.py qinit a1q6                # quest init function + event handler slots of a quest source file
+  py -3 tools/d2r_find.py qinit 6|all               # quest init function + event handler slots (descriptor table at 0x239c5c0)
   py -3 tools/d2r_find.py bytes 0x529090 [16]      # raw bytes (entry bytes)
   py -3 tools/d2r_find.py qword 0x238ea00 [n]      # read pointers (shown as RVA when inside the image)
   py -3 tools/d2r_find.py ptrs 0x52aa00            # find 8-byte pointers to an RVA (function tables, vtables)
@@ -98,10 +98,10 @@ def find_strings(sub, ignore_case=False):
     for rva, kind in sorted(hits):
         s = rva
         if kind == "a":
-            while s > 0 and 32 <= b[s - 1] < 127 and rva - s < 200:
+            while s > 0 and (32 <= b[s - 1] < 127 or b[s - 1] == 9) and rva - s < 200:
                 s -= 1
             e = rva
-            while e < len(b) and 32 <= b[e] < 127 and e - rva < 300:
+            while e < len(b) and (32 <= b[e] < 127 or b[e] == 9) and e - rva < 300:
                 e += 1
             res.append((s, kind, bytes(b[s:e]).decode()))
         else:
@@ -188,38 +188,45 @@ def dis(rva, n=0x200, whole=False):
 QUEST_CB = 0x270  # D2R quest object: callback for event N at +0x270 + 8*N (1.13c: +0xa0 + 4*N)
 
 
-def quest_init(fname):
-    """For a quest source file (e.g. 'a1q6'): find the quest init function (the one that stores the file's handler
-    functions into the quest object) and print slot -> handler. Heuristic: owner of >= 3 lea-of-handler references."""
+QUEST_TABLE = 0x239c5c0  # 36 descriptors of 0x20 bytes: +0 init fn VA, +8 u32 act (0-4), +0x14 u32 ordinal, +0x18 u32 quest id
+QUEST_COUNT = 36
+
+
+def quest_table():
+    """[(quest id, act, init function RVA)] from the descriptor table."""
+    out = []
+    for i in range(QUEST_COUNT):
+        init, w1, _w2, w3 = struct.unpack("<QQQQ", raw(QUEST_TABLE + 0x20 * i, 32))
+        out.append((w3 & 0xFFFFFFFF, w1 & 0xFFFFFFFF, init - BASE))
+    return out
+
+
+def quest_init(arg):
+    """arg = quest id (e.g. 6) or 'all': find the quest's init function in the descriptor table and print which handler
+    it stores into quest+0x270+8*event. Quest id N of act 1 is file a1qN; act 2: a2q(N-8); act 3: a3q(N-16);
+    act 4: a4q(N-24); act 5: a5q(N-34). Ids 29-33 and 41 are extra objects with no handlers of their own."""
     import capstone
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
-    for r, k, t in find_strings("Quests\\" + fname + ".cpp"):
-        if k != "a" or not t.endswith(fname + ".cpp"):
+    for qid, act, init in quest_table():
+        if arg != "all" and qid != int(arg, 0):
             continue
-        xr = xrefs([r])[r]
-        fs = sorted(set(func_of(p)[0] for p, _ in xr if func_of(p)))
-        xr2 = xrefs(fs)
-        owners = {}
-        for f in fs:
-            for p, _ in xr2[f]:
-                o = func_of(p)
-                if o:
-                    owners.setdefault(o[0], []).append(f)
-        print(t, "handler candidates:", len(fs))
-        for o, lst in owners.items():
-            if len(lst) < 3:
-                continue
-            ins = list(md.disasm(raw(o, func_of(o)[1] - o), o))
-            print(f"  init function {o:#x} (entry bytes {raw(o, 16).hex(' ')})")
-            for i, x in enumerate(ins):
-                m = re.search(r"rip ([+-]) (0x[0-9a-f]+)", x.op_str)
-                if x.mnemonic == "lea" and m and i + 1 < len(ins):
-                    tgt = x.address + x.size + (int(m.group(2), 16) if m.group(1) == "+" else -int(m.group(2), 16))
-                    n = re.search(r"qword ptr \[rcx \+ (0x[0-9a-f]+)\], r", ins[i + 1].op_str)
-                    if ins[i + 1].mnemonic == "mov" and n:
-                        off = int(n.group(1), 16)
-                        ev = (off - QUEST_CB) // 8 if QUEST_CB <= off < QUEST_CB + 8 * 20 else None
-                        print(f"    quest+{off:#x} (event {ev}) = {tgt:#x}  {raw(tgt, 12).hex(' ')}")
+        f = func_of(init)
+        end = f[1] if f and f[0] == init else init + 0x400  # leaf inits have no .pdata entry of their own
+        print(f"quest {qid} (act {act + 1}) init {init:#x}  entry bytes {raw(init, 16).hex(' ')}")
+        ins = []
+        for x in md.disasm(raw(init, end - init), init):
+            ins.append(x)
+            if x.mnemonic == "ret":
+                break
+        for i, x in enumerate(ins):
+            m = re.search(r"rip ([+-]) (0x[0-9a-f]+)", x.op_str)
+            if x.mnemonic == "lea" and m and i + 1 < len(ins):
+                tgt = x.address + x.size + (int(m.group(2), 16) if m.group(1) == "+" else -int(m.group(2), 16))
+                n = re.search(r"qword ptr \[r\w+ \+ (0x[0-9a-f]+)\], r", ins[i + 1].op_str)
+                if ins[i + 1].mnemonic == "mov" and n:
+                    off = int(n.group(1), 16)
+                    if QUEST_CB <= off < QUEST_CB + 8 * 20:
+                        print(f"    event {(off - QUEST_CB) // 8:2d} (quest+{off:#x}) = {tgt:#x}  {raw(tgt, 16).hex(' ')}")
 
 
 def around(rva, before=0x60, after=0x80):

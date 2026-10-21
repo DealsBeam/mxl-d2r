@@ -42,10 +42,15 @@ Reading aids that apply everywhere:
 | 2 | Create a quest item by 4-char code in the player's inventory | `0x517530` | likely |
 | 2 | Quest bit test / set / clear (record, quest id, bit) | `0x325c50` / `0x325c00` / `0x325990` | verified / verified / likely |
 | 2 | Player quest record for a game and player | `*(0x34b240(player) + game[0x104]*8 + 0x40)` | verified |
-| 3 | NPC interact packet (server) | `0x4c26a7` area in the function starting before it (see section 4) | likely |
-| 3 | NPC dialog-message packet (server) | `0x4c33e0` | likely |
-| 4 | Warp interact (server, PlrMsg) | `0x4adbb0` | likely |
-| 5, 6 | see sections 5 and 6 | | |
+| 2 | Quest descriptor table (36 entries: init fn, act, quest id) | `0x239c5c0` (stride 0x20) | verified |
+| 3 | NPC table (43 x 0x1c bytes: hire/trade/gamble flags, hire quest and level) | `0x237ea60`, getter `0x3971a0` | verified |
+| 3 | Server NPC trade / gamble / hire packet handler | `0x4b0470` | verified |
+| 3 | NPC click packet (server; calls quest event 0) | block `0x4c26a7` of a PlrMsg handler | likely |
+| 3 | NPC dialog-message packet (server; calls quest event 11) | `0x4c33e0` | likely |
+| 3 | Client NPC menu module (`D2Client\src\UI\npcmenu.cpp`) | functions `0x10a520`-`0x117634` | likely (module only) |
+| 4 | Warp interact packet (server) and the warp action it calls | `0x4adbb0` -> `0x491ff0` | likely |
+| 5 | Monster spawn / goblin tick | not found | unknown |
+| 6 | Requirement gates for NPC services | NPC table bytes +7/+8/+9/+0x10/+0x11 (section 6) | verified |
 
 ## 1. Cube output / recipe result
 
@@ -73,10 +78,11 @@ That path is not the player's Transmute click (it has a different shape); the pl
 Signature of the recipe executor, the recommended hook for craft flags and gold:
 
 `void* ExecRecipe(Game* game /*rcx*/, Unit* player /*rdx*/, const CubeRecord* record /*r8*/, void* ctx /*r9*/)`
-returns the created item (or null). The recipe row is `(record - 0x3e3f60(game[0x106], 0)) / 0x16c`, exactly the
+returns the **first output item on success** (`[rbp+0x120]` at `0x528128`) and **null on failure** (`0x528181`: no output
+could be made, the inputs are put back with `0x471500`). The recipe row is `(record - 0x3e3f60(game[0x106], 0)) / 0x16c`, exactly the
 formula `cube_conditions.cpp` already uses. `ctx` is the `out` buffer of the search (`[rsp+0x60]` in the caller).
 **Recommendation (port spec option 2, the post-hook):** detour `0x5269c0`, call the original, and when it returns a
-non-null item (or when the inputs are gone) run the recipe's effect list from the generated table:
+non-null item run the recipe's effect list from the generated table:
 set player flag, set game flag, pay gold. The search has already validated the conditions, so the flag/gold step is
 the only thing left. Option 1 (patch Median's way) is possible but awkward, see below.
 
@@ -160,10 +166,8 @@ Each quest's init function stores its handlers into the object. `tools/d2r_find.
 | id 4 `a1q4` (Search for Cain) | `0x5db310` | `0x5dfe90` | `0x5e29d0` | **`0x5e0830`** |
 | id 6 `a1q6` (Andariel) | `0x5db6c0` | **`0x5e1d30`** | **`0x5e1f00`** | `0x5e2660` |
 
-Quest id to file name: act 1 `a1qN` is id N (checked for 4 and 6 against the handler contents); the other acts
-(`a2q*`..`a5q*`) were not mapped to Median's quest ids 13, 14, 19, 21, 25, 36, 38, 40 (use `qinit` and the NPC class
-constants listed in `quests-requirements.md`, section 2.2, to match them; D2R's file numbering is not a plain
-`8*(act-1)+n`: act 5 starts one later).
+Quest id to source file and the full list of Median-hooked quests: Appendix A (the quest descriptor table at `0x239c5c0` gives id,
+act and init function for all 36 quests; `d2r_find.py qinit <id>` lists the handlers).
 
 Entry bytes: `0x5e0830` `40 53 55 56 57 41 56 48 83 ec 60 44 0f b7 72 28`; `0x5e1f00` `40 53 55 41 56 48 83 ec 40 33 ed 48 89 74 24 68`;
 `0x5e1d30` `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57`; `0x5e2660` `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48`;
@@ -224,43 +228,232 @@ bit 0xc) with the set function.
 
 ## 3. NPC interaction menu
 
-Server side (verified flow, entry addresses likely):
-- NPC click (packet): the PlrMsg handler containing `0x4c26a7` (it calls `0x502f60`, builds the interact reply, then
-  `0x515980` = quest event 0; assert lines in `D2Game\src\Player\PlrMsg.cpp`). The function begins before `0x4c26a7`
-  (not located: `.pdata` gives a chained piece at `0x4c26a7`).
-- Dialog-message packet: **`0x4c33e0`** (calls `0x515980` at `0x4c37b2` and the event-11 wrapper `0x516940` at
-  `0x4c35cf/0x4c3bbf/0x4c3bd4`); entry bytes `40 55 53 57 41 54 41 55 48 8d 6c 24 e0 48 81 ec`. A plugin that wants a
-  custom menu entry's action to run server-side hooks `0x516940` (message id = `event+0x30`) or this packet handler.
-- The menu **layout** (which buttons the client shows) is client UI code and was not traced here; D2R builds the NPC
-  menu in its UI layer from the NPC's class and quest state. Still unknown, see "Unknown".
+### Server
+
+- **NPC click**: block `0x4c26a7` of a PlrMsg packet handler (it calls `0x502f60`, sends the 0x27 reply with the NPC unit
+  id/type via `0x47e340`, and runs quest event 0 through `0x515980` at `0x4c26f2`). `.pdata` only gives this block, not
+  the function entry; the parent is a large `D2Game\src\Player\PlrMsg.cpp` switch. Prefer hooking the quest wrappers
+  (section 2) for rule logic; use this block only to read how the click arrives.
+- **Dialog message** (the player picks a dialog line): **`0x4c33e0`**, entry bytes
+  `40 55 53 57 41 54 41 55 48 8d 6c 24 e0 48 81 ec`; it calls `0x515980` (event 0, `0x4c37b2`) and the message wrapper
+  `0x516940` (event 11, at `0x4c35cf`, `0x4c3bbf`, `0x4c3bd4`). Custom actions (Median's 16 action slots) can be run by
+  hooking `0x516940` (`(game, player, npc id /*r8d, -1 = none*/, msg /*r9w*/)`; the quest handlers read the message at
+  `event+0x30` and the NPC class at `event+0x28`).
+- **Trade / gamble / hire packet**: **`0x4b0470`** `(game, player, packet*, size)`, `D2Game\src\Player\PlrMsg.cpp`
+  (assert strings "Can't trade / gamble / hire with this NPC. player: %u, dwParam1: %u, dwParam2: %u."). Entry bytes
+  `40 55 53 56 57 41 54 41 55 48 8d 6c 24 d1 48 81`. It finds the NPC (`0x53b8f0`), fetches the NPC record
+  `0x3971a0(dataFlag, npcClass)` and branches on the request type (`[rbp-8]`: 1 trade, 2 gamble, 3 hire) testing
+  record bytes `+8` (trade), `+9` (gamble), `+7` (hire), see section 6.
+
+### Client
+
+The NPC dialog UI is in **`D2Client\src\UI\npcmenu.cpp`** (string `0x1cc78a0`): 22 functions between `0x10a520` and
+`0x117634`; global state `0x2a4875c` (NPC unit id), `0x2a48764` (NPC class, word), `0x2a487b0`, `0x2a48760`. Three of
+them call the NPC-table getter `0x3971a0` (`0x1147a0`, `0x1162f0`, `0x117510`; `0x117510` is the "click a menu item"
+sender: it reads record byte `+0xb` and sends packet 0x2e through `0xec820`). **The menu is built from the same static
+NPC table** as the server checks; so editing that table (section 6) changes both the buttons and the server answer.
+How the visible list of lines is composed (the loop over trade / gamble / hire / quest lines, and where a 16-slot
+action list could be added) is not traced; start at the other npcmenu functions listed by
+`d2r_find.py xref 0x1cc78a0`. Layout (sprites, JSON panels) is separate and not in this lane.
 
 ## 4. Level entry / warp (dungeon lockout)
 
-- Server warp interaction handler: **`0x4adbb0`** (`D2Game\src\Player\PlrMsg.cpp`; logs "Warp object not found",
-  "Unable to do warp interact", "Can't warp now due to hostility"), entry bytes
-  `40 55 53 57 41 54 41 56 41 57 48 8d 6c 24 d1 48`. likely. Not read to the point of the actual warp (level change)
-  call or the place where D2R refuses entry, so the lockout test (Sigma `0x5d810`) has no precise call site yet.
-- D2R keeps warp data in D2Common's DRLG (`D2Common\src\Drlg\DrlgWarp.cpp` at `0x1d0dac0`); the client also builds the
-  entry-requirements text (Sigma `0x5d150` is client-side text, not the server check).
+- **`0x4adbb0`** `(game, player, packet*, size)`: the server handler of the "use warp" packet
+  (`D2Game\src\Player\PlrMsg.cpp`, strings "Warp object not found", "Unable to do warp interact", "Can't warp now due to
+  hostility"). Entry bytes `40 55 53 57 41 54 41 56 41 57 48 8d 6c 24 d1 48`. After the checks (distance
+  `0x325140(player, target) <= 0x32`, hostility `0x42bfb0`) it calls **`0x491ff0(game, player, warp)`**
+  (`D2Game\src\Unit\SUnit.cpp`, 0x90 bytes plus chained parts; entry bytes
+  `48 8b c4 53 55 57 41 56 48 83 ec 68 49 8b d8 4c`) which is the warp/level-change action; four more callers exist
+  (`0x58e2ce`, `0x590251`, `0x5907f4`, `0x5a11a0`). Confidence: likely (the call chain is read; the call that actually
+  changes the player's level inside `0x491ff0` and the level id of the destination were not isolated).
+- **Plugin plan:** to implement Median's lockout, hook `0x491ff0` (or `0x4adbb0` before it): read the target warp's
+  destination level, check the per-game lockout map and the levels extension (difficulty, level, class), and either
+  refuse (return without calling the original) or call it and then start the clock. The destination-level read still
+  needs a follow-up (the warp unit's object data holds it; the portal object code in the plugin, `0x432ce0` family, uses
+  `0x34e9d0` to write the level byte, so the reader is nearby).
+- The client's entry-requirements text (Sigma `0x5d150`) is client UI and does not exist in D2R.
+- D2Common keeps the vanilla warp data in `D2Common\src\Drlg\DrlgWarp.cpp` (string `0x1d0dac0`); the vanilla level-record
+  extension fields (levels.bin +0x14b..+0x15f) are Median's, so D2R does not read them; the plugin owns that table.
 
 ## 5. Monster spawning (treasure goblins)
 
-Not traced to hook points. Anchor candidates: the unit-death function `0x44db20` (SUnitDmg.cpp) already shows how
-D2R drives per-kill logic; spawn would use the monster-create path used by the summon code (`0x4350e0`, plugin-known).
-See "Unknown".
+Not found. What was established:
 
-## 6. Item / skill requirement checks
+- Median's tick is a per-game-frame call (Sigma patches 1.13c `D2Game+0x2e15a`, the end of the game frame function
+  `0x2e050`, which increments `game+0xa8` and runs the subsystem updates). D2R's game frame function was not located
+  (candidates are in `0x403000`-`0x40a000`, where `D2Game\src\Game\Game.cpp` is referenced; none confirmed).
+- **Alternative that needs no tick:** roll the goblin chance on each monster death. The kill wrapper `0x515640`
+  `(game, victim, killer)` (section 2) sees every kill with the killer player; "last kill within 15 s" is then implicit.
+  This changes the spawn rate model (per kill instead of one roll per 15 s per active player); tune the chance down.
+- Spawn call: D2R's monster-spawn code lives in `D2Game\src\Monster\MonsterSpawn.cpp` (functions `0x4929e0`, `0x492e70`,
+  `0x4934d0`, `0x493870`, `0x4945c0`, `0x495110`); the summon routine `0x4350e0` (plugin-known) creates a monster
+  for an owner. Which of them takes `(game, room, x, y, class)` was not decided.
 
-Not traced. See "Unknown".
+## 6. Item / skill requirement checks (the requirements evaluator)
+
+Median's requirement table only gates NPC services (quests-requirements.md). In D2R the same gates exist as **a static
+NPC table**, and its checks run on both client and server:
+
+- **Table: RVA `0x237ea60`, 43 entries of 0x1c bytes**, writable data; getter **`0x3971a0(dataFlag /*ecx*/, npcClass /*edx*/)`**
+  returns the entry or null (linear scan, entry `+0` is an s16 class id). Entry bytes of the getter:
+  `45 33 c0 4c 8d 15 b6 78 fe 01 41 8b c8 4d 8b ca`.
+- Fields (verified with Kashya 150, Gheed 147, Qual-Kehk 515 against known game behaviour): `+0` class id (s16), `+7` hire
+  allowed, `+8` trade (shop) allowed, `+9` gamble allowed, **`+0x10` hire quest gate: quest id + 1 (0 = none)** (Kashya `3`
+  = quest 2 Blood Raven, Qual-Kehk `0x25` = quest 36 Rescue on Mount Arreat: **this is exactly Median's hire gating, so
+  requirement rows 9 and 14 already hold in D2R**), `+0x11` minimum level for hiring (Kashya 8), `+0x0a` act index,
+  `+0x18` a second id (`-1` none).
+- The server checks (`0x4b0470`): hire needs `+7`, then the quest gate (`0x325c50(rec, quest-1, 0)` must be set) and the
+  level (`stat 12`, via `0x2f5020`); trade needs `+8`; gamble needs `+9`.
+- **Hook plan for `requirements.cpp`:** (1) static cases at plugin load: write the table bytes (Median turns the shop off
+  for Atma 176, Geglash, Cain in acts 2 and 5, act2vendor1; the table is in `.data`, so a guarded write like the
+  srvdofunc table works). (2) Dynamic cases (anything the table cannot say, such as Cain's per-catalyst buttons): hook the
+  server packet handler `0x4b0470`, or call the evaluator from a detour of the getter `0x3971a0`... the getter has no
+  player argument, so prefer `0x4b0470` for denial and the client menu functions for display.
+- Item level/class requirement checks for equipment and skills (strength, level, class) are not gated by Median's
+  evaluator; D2R's own `0x376de0(item, player)` (item level requirement, plugin-known) is the call to reuse.
+
+## Appendix A. Quest descriptor table (D2R, verified)
+
+`0x239c5c0`, 36 entries of 0x20 bytes: `+0` init function VA, `+8` u32 act (0-4), `+0xc` u32 (`0x64` or 0), `+0x10`
+u32 flag, `+0x14` u32 ordinal in the act, **`+0x18` u32 quest id**. Ids: act 1 `1-6` and `41` (init `0x5db880`,
+shared with id 29), act 2 `8-14, 30, 31`, act 3 `16-22, 32`, act 4 `24-27, 33`, act 5 `35-40`. Quest id N to source
+file: act 1 `a1qN`, act 2 `a2q(N-8)`, act 3 `a3q(N-16)`, act 4 `a4q(N-24)`, act 5 `a5q(N-34)` (checked from the strings
+each init's handlers reference). So Median's hooked quests are: 4 `a1q4`, 5 `a1q5`, 6 `a1q6`, 13 `a2q5`, 14 `a2q6`,
+19 `a3q3`, 21 `a3q5`, 25 `a4q1`, 36 `a5q2`, 38 `a5q4`, 40 `a5q6`.
+
+`py -3 tools/d2r_find.py qinit <id|all>` lists the handlers an init stores; results for the Median-hooked quests
+(event 0 = NPC activate, 8 = kill, 11 = NPC message; entry bytes in the tool output):
+
+| Quest | Init | event 0 | event 8 | event 11 | Confirmed by |
+|---|---|---|---|---|---|
+| 4 | `0x5db310` | `0x5dfe90` | `0x5e29d0` | `0x5e0830` | NPC 0x94, msgs 0x61/0x70/0x76/0x7d, same as 1.13c `0x66ce0` |
+| 6 | `0x5db6c0` | `0x5e1d30` | `0x5e1f00` | `0x5e2660` | quest-6 bit tests, drop sequence = 1.13c `0x67e00` |
+| 13 | `0x59f8f0` | `0x5a5360` | `0x5a5490` | `0x5a5920` | init only |
+| 14 | `0x59f9f0` | `0x5a5d40` | (none) | `0x5a66b0` | init only |
+| 19 | `0x5ea880` | `0x5ee920` | | `0x5ef040` | constants 0x251, 0xff (Ormus), 0x60 |
+| 21 | `0x5eaad0` | `0x5f05d0` | `0x5f06f0` | `0x5f0df0` | constant 0x272 (Cain, act 3) |
+| 25 | `0x5e4c20` | `0x5e6660` | `0x5e67c0` | `0x5e6d70` | init only |
+| 36 | `0x548220` | `0x54c090` | `0x54c1e0` | `0x54c810` | constant 0x203 (Qual-Kehk) |
+| 38 | `0x548590` | | | | init stores by another pattern, not listed |
+| 40 | `0x5487f0` | `0x54f800` | `0x54fa70` | `0x550450` | init only |
+
+## Appendix B. Median's D2Game patch table (1.13c call sites that need a D2R analog)
+
+D2Sigma's loader patches D2Game from a table of 520 records at D2Sigma VA `0x101712f0` (five dwords: D2Game RVA, 0,
+value, flag, 8). 285 records have flag 0 (a 32-bit constant or table pointer written into code: bounds, table
+addresses, `0x90909090` nops, `0xe8`/`0xe9` opcode bytes); 235 have flag 1 (the rel32 of a call/jmp redirected to a
+D2Sigma function). These are exactly the places where Median changes 1.13c behaviour. The grouped table is below, by
+target; use `tools/ghidra_scripts/SiteFuncs.java` on the D2Game copy to name the 1.13c function around a site. Cases
+already mapped: `0x7242a` / `0x72418` / `0x72421` = the cube output dispatch (section 1); `0x348a4..0x35349` and the
+`0x101dd0e8/0f8/0fc` constants = the quest descriptor table (Appendix A: D2R has one table, patch nothing, hook the
+handlers); `0x2e15a` = the end of the game frame function (the goblin / D2GS tick).
+
+| Sigma target (VA) | D2Game patch sites (1.13c RVAs of the rel32 operand of a call/jmp) |
+|---|---|
+| `0x1004b560` | 2: 0x79f91 0xdef8b |
+| `0x100573a0` | 1: 0xdb7b4 |
+| `0x10057930` | 17: 0xdb98 0x760b8 0x7625e 0x76965 0x7cb77 0x7cbe6 0x7d3de 0x7f5d9 0x97891 0xa2f77 ... |
+| `0x10057f50` | 4: 0xa10f1 0xdb7a0 0xdb7c2 0xdb846 |
+| `0x10057f70` | 1: 0xdbd79 |
+| `0x10057f80` | 3: 0x9a300 0xdc7cd 0xddb74 |
+| `0x10057f90` | 1: 0xdc180 |
+| `0x1005a840` | 1: 0x734f2 |
+| `0x1005c780` | 21: 0x3afd9 0x42c20 0x430be 0x43370 0x4f23d 0x4f434 0x4f4b8 0x75664 0x92927 0x95543 ... |
+| `0x1005ca30` | 1: 0x4b2ee |
+| `0x1005ca50` | 1: 0x4b292 |
+| `0x1005e900` | 1: 0xdc076 |
+| `0x1005e910` | 1: 0xde8f1 |
+| `0x10064dd0` | 1: 0xed30e |
+| `0x100664a0` | 1: 0x2e15a |
+| `0x10066900` | 1: 0xcedb8 |
+| `0x10066c10` | 4: 0x49191 0x55d51 0xdddb0 0xedaef |
+| `0x10067450` | 3: 0x97593 0x981f5 0xc0f0e |
+| `0x10067910` | 5: 0x4919a 0x55de0 0xc0d9a 0xdddb9 0xedcf0 |
+| `0x10067920` | 2: 0xd0d1a 0xd0d1a |
+| `0x1006aff0` | 3: 0x79de4 0xd0902 0xd093d |
+| `0x1007e3b0` | 1: 0x10c88 |
+| `0x1007e7d0` | 2: 0x11e8f 0x4ee05 |
+| `0x1008a910` | 1: 0x6f63e |
+| `0x1008f880` | 1: 0xaf841 |
+| `0x1008f8a0` | 1: 0xaccf5 |
+| `0x100931e0` | 2: 0xce48e 0xce4a0 |
+| `0x10093200` | 2: 0xcd4ce 0xcd4e0 |
+| `0x100936f0` | 3: 0xbd20d 0xbd3ce 0xbf7f2 |
+| `0x10093710` | 2: 0x2c4a4 0x2c7ac |
+| `0x10093a30` | 3: 0xbf71f 0xbf7bf 0xbf8a0 |
+| `0x10093e40` | 23: 0x8f638 0x8f715 0x8f7d4 0x8f82d 0x8f83d 0x8fab3 0x8fb0d 0x9029a 0x906c6 0xb0174 ... |
+| `0x10093f90` | 4: 0x488af 0xc02b0 0xc02ca 0xc17f4 |
+| `0x10097de0` | 3: 0x3876b 0x6cc74 0xaf531 |
+| `0x10097fa0` | 1: 0x6bee9 |
+| `0x10098890` | 2: 0x4b5b7 0xe1ac4 |
+| `0x100988b0` | 1: 0x6a133 |
+| `0x100988c0` | 1: 0xddd74 |
+| `0x1009b660` | 1: 0xf0346 |
+| `0x1009b720` | 1: 0xc73d7 |
+| `0x1009b730` | 1: 0x36f1a |
+| `0x1009b750` | 2: 0x2c428 0x2c76c |
+| `0x1009b770` | 1: 0x2c567 |
+| `0x1009b780` | 1: 0x2c813 |
+| `0x1009b7a0` | 1: 0xf0dd5 |
+| `0x1009b7b0` | 2: 0x2c48d 0x2c795 |
+| `0x1009b7d0` | 1: 0x5fa19 |
+| `0x1009b7e0` | 1: 0xdc4ea |
+| `0x1009b850` | 1: 0x7242a |
+| `0x1009b900` | 4: 0x6bd39 0x6e085 0xc8970 0xd0315 |
+| `0x1009b920` | 1: 0xd7b75 |
+| `0x1009b990` | 1: 0x2e8d2 |
+| `0x1009b9b0` | 1: 0xe12f2 |
+| `0x1009b9d0` | 1: 0x2e831 |
+| `0x1009ba30` | 1: 0x2cd8b |
+| `0x1009bad0` | 1: 0x2e43f |
+| `0x1009bb20` | 2: 0x43413 0x6a78e |
+| `0x1009bb40` | 2: 0x5618c 0x56389 |
+| `0x1009bbc0` | 1: 0x10cca |
+| `0x1009bc00` | 2: 0x106b0 0x10ca9 |
+| `0x1009bc20` | 9: 0x53471 0x53978 0x539cc 0x53a03 0x53a43 0x53a89 0x53ac3 0x53b06 0xec0b8 |
+| `0x1009bc40` | 3: 0x2d568 0x2d7b7 0x2d141 |
+| `0x1009bc60` | 6: 0x55195 0x55938 0x79352 0xe1ee9 0xed0e0 0xed638 |
+| `0x1009bc80` | 1: 0xe2121 |
+| `0x1009bc90` | 3: 0xa09e3 0xa1cd9 0xa1cf1 |
+| `0x1009bd10` | 2: 0x8580c 0x8581a |
+| `0x1009bd70` | 2: 0xf4d6 0xf66d |
+| `0x1009bd90` | 1: 0xf6b5 |
+| `0x1009bdc0` | 1: 0xcadc5 |
+| `0x1009bde0` | 1: 0x53f94 |
+| `0x1009be30` | 2: 0xddeb8 0xddeee |
+| `0x1009d420` | 3: 0x35444 0x359a5 0x48916 |
+| `0x1009e6a0` | 1: 0xc0423 |
+| `0x1009e9a0` | 1: 0x68cdd |
+| `0x1009ff10` | 1: 0xc0597 |
+| `0x1009ff20` | 3: 0x5c0f1 0x5c1bd 0x5efee |
+| `0x1009ff40` | 1: 0x4b4bc |
+| `0x100a2070` | 1: 0x9ed3e |
+| `0x100a2080` | 3: 0x95d37 0x9fe88 0xa1c8b |
+| `0x100a20a0` | 1: 0x79b7c |
+| `0x100a20b0` | 1: 0x79b77 |
+| `0x100a2370` | 1: 0xc057d |
+| `0x100a2a50` | 3: 0x2c210 0x2c21e 0x2c289 |
+| `0x100a4af0` | 1: 0x543d1 |
+| `0x100aebc0` | 1: 0x459ab |
+| `0x100afa10` | 1: 0x29456 |
+| `0x100afa20` | 1: 0x3865a |
+| `0x100b0f40` | 2: 0xa09d5 0xa1cb7 |
+| `0x100b1390` | 2: 0x9fd66 0xa1aed |
+| `0x100b3dc0` | 1: 0x7add7 |
+| `0x100b3f30` | 3: 0x78a23 0x7addd 0xf3c0b |
+| `0x100b6410` | 2: 0x7403f 0x7404d |
+| `0x100bca20` | 3: 0x6b273 0x789bb 0xf3b37 |
+| `0x100bcd10` | 9: 0x4b17e 0x4b1b6 0x5568b 0x55955 0x9dd29 0xe176f 0xe1858 0xed3fe 0xed655 |
+
 
 ## Unknown / next steps
 
-1. Quests 13, 14, 19, 21, 25, 36, 38, 40: map Median's ids to D2R files with `d2r_find.py qinit` and read their
-   handlers (the Act 1 milestone does not need them).
-2. D2R's treasure-class executor (1.13c `0x12380`) and the unique-by-index item creator (1.13c `0x11490`), for "drop TC X"
-   instead of creating the item directly.
-3. NPC menu (client UI): which D2R function decides the button list; the server action path is `0x516940`/`0x4c33e0`.
-4. Warp / level entry refusal point for the dungeon lockout (inside `0x4adbb0`'s callees or the level change itself).
-5. Goblin spawn call (monster create at a position) and the per-player tick.
-6. Item and skill requirement evaluation call sites (strength/level/class checks for equip and skill use).
-7. Game create / destroy hook for the cube flag storage (workaround: reset on game pointer change).
+1. D2R's treasure-class executor (1.13c `0x12380`) and the unique-by-index item creator (1.13c `0x11490`): needed to
+   drop "TC X" or create Griswold's Heart as a unique. Workaround for the Act 1 milestone: create items by code
+   (`0x517530`); the unique needs the item-generation core (`0x43d530` / `0x43cd50`, signatures not read).
+2. Quest handlers for 13, 14, 25, 40 are known only from the init stores (not read); 38 is not listed.
+3. The client NPC menu line composition (where Median's 16 action slots would be added) and the UI layout.
+4. The destination-level read inside `0x491ff0` and the exact refusal point for the dungeon lockout.
+5. The D2R game frame function (goblin tick) and the monster-spawn call `(game, room, x, y, class)`.
+6. A game create / destroy hook for the cube flag storage (workaround: reset when the game pointer changes).
+7. Whether the post-hook's gold payment (`0x2f7d10` set stat 14 / 15) needs an explicit client update packet.
