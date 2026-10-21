@@ -46,6 +46,8 @@ Reading aids that apply everywhere:
 | 2 | Quest descriptor table (36 entries: init fn, act, quest id) | `0x239c5c0` (stride 0x20) | verified |
 | 3 | NPC table (43 x 0x1c bytes: hire/trade/gamble flags, hire quest and level) | `0x237ea60`, getter `0x3971a0` | verified |
 | 3 | Server NPC trade / gamble / hire packet handler | `0x4b0470` | verified |
+| 3 | Mercenary stat setup from the hireling.txt row `(game, player, merc or null, level)`; run by hire, save load and level-up (hooked by hirelings.cpp, entry `48 8b c4 53 55 41 55 41 57 48 83 ec 58`) | `0x544f60` | verified |
+| 3 | Hire packet 0x36 handler `0x4a9520` -> hire `0x53d350` (checks hire flag, quest/level gate, price) -> bind `0x544ac0`; save load of the mercenary `0x421240`; player's mercenary unit `0x4ff1a0(game, player, 7, 0)`; mercenary record by unit id `0x4ff2d0(player, id)` (hireling id at `+8`); hireling.txt row by id and level `0x3965d0(dataFlag, dataFlag != 1, id, level)` (row 0x150 bytes: `+0x1c` level, `+0x34/+0x38` strength and per level, `+0x3c/+0x40` dexterity) | see text | verified |
 | 3 | NPC click packet (server; calls quest event 0) | block `0x4c26a7` of a PlrMsg handler | likely |
 | 3 | NPC dialog-message packet (server; calls quest event 11) | `0x4c33e0` | likely |
 | 3 | Client NPC menu module (`D2Client\src\UI\npcmenu.cpp`) | functions `0x10a520`-`0x117634` | likely (module only) |

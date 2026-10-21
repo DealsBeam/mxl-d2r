@@ -285,7 +285,58 @@ only a name string key per hiredesc row (`strhirespecial1..9`), already used by 
 - D2R extras that Median lacks: per-element resists (converted), `HiringMaxLevelDifference`, resurrect cost columns,
   `equivalentcharclass` (take from hireclasses +4; check the converter filled it for the barbarian rows).
 - D2R's own mercenary equipment rules (head/torso/weapon/shield by class) come from D2R's tables; Median's Head/
-  Torso/Weapon/Shield columns exist in hireling.txt and convert as data.
+  Torso/Weapon/Shield columns exist in hireling.txt but D2R has no such columns, so they are not converted (2.4, item 9).
+
+### 2.4 Median's hireling changes: the list, the buckets and the port (lane hirelings, 2026-10-21)
+
+Method: Median's hireling.txt (extract) against the built one; D2Sigma's D2Hirelings.cpp (23 functions) and the
+D2Items.cpp equip test read again; D2R's hire path read in the dump (packet 0x36 handler `0x4a9520` -> hire `0x53d350`
+-> bind `0x544ac0`; save load `0x421240`; level-up and stat setup `0x544f60`; hire menu `0x4b0470` kind 3).
+
+| # | What Median changes | Evidence | Bucket |
+|---|---|---|---|
+| 1 | Hireling rows: 60 rows, four hire classes (rogue, desert, iron wolf, act 5 barbarian), nine types, levels 3/36/90, 12/43/90, 15/49/90, 38/68/90 | hireling.txt | **data, done** (txt_migrate; D2R's 135 rows are replaced) |
+| 2 | Skills, stats per level, resistances, hire cost (`Gold`), `Exp/Lvl`, type names (`HireDesc` -> `strhirespecial1..9`) | hireling.txt, hiredescext | **data, done**; skill, name and desc keys exist in the string JSONs (checked 2026-10-21) |
+| 3 | `equivalentcharclass` (which class's items the mercenary may equip): ama / pal / sor / bar. D2R's own table has only ama and bar | hireclasses +4; 0x1007e470 compares the item's class restriction with it | **data, fixed here**: txt_migrate `hireling_tables` sets it for acts 2 and 3 (pal, sor), 72 bank rows. Needs an in-game check (below) |
+| 4 | Class bonuses on hire: damage resist, damage %, life regeneration, speed, dodge, energy, masteries, skill armor, crushing blow, slows attacker, extra experience, poison length resist (values below) | 0x10066900, called only by the hire function 0x100672a0 | **plugin, done**: `hirelings.cpp` |
+| 5 | Minion scaling (`mnhp`, `mnar`, resist and proc copy) | 0x100683d0 and callees | **already ported** (`pet_scaling.cpp`); summons only, hirelings do not use it |
+| 6 | Hire availability: hirer flag (npcext bit 2), quest requirement (Kashya row 9, Qual-Kehk row 14), resurrect entry (bit 3: the four hirers and Tyrael of act 4) | npcext, requirements | **mostly already in D2R's NPC table** (`+7` hire, `+4` resurrect, `+0x10` quest gate: the same five NPCs, the same quests). One difference, fixed: D2R also lets a character of level 8 hire from Kashya without Blood Raven (`+0x11`, read by `0x4b0470` and `0x53d350`); the plugin clears that byte so the quest alone opens her, as in Median |
+| 7 | Hire and equip tests: refuse while the player has state 0x4c, 0x51 or 0x50; mercenary equip test (class, strength, dexterity, level, plus a fixed list of eight states and the hireclasses state lists) | 0x100672a0, 0x10067220, 0x10066fd0, 0x1007e470 | **cut** for now: the state ids are unresolved (open question 5); D2R keeps its own requirement and class checks, which `equivalentcharclass` feeds |
+| 8 | Revive cost | no D2Sigma code; the cost is D2Common's, and D2R's columns `resurrectcostmultiplier/divisor/max` (15 / 2 / 50000) copy the vanilla formula | **same as D2R**, nothing to do |
+| 9 | Median's `Head`, `Torso`, `Weapon`, `Shield` columns (0 to 2, 48 rows) and `Share` (55 rows) | hireling.txt overflow | **cut / unknown**: D2R's table has no such columns and the rule for a new hire's starting gear is not found. In game: does a fresh hire carry gear? |
+| 10 | Death / revive stat handling (`0x10068020`, `0x10067e20`) | read again: 0x10068020 is the pet attribute copy (energy, strength, ... in full, masteries halved), not a death penalty | **n/a**, part of the minion scaling; the note in 2.2 step 4 is superseded |
+| 11 | Hireling skill use | skills are table data; no D2Hirelings code touches skill use | **data** |
+
+**Class bonuses (item 4).** The function *sets* (D2Common 10887) these stats on the new mercenary; level is its level,
+strength and dexterity its attributes. Stat ids are matched by name through `mxl_hirelings.h` (generated). Common to
+all but the rogue: skill armor % 40, damage % = strength / 2, life regeneration = (strength * 8 / 10) * 256, movement
+velocity 80. Rogue: damage resist = level / 4, damage % = dexterity / 2, regeneration from dexterity, velocity 100,
+dodge = min(dexterity / 40, 60). Everybody: poison length resist 200, item_addexperience = 10 * level. Then by class:
+
+| Class | Stats set |
+|---|---|
+| Rogue | energy (level + 4) * 6; slows attacker level / 5 + 25 |
+| Desert | energy level * 4 + 16; crushing blow level / 10 + 15; damage resist level / 5 + 25; hireling ids 8, 11, 14 (the Fighter Mage type): fire and cold mastery = level |
+| Iron Wolf | energy (level + 9) * 20; skill armor (level + 60) * 5; Median stat 485 (level + 50) * 5; fire, cold, lightning mastery = level |
+| Barbarian | energy level * 2 + 8; to strength level / 4 + 20; to dexterity level / 3 + 20; Median stat 184 = 20 |
+
+**Where it runs in D2R.** `0x544f60 (game, player, mercenary or null, level)` is D2R's single "derive the mercenary's
+stats from its hireling.txt row" function. The hire (`0x544ac0`), the save load (`0x421240`, twice) and the level-up
+(`0x44f52e`) all call it, so a post-hook sets the bonuses on every one of them. D2Sigma ran its function only from the
+hire (its only caller; how Median restores the stats from a save is open question 6); here the bonuses are always
+present. Because they are stat *sets*, repeating them after a level-up is exact. Strength and dexterity are recomputed
+from the hireling.txt row exactly as D2R's own function does (`base + (level - row level) * perLevel / 8`, at least
+10), so gear does not feed the regeneration or the damage bonus. The hireling id (the dm3 test) comes from the
+player's mercenary record (`0x4ff2d0`, `+8`), the row from `0x3965d0(dataFlag, dataFlag != 1, id, level)`. Entry bytes
+of all four functions are checked at load; any mismatch leaves the part off with the reason in the `mxl` line. Switch:
+`hirelings` in mxl-core-off.txt.
+
+**Not changed:** the hire NPCs (Qual-Kehk is D2R's), the hire menu panel, the revive price.
+
+**In-game checks** are in docs/testing.md (hirelings row): the `mxl` line, bonuses visible on the hireling screen and
+still there after a level-up or reload, Kashya before Blood Raven at level 8 or more, and class items on the desert
+mercenary (paladin items) and the iron wolf (sorceress items). If `equivalentcharclass` for acts 2 and 3 is ignored
+or harmful, take it out of `hireling_tables` (the only line that writes it).
 
 ## 3. Vanilla functions hooked or replaced, and D2R equivalents
 
@@ -366,4 +417,4 @@ only a name string key per hiredesc row (`strhirespecial1..9`), already used by 
 
 All 60 converted rows follow D2R's 135-row hireling column layout (including the base bank): no shifted columns. Median's shared Resist and Resist/Lvl land in all four D2R elements; shared row fields, six skills per row, and the nine HireDesc mappings match the named table. Every skill exists in the converted skills.txt, and every NameFirst, NameLast and HireDesc key exists in the mod string JSONs. Act I and Act V equivalentcharclass values are ama and bar.
 
-Only difference (column `equivalentcharclass`): rows 13–30 (Act II) and 31–48 (Act III) are blank, where Median's hireclasses says `pal` and `sor`. D2R's own hireling.txt leaves Act II and III blank too, so the conversion copied D2R's convention. Open question: set `pal`/`sor` so these mercenaries can equip what Median lets them (needs checking what D2R does with a non-blank value for those acts).
+Only difference (column `equivalentcharclass`): rows 13–30 (Act II) and 31–48 (Act III) were blank, where Median's hireclasses says `pal` and `sor`. D2R's own hireling.txt leaves Act II and III blank too, so the conversion copied D2R's convention. **Fixed 2026-10-21** (lane hirelings): `txt_migrate.py hireling_tables` writes ama / pal / sor / bar from hireclasses into both banks; what D2R does with a non-blank value for acts 2 and 3 is an in-game check (2.4, testing.md).
