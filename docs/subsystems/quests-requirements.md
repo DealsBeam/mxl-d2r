@@ -221,6 +221,29 @@ Order = what a player meets first. Sizes: S < 100 lines, M 100-300, L > 300 of p
 Milestone note (Barbarian, Act 1): items 2, 3 (Andariel part) and 4 are enough for Act 1; Akara's Heart is the first
 visible reward. Cain's buttons (item 5) are the first Median NPC UI and are needed to recover a lost catalyst.
 
+## 5b. Implemented: Act 1 (plugin/src/quests_act1.cpp, quests_logic.h; switch `quests`)
+
+Hooks sit on D2R's per-quest handlers (same slot as Median's, run in front of the vanilla handler, then chain):
+
+| Hook | RVA (entry bytes in the source) | Does |
+|---|---|---|
+| a1q4 event 11 | `0x5e0830` | Akara (class 0x94), message 0x76, quest-4 bit 1: creates **Griswold's Heart** of the game difficulty (uniqueitems rows 69 / 70 / 71 = `GriswoldsHeart`, `(N)`, `(H)`; base armor codes `600 `, `784 `, `@01 `) with `0x517530(game, player, code, 255, 7, 1)` |
+| item generator | `0x43cd50` | when a request is armed on the thread, writes unique index + 1 at block +0x50 (read by the quality-7 chooser `0x443910`); the unique-already-exists bit (game+0x3638) is cleared first |
+| a1q6 event 8 | `0x5e1f00` | Andariel (class 156) in Normal, flag clear: creates `3o[ ` (catalyst of disenchantment) in the killer's inventory, sets the flag |
+| a1q6 event 0 | `0x5e1d30` | NPC activate: flag set, NPC class 0x9b (**Warriv**, from D2Sigma `0xbff40(0)`, not Cain) and no `3o[ ` held (`0x441980`): creates it again |
+
+Findings that change the earlier notes: (1) the Akara reward is not an "Akara's Heart" but the unique Griswold's Heart, picked by
+difficulty from three strings at `0x1018fd54`. (2) The re-issue hook fires on Warriv (act 1, monster 155), the same row Median uses as a
+treasure-class holder; Cain's buttons (requirement rows 27-31) are a second route and belong to the NPC lane. (3) The flag is not in D2R's
+quest object (its data block is full); it is quest id 47, bit 0 of the player's record of that difficulty, so it survives saving
+(D2Sigma loses its flag when the game ends). Quest-record bit helpers `0x325c50` (test) and `0x325c00` (set) take `(record, quest, bit)` with
+`record = *(playerdata + 0x40 + difficulty * 8)`, no bounds check.
+
+TODO (not done): D2Sigma drops the treasure class once per player in the game on the ground; here only the killer gets one (the TC executor
+is still unlocated). Notice 0x61 (`0xb15d0`) after the Heart. Requirement rows 26 (Akara level-51 slot), quest 41 level flag (`0x9e600`), Cain
+and Akara/Charsi/Warriv/Meshif/Larzuk/Drehya action buttons (NPC lane). Quest 5 repeat guard `0x9e8b0` (a1q5 event 8 `0x5e10c0`): purpose
+unconfirmed, deferred. The requirements evaluator (`requirements.cpp`) gates nothing in Act 1 yet; its only Act 1 consumers are the NPC action rows.
+
 ## 6. Open questions
 
 1. **Where are the Ubers?** Not here. Candidates: item spells (red portal, done), D2Dungeon/D2Drlg (level types 36-51),
