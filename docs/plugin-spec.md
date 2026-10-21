@@ -702,10 +702,32 @@ or 0x1000 (rainbow, Halloween only): rarity u16 at +0x17, min / max monster leve
 level restriction u16 at +0x1d (0xffff -> -1 any, else the level row mapped to its D2R id). `flags` keeps the whole
 word; its other bits are not understood. Rarity is the row's weight in the draw (confirmed, docs/subsystems/ubers-events.md section 4).
 
+## Skill tree pages (`skill_tree.cpp`, off word `skilltree`)
+
+D2R's `SkillsTreePanel` (D2Client SkillsTreePanel.cpp, one class for the HD and the classic panel) handles three pages
+and an item-skills "tab 3"; Median has eight pages per class. Findings (dump RVAs; Ghidra `FUN_1414c4520` etc.):
+- Build function `0x14c4520`: walks the pages 3, 2, 1 (`r13d`) and gives page p the widget `Tab<n>` with n counting up from 0
+  (`0x14c5f60`), so Tab0 held page 3 and Tab2 page 1, the reverse of the `SkillPage` numbers. It creates a
+  `SkillButton<page> <col>,<row>` for every class skill (the class skill list, `0x33cb30` count / `0x33dde0` id) whose
+  skilldesc record (stride 300: +2 SkillPage, +3 row, +4 column, +6 IconCel) has that page. Pages above 3 never got buttons.
+- Tab setter `0x14c3b10` (the `SkillsTreePanelMessage:ActivateTab:<n>` handler) clamps the index to 0..3 (tab 5-8 clicks
+  all selected tab 4); the current tab is the global `0x3bbd8bc`; controller bumpers `0x14c6810` wrap 0..3; the tab styling
+  loop `0x14c789b` covers tabs 0..3; seven `cmp [0x3bbd8bc], 3` mark the item-skills tab (no skill counter, no skill button
+  draw hook, `ItemHeader`).
+Patches (13 sites, byte-checked, one mutation transaction): clamp, controller wrap and styling loop 3/4 -> 7/8; the seven
+compares test 127 (no item-skills tab); the build function starts at page 8 and counts the tab widget index down
+(`push 3; pop r14` / `push 8; pop r13` / `mov eax, 7` in place of the loop set-up at `0x14c488a`, 38 bytes, and `inc eax` ->
+`dec eax` at `0x14c531a`), so page p lives in `Tab<p-1>`, which is what `tools/ui_layouts.py` (Tab n, background frame n) and
+`tools/skill_tree_art.py` (frame n = page n+1) always assumed. `mxl` prints `skill tree on: 13 sites, 8 pages ...`.
+Data side (`tools/skill_icons.py`): a skilldesc row has one IconCel, but Median shares rows between classes (the Mastery
+pages of all classes, many item skills): the row is now split per sheet ("row~class" copies, skills.txt repointed), so every
+tree skill finds its own icon in its class sheet (bug #3b: empty sockets on masteries, wrong icons where a class-less
+skill came first). Classes with more than 62 tree icons get smaller HD frames (Amazon 113 px, Barbarian 116 px).
+
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc skilltree`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500
