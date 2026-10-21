@@ -144,8 +144,9 @@ AlwaysDisplayName, GoblinChance); the **meaning below is from how the code uses 
 - **0x66120 (per player, every 15 s)**: skips dead or dying players (0xbf440), players in a town (0xbf8a0) and players who have not killed anything in the last 375 frames (15 s; the player's last-kill frame sits in the player data +0x28, `NoKillTimestampUpdate` in monstats opts a monster out of updating it). If the chance roll passes it picks
   a goblin, finds a spot near the player (radius 8), spawns it (`0x10042630`, monster id, x, y) and sends the
   client a 0x28-byte packet 0x5a type 0x15 with the new unit id (the "goblin sighted" notice).
-- **Chance (0x66070)**: GoblinChance of the area (+0x15c) reduced by a per-player term, at least 1, rolled against 1024 (`rand < chance`
-  with `0x400`; the reduction formula `a*b/c` of 0x88e50 is not decoded: open question).
+- **Chance (0x66070)** (decoded 2026-10-21): `chance - chance * (10 * players - 10) / 100` (0x88e50 is `a * b / 100`; `players` = game +0x8c,
+  the player count), at least 1; the roll is `rand < chance` out of 0x400 (1024). So 10% less per extra player (the tick is per player).
+  Area monster level for the pick = levels +0x16 + 2 x difficulty (u16 x3: Blood Moor 1 / 51 / 100; copied into `mxl_goblins.h` as `monLevel`).
 - **Pick (0x65de0)**: from a candidate list of monstats rows (rebuilt by 0x65be0) whose monstats3 flag word has bit 0x400
   set (and not bit 0x1000 = rainbow/Halloween only), with the area's monster level (levels record +0x16 + 2 x
   difficulty) within [min +0x19, max +0x1b] (0 = no bound) and level restrict (+0x1d: -1 any, else that level id).
@@ -154,7 +155,30 @@ AlwaysDisplayName, GoblinChance); the **meaning below is from how the code uses 
   voided_spawn (0), arcane_collector (300), glowing_baron (553, max 99), relic_thief (4, 100-119), relic_thief_2 (10, 120+),
   rainbow_goblin (flag 0x1000), rift_inspector 1-12 (restrict to levels 139, 39, 140, 141, 146, 148, 150, 151, 270, 154,
   155; the 5th at monster levels 116-117). The goblin treasure classes are `Goblin`, `Gob Rainbow`, `SoH Design`.
-- Rarity numbers need confirming (2325 for the common goblin looks high; the u16 at +0x17 may overlap a neighbour).
+- Rarity confirmed from 0x65de0: the u16 at +0x17 is the number of times the row is added to the draw list (a plain weight; 2325 vs 184 / 300 / 553
+  makes the treasure goblin about 69% of the draws below monster level 100). The pick is uniform over that list.
+- **Last-kill stamp** (D2Achievements.cpp 0x49c40, called per kill): when a player (or the owner of a minion, walked up the owner chain) kills a
+  monster whose monstats3 byte +0x20 (`NoKillTimestampUpdate`, 177 rows incl. the goblins themselves and summons) is 0, the frame goes into
+  the player data +0x28 (0xc04c0). The tick needs `frame - stamp < 0x177`.
+- Drops and behaviour after the spawn are pure data (monstats `TreasureClass1` "Goblin", "Goblin (N)/(H)", AI `OblivionKnight`, velocity 7);
+  D2Goblins.cpp has no despawn, flee or death code. The client notice (packet 0x5a type 0x15, "goblin sighted") is Median-client only.
+
+### D2R port (plugin 0.40.0, `plugin/src/goblins.cpp`, switch word `goblins`)
+
+- Tick: detour of the server game frame `0x406550` (14 entry bytes `48 89 74 24 20 55 57 41 57 48 8d 6c 24 b9`), original first, then
+  `game+0x170 % 375 == 0` runs the per-player turn. Chosen over a kill-wrapper roll because it is the exact twin of Median's table entry (a
+  15 s clock independent of kills, all players of the game) and the hook sits at a plain prologue; if the install fails the kill wrapper runs
+  the same tick once per 375-frame bucket (implemented as the fallback).
+- Stamp: pre-hook of the kill wrapper `0x515640` (15 bytes `48 89 5c 24 10 48 89 6c 24 18 57 48 83 ec 70`); the owner of a minion killer is
+  found with `0x4a5480(unit, &id, &err)` + `0x48fe80(game, 0, id)` exactly as the wrapper does.
+- Turn per player: not dead (unit mode `+0xc` is 0 / 17; `0x34ab60` reads the mode, **not** the unit id), room `0x34b440`, level `0x2efc10`, not in
+  a town (levels with the town flag: 1, 40, 75, 103, 109, 138, 139, 242, 243), recent kill, chance roll, pick, spot = player position + (8, 8)
+  in `0x38dfb0(room, x, y)`, then `0x4929e0(game, room, x, y, class, 1, 2, 0, 0)` (radius arg 2 lets `0x493cc0` search rings of 3 and 6 sub-tiles
+  for a free spot; Median's call is the exact point). Drops: the monster's own monstats treasure classes, nothing hooked.
+- State: last-kill frames per player id (16 slots), reset when the game pointer changes or the frame counter goes backwards (a new game on a
+  reused address). The game-destroy hook `0x4057c0` was not used: its entry has a rip-relative load inside the first 14 bytes.
+- Not ported: the "goblin sighted" packet. Testing aid: environment variable `MXL_GOBLINS_FORCE=1` (every roll passes) or `=2` (also no
+  last-kill requirement).
 
 ## 5. Halloween event and currency (D2Currency.cpp, object functions 36/37)
 
@@ -205,7 +229,7 @@ appear from Act 1, so players notice their absence early) -> 7 -> 9. Item 2 is a
    `OnEnteringLevelText` string.
 4. Level extension +0x154/+0x155/+0x156: portal level / portal object / flags (which one the red portal uses; plugin
    uses object 60 or the one-way portal today).
-5. Goblin chance reduction term (0x88e50 arguments) and the rarity field offset (+0x17 vs a neighbour).
+5. (answered, see section 4) Goblin chance reduction term and rarity field.
 6. What switches the Halloween event on (date, realm setting, quest flag?) and what the currency 102024 item is.
 7. How the three ubers and the Fist bosses are placed and phase-chained (DS1 presets and `BossEventMode` /
    `BossEventMissile1/2` fields in monstats; not read). Probably asset work, but the phase change of
