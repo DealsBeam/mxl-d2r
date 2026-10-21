@@ -179,6 +179,10 @@ void ActivateHook(void* quest, uint8_t* event) {
 
 }  // namespace
 
+void QuestsWantUnique(int indexPlusOne) noexcept {
+	g_wantUnique = indexPlusOne;
+}
+
 auto InstallQuestsAct1(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;
 	g_context = context;

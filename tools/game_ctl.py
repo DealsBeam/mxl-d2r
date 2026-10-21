@@ -724,6 +724,29 @@ def console_text(cmd, settle=0.6):
     return text
 
 
+def hcmd(cmd, timeout=15):
+    """Run one plugin test-harness gameplay command (plugin/src/harness_cmds.cpp, docs/testing.md "Harness commands"):
+    `hcmd("kill nearest 156")`. The plugin calls the game's own functions (no mouse or keyboard), appends "h: ..."
+    lines to mxl-testharness-console.txt and ends with "h: <verb> OK" or "h: <verb> FAIL <reason>".
+    Returns (ok, lines): ok is True for an OK last line, lines are the "h: " lines with the prefix removed."""
+    mark = _size(HARNESS_CONSOLE)
+    console_bg("h " + cmd, timeout)
+    verb = cmd.split()[0]
+    lines = []
+    t0 = time.time()
+    while time.time() - t0 < timeout:  # server-side verbs finish on the game thread's next frame
+        text = _read_from(HARNESS_CONSOLE, mark) or ""
+        lines = [ln[3:] for ln in text.splitlines() if ln.startswith("h: ")]
+        if lines and (lines[-1].startswith(verb + " OK") or lines[-1].startswith(verb + " FAIL")):
+            break
+        time.sleep(0.1)
+    else:
+        lines.append(f"{verb} FAIL no answer in {timeout} s (not in a game?)")
+    ok = bool(lines) and lines[-1].startswith(verb + " OK")
+    log(f"hcmd {cmd!r} -> {'OK' if ok else 'FAIL'}: " + " | ".join(lines)[:400])
+    return ok, lines
+
+
 def console(cmd):
     if BG:
         return console_text(cmd)

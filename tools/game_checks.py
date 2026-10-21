@@ -8,16 +8,19 @@ uses ImageGrab. A watchdog thread samples GetCursorPos and GetForegroundWindow e
 aborts the run when the real cursor enters the game window or the game window becomes the foreground window.
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
-%USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\). Checks: mxl goblins respec cain heart catalyst lockout lockclock cow
-goldcraft. See docs/dev-console.md for the console commands. D2R's own cheat output cannot be read in background
-mode (the console panel stays closed): a check verifies a cheat by its effect in the screenshots and by the plugin's
-`mxl` output and mxl-core.log.
+%USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
+catalyst lockout cow goldcraft craftflags lockclock. What a click in the world cannot do in background mode (kill a
+boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
+harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
+game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
+and D2R's own `cheat goto` (area change inside an act) still go through the window.
 """
 import ctypes
 import ctypes.wintypes as wt
 import datetime
 import hashlib
 import os
+import re
 import shutil
 import struct
 import sys
@@ -230,7 +233,6 @@ def counter(text, key, pattern):
 # ------------------------------------------------------------------ menus / entering the game
 
 DIFF_Y = {"normal": 0.42, "nightmare": 0.482, "hell": 0.542}
-CARD_Y, CARD_DY = 0.076, 0.095
 
 
 def to_menu():
@@ -275,18 +277,13 @@ def play(difficulty="normal"):
 STATE = {"in_game": False}
 
 
-def save_exit():
-    for _ in range(3):  # close panels / dialogs; the last Esc opens the pause menu
-        g.key("esc")
-        time.sleep(1.0)
-    g.click(*g.UI["save_exit"])
-    time.sleep(9)
-
-
-def leave():
-    if STATE["in_game"]:
-        save_exit()
-        STATE["in_game"] = False
+def enter_game():
+    """From the main menu: play the selected character (the first card: the slot's most recently played one) in Normal."""
+    g.click(0.87, 0.076)
+    time.sleep(0.8)
+    ok = play("normal")
+    STATE["in_game"] = ok
+    return ok
 
 
 def _checksum(d):
@@ -320,111 +317,113 @@ def patch_quests(name, quests):
     open(sp, "wb").write(bytes(r))
 
 
-CARDS = {"MxlQ": 0, "MxlBarb": 1}
+# ------------------------------------------------------------------ the plugin's gameplay commands (tools/game_ctl.hcmd)
+
+def H(cmd, timeout=15):
+    """One harness gameplay command (plugin/src/harness_cmds.cpp): (ok, lines). No mouse, no keyboard."""
+    guard()
+    return g.hcmd(cmd, timeout)
 
 
-def enter(name, difficulty="normal", quests=None, god=True):
-    """Leave any running game, optionally patch the closed save, play the character, switch debug mode on."""
-    leave()
-    if quests:
-        patch_quests(name, quests)
-    g.click(0.87, CARD_Y + CARD_DY * CARDS[name])
-    time.sleep(0.8)
-    ok = play(difficulty)
-    STATE["in_game"] = ok
+def kv(line):
+    return {k: v for k, v in re.findall(r"(\w+)=(\S+)", line)}
+
+
+def hstate():
+    """`h state` parsed: player dict, items (dicts), mons, objs, plugin counters, npc menu."""
+    ok, lines = H("state")
+    st = {"ok": ok, "player": {}, "items": [], "mons": [], "objs": [], "plugin": "", "menu": {}, "lines": lines}
+    for ln in lines:
+        if ln.startswith("player "):
+            st["player"] = {k: (int(v) if re.fullmatch(r"-?\d+", v) else v) for k, v in kv(ln).items()}
+        elif ln.startswith("item "):
+            st["items"].append({k: (int(v) if re.fullmatch(r"-?\d+", v) else v) for k, v in kv(ln).items()})
+        elif ln.startswith("mon "):
+            st["mons"].append({k: int(v) for k, v in kv(ln).items() if re.fullmatch(r"-?\d+", v)})
+        elif ln.startswith("obj "):
+            st["objs"].append({k: int(v) for k, v in kv(ln).items() if re.fullmatch(r"-?\d+", v)})
+        elif ln.startswith("plugin "):
+            st["plugin"] = ln
+        elif ln.startswith("npcmenu "):
+            st["menu"] = {k: int(v) for k, v in kv(ln).items()}
+    return st
+
+
+def items(st, code, page=None):
+    return [i for i in st["items"] if str(i.get("code")) == code and (page is None or i.get("page") == page)]
+
+
+def stat_of(lines):
+    m = re.search(r"= (-?\d+)", lines[0]) if lines else None
+    return int(m.group(1)) if m else None
+
+
+def lockout_counts(st):
+    m = re.search(r"refused=(\d+) clocks=(\d+)", st["plugin"])
+    return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+
+
+def goblins_counts(st):
+    m = re.search(r"(\d+) spawned .*?(\d+) rolls", st["plugin"])
+    return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+
+
+def goto(area, timeout=40):
+    """Move the character to an area: D2R's own `cheat goto` (debug mode) for the same act, the plugin's `level`
+    (the NPC travel) across acts. Waits until `h state` says so."""
+    for attempt in range(2):
+        enable_debug()
+        con("cheat goto %d" % area) if attempt == 0 else H("level %d" % area)
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            time.sleep(2)
+            st = hstate()
+            if st["player"].get("area") == area:
+                time.sleep(2)
+                return st
+    return hstate()
+
+
+def wait_menu(timeout=60):
+    """The NPC menu opens when the NPC's speech has played; returns the `menu list` lines or None."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        guard()
+        ok, lines = g.hcmd("menu list", 5)
+        if ok:
+            return lines
+        time.sleep(3)
+    return None
+
+
+def npc_menu(npc_class, spawn=True):
+    """Stand next to an NPC (spawn it when it is not loaded), talk, wait for the menu. Returns the menu lines."""
+    ok, lines = H("interact %d" % npc_class)  # the town's own NPC: its speech ends with the menu
+    if not ok and spawn:
+        H("spawn %d" % npc_class)
+        ok, lines = H("interact %d" % npc_class)
     if not ok:
-        return False
-    time.sleep(2)
-    enable_debug()
-    if god:
-        cheat("god 1")
-    return True
+        return None
+    menu = wait_menu(40)
+    if menu is None:  # the first click of a speech can be lost: talk again
+        close_menu()
+        H("interact %d" % npc_class)
+        menu = wait_menu(40)
+    return menu
 
 
-# ------------------------------------------------------------------ helpers for checks
-
-INV_REGION = (0.645, 0.42, 0.925, 0.72)
-CUBE_REGION = (0.08, 0.29, 0.35, 0.60)
+def close_menu():
+    g.hcmd("menu cancel", 5)
 
 
-def attack(fx, fy, n=1):
-    """Left click on an adjacent monster: the character attacks it (no real input, virtual cursor)."""
-    for _ in range(n):
-        g.click(fx, fy)
+def kill_all_near():
+    for _ in range(6):
+        ok, _l = H("kill nearest")
+        if not ok:
+            break
 
 
-def find_spawn(cmd, region=(0.2, 0.15, 0.8, 0.78), fallback=(0.5, 0.35)):
-    """Run a spawn cheat and return the centre of what appeared (fractions), by diffing two captures around it."""
-    A = grab()
-    time.sleep(0.5)
-    B = grab()
-    cheat(cmd)
-    time.sleep(1.5)
-    C = grab()
-    import numpy as np
-    h, w, _ = C.shape
-    d = np.abs(C - B).sum(axis=2) > 90
-    n = np.abs(B - A).sum(axis=2) > 30
-    for dy in range(-6, 7, 3):
-        for dx in range(-6, 7, 3):
-            n = n | np.roll(np.roll(np.abs(B - A).sum(axis=2) > 30, dy, 0), dx, 1)
-    m = d & ~n
-    mask = np.zeros_like(m)
-    mask[int(region[1] * h):int(region[3] * h), int(region[0] * w):int(region[2] * w)] = True
-    m &= mask
-    ys, xs = np.nonzero(m)
-    if len(xs) < 200:
-        return fallback
-    # densest 120 x 160 window
-    best, bx, by = 0, 0, 0
-    for yy in range(int(region[1] * h), int(region[3] * h) - 160, 20):
-        for xx in range(int(region[0] * w), int(region[2] * w) - 120, 20):
-            v = int(m[yy:yy + 160, xx:xx + 120].sum())
-            if v > best:
-                best, bx, by = v, xx, yy
-    sub = np.nonzero(m[by:by + 160, bx:bx + 120])
-    return (bx + float(sub[1].mean())) / w, (by + float(sub[0].mean())) / h
-
-
-def open_inventory():
-    g.key("i")
-    time.sleep(1.0)
-
-
-def spawn_inv(codes):
-    """Inventory open: spawn the items straight into it (`spawn <code>,inv`); returns the clusters that appeared."""
-    before = grab()
-    for code in codes:
-        cheat("spawn %s,inv" % code)
-    time.sleep(1.2)
-    return clusters(before, grab(), INV_REGION)
-
-
-def cube_try(codes, tag):
-    """Fresh inventory (`itemgridclear`, a new cube), cube panel open, spawn `codes` into the inventory, move them into
-    the cube, Transmute. Returns (cube items before, after, shots)."""
-    open_inventory()
-    cheat("itemgridclear")
-    cheat("spawn box,inv")
-    time.sleep(1.0)
-    g.click(0.677, 0.452, "right")  # the Horadric Cube at the inventory's top left cell
-    time.sleep(1.2)
-    empty = grab()
-    items = spawn_inv(codes)
-    if len(items) < len(codes):
-        return None, None, [sh(tag + "_spawn_failed")]
-    for k, (fx, fy, _) in enumerate(items):
-        g.click(fx, fy)
-        time.sleep(0.5)
-        g.click(0.12 + 0.07 * k, 0.33)
-        time.sleep(0.5)
-    s1 = sh(tag + "_loaded")
-    n0 = len(clusters(empty, grab(), CUBE_REGION))
-    g.click(0.209, 0.697)  # Transmute
-    time.sleep(2.5)
-    s2 = sh(tag + "_after")
-    n1 = len(clusters(empty, grab(), CUBE_REGION))
-    return n0, n1, [s1, s2]
+# ------------------------------------------------------------------ results
 
 
 class Result:
@@ -444,12 +443,19 @@ def sh(name):
     return os.path.basename(g.shot(name))
 
 
+def need_game():
+    if not STATE["in_game"]:
+        return False
+    st = hstate()
+    return st["ok"]
+
+
 # ------------------------------------------------------------------ checks
 
 
 def check_mxl():
-    if not enter("MxlQ", "normal"):
-        return add("mxl console command", "BLOCKED", "could not enter the game")
+    if not need_game():
+        return add("mxl console command", "BLOCKED", "not in a game")
     txt = mxl_text()
     wanted = ["states fix", "level types", "calc codes", "skill functions", "item spells", "missile hits", "mana costs",
               "cube conditions", "craft flags", "act 1 quests", "dungeon lockout", "goblins on",
@@ -463,279 +469,360 @@ def check_mxl():
 
 def check_goblins():
     name = "Treasure goblin spawns in the Blood Moor after a kill (MXL_GOBLINS_FORCE=1)"
-    if not enter("MxlQ", "normal"):
-        return add(name, "BLOCKED", "could not enter the game")
-    cheat("goto 2")
-    time.sleep(7)
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    st = goto(2)
+    if st["player"].get("area") != 2:
+        return add(name, "BLOCKED", "could not reach the Blood Moor (area %s)" % st["player"].get("area"))
+    s0, r0 = goblins_counts(st)
     m = mxl_mark()
-    lines = []
-    for _ in range(4):
-        x, y = find_spawn("mspawn fallen1")
-        attack(x, y, 6)
-        lines = [ln for ln in mxl_lines_since(m) if "goblin" in ln and "spawned" in ln]
-        if lines:
+    log = []
+    for rnd in range(4):
+        H("spawn 18 2")
+        H("kill nearest 18")
+        ok, l = H("kill nearest 18")
+        log += l
+        time.sleep(18)  # the tick runs every 375 frames (15 s)
+        st = hstate()
+        s1, r1 = goblins_counts(st)
+        if s1 is not None and s0 is not None and s1 > s0:
             break
-        time.sleep(16)
-    time.sleep(2)
+    gob = [mm for mm in st["mons"] if mm.get("class", 0) >= 2700]
+    lines = [ln for ln in mxl_lines_since(m) if "goblin" in ln and "spawned" in ln]
     shots = [sh("goblin_scene")]
-    txt = mxl_text()
-    gl = [ln for ln in txt.splitlines() if "goblins on" in ln]
-    add(name, "PASS" if lines else "FAIL",
-        "log: %s; mxl: %s" % (lines[0][-85:] if lines else "no goblin line in 4 kills / 70 s", gl[0][:140] if gl else "-"),
-        shots, lines)
-
-
-def stat_crop():
-    return grab()[620:670, 140:460]
+    add(name, "PASS" if (s1 or 0) > (s0 or 0) else "FAIL",
+        "`h state` counters: spawned %s -> %s, rolls %s -> %s; goblin monsters alive near the player: %s; log: %s" % (
+            s0, s1, r0, r1, [(mm["class"], mm["dist"]) for mm in gob], lines[0][-80:] if lines else "-"),
+        shots, lines + [st["plugin"]])
+    goto(1)
+    kill_all_near()
 
 
 def check_respec():
     name = "Akara respec after Den of Evil (Reset Stat/Skill Points)"
-    if not enter("MxlQ", "normal", quests={(0, 41): 2}):
-        return add(name, "BLOCKED", "could not enter the game")
-    import numpy as np
-    cheat("level 12")
-    time.sleep(1)
-    ax, ay = find_spawn("mspawn akara")
-    g.key("c")
-    time.sleep(1.2)
-    A = stat_crop()
-    sA = sh("respec_1_sheet_before")
-    for _ in range(10):
-        g.click(0.186, 0.573)
-    time.sleep(0.5)
-    B = stat_crop()
-    sB = sh("respec_2_after_spending")
-    g.key("esc")
-    time.sleep(0.6)
-    g.click(ax, ay)  # click Akara; her menu opens over her head
-    time.sleep(3)
-    sM = sh("respec_3_menu")
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    H("quest 1 0 set")   # Den of Evil done
+    H("quest 41 1 set")  # its respec reward is waiting
+    base0 = stat_of(H("stat player 0")[1])
+    base4 = stat_of(H("stat player 4")[1])
+    H("stat player 0 set %d" % (base0 + 60))   # 60 points "spent" on strength
+    menu = npc_menu(148)
+    if not menu:
+        return add(name, "BLOCKED", "Akara's menu did not open (menu list: %s)" % menu)
+    shot = sh("respec_menu")
+    plugin_lines = [ln for ln in menu if "handler=plugin" in ln]
+    if not plugin_lines:
+        return add(name, "FAIL", "no plugin line in Akara's menu: %s" % menu, [shot], menu)
+    idx = int(re.search(r"line (\d+)", plugin_lines[0]).group(1))
     m = mxl_mark()
-    g.click(ax, ay - 0.12)  # menu lines (measured from the click on Akara): the plugin's Reset line is 0.12 above her
-    time.sleep(2.5)
+    ok, ml = H("menu %d" % idx)
+    time.sleep(1)
+    _, after0 = H("stat player 0")
+    _, after4 = H("stat player 4")
     lines = [ln for ln in mxl_lines_since(m) if "npc actions" in ln]
-    g.key("c")
-    time.sleep(1.2)
-    C = stat_crop()
-    sC = sh("respec_4_sheet_after")
-    d_ab = float(np.abs(A - B).mean())
-    d_ac = float(np.abs(A - C).mean())
+    s0 = stat_of(after0)
+    s4 = stat_of(after4)
+    _, q = H("quest 41 dump")
     done = any("done" in ln for ln in lines)
-    add(name, "PASS" if (done and d_ab > 0.5 and d_ac < 0.5) else "FAIL",
-        "log %s; stat text change by spending %.1f, difference to the start after the reset %.2f" % (
-            "`npc actions: done (48, 148)`" if done else "has no done line: %s" % [ln[-60:] for ln in lines], d_ab, d_ac),
-        [sA, sB, sM, sC], lines)
+    # the character's strength goes back to the class start (Barbarian 30) and every point spent comes back as unused points
+    refunded = (base0 + 60) - s0 if s0 is not None else None
+    add(name, "PASS" if (ok and done and s0 == 30 and s4 == base4 + refunded) else "FAIL",
+        "menu lines %s; strength %d -> %s (Barbarian start 30), unused stat points %d -> %s (%s refunded); log `%s`; quest 41 %s" % (
+            [ln.strip() for ln in menu[1:]], base0 + 60, s0, base4, s4, refunded, lines[-1][-60:] if lines else "none", q[0]),
+        [shot], menu + ml + lines)
+    close_menu()
 
 
 def check_cain():
-    name = "Cain crafting materials line (before the rescue)"
-    if not enter("MxlQ", "normal"):
-        return add(name, "BLOCKED", "could not enter the game")
+    name = "Cain crafting materials line (bug #23)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
     m = mxl_mark()
-    cx, cy = find_spawn("mspawn deckard_cain")
-    g.click(cx, cy)
-    time.sleep(3)
+    menu = npc_menu(265)
+    time.sleep(1)
     s = sh("cain_menu")
     lines = [ln for ln in mxl_lines_since(m) if "npc actions" in ln]
-    full = [ln for ln in lines if "menu record is full" in ln]
-    add(name, "FAIL" if full else "PASS",
-        "log: %s (known bug #23: Cain's menu record has no room for the line; look at cain_menu.png: Talk and Cancel only)" % (
-            full[0][-90:] if full else "no 'record is full' line"), [s], lines)
+    full = [ln for ln in lines if "full" in ln]
+    # The popup is read from the screenshot (top left of the window: DECKARD CAIN / TALK / CRAFTING MATERIALS / CANCEL);
+    # the script can only assert the log and that the menu opened.
+    add(name, "PASS" if (menu and not full) else "FAIL",
+        "menu opened by `h interact 265`: %s; no `menu record is full` log line: %s. Popup text must be read from the "
+        "screenshot (cain_menu.png)" % (bool(menu), not full), [s], (menu or []) + lines)
+    close_menu()
 
 
 def check_heart():
     name = "Griswold's Heart from Akara after Cain (quest 4 bit 1)"
-    if not enter("MxlQ", "normal", quests={(0, 4): 2}):
-        return add(name, "BLOCKED", "could not enter the game")
-    open_inventory()
-    base = grab()
-    g.key("i")
-    time.sleep(0.5)
-    ax, ay = find_spawn("mspawn akara")
-    g.click(ax, ay)
-    time.sleep(4)
-    s1 = sh("heart_talk1")
-    g.key("esc")
-    time.sleep(1)
-    g.key("esc")
-    time.sleep(0.6)
-    g.click(ax, ay)
-    time.sleep(4)
-    s2 = sh("heart_talk2")
-    g.key("esc")
-    time.sleep(1)
-    open_inventory()
-    after = grab()
-    s3 = sh("heart_inventory")
-    new = clusters(base, after, INV_REGION)
-    add(name, "PASS" if new else "FAIL",
-        "%d new inventory item(s) after talking to Akara twice with quest 4 bit 1 set (patched save). Unique name/stats "
-        "not read: check heart_inventory.png" % len(new), [s1, s2, s3])
-
-
-def kill_andariel(tries=30):
-    x, y = find_spawn("mspawn 156")
-    attack(x, y + 0.03, tries)
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    H("quest 4 1 set")
+    H("packclear")  # room in the backpack: the Heart would be dropped on the floor otherwise
+    H("remove 600 6")   # earlier runs' hearts
+    H("remove rin 6")
+    st0 = hstate()
+    n0 = len(items(st0, "600"))
+    ok0, _l0 = H("interact 148")
+    if not ok0:
+        H("spawn 148")
+        H("interact 148")
+    ok, ml = H("msg 148 0x76")
+    for _ in range(15):  # (Akara's own speech sends the same message when it ends)
+        time.sleep(2)
+        st1 = hstate()
+        if items(st1, "600"):
+            break
+    new = [i for i in items(st1, "600") if i["id"] not in [j["id"] for j in items(st0, "600")]]
+    ring = [i for i in items(st1, "rin") if i["id"] not in [j["id"] for j in items(st0, "rin")]]
+    _, q = H("quest 4 dump")
+    add(name, "PASS" if (new and new[0].get("unique") == 69) else "FAIL",
+        "after `h msg 148 0x76`: new item(s) with base code 600: %s (unique index %s, Griswold's Heart = 69), vanilla ring "
+        "reward: %s; quest 4 bits %s" % (len(new), new[0].get("unique") if new else "-", bool(ring), q[0]),
+        [sh("heart")], ["before: %s" % [(i["id"], i["page"], i.get("unique")) for i in items(st0, "600")], "after: %s" % [(i["id"], i["page"], i.get("unique")) for i in items(st1, "600")]] + ml + [x for x in mxl_lines_since(0)[-6:]])
+    close_menu()
 
 
 def check_catalyst():
     name = "Andariel catalyst of disenchantment (Normal), not twice; Warriv re-issue"
-    if not enter("MxlQ", "normal"):
-        return add(name, "BLOCKED", "could not enter the game")
-    cheat("easykill 1")
-    open_inventory()
-    base = grab()
-    g.key("i")
-    time.sleep(0.5)
-    cheat("goto 37")
-    time.sleep(7)
-    kill_andariel()
-    time.sleep(4)
-    shots = [sh("catalyst_after_kill1")]
-    open_inventory()
-    one = grab()
-    shots.append(sh("catalyst_inv_after_kill1"))
-    g.key("i")
-    time.sleep(0.5)
-    new1 = clusters(base, one, INV_REGION)
-    kill_andariel()
-    time.sleep(4)
-    open_inventory()
-    two = grab()
-    shots.append(sh("catalyst_inv_after_kill2"))
-    g.key("i")
-    new2 = clusters(one, two, INV_REGION)
-    ok = len(new1) >= 1 and len(new2) == 0
-    add(name, "PASS" if ok else "BLOCKED",
-        "new inventory items after kill 1: %d, after kill 2: %d. If Andariel is still alive in catalyst_after_kill1.png "
-        "the kill did not happen: no cheat found that kills her. Needs a harness command `kill <monster id>` (or `damage "
-        "unit N`) and `quest <id> <state>` to put quest 6 in progress" % (len(new1), len(new2)), shots)
-
-
-def portal_scroll(code, tag):
-    """Spawn a scroll into the inventory, use it, return the portal position (fraction) or None."""
-    open_inventory()
-    items = spawn_inv([code])
-    if not items:
-        return None, [sh(tag + "_nopickup")]
-    A = grab()
-    g.click(items[0][0], items[0][1], "right")
-    time.sleep(0.5)
-    g.key("i")
-    time.sleep(2.5)
-    B = grab()
-    cl = clusters(A, B, (0.2, 0.15, 0.8, 0.8), thr=150, minblocks=6)
-    return ((cl[0][0], cl[0][1]) if cl else None), [sh(tag + "_portal")]
-
-
-def lock_counters(txt):
-    return (counter(txt, "dungeon lockout", r"refused (\d+)"), counter(txt, "dungeon lockout", r"clocks started (\d+)"))
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    H("remove 3o[ 5")
+    H("quest 47 0 clear")  # the plugin's "catalyst handed out" flag lives in the character's quest record: clear it
+    H("difficulty 0")
+    H("spawn 156")
+    ok1, l1 = H("kill nearest 156")
+    time.sleep(1)
+    st1 = hstate()
+    n1 = len(items(st1, "3o["))
+    H("spawn 156")
+    H("kill nearest 156")
+    time.sleep(1)
+    st2 = hstate()
+    n2 = len(items(st2, "3o["))
+    H("remove 3o[ 5")
+    H("spawn 155")
+    ok3, l3 = H("interact 155")
+    time.sleep(2)
+    st3 = hstate()
+    n3 = len(items(st3, "3o["))
+    _, q = H("quest 47 dump")
+    ok = ok1 and n1 == 1 and n2 == 1 and n3 == 1
+    add(name, "PASS" if ok else "FAIL",
+        "catalysts in the inventory: after kill 1 %d, after kill 2 %d (must stay 1), after removing it and talking to Warriv "
+        "%d (re-issued); flag quest 47 %s" % (n1, n2, n3, q[0]), [sh("catalyst")], l1 + l3)
+    close_menu()
 
 
 def check_lockout():
-    name = "Dungeon lockout: entry refused by level/difficulty (Normal level 12, level 251 portal)"
-    if not enter("MxlQ", "normal"):
-        return add(name, "BLOCKED", "could not enter the game")
-    cheat("goto 1")
-    time.sleep(6)
-    r0, c0 = lock_counters(mxl_text())
-    pos, shots = portal_scroll("b61X", "lock_normal")
-    if pos is None:
-        return add(name, "BLOCKED", "no portal visible after using `spawn b61X` (scroll not picked up or the portal "
-                   "position not detected); counters before: refused %s clocks %s" % (r0, c0), shots)
-    g.click(*pos)
-    time.sleep(6)
-    shots.append(sh("lock_normal_after_click"))
-    r1, c1 = lock_counters(mxl_text())
-    ok = r0 is not None and r1 == r0 + 1
-    add(name, "PASS" if ok else "FAIL", "`mxl` dungeon-lockout counters: refused %s -> %s, clocks started %s -> %s" % (r0, r1, c0, c1), shots)
+    name = "Dungeon lockout: entry refused by level/difficulty (Normal level 1, portal to level 251)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    H("difficulty 0")
+    st = hstate()
+    r0, c0 = lockout_counts(st)
+    H("item b60X")
+    ok, l = H("use b60X")
+    time.sleep(1.5)
+    ok2, l2 = H("enter nearest")
+    time.sleep(1.5)
+    st1 = hstate()
+    r1, c1 = lockout_counts(st1)
+    add(name, "PASS" if (ok and r1 == (r0 or 0) + 1 and st1["player"]["area"] == 1) else "FAIL",
+        "`use b60X` opened the portal (%s); `enter nearest`: %s; counters in `h state`: refused %s -> %s, clocks %s -> %s, "
+        "still in area %s" % (ok, l2[0] if l2 else "-", r0, r1, c0, c1, st1["player"]["area"]), [sh("lock_normal")], l + l2)
 
 
 def check_lockout_clock():
-    n1 = "Dungeon lockout: clock starts on entry; re-entry inside the lock time (Hell, level 251, 60 s)"
+    n1 = "Dungeon lockout: clock starts on entry; re-entry inside the lock time (Hell rules, level 253 infernal_cave_2, 60 s)"
     n2 = "Dungeon lockout: level sealed after the lock time"
-    if not enter("MxlBarb", "hell"):
-        add(n1, "BLOCKED", "could not enter MxlBarb in Hell")
-        return add(n2, "BLOCKED", "could not enter MxlBarb in Hell")
-    cheat("goto 109")  # Harrogath: the scroll needs the matching act? the portal opens in any act
-    time.sleep(6)
-    r0, c0 = lock_counters(mxl_text())
-    pos, shots = portal_scroll("b61X", "lock_hell")
-    if pos is None:
-        add(n1, "BLOCKED", "no portal visible after `spawn b61X`", shots)
-        return add(n2, "BLOCKED", "no portal", shots)
-    g.click(*pos)
-    time.sleep(8)
+    if not need_game():
+        add(n1, "BLOCKED", "not in a game")
+        return add(n2, "BLOCKED", "not in a game")
+    goto(1)
+    lvl0 = hstate()["player"]["level"]
+    H("difficulty 2")
+    H("stat player 12 set 125")
+    H("stat player 7 set 20000000")
+    H("stat player 6 set 20000000")
+    H("item b62X")
+    ok, l = H("use b62X")
+    r0, c0 = lockout_counts(hstate())
+
+    def enter_portal():
+        for _ in range(3):  # the portal object needs a frame or two before it works
+            time.sleep(2)
+            ok, ll = H("enter nearest")
+            if ll and "moved" in ll[0]:
+                return True, ll
+        return False, ll
+
+    moved, ll = enter_portal()
     t0 = time.time()
-    shots.append(sh("lock_hell_inside"))
-    r1, c1 = lock_counters(mxl_text())
-    cheat("goto 109")
-    time.sleep(6)
-    g.click(*pos)
-    time.sleep(7)
-    shots.append(sh("lock_hell_reenter"))
-    r2, c2 = lock_counters(mxl_text())
-    add(n1, "PASS" if (c1 == (c0 or 0) + 1 and r2 == r1) else "FAIL",
-        "counters (refused, clocks): start %s/%s, after entry %s/%s, after re-entry %s/%s" % (r0, c0, r1, c1, r2, c2), shots)
-    cheat("goto 109")
-    time.sleep(6)
-    while time.time() - t0 < 75:
+    time.sleep(4)
+    st1 = hstate()
+    r1, c1 = lockout_counts(st1)
+    a1 = st1["player"].get("area")
+    shots = [sh("lock_hell_inside")]
+    goto(1)
+    moved2, ll2 = enter_portal()
+    time.sleep(3)
+    st2 = hstate()
+    r2, c2 = lockout_counts(st2)
+    a2 = st2["player"].get("area")
+    goto(1)
+    ok1 = moved and a1 == 253 and c1 == (c0 or 0) + 1 and moved2 and r2 == r1
+    add(n1, "PASS" if ok1 else "FAIL",
+        "Hell rules (`h difficulty 2`, level 125): entry %s (area %s), counters (refused, clocks) %s/%s -> %s/%s; "
+        "re-entry after %.0f s: %s (area %s), counters %s/%s" % (moved, a1, r0, c0, r1, c1, time.time() - t0, moved2, a2, r2, c2),
+        shots, l + ll + ll2)
+    while time.time() - t0 < 68:
         guard()
         time.sleep(3)
-    g.click(*pos)
-    time.sleep(7)
-    s3 = sh("lock_hell_sealed")
-    r3, c3 = lock_counters(mxl_text())
-    lines = [ln for ln in mxl_lines_since(0) if "lockout" in ln and "sealed" in ln]
-    add(n2, "PASS" if (r3 or 0) > (r2 or 0) else "FAIL", "after 75 s: refused %s -> %s; sealed log lines: %d" % (r2, r3, len(lines)),
-        [s3], lines[-3:])
+    for _ in range(2):
+        ok3, ll3 = H("enter nearest")
+        time.sleep(2)
+    st3 = hstate()
+    r3, c3 = lockout_counts(st3)
+    a3 = st3["player"].get("area")
+    add(n2, "PASS" if (r3 or 0) > (r2 or 0) and a3 == 1 else "FAIL",
+        "68 s after the first entry: `enter nearest` -> %s; refused %s -> %s, still in area %s (sealed: %s)" % (
+            ll3[0] if ll3 else "-", r2, r3, a3, (r3 or 0) > (r2 or 0)), [sh("lock_hell_sealed")], ll3)
+    H("difficulty 0")
+    H("stat player 12 set %d" % lvl0)
 
 
 def check_cow():
-    for diff, town, who in (("hell", True, "MxlBarb"), ("hell", False, "MxlBarb"), ("normal", True, "MxlQ")):
-        nm = "Cow portal recipe (%s, %s)" % (diff, "town" if town else "field")
-        tag = "cow_%s_%s" % (diff, "town" if town else "field")
-        if not (STATE.get("cow") == diff and STATE["in_game"]):
-            if not enter(who, diff):
-                add(nm, "BLOCKED", "could not enter the game")
-                continue
-            STATE["cow"] = diff
-        if not town:
-            cheat("goto 2")
-            time.sleep(7)
-        n0, n1, shots = cube_try(["leg", "tbk"], tag)
-        if n0 is None:
-            add(nm, "BLOCKED", "the spawned Wirt's Leg / Tome were not picked up into the inventory (inventory full or the "
-                "pickup cheat missed)", shots)
-            continue
-        ran = n1 < n0
-        want = diff == "hell" and town
-        add(nm, "PASS" if ran == want else "FAIL",
-            "cube items %d -> %d after Transmute; expected %s (recipe row 3: min difficulty Hell, op 36 town only)" % (
-                n0, n1, "the recipe to run" if want else "nothing"), shots)
-        g.key("esc")
-        time.sleep(0.5)
+    nm = "Cow portal recipe (Wirt's Leg): Normal town, Hell town, Hell field"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(1)
+    H("cubeclear")
+    H("item leg cube")
+
+    def cow(diff, area):
+        H("difficulty %d" % diff)
+        H("quest 40 0 set")  # the cow portal handler wants Baal killed in the game's difficulty
+        before = {o["id"] for o in hstate()["objs"]}
+        ok, l = H("cubecraft")
+        time.sleep(1.5)
+        st = hstate()
+        new = [o for o in st["objs"] if o["id"] not in before and o.get("class") in (60, 600)]
+        return ok, l, new
+
+    ok1, l1, new1 = cow(0, 1)
+    ok2, l2, new2 = cow(2, 1)
+    goto(2)
+    H("difficulty 2")
+    H("cubeclear")
+    H("item leg cube")
+    ok3, l3, new3 = cow(2, 2)
+    H("difficulty 0")
+    goto(1)
+    good = (not ok1) and ok2 and bool(new2) and (not ok3) and not new3
+    add(nm, "PASS" if good else "FAIL",
+        "cubecraft with the leg: Normal town -> %s (recipe has min difficulty Hell); Hell town -> %s, new portal object %s; "
+        "Hell field (Blood Moor) -> %s, new portal object %s" % (
+            l1[-1][:60], l2[0][:70], [(o['class']) for o in new2], l3[-1][:60], [(o['class']) for o in new3]),
+        [sh("cow")], l1 + l2 + l3)
+    H("cubeclear")
 
 
 def check_goldcraft():
-    add("Cube gold payment (rows 6327-6329) and craft flags (7100, 6369 -> 6350)", "BLOCKED",
-        "needs items no cheat creates: stat 532 on an item (6327-6329), UpgradedBossKillerRing + erun + f700 (7100), "
-        "RathmasSupremacy2 as an assassin (6369), and a way to read carried/banked gold exactly. Harness commands "
-        "needed: `item <code> [stat=value ...]` to create an item with stats in the inventory, `flag player|game N "
-        "get|set|clear`, `gold get` (write into mxl-testharness-console.txt), `class` change is already a cheat "
-        "(`cheat class ass`).")
+    nm = "Cube gold payment (rows 6327/6328): carried gold first, then the bank"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(1)
+    H("cubeclear")
+    H("stat player 532 set 140")
+    H("gold set 400000 100000")
+    H("item 0u1 cube uniq=30 532=1")   # HotTJ; item stat 532 == 1 is the cubemain row's own condition (op 18)
+    H("item f667 cube")
+    ok1, l1 = H("cubecraft")
+    _, g1 = H("gold get")
+    H("cubeclear")
+    H("gold set 20000 100000")
+    H("item 0u1 cube uniq=30 532=1")
+    H("item f667 cube")
+    H("item f667 cube")
+    ok2, l2 = H("cubecraft")
+    _, g2 = H("gold get")
+    H("cubeclear")
+    c1 = re.search(r"carried=(\d+) bank=(\d+)", g1[0])
+    c2 = re.search(r"carried=(\d+) bank=(\d+)", g2[0])
+    good = ok1 and ok2 and c1 and c2 and (int(c1.group(1)), int(c1.group(2))) == (350000, 100000) and \
+        (int(c2.group(1)), int(c2.group(2))) == (0, 20000)
+    add(nm, "PASS" if good else "FAIL",
+        "row 6327 (cost 50,000): %s, gold 400000 / 100000 -> %s; row 6328 (cost 100,000) with 20000 carried: %s, gold "
+        "20000 / 100000 -> %s (carried first, the rest from the bank)" % (l1[0][:50], g1[0], l2[0][:50], g2[0]),
+        [sh("goldcraft")], l1 + l2)
+    H("stat player 532 set 0")
 
 
-CHECKS = [("mxl", check_mxl), ("goblins", check_goblins), ("respec", check_respec), ("cain", check_cain),
-          ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout), ("cow", check_cow),
-          ("lockclock", check_lockout_clock), ("goldcraft", check_goldcraft)]
+def check_craftflags():
+    n1 = "Cube craft flag (player): row 6369 sets it, row 6350 is offered afterwards"
+    n2 = "Cube craft flag (game): dungeon key row 7102 sets game flag 50, a second try is refused"
+    if not need_game():
+        add(n1, "BLOCKED", "not in a game")
+        return add(n2, "BLOCKED", "not in a game")
+    goto(1)
+    H("cubeclear")
+    cls0 = hstate()["player"]["class"]
+    H("class 6")  # the recipe is for assassins
+    try:
+        H("stat player 378 set 214100")
+        H("item voXX cube uniq=55")
+        _, f0 = H("flag player 1 get")
+        ok1, l1 = H("cubecraft")
+        _, f1 = H("flag player 1 get")
+        ok2, l2 = H("cubecraft")
+    finally:
+        H("class %d" % cls0)
+        H("stat player 378 set 0")
+    H("cubeclear")
+    r1 = re.search(r"recipe (\d+)", l1[0]) if l1 else None
+    r2 = re.search(r"recipe (\d+)", l2[0]) if l2 else None
+    add(n1, "PASS" if (ok1 and r1 and r1.group(1) == "6369" and f0[0].endswith("= 0") and f1[0].endswith("= 1") and ok2
+                       and r2 and r2.group(1) == "6350") else "FAIL",
+        "assassin with the quest item: before %s; first transmute %s; after %s; second transmute %s (6350 only offered "
+        "with the flag)" % (f0[0], l1[0][:40], f1[0], l2[0][:40] if l2 else "-"), [sh("craftflags")], l1 + l2)
+    H("stat player 536 set 1000")
+    H("item rx01 cube")
+    H("item f700 cube")
+    _, g0 = H("flag game 50 get")
+    ok3, l3 = H("cubecraft")
+    _, g1 = H("flag game 50 get")
+    H("cubeclear")
+    H("item rx01 cube")
+    H("item f700 cube")
+    ok4, l4 = H("cubecraft")
+    H("cubeclear")
+    H("stat player 536 set 0")
+    r3 = re.search(r"recipe (\d+)", l3[0]) if l3 else None
+    add(n2, "PASS" if (ok3 and r3 and r3.group(1) == "7102" and g0[0].endswith("= 0") and g1[0].endswith("= 1") and not ok4)
+        else "FAIL",
+        "key recipe: before %s; transmute %s; after %s; second try in the same game: %s" % (
+            g0[0], l3[0][:50] if l3 else "-", g1[0], l4[-1][:60]), [sh("gameflag")], l3 + l4)
+    H("flag game 50 clear")
+
+
+# lockclock goes first after mxl: entering the Median dungeon is a heavy level load and D2R's client asserts "asset cache
+# exceeded" (512 assets) after a few area changes, then crashes (see docs/bugs.md)
+CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
+          ("cain", check_cain), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
+          ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags)]
 
 
 def write_report(extra=""):
     p = os.path.join(g.current_run(), "report.md")
     with open(p, "w", encoding="utf-8") as f:
-        f.write("# Game checks (background input) %s\n\n" % os.path.basename(g.current_run()))
+        f.write("# Game checks (background input, harness commands) %s\n\n" % os.path.basename(g.current_run()))
         f.write("| Check | Result | Note | Evidence |\n|---|---|---|---|\n")
         for r in RESULTS:
             f.write("| %s | %s | %s | %s |\n" % (r.name, r.status, r.note.replace("|", "/"), ", ".join(r.shots)))
@@ -747,21 +834,50 @@ def write_report(extra=""):
     return p
 
 
+def lock(wait_s=1800):
+    """The slot's run lock (tools/game_slots.py): wait, retry every 30 s."""
+    t0 = time.time()
+    while True:
+        ok, msg = g.game_slots.acquire(g.SLOT, g.LOCK_OWNER)
+        if ok:
+            return True
+        if time.time() - t0 > wait_s:
+            g.log("slot %d: %s; giving up" % (g.SLOT, msg))
+            return False
+        g.log("slot %d lock is held (%s), waiting 30 s" % (g.SLOT, msg))
+        time.sleep(30)
+
+
+def unlock():
+    g.game_slots.release(g.SLOT, g.LOCK_OWNER)
+
+
 def run_all(only=None):
     global WD
     new_run()
     if not lock():
-        print("game.lock held for 20 min, giving up")
+        print("game lock held for 30 min, giving up")
         return 2
     os.environ["MXL_GOBLINS_FORCE"] = "1"
     WD = Watchdog()
     WD.start()
     try:
         backup_saves()
+        if g.game_pids():
+            g.stop()
+            time.sleep(2)
+        # Quest state of the test character: the kill / dialog checks need quests 4 (Cain rescued, bit 1) and 6 (Andariel)
+        # active when the game is created, and the plugin's catalyst flag (quest 47) clear; the earlier run's rewards
+        # completed them. Closed save, checksum and sidecar fixed (docs/save-format.md).
+        for name in sorted({f[:-4] for f in os.listdir(SAVES) if f.endswith(".d2s")}):
+            patch_quests(name, {(0, 1): 0, (0, 4): 2, (0, 6): 0, (0, 41): 0, (0, 47): 0})
         g.snapshot_marks()
         if not to_menu():
             add("start game", "BLOCKED", "game did not reach the main menu")
+        elif not enter_game():
+            add("enter game", "BLOCKED", "the character did not enter the game")
         else:
+            p0 = hstate()["player"]
             for name, fn in CHECKS:
                 if only and name not in only:
                     continue
@@ -772,6 +888,12 @@ def run_all(only=None):
                     add(name, "BLOCKED", "script error: %r" % (e,))
                     if WD.abort:
                         break
+            try:  # the test character is saved on exit: put the numbers the checks changed back
+                H("difficulty 0")
+                H("gold set %d %d" % (p0.get("gold", 0), p0.get("bank", 0)))
+                H("cubeclear")
+            except Exception:
+                pass
     finally:
         WD.stop_flag = True
         try:
