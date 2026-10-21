@@ -184,6 +184,33 @@ int RunNpcActionsTests() {
 		Check(AddMenuLines(rec, newId, newFn, 1) == 3 && ids[1] == 40516 && ids[3] == 0, "idempotent");
 		Check(*reinterpret_cast<std::uint32_t*>(rec + RecCountOffset) == 4, "count restored");
 	}
+	// bug #23: the plugin patches the table on every menu open. The record as D2R builds it (read from the heap in game,
+	// 2026-10-21: count 3, ids 0xd35 0xfb4, handlers 0x112eb0 / 0x114000, nothing behind) must take the line and stay at
+	// three lines over many opens, whether the builder shows or skips Identify (it rewrites the count to 3 or 2).
+	{
+		alignas(8) std::uint8_t rec[RecordSize] = {};
+		auto* ids = reinterpret_cast<std::uint16_t*>(rec + RecIdsOffset);
+		auto* fns = reinterpret_cast<std::uint64_t*>(rec + RecHandlersOffset);
+		auto* count = reinterpret_cast<std::uint32_t*>(rec + RecCountOffset);
+		*reinterpret_cast<std::uint16_t*>(rec) = 265;
+		*count = 3;
+		ids[0] = 0xd35;
+		ids[1] = IdentifyLine;
+		fns[0] = 0x140112eb0;
+		fns[1] = 0x140114000;
+		rec[0x40] = 1;
+		const std::uint16_t newId[1] = {40516};
+		const std::uint64_t newFn[1] = {0x7ffa12340001};
+		bool ok = true;
+		for (int open = 0; open < 12; ++open) {
+			ok = ok && AddMenuLines(rec, newId, newFn, 1) == 3 && *count == 4;
+			*count = (open % 2 == 0) ? 3u : 2u;  // the builder: Identify shown (3) or skipped (2)
+		}
+		Check(ok, "twelve menu opens keep Cain at three lines (no 'record is full')");
+		Check(ids[0] == 0xd35 && ids[1] == 40516 && ids[2] == IdentifyLine && ids[3] == 0 && ids[4] == 0, "ids stay [Talk, crafting, Identify]");
+		Check(fns[0] == 0x140112eb0 && fns[1] == 0x7ffa12340001 && fns[2] == 0x140114000 && fns[3] == 0 && rec[0x40] == 1,
+		      "handlers follow their ids, the flag byte behind the five handler slots is untouched");
+	}
 	// Akara [Talk, Trade] gets the line at the end; a full record refuses
 	{
 		alignas(8) std::uint8_t rec[RecordSize] = {};

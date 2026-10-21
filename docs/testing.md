@@ -152,6 +152,12 @@ D2R DX12 window live (animations move) while it is behind other windows or on an
 desktop. (`PW_CLIENTONLY` returns black.) A minimized window cannot be captured: the script refuses, so the window must
 stay un-minimized. D2R keeps rendering at 60 FPS when not in front; no D2R option had to be changed.
 
+Found 2026-10-21 (cain-menu lane): the game starts in legacy (2D, 4:3 pillarbox) graphics here; `G` (`press_bg("g", hold=0.1)`, a few
+seconds after the game is loaded) switches to HD. In both modes a background click on an NPC (hover works and shows the name) walks the
+character next to it but the NPC menu does not open (the menu builder `0x1147a0` is never called; calling the opener `0x1141d0`
+from the plugin does call it but draws nothing, and `0x10e6e0` crashed the game), so NPC menu checks still need `--foreground`.
+Also: `stop()` returns early when no game is running and then leaves `mxl-testharness.txt` in place.
+
 Limits: the output of D2R / D2RLoader commands (cheats, `help`) goes only to the console panel, so it cannot be read in
 background mode (the effect of a cheat shows in game; the plugin's own `mxl` output is written to
 `mxl-testharness-console.txt` and returned by `console_text()`). While the harness is on the game ignores the real
