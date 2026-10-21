@@ -24,6 +24,7 @@
 #include "dungeon_lockout.h"
 #include "goblins.h"
 #include "hirelings.h"
+#include "items_ext.h"
 #include "npc_actions.h"
 #include "requirement_gates.h"
 #include "skill_tree.h"
@@ -60,6 +61,7 @@ char g_npcReport[192] = "off: not the expected game image";
 char g_hirelingsReport[192] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
 char g_reqGatesReport[256] = "off: not the expected game image";
+char g_itemsExtReport[320] = "off: not the expected game image";
 int g_missileHitsInstalled = 0;
 
 constexpr D2RL::PluginInfo Info {
@@ -84,7 +86,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc reqgates hirelings skilltree; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc reqgates hirelings skilltree runewords xp; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -178,6 +180,14 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	command->plugin->WriteConsoleMessage(line);
 	std::snprintf(line, sizeof(line), "hirelings %s", g_hirelingsReport);
 	command->plugin->WriteConsoleMessage(line);
+	{
+		int extended = 0, refused = 0, changed = 0, seen = 0, padded = 0;
+		ItemsExtCounts(&extended, &refused, &changed, &seen, &padded);
+		char text[480];
+		std::snprintf(text, sizeof(text), "items %s | runewords with extra properties %d (refused %d), found by Jewel padding %d | kills with a changed experience %d of %d",
+		              g_itemsExtReport, extended, refused, padded, changed, seen);
+		command->plugin->WriteConsoleMessage(text);
+	}
 	return D2RL::ConsoleCommandResult::Handled;
 }
 
@@ -353,6 +363,17 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallSkillTree(context, g_skillTreeReport, sizeof(g_skillTreeReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: skill tree %s", g_skillTreeReport);
+			context->LogInfo(line);
+		}
+		{
+			const bool rw = !Off("runewords");
+			const bool xp = !Off("xp");
+			if (!rw && !xp) {
+				std::snprintf(g_itemsExtReport, sizeof(g_itemsExtReport), "%s", OffNote);
+			} else {
+				InstallItemsExt(context, rw, xp, g_itemsExtReport, sizeof(g_itemsExtReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: items %s", g_itemsExtReport);
 			context->LogInfo(line);
 		}
 		if (Off("trace")) {  // diagnosis word, not a part: turns the state trace on (bug #22)

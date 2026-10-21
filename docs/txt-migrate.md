@@ -61,7 +61,8 @@ which bank a Median character loads is still to be confirmed in game. Report: `w
   purpose (old ID columns, Beta/Expansion markers, overlay Frames, legacy sound mixing) are only counted.
 
 ## Open items found here (for plugins / later phases)
-- **Runewords**: 197 of 237 use property slots 8-13; D2R's runes.txt has 7.
+- **Runewords**: 197 of 237 use property slots 8-13; D2R's runes.txt has 7. `tools/items_data.py` writes them to
+  `plugin/src/mxl_runewords.h` and mxl-core applies them (docs/subsystems/items-xp.md section 3).
 - **Objects**: `OperateRange` (545), `SpawnMax` (223), `TrapProb` (161), `Parm5-7` (~100), `Act` (584) have no D2R
   column. Median's object rows 573+ moved after D2R's (IDs 587+); **Median's map files (.ds1) reference objects by
   number and must be remapped in Phase 5.**
