@@ -23,6 +23,7 @@
 #include "craft_flags.h"
 #include "cube_conditions.h"
 #include "quests_act1.h"
+#include "quests_act2_5.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
 #include "hirelings.h"
@@ -59,6 +60,7 @@ char g_missileHitsReport[512] = "";
 char g_cubeReport[192] = "off: not the expected game image";
 char g_craftReport[96] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
+char g_quests2Report[224] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
 char g_goblinsReport[192] = "off: not the expected game image";
 char g_npcReport[256] = "off: not the expected game image";
@@ -93,7 +95,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc reqgates hirelings skilltree combat props runewords xp; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags quests quests2 lockout goblins npc reqgates hirelings skilltree combat props runewords xp; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -173,6 +175,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "craft flags %s", g_craftReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "act 1 quests %s", g_questsReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "act 2-5 quests %s", g_quests2Report);
 	Say(command, line);
 	{
 		int refused = 0, started = 0;
@@ -329,6 +333,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallQuestsAct1(context, g_questsReport, sizeof(g_questsReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: act 1 quests %s", g_questsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("quests2")) {
+				std::snprintf(g_quests2Report, sizeof(g_quests2Report), "%s", OffNote);
+			} else {
+				InstallQuestsAct2To5(context, g_quests2Report, sizeof(g_quests2Report));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: act 2-5 quests %s", g_quests2Report);
 			context->LogInfo(line);
 		}
 		{

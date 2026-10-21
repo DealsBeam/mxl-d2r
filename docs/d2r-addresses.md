@@ -599,6 +599,11 @@ use quest-record bits as in section 2).
 | 38 | init | `0x548590` | `4c 8b dc 48 81 ec c8 00 00 00 48 8b c1 48 8d 15` | stores event 0 `0x54ddc0`, 2 `0x54dd30`, 3 `0x54dc90`, 8 `0x54df80`, 10 `0x54e070`, 11 `0x54e570`, 13 `0x54e0d0` (the earlier note "init stores by another pattern" was a plain `*(code**)(q+0x270+8n)` store, ordered differently) | |
 | 40 `a5q6` (Baal) | 8 kill | **`0x54fa70`** | `48 89 5c 24 20 55 56 57 41 56 41 57 48 81 ec 80` | `0x517db0(game, 0x13)`; reads the killed unit's room; quest-0x28 (40) bit tests; spawns the Baal clone path; same shape as `0x5fe30` | after the vanilla handler: Hell, players in level 132 above level 109 get a relic orb once (bit 0xb of quest 40) |
 
+Acts 2-5 hooks (quests_act2_5.cpp, docs/subsystems/quests-requirements.md section 5c) also use: `0x518220(game, questId)` -> quest object (walks `game+0x21d8`; id 0x1e is
+the respec quest object that `0x5d9ae0` switches off with `+0x12 = 0`), `0x490de0(game, 0, arg, callback(game, player, arg))` -> walks the game's
+player table (`game+0x2230`, 128 buckets, next at unit `+0x158`, skipping units with state 7 or 0xba) and stops when the callback returns 1, and
+handlers a3q3 `0x5ef040` (Ormus 0xff: message 0x24b hand-over, **0x251** with bits 6 set / 8 clear), a3q5 `0x5f0df0` (Cain 0xf5, message **0x272** with
+bit 4), a5q2 `0x54c810` (Qual-Kehk 0x203, message **0x4e8e** with bit 1; pays out the rune table `0x23a02c0` = `r07 r08 r09`, count 3 / 2 with bit 6 / 1 with bit 7).
 The quest-bit helpers in these handlers are the section 2 ones (`0x325c50` test, `0x325c00` set, `0x325990` clear). Quest 40 in D2R keeps vanilla
 bit 0xb unused as far as read; the plugin can set it itself.
 

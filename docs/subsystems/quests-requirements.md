@@ -274,6 +274,38 @@ is still unlocated). Notice 0x61 (`0xb15d0`) after the Heart. Requirement rows 2
 and Akara/Charsi/Warriv/Meshif/Larzuk/Drehya action buttons (NPC lane). Quest 5 repeat guard `0x9e8b0` (a1q5 event 8 `0x5e10c0`): purpose
 unconfirmed, deferred. The requirements evaluator (`requirements.cpp`) gates nothing in Act 1 yet; its only Act 1 consumers are the NPC action rows.
 
+## 5c. Implemented: Acts 2-5 (plugin/src/quests_act2_5.cpp, quests_logic.h; switch `quests2`)
+
+Shared engine access moved to `quests_common.h` (Act 1 uses it too, behaviour unchanged). Every hook runs in front of D2R's handler of
+the same quest and event slot, then calls it, except where marked. Entry bytes are checked against the dump (`quests_act2_5.cpp`).
+Class ids are the same rows in Median's and D2R's monstats (checked in `extract/d2r/93847/.../monstats.txt`: summoner 250, izual 256,
+tyrael2 367, baalcrab 544, jerhyn 201, ormus 255, cain3 245, qual-kehk 515; **note** the D2R a4q1 event-0 handler itself tests class
+406 = `izualghost`, Median's re-issue tests 367 = Tyrael).
+
+| Quest / event | D2R handler (bytes used) | Median (D2Sigma) | Port |
+|---|---|---|---|
+| 13 `a2q5` event 8 | `0x5a5490` (10) | `0x9ed00`: Nightmare, Summoner (250), drop TC "Quest Cata Learning" once per player count, flag at quest data +0xc | Nightmare, class 250, flag clear: `0o[ ` into the killer's inventory, flag = quest 47 bit 1 |
+| 13 event 0 | `0x5a5360` (15) | `0x9ee40`: flag set and no `0o[ ` held (no NPC class test): create `0o[ ` | same, any NPC activation the quest receives |
+| 14 `a2q6` event 11 | `0x5a66b0` (15) | `0x9ef90`: Jerhyn (201), message 0x1ba: one Arcane Crystal `qum `, notice 0x5f | same, additionally requires quest-14 bit 3, the bit the vanilla handler tests and clears, so it cannot repeat |
+| 19 `a3q3` event 11 | `0x5ef040` (16) | `0x9f030` / `0x9f110`: Ormus (255), message 0x251, quest-19 bit 6: 1 / 3 / 5 random `flsh` items (type 244: the 16 `*_shrine_10` misc rows, codes `A0+ ` .. `R0+ `), notice 0x60 | same with the D2R engine RNG; also requires quest-19 bit 0 and bit 8 clear (the vanilla handler's own conditions) |
+| 21 `a3q5` event 11 | `0x5f0df0` (18) | `0x9f340`: Cain act 3 (245), message 0x272, quest-21 bit 0 clear: Arcane Crystal, notice 0x5f | same, additionally requires bit 4 (vanilla accept bit) |
+| 25 `a4q1` event 8 | `0x5e67c0` (15) | `0x9f3f0`: Nightmare, Izual (256), TC "Quest Cata Jewelcraft", flag at +0x1c | `jcat` into the killer's inventory, flag = quest 47 bit 2 |
+| 25 event 0 | `0x5e6660` (15) | `0x9f530`: flag set, NPC = Tyrael 367 (`0xbfd80(3)`), no `jcat`: create | same |
+| 36 `a5q2` event 11 | `0x54c810` (8) | `0x9f7c0`: Qual-Kehk (515), message 0x4e8e, quest-36 bit 0 clear and bit 1 set: runes by difficulty (r08 r09 r10 / r15 r16 r17 / r22 r23 r24), 3 (2 with bit 6, minus 1 with bit 7) | same. Note D2R's own handler also pays out its table (`r07 r08 r09`, same bit rules), so players get both, exactly like D2Sigma on top of 1.13c's vanilla table |
+| 40 `a5q6` event 8 | `0x54fa70` (12) | `0x9fa80`: after the vanilla handler, Hell and Baal (544): for every player with level above 109 in area 132 and quest-40 bit 0xb clear: set it, create `qrel` (item level 125) | same; players are walked with D2R's `0x490de0(game, 0, arg, callback)` (the iteration the vanilla Baal handler uses), area from `0x34b440` + `0x2efc10`, level from stat 12 |
+| 41 (respec) | `0x5d9ae0` (10), the only caller is the respec packet `0x4b2530`, also the NPC lane's respec action | `0x9e600`, patched in place of the 1.13c call `0x6fc83bb0` (the respec packet handler's "used up" step): level above 50: clear quest-41 bit 0, set bit 1, and if bit 0xf is clear switch quest object 30 off | **replaces** the D2R function with the same logic; at level 50 or below it does nothing, so, like D2Sigma, the token is not used up at all (see the in-game check) |
+
+**Not ported, with reasons**
+- Quest 5 repeat guard (`0x9e8b0`): skips the vanilla kill handler once quest-5 bits 0, 0xe or 0xf are set. D2Sigma re-creates all quest init
+  functions, so a finished quest can still have its kill handler registered; D2R's own handler `0x5e10c0` clears its slot (`quest+0x2b0 = 0`)
+  when it finishes and the init respects the record, so the guard has nothing to guard. Left out (a wrong guess could block the real completion).
+- Quest 38 re-arm (`0x9f960`, replaces the vanilla handler): D2R's own event-2 handler `0x54dd30` already does the same with the same fields
+  (Anya, class 512: re-arm when `quest+0xa6` is set, clear it, run `0x550570` when `+0xa7` and not `+0xa8`). Nothing to add.
+- Empty act-intro event-2 handlers (`0x9e5f0`, quests 0, 8, 16, 24): D2R's quests 16 and 24 have no event-2 handler; quest 8's is `0x5a2830`
+  (purpose not read). Left alone; if an Act 2 intro dialog plays wrongly, this is the place to look.
+- Notices 0x5f-0x61 (D2Sigma `0xb15d0`): client strings, not found in D2R; the rewards just appear in the inventory.
+- D2Sigma drops the TC once per player in the game on the ground; the killer alone gets the item (as Act 1).
+
 ## 6. Open questions
 
 1. **Where are the Ubers?** Not here. Candidates: item spells (red portal, done), D2Dungeon/D2Drlg (level types 36-51),
