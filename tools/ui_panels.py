@@ -4,12 +4,21 @@ D2R's HD panels draw a 1162 x 1507 background sprite (e.g. PANEL\\Inventory\\Cla
 data/hd/global/ui/panel/inventory/classic_background.sprite, plus a .lowend at half size). Median's panels are
 512 x 704 classic pictures in six 256-pixel tiles (themes/classic_sigma/game/panels/*.dc6, 2 x 3 tiles per page).
 Each page used here is assembled, scaled to 1162 x 1507 (x 2.2695 across, x 2.1406 down; bilinear) and written to
-data/hd/global/ui/panel/mxl/<name>.sprite, referenced by the layouts as PANEL\\mxl\\<name> (tools/ui_layouts.py).
+data/hd/global/ui/panel/mxl/<name>.sprite (consumables.sprite: see below), referenced by the layouts as PANEL\\mxl\\<name> (tools/ui_layouts.py).
 Sprites newer than their DC6 (and this script) are kept.
 
 Stash: Median's gold box sits above the grid, where D2R's Personal / Shared tabs go, while D2R's gold button is below
 the shared-stash arrows. The box (MOVES) is moved down to the empty bottom of the panel and its old place is filled
 with the panel's background, taken from just right of the box.
+
+Trade window (Median's trade.dc6): two 7 x 15 grids side by side. Store (store.dc6, page 0): a 15 x 15 grid under four
+tabs; the page has its last tab drawn pressed, so the unpressed tab from page 3 (same place) is pasted over it
+(PATCHES), because D2R's tab bar draws the active tab itself.
+
+Stash, materials tab: D2R's panel (PANEL/Stash/AdditionalStash/PANEL_AdditionalStash_Consumables) shows the
+Horadric Cube as a small 3 x 4 recess. Median's cube grid is 15 x 10, so the cube picture of crafting.dc6 is pasted
+over the recess at the size of the cube view in the layout (CUBE_VIEW; tools/ui_layouts.py reads the same numbers).
+The sprite is taken from the extracted D2R files (extract/d2r/93847).
 
 Usage: python tools/ui_panels.py
 """
@@ -22,13 +31,20 @@ from skill_icons import decode_frame, palette, read_dc6  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "extract" / "mxl" / "data" / "global" / "themes" / "classic_sigma" / "game" / "panels"
+D2R_STASH = ROOT / "extract" / "d2r" / "93847" / "data" / "hd" / "global" / "ui" / "panel" / "stash" / "additionalstash"
+CUBE_ART = ("crafting", 0, (39, 208, 474, 498))  # Median's cube grid picture: dc6, page, classic rectangle
+# where the cube view sits in the materials tab, in HD pixels (x, y, width, height); 15 x 10 cells of 54 x 50.6
+CUBE_VIEW = (177, 720, 810, 506)
 OUT = ROOT / "work" / "mod" / "data" / "hd" / "global" / "ui" / "panel" / "mxl"
 CLASSIC_W, CLASSIC_H = 512, 704
 HD_W, HD_H = 1162, 1507
 # sprite name -> (dc6, page)
-PANELS = {"inventory": ("character-inventory", 0), "cube": ("crafting", 0), "stash": ("stash", 0)}
+PANELS = {"inventory": ("character-inventory", 0), "cube": ("crafting", 0), "stash": ("stash", 0),
+          "trade": ("trade", 0), "store": ("store", 0)}
 # sprite name -> [(left, top, right, bottom, new top)] in classic pixels
 MOVES = {"stash": [(112, 86, 403, 134, 615)]}
+# sprite name -> [(page, left, top, right, bottom)]: pixels of another page of the same DC6 pasted in place
+PATCHES = {"store": [(3, 362, 128, 478, 178)]}
 FILL_FROM = 404  # background strip for the holes: opaque pixels of the same row from this x on
 
 
@@ -56,6 +72,13 @@ def page_rows(dc6: Path, page: int, pal) -> list[list[tuple]]:
             if ty + y < CLASSIC_H:
                 rows[ty + y][tx:tx + w] = tile[y]
     return rows
+
+
+def patch_rows(rows: list[list[tuple]], dc6: Path, patches: list[tuple], pal) -> None:
+    for page, x0, y0, x1, y1 in patches:
+        other = page_rows(dc6, page, pal)
+        for y in range(y0, y1):
+            rows[y][x0:x1] = other[y][x0:x1]
 
 
 def scale(rows: list[list[tuple]], out_w: int, out_h: int) -> bytes:
@@ -105,10 +128,41 @@ def main() -> int:
         pal = pal or palette()
         rows = page_rows(src, page, pal)
         move_boxes(rows, MOVES.get(name, []))
+        patch_rows(rows, src, PATCHES.get(name, []), pal)
         write_sprite(hd, HD_W, HD_H, scale(rows, HD_W, HD_H))
         write_sprite(low, HD_W // 2, HD_H // 2, scale(rows, HD_W // 2, HD_H // 2))
         print(f"   panel {name}: {dc6}.dc6 page {page} -> {HD_W}x{HD_H}")
+    cube_in_stash()
     return 0
+
+
+def cube_in_stash() -> None:
+    """D2R's stash materials page with Median's cube grid picture over its 3 x 4 recess (HD and lowend)."""
+    name = "panel_additionalstash_consumables"
+    src = SRC / f"{CUBE_ART[0]}.dc6"
+    if not (D2R_STASH / f"{name}.sprite").exists():
+        print(f"   {name}: D2R sprite not extracted, cube view keeps D2R's art")
+        return
+    hd, low = OUT / "consumables.sprite", OUT / "consumables.lowend.sprite"
+    newest = max(src.stat().st_mtime, Path(__file__).stat().st_mtime, (D2R_STASH / f"{name}.sprite").stat().st_mtime)
+    if hd.exists() and low.exists() and hd.stat().st_mtime >= newest:
+        return
+    pal = palette()
+    page = page_rows(src, CUBE_ART[1], pal)
+    left, top, right, bottom = CUBE_ART[2]
+    crop = [r[left:right] for r in page[top:bottom]]
+    for path, k in ((hd, 1), (low, 2)):
+        base = D2R_STASH / f"{name}{'.lowend' if k == 2 else ''}.sprite"
+        data = base.read_bytes()
+        head, (_ver, _w, width, height, *_rest) = data[:40], struct.unpack("<HHIIIIIIII", data[4:40])
+        pixels = bytearray(data[40:40 + width * height * 4])
+        x, y, w, h = (v // k for v in CUBE_VIEW)
+        art = scale(crop, w, h)
+        for j in range(h):
+            pixels[((y + j) * width + x) * 4:((y + j) * width + x + w) * 4] = art[j * w * 4:(j + 1) * w * 4]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(head + bytes(pixels))
+    print(f"   panel stash materials: Median's cube grid at {CUBE_VIEW}")
 
 
 if __name__ == "__main__":

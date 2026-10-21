@@ -68,7 +68,10 @@ Status (2026-10-14):
 - Inventory and cube sizes (2026-10-14): Median's 15 x 10 player inventory and 15 x 10 Horadric Cube (D2R 10 x 4,
   3 x 4). inventory.txt gridX/gridY (txt_migrate inventory_sizes); HD panels use Median's own panel art
   (tools/ui_panels.py) and Median's positions scaled to D2R's panel (tools/ui_layouts.py). The 14 x 14 stash (personal and shared
-  pages) followed the same day. Open: trade window, classic-mode panels, the cube grid shown inside D2R's stash panel.
+  pages) followed the same day. Trade window, NPC stores and the cube view in the stash followed (2026-10-21): Median's inventory.bin has
+  Trade Page 1/2 as two 7 x 15 grids side by side (trade.dc6) and "Monster", the stores' grid, as 15 x 15 (store.dc6);
+  inventory.txt, three HD layouts and panel art (tools/ui_panels.py: trade, store with its pressed tab replaced,
+  stash materials tab with a cube grid pasted over D2R's 3 x 4 recess) done, in-game check pending. Open: classic-mode panels.
 - Next: HD art. items.json / missiles.json / monsters.json use D2R look-alikes today (item_hd.py, missile_hd.py,
   gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
   backgrounds and tab titles (bug #3): tools/skill_tree_art.py, to test (titles are drawn into per-class 8-frame sprites). Deferred checks: Median monster art in classic mode, Median-only

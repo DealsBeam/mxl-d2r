@@ -12,8 +12,18 @@ and 3 x 4). The HD panels get Median's own art (tools/ui_panels.py, hd/global/ui
 is 66 x 62 and the grid lines up with the art. Equipment slots move to Median's places; the weapon swap tabs sit
 above Median's arm slots. The grid sizes themselves are in inventory.txt (txt_migrate.py, inventory_sizes).
 
+Trade window: Median's trade.dc6 has two 7 x 15 grids side by side (inventory.bin rows 6 and 7: Trade Page 1 on the
+left, Page 2 on the right; D2R stacks two 10 x 4 grids). The left one is "them", the right one "us" (to check in
+game; swap the x values of TRADE_GRIDS and TRADE_BARS). Names and accept buttons go in the two header bars, gold
+under each grid.
+NPC stores: Median's "Monster" inventory (the stores' grid) is 15 x 15 under four tabs (store.dc6); D2R's vendor panel
+gets that art, grid and tabs, and its repair / refresh buttons move below the grid.
+Stash: its materials tab shows the Horadric Cube as a 3 x 4 recess (D2R), now 15 x 10 over Median's grid picture
+(ui_panels.py, CUBE_VIEW), the inventory being the same 15 x 10 cube.
+
 Writes work/mod/data/global/ui/layouts/skillstreepanelhd.json, skillstreepanel.json, playerinventoryoriginallayouthd.json,
-playerinventoryexpansionlayouthd.json and horadriccubelayouthd.json (after txt_migrate.py).
+playerinventoryexpansionlayouthd.json, horadriccubelayouthd.json, bankexpansionlayouthd.json, tradelayouthd.json and
+vendorpanellayouthd.json (after txt_migrate.py).
 Usage: python tools/ui_layouts.py
 """
 import re
@@ -147,6 +157,18 @@ STASH_GOLD = (118, 619)        # the box's coin after ui_panels.py moves it down
 CUBE_BUTTON = (224, 580)       # the transmute button's place in Median's crafting.dc6
 GOLD_ICON = (37, 636)          # the coin box at the left of Median's gold bar (character-inventory.dc6, y 635-662)
 GOLD_TEXT = (62, 636)
+# Trade (trade.dc6): grids 7 x 15 at x 33 / 277, y 188; header bars (left 28-245, right 268-485) y 135-176
+TRADE_GRIDS = {"them": (33, 188), "us": (277, 188)}
+TRADE_BARS = {"them": (28, 245), "us": (268, 485)}
+TRADE_BAR_Y = (135, 176)
+TRADE_GOLD_Y = 628
+# Store (store.dc6 page 0): 15 x 15 grid, tabs 37-475 x 134-173, the chest icon and bar of the gold at y 97-120
+STORE_GRID = (39, 180)
+STORE_TABS = (37, 134, 475, 173)
+STORE_GOLD = (118, 97, 390)    # icon left, top, bar right
+STORE_BUTTONS_Y = 1345         # D2R's repair / refresh buttons, below the 15 x 15 grid (HD pixels)
+CUBE_VIEW = (177, 720, 810, 506)  # ui_panels.py: the cube view in the stash's materials tab (HD pixels)
+CUBE_VIEW_SCALE = 0.55
 RECT = re.compile(r'"rect":\s*\{[^}]*\}')
 
 
@@ -178,8 +200,8 @@ def set_fields(text: str, name: str, fields: str) -> str:
     return text[:s] + block[:j] + fields + block[k + 1:] + text[e:]
 
 
-def grid_fields(x: int, y: int, cols: int = 15, rows: int = 10) -> str:
-    return (f'{{ "rect": {{ "x": {x}, "y": {y}, "scale": {GRID_SCALE} }}, "cellCount": {{ "x": {cols}, "y": {rows} }}, "cellSize": {CELL}, '
+def grid_fields(x: int, y: int, cols: int = 15, rows: int = 10, scale: float = GRID_SCALE) -> str:
+    return (f'{{ "rect": {{ "x": {x}, "y": {y}, "scale": {scale} }}, "cellCount": {{ "x": {cols}, "y": {rows} }}, "cellSize": {CELL}, '
             f'"gemSocketFilename": "PANEL\\\\gemsocket", "chronicleFlourishOffset": {{ "x": -1, "y": 0 }} }}')
 
 
@@ -241,7 +263,11 @@ def stash() -> str:
     t = baseline("bankexpansionlayouthd.json")
     t = t.replace('"PANEL\\\\Stash\\\\StashPanel_BG_Personal"', '"PANEL\\\\mxl\\\\stash"')
     t = t.replace('"PANEL\\\\Stash\\\\StashPanel_BG_Shared"', '"PANEL\\\\mxl\\\\stash"')
+    t = t.replace('"PANEL\\\\Stash\\\\AdditionalStash\\\\PANEL_AdditionalStash_Consumables"', '"PANEL\\\\mxl\\\\consumables"')
     t = set_fields(t, "grid", grid_fields(*hd(*STASH_GRID), 14, 14))
+    # the cube view (materials tab): 15 x 10 over the art ui_panels.py pasted; D2R's cover picture of the recess goes
+    t = set_fields(t, "horadriccube_grid", grid_fields(CUBE_VIEW[0], CUBE_VIEW[1], 15, 10, CUBE_VIEW_SCALE))
+    t = set_rect(t, "horadriccube_cover", '{ "x": -5000, "y": -5000 }')
     # Personal / Shared tabs (195 x 72 each) centred where Median's gold box was (ui_panels.py moves it down)
     x0, y0 = hd(*STASH_TABS[:2])
     x1, y1 = hd(*STASH_TABS[2:])
@@ -253,6 +279,42 @@ def stash() -> str:
     return t
 
 
+def trade() -> str:
+    t = baseline("tradelayouthd.json")
+    t = t.replace('"PANEL\\\\Trade\\\\MultiplayerTrade_BG"', '"PANEL\\\\mxl\\\\trade"')
+    y0, y1 = (round(v * SY) for v in TRADE_BAR_Y)
+    mid = (y0 + y1) // 2
+    for who, (gx, gy) in TRADE_GRIDS.items():
+        t = set_fields(t, f"grid_{who}", grid_fields(*hd(gx, gy), 7, 15))
+        bx0, bx1 = (round(v * SX) for v in TRADE_BARS[who])
+        t = set_rect(t, f"ready_{who}", rect(bx0 + 12, mid - 37))
+        t = set_rect(t, f"name_{who}", rect(bx0 + 100, mid - 26, bx1 - bx0 - 112, 52))
+        gold_x = round(gx * SX) + (round(203 * SX) - 309) // 2
+        t = set_rect(t, f"gold_amount_{who}", rect(gold_x, round(TRADE_GOLD_Y * SY), 309, 53))
+    return t
+
+
+def vendor() -> str:
+    t = baseline("vendorpanellayouthd.json")
+    t = t.replace('"PANEL\\\\Vendors\\\\VendorShop_BG"', '"PANEL\\\\mxl\\\\store"')
+    t = t.replace('"PANEL\\\\Vendors\\\\VendorForge_BG"', '"PANEL\\\\mxl\\\\store"')
+    tx, ty0 = hd(STORE_TABS[0], STORE_TABS[1])
+    ty = (ty0 + round(STORE_TABS[3] * SY)) // 2 - 37
+    t = set_rect(t, "tabs", rect(tx, ty))
+    t = set_fields(t, "grid", grid_fields(*hd(*STORE_GRID), 15, 15))
+    for name in ("button_repair", "button_repair_all", "button_refresh"):
+        s_, e_ = block_span(t, f'"name": "{name}"')
+        x = re.search(r'"x":\s*(\d+)', t[s_:e_]).group(1)
+        t = set_rect(t, name, rect(int(x), STORE_BUTTONS_Y))
+    # gold: Median's chest icon and bar at the top of the panel instead of D2R's coin at the bottom
+    gx, gy = hd(STORE_GOLD[0], STORE_GOLD[1])
+    bar_w = round((STORE_GOLD[2] - STORE_GOLD[0]) * SX)
+    t = set_rect(t, "gold_icon", '{ "x": -5000, "y": -5000, "width": 57, "height": 57 }')
+    t = set_rect(t, "gold_amount", rect(gx + 70, gy + 2, bar_w - 100, 48))
+    t = set_rect(t, "StashWidget", rect(gx, gy, bar_w, 58))
+    return t
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "skillstreepanelhd.json").write_text(skill_tree(), encoding="utf-8")
@@ -261,7 +323,9 @@ def main() -> int:
     (OUT / "playerinventoryexpansionlayouthd.json").write_text(inventory_expansion(), encoding="utf-8")
     (OUT / "horadriccubelayouthd.json").write_text(cube(), encoding="utf-8")
     (OUT / "bankexpansionlayouthd.json").write_text(stash(), encoding="utf-8")
-    print(f"skillstreepanel(hd).json: {TABS} tabs; inventory and cube 15 x 10, stash 14 x 14 on Median's panels")
+    (OUT / "tradelayouthd.json").write_text(trade(), encoding="utf-8")
+    (OUT / "vendorpanellayouthd.json").write_text(vendor(), encoding="utf-8")
+    print(f"skillstreepanel(hd).json: {TABS} tabs; inventory and cube 15 x 10, stash 14 x 14, trade 7 x 15 x 2, stores 15 x 15 on Median's panels")
     return 0
 
 
