@@ -115,26 +115,35 @@ waypoint panel (`D2Waypoints.cpp`, `ui/Waypoint.cpp`) lists every level of the t
 
 D2R's own five rows name 39 levels and leave Act 4's slots 4-9 empty; 39 + 8 Median levels = 47 > 5 x 9 = 45.
 
-**Panel patch, what the lane client-ui found (2026-10-22), not done.** The button table is a static array of 9 entries of 8 bytes
-(`{u32 level number, u8 listed}`) at `0x2a969e0` (zeroed by `0x1ea9b0` from `0x1eaa31` to `0x1eaaa8`, count dword `0x2a969d4`),
-directly in front of the vector `0x2a96a28` of 0x34-byte actinfo entries, so it cannot be grown in place; it has to be relocated.
-Functions that address it (RIP-relative disp32): `0x1e9b40` (button builder, size 0x8ac, `0x1ea198`), `0x1ea9b0` (tab fill, `0x1eaa31`
-and `0x1eacb4`, tab index in `edx`, entry stride 0x34), `0x1ebf50` (`0x1ec05a`), `0x1ec508` (`0x1ec582`); the count dword has 12 users in all (`0x1e9c3f`, `0x1ea230`, `0x1ebad4`, `0x1ec56e`, `0x1ec79f`, `0x1ec935`, `0x1ec982`, ...). The fill loop compares with 9 (`mov r12d, 9`
-at `0x1eab08`). The buttons themselves come from the panel's layout JSON (one widget per slot), so a tab with more than 9 levels needs
-extra button widgets in the layout and a layout override for HD. Plan: hook `0x1ea9b0`, allocate a 16-entry table, patch the disp32s of the
-four functions above (whole instructions, no rip-relative copies), raise the loop bound, add the layout widgets, then give each
-Median waypoint level its own act in `tools/waypoints_data.py`. Not started: the number of users and the unverifiable layout part
-exceed what this lane could test.
+**Panel patch (`plugin/src/waypoints.cpp`, lane waypoint-panel, 2026-10-22).** Every Median waypoint now sits in its own act, up to
+27 buttons per tab. The button table is a static array of 9 entries of 8 bytes (`{u32 level, u8 listed}`) at `0x2a969e0`, count dword
+`0x2a969d4`, directly in front of the actinfo row vector (`0x2a96a28` data, `0x2a96a30` size, `0x2a96a38` capacity), so it cannot grow
+in place. Three functions read it through a 7-byte `lea reg,[rip+disp32]`: the button builder `0x1e9b40` (`0x1ea198`), the click handler
+`0x1ebf50` (`0x1ec05a`) and the state refresh `0x1ec430` (`0x1ec582`). The tab fill `0x1ea9b0(panel, tab)` is the only writer, and its
+loop is fixed at 9 levels per row.
 
-**Fix (data, `tools/waypoints_data.py`, a build step after txt_migrate).** No remap and no save work. The generated `actinfo.txt`
-(D2R's rows, both banks) puts each Median waypoint level whose own act has no free slot into Act 4's six free slots, in act
-order: `silver_city`, `duncraig`, `tran_athulua`, `island_of_skartara`, `caldeum`, `torajan_jungles`. They appear under tab IV
-(unlocked by D2R's act 4 intro quest `0x17`, so an Act 1-3 player sees them from Act 4 on; the waypoint objects work and save
-from the start). `vizjun` (155) and `t_r_d_lra` (242) have no free slot: the `mxl` line `waypoints` and `area_audit.py` name
-them; they need a panel patch (more than 9 slots per tab, or a sixth tab with its unlock quest and art) to appear.
-`plugin/src/waypoints.cpp` (Off word `waypoints`, read-only) checks at load that the bit table and the entry bytes are the
-analysed ones and that Median's numbers fit and are unique. `tools/area_audit.py` flags a number >= 112 or a duplicate as a
-problem and a waypoint level without a button as a warning.
+What the plugin does: it hooks the tab fill (13 entry bytes checked), and for the tab asked for runs the engine's own fill over
+synthetic 0x34-byte rows (up to 3 rows of 9 levels, built from the generated `mxl_waypoints.h`, ascending waypoint number) by
+swapping the row vector's data pointer and size for the call and restoring them after it. Each run's table entries are appended
+to a plugin table allocated within +-2 GB of the image (rip-relative reach), and the count dword is set to the total. The three
+`lea` disp32s are patched through `PatchBytes` with the expected bytes verified (the 5 bytes D2RLoader patches are not touched; no
+rip-relative copy is made). Because the engine's fill makes the entries, the "not yet visited" and "current level" flags and the
+unlock logic stay the engine's. The tab-unlock quests are unchanged (tabs II-V open with quests 7, 15, 23, 26 as before).
+
+Layout: the buttons are not layout widgets but clones of `UnselectableButtonTemplate` made at run time (`Act%d_Button%d`, y =
+index * `buttonOffset` + 264, default `buttonOffset` 123). 12 buttons at 123 do not fit the 1162x1507 HD panel, so
+`tools/ui_layouts.py` writes `waypointspaneloriginalhd.json` with `"buttonOffset": 100` (art is 129 tall; the buttons overlap
+their gap a little, which the art allows). No extra widgets were needed.
+
+Data (`tools/waypoints_data.py`): `plugin/src/mxl_waypoints.h` lists every waypoint level with its tab (levels.txt Act + 1); the
+plugin fills each tab from it. `actinfo.txt` is still written for the patch-off case (word `waypoints` in `mxl-core-off.txt`, or an
+image the patch does not recognise): D2R's rows plus only the Median levels of their own act that have a free slot (just Silver
+City, Act 4). The `mxl` line `waypoints` reports the plugin as `panel list has a button for N`.
+
+Result in game (slot run, HD, 5 tabs, screenshots checked): I 10 (Rogue Encampment to Duncraig), II 11 (to Tran Athulua,
+Skartara), III 12 (to Caldeum, Torajan Jungles, Vizjun), IV 4 (Pandemonium Fortress to Silver City), V 10 (to Tur Dulra).
+Not verified: a travel click from a real waypoint object succeeding (a click from a harness-opened panel is sent to the server and
+refused with "Impossible", the same as D2R's refusal when no waypoint object is in use).
 
 ## 4. `tools/area_audit.py`
 
@@ -149,8 +158,8 @@ them Median's); one problem until the data is rebuilt: the built mod has no Medi
 on a rebuilt copy: 0 problems). Warnings and info:
 
 - 8 Median waypoint numbers >= 39 (levels 138, 139, 141, 147, 153, 155, 169, 242: 70, 80, 71, 60, 50, 72, 61, 90): not a
-  save problem (the record keeps 112 bits); the waypoint panel has 9 slots per act, see section 3b. With the actinfo.txt that
-  `tools/waypoints_data.py` writes, 2 of them (155 vizjun, 242 t_r_d_lra) still have no panel button (a warning in the audit).
+  save problem (the record keeps 112 bits); the panel patch (section 3b) gives each its own act's tab; the audit warns only for an
+  act outside 1-5 or more than 27 in one act.
 - 2 one-way Vis links (teganze -> torajan_jungles, vizjerei_temple -> ruins_of_ureh), 16 `lvlmaze` rows for levels that
   are presets (vanilla leftovers), 5 level types (45-49) no level uses, type 50 without automap rows, 3 placeholder level
   rows (254, 255, 270; never generated).
@@ -168,5 +177,5 @@ on a rebuilt copy: 0 problems). Warnings and info:
 | ObjPreset.txt with Median's table (`txt_migrate.object_presets`) | done in the pipeline, run `tools/build.py` |
 | `.ds1` monster / object renumbering (`ds1_remap.py`, called by `install_mod.py`) | done; **install + in-game check pending** (docs/testing.md) |
 | Plugin hooks | none needed |
-| Waypoint numbers >= 39 | save and engine fine (112 bits); `actinfo.txt` lists 6 of the 8 extras (Act 4 tab); vizjun and t_r_d_lra need a panel patch; **in-game check pending** (docs/testing.md) |
+| Waypoint numbers >= 39 | save and engine fine (112 bits); panel patch lists every Median waypoint under its own act (up to 27 per tab, HD layout stride 100); tabs checked in game; travel click from a real waypoint object not checked |
 | Automap for type 50, low-coverage maps | open |
