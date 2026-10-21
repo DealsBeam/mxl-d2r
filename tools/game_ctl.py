@@ -566,8 +566,8 @@ def logscan(update=True):
     newc = [c for c in crashes if c not in m.get("crashes", [])]
     out.append(f"crash files: {len(newc)} new {newc}")
     text = "\n".join(out)
-    print(text)
     open(os.path.join(current_run(), "logscan.txt"), "w", encoding="utf-8").write(text)
+    print(text)
     return {"errors": errs, "bad": bad, "crashes": newc, "text": text}
 
 
@@ -862,6 +862,10 @@ def step_shot(rep, step, name, key_name=None, wait=1.5):
 
 
 def main():
+    # stdout may be a file opened by parallel_smoke.py (or a cp932 console); log text can hold characters cp932 cannot
+    # encode, and a print() that raises here must not cost the run its report
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
     a = sys.argv[1:]
     if not a:
         print(__doc__)
@@ -948,11 +952,17 @@ def run_smoke():
             key("esc"); time.sleep(1.5)
             click(*UI["save_exit"]); time.sleep(8)
     finally:
+        # every step below is guarded: the report is written whatever happened above
         try:
             stop()
-        finally:
-            r = logscan()
-            rep.write("## logscan\n\n```\n" + r["text"] + "\n```")
+        except Exception as e:
+            log(f"stop failed: {e!r}")
+        try:
+            extra = "## logscan\n\n```\n" + logscan()["text"] + "\n```"
+        except Exception as e:
+            log(f"logscan failed: {e!r}")
+            extra = f"## logscan\n\nlogscan failed: {e!r}"
+        rep.write(extra)
 
 
 if __name__ == "__main__":
