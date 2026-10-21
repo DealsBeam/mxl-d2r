@@ -817,33 +817,61 @@ class Report:
         log(f"report {p}")
 
 
-def clear_intro():
-    """Calibration screens (every launch), skippable intro cinematics (hold a key), title screen.
-    Returns False if the game quit (license check dialog: OK closes the game)."""
+# Signature of the main menu: the left button panel (Options / Cinematics / Credits / Exit; fixed art, the scene behind
+# the panel changes) as 12 x 16 grey cells. The menu matches with a mean difference of 0; dimmed behind a dialog it is
+# about 27, the in-game screens 25 or more. The calibration screens' Continue button is NOT a menu feature: the scenery
+# in that box is bright too.
+MENU_SIG = bytes.fromhex(
+    "192e2f35373b3d37332e2c152137465a6f6f69615847361d1d2c30385753564f"
+    "3a2f2e19152523272a292828252522131b3030373a3f3f3a36302d151f37465d"
+    "676e68605746361c1b2c2e3f4f5c4c4e432e2e18142221242626262522241f12"
+    "1b343741444b4a43403731161f384153666b665e5141381b1a292d35474f4543"
+    "362d2b17142222242625252422231e121930343e414645403c352e141f384855"
+    "676e635d5545381b1b293d443d4f534e41342c17142221242625252422231f11")
+
+
+def menu_visible() -> bool:
+    """The main menu is up and no dialog dims it."""
+    from PIL import Image
+    img = grab_client()
+    w, h = img.size
+    c = img.crop((int(.0375 * w), int(.372 * h), int(.172 * w), int(.633 * h))).convert("L").resize((12, 16), Image.BOX)
+    return sum(abs(a - b) for a, b in zip(c.tobytes(), MENU_SIG)) / len(MENU_SIG) < 8
+
+
+def clear_intro(timeout=120):
+    """Calibration screens (first launches), skippable intro cinematics (hold a key), title screen. Done when the main
+    menu is recognised (menu_visible); Continue is clicked at most 6 times and Esc held at most 4 times, so a bright
+    menu scene cannot make this loop. Returns False if the game quit (license check dialog: OK closes the game)."""
     from PIL import ImageStat
+
     def button_visible():
         img = grab_client()
         w, h = img.size
         box = (int(.45 * w), int(.82 * h), int(.55 * w), int(.86 * h))
         return ImageStat.Stat(img.crop(box).convert("L")).mean[0] > 50
 
-    def wait_button(sec):
-        t0 = time.time()
-        while time.time() - t0 < sec:
-            if button_visible():
-                return True
+    t0 = time.time()
+    clicks = escs = 0
+    last_esc = 0.0
+    while time.time() - t0 < timeout:
+        if not game_pids():
+            return False
+        if menu_visible():
             time.sleep(1)
-        return False
-
-    # three calibration screens; the Continue button is bright while one is up
-    while wait_button(40):
-        click(*UI["calib_continue"])
-        time.sleep(3)
-        if not wait_button(6):
-            break
-    time.sleep(6)
-    press("esc", hold=3)  # "Hold any button to skip"
-    time.sleep(5)
+            if menu_visible():  # stable for a second: not a frame of the intro
+                shot("intro_end")
+                return True
+        elif button_visible() and clicks < 6:
+            click(*UI["calib_continue"])
+            clicks += 1
+            time.sleep(3)
+            continue
+        elif escs < 4 and time.time() - last_esc > 12 and time.time() - t0 > 20:
+            press("esc", hold=3)  # "Hold any button to skip"
+            escs += 1
+            last_esc = time.time()
+        time.sleep(1)
     shot("intro_end")
     if not game_pids():
         return False

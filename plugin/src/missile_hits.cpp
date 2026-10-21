@@ -3,15 +3,19 @@
 // hit slots 61-70 (table 0x2391030, bound 71 at 0x2391404; dispatcher 0x464ac0 calls (game, missile, target unit
 // or null), and the plugin fills the ones ported here. Median's 69 runs D2R's own hit 1 and its 40 D2R's 40 (both
 // vanilla's, data only). Not yet ported: 42 (one missile, parasite_2: bounces to a unit nearby) and 73 (one,
-// habeas_corpus); their slots stay empty, so those missiles hit without the extra effect.
+// habeas_corpus); their slots hold a function that does nothing (bug #24b: an empty slot is a call through null), so
+// those missiles hit without the extra effect.
 #include "missile_hits.h"
 
 #include "d2r.h"
 #include "item_spells.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <utility>
 
 namespace {
 
@@ -689,6 +693,65 @@ auto CltDoPhalanx(Unit* missile, float frames) noexcept -> int64_t {
 	return result;
 }
 
+// Bug #24b: D2R's client missile tick (0x1ba040) calls table[record +0x28] for every missile whose index is below the
+// bound at 0x2358a60 (91) with no check for an empty slot; slot 0 and 78-90 are empty, so a missile whose pCltDoFunc is
+// empty (0: D2Sigma's client does nothing then) crashes the client with a call through a null pointer. The base bank
+// has 95 such rows (D2R's own blanks for Median's Warlock sigil / miasma rows, Median's helper sub-missiles). Every
+// empty slot gets a function that does nothing and logs the first missile row it was called for.
+constexpr uint64_t CltDoBoundRva = 0x2358a60;  // int32: number of client do slots the dispatcher accepts
+constexpr int CltDoMaxSlots = 96;
+const D2RL::PluginContext* g_logContext = nullptr;
+std::atomic<uint32_t> g_cltDoSeen[(8192 + 31) / 32];
+std::atomic<uint32_t> g_srvHitSeen[(8192 + 31) / 32];
+
+// First call per missile row and table is logged.
+void NoteEmptySlot(std::atomic<uint32_t>* seen, const char* table, int slot, Unit* missile) noexcept {
+	const uint32_t row = missile != nullptr ? At<uint32_t>(missile, 0x04) : 0;
+	if (row >= 8192) {
+		return;
+	}
+	const uint32_t bit = 1u << (row & 31);
+	if ((seen[row >> 5].fetch_or(bit, std::memory_order_relaxed) & bit) == 0 && g_logContext != nullptr) {
+		char line[128];
+		std::snprintf(line, sizeof(line), "mxl-core: missile row %u has %s slot %d, which D2R leaves empty: skipped", row,
+		              table, slot);
+		g_logContext->LogInfo(line);
+	}
+}
+
+void NoteEmptyCltDo(int slot, Unit* missile) noexcept {
+	NoteEmptySlot(g_cltDoSeen, "client do", slot, missile);
+}
+
+template <int N>
+auto CltDoEmpty(Unit* missile, float) noexcept -> int64_t {
+	NoteEmptyCltDo(N, missile);
+	return 0;
+}
+
+template <int... N>
+constexpr auto CltDoEmptyTable(std::integer_sequence<int, N...>) noexcept {
+	return std::array<CltDoFn, sizeof...(N)>{&CltDoEmpty<N>...};
+}
+const auto g_cltDoEmpty = CltDoEmptyTable(std::make_integer_sequence<int, CltDoMaxSlots>{});
+
+// The same for the server hit table (0x2391030, bound at 0x2391404 = 71; dispatcher 0x464ac0 calls table[record +0x2e]
+// for 0 < index < bound, no null check): slot 70 is D2Sigma's hit 42 (missiles_4373, parasite_2), not ported.
+constexpr uint64_t SrvHitBoundRva = 0x2391404;
+constexpr int SrvHitMaxSlots = 80;
+
+template <int N>
+auto SrvHitEmpty(Game*, Unit* missile, Unit*) noexcept -> int64_t {
+	NoteEmptySlot(g_srvHitSeen, "server hit", N, missile);
+	return 0;
+}
+
+template <int... N>
+constexpr auto SrvHitEmptyTable(std::integer_sequence<int, N...>) noexcept {
+	return std::array<int64_t (*)(Game*, Unit*, Unit*), sizeof...(N)>{&SrvHitEmpty<N>...};
+}
+const auto g_srvHitEmpty = SrvHitEmptyTable(std::make_integer_sequence<int, SrvHitMaxSlots>{});
+
 using HitFn = int64_t (*)(Game* game, Unit* missile, Unit* target);
 using CltHitFn = int64_t (*)(Unit* missile, Unit* target);
 struct HitSlot {
@@ -719,7 +782,7 @@ constexpr HitSlot Hits[] = {
 
 }  // namespace
 
-auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> int {
+auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t reportSize, bool clientDoStubs) noexcept -> int {
 	g_exeBase = context->exeBase;
 	g_owner = reinterpret_cast<MissileOwnerFn>(g_exeBase + RvaMissileOwner);
 	g_unitClass = reinterpret_cast<UnitClassFn>(g_exeBase + RvaUnitClass);
@@ -781,6 +844,40 @@ auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t
 	                           reinterpret_cast<uint64_t>(&DoPhalanx)) &&
 	    context->PatchWriteU64(cltSlot, &cltOld, sizeof(cltOld), reinterpret_cast<uint64_t>(&CltDoPhalanx));
 	installed += phalanxOk ? 1 : 0;
+	// Empty client do slots (see CltDoEmpty): every one below the dispatcher's bound.
+	g_logContext = context;
+	const int32_t cltBound = *reinterpret_cast<const volatile int32_t*>(g_exeBase + CltDoBoundRva);
+	int stubbed = 0, stubFailed = 0;
+	for (int32_t slot = 0; clientDoStubs && slot < cltBound && slot < CltDoMaxSlots; ++slot) {
+		const uint64_t rva = MissileCltDoTable + static_cast<uint64_t>(slot) * 8;
+		if (*reinterpret_cast<const volatile uint64_t*>(g_exeBase + rva) != 0) {
+			continue;
+		}
+		const bool ok = context->PatchWriteU64(rva, Empty, sizeof(Empty), reinterpret_cast<uint64_t>(g_cltDoEmpty[slot]));
+		++(ok ? stubbed : stubFailed);
+	}
+	// Server hit slots left empty after the ones above (1..bound-1; 0 means "no hit function" and is never called).
+	const int32_t srvHitBound = *reinterpret_cast<const volatile int32_t*>(g_exeBase + SrvHitBoundRva);
+	int srvStubbed = 0;
+	for (int32_t slot = 1; clientDoStubs && slot < srvHitBound && slot < SrvHitMaxSlots; ++slot) {
+		const uint64_t rva = SrvHitTable + static_cast<uint64_t>(slot) * 8;
+		if (*reinterpret_cast<const volatile uint64_t*>(g_exeBase + rva) != 0) {
+			continue;
+		}
+		const bool ok = context->PatchWriteU64(rva, Empty, sizeof(Empty), reinterpret_cast<uint64_t>(g_srvHitEmpty[slot]));
+		++(ok ? srvStubbed : stubFailed);
+	}
+	const bool stubsOk = !clientDoStubs || (cltBound > 0 && cltBound <= CltDoMaxSlots && srvHitBound > 0 &&
+	                                         srvHitBound <= SrvHitMaxSlots && stubFailed == 0);
+	installed += stubsOk ? 1 : 0;
+	if (used < reportSize) {
+		const int n = clientDoStubs
+		                  ? std::snprintf(report + used, reportSize - used, "%s empty slots skipped: client do %d of %d, server hit %d of %d%s",
+		                                  used ? ";" : "", stubbed, static_cast<int>(cltBound), srvStubbed,
+		                                  static_cast<int>(srvHitBound), stubsOk ? "" : " FAILED")
+		                  : std::snprintf(report + used, reportSize - used, "%s empty client do / server hit slots left empty (off: cltdostub)", used ? ";" : "");
+		used += n > 0 ? static_cast<size_t>(n) : 0;
+	}
 	if (used < reportSize) {
 		const int n = std::snprintf(report + used, reportSize - used, "%s srvdo %d / cltdo %d phalanx (D2Sigma do 4 / 69)%s",
 		                            used ? ";" : "", PhalanxSrvSlot, PhalanxCltSlot, phalanxOk ? "" : " FAILED");
@@ -801,5 +898,5 @@ auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t
 }
 
 auto MissileHitCount() noexcept -> int {
-	return static_cast<int>(sizeof(Hits) / sizeof(Hits[0]) + sizeof(CltHits) / sizeof(CltHits[0])) + 2;
+	return static_cast<int>(sizeof(Hits) / sizeof(Hits[0]) + sizeof(CltHits) / sizeof(CltHits[0])) + 3;
 }

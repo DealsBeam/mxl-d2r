@@ -59,7 +59,7 @@ char g_levelTypesReport[160] = "off: not the expected game image";
 char g_calcReport[160] = "off: not the expected game image";
 char g_itemSpellsReport[160] = "off: not the expected game image";
 char g_manaCostsReport[160] = "off: not the expected game image";
-char g_missileHitsReport[512] = "";
+char g_missileHitsReport[1024] = "";
 char g_cubeReport[192] = "off: not the expected game image";
 char g_craftReport[96] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
@@ -100,7 +100,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 	return context->exeBase != 0 && ImageStamp(context) == ExpectedImage;
 }
 
-// Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
+// Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
 // items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai npc reqgates hirelings skilltree combat props runewords xp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
@@ -311,7 +311,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		if (Off("missiles")) {
 			std::snprintf(g_missileHitsReport, sizeof(g_missileHitsReport), " %s", OffNote);
 		} else {
-			g_missileHitsInstalled = InstallMissileHits(context, g_missileHitsReport, sizeof(g_missileHitsReport));
+			g_missileHitsInstalled = InstallMissileHits(context, g_missileHitsReport, sizeof(g_missileHitsReport), !Off("cltdostub"));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: %d/%d missile hits:%s", g_missileHitsInstalled, MissileHitCount(),
 		              g_missileHitsReport);

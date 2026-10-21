@@ -5,5 +5,6 @@
 
 #include <cstddef>
 
-auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> int;
+// clientDoStubs false (mxl-core-off.txt word "cltdostub"): leave D2R's empty client do slots empty (bug #24b diagnosis)
+auto InstallMissileHits(const D2RL::PluginContext* context, char* report, size_t reportSize, bool clientDoStubs = true) noexcept -> int;
 auto MissileHitCount() noexcept -> int;
