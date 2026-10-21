@@ -720,8 +720,9 @@ game destroy / create, client menu composition, quest handlers 13 / 14 / 25 / 38
 
 1. **Unique item by index** (Griswold's Heart): no D2R function found that takes a unique row; see section 7 for the two workarounds (base item
    via `0x43d530`, or a one-entry treasure class through `0x4404f0`). Needs a look at the unit creation `0x490410` -> `0x1404905a0` or an in-game test.
-2. Portal objects (red portal, town portal): the position-placing code of the portal object functions was not read; Median's lockout *clock start* sits
-   there (item_spells hooks). `0x491ff0` covers the tile / stair warps only.
+2. ~~Portal objects~~ lane dungeon-lockout: the portal object operate function is **`0x58f680`** (ctx `{game, portal, player, ?, object class}`; it pairs
+   the portal with its twin through `0x490070`, places the player with `0x491ca0`, returns 1 moved / 0 failed with unit message `0x14`). Entry bytes
+   `48 89 4c 24 08 55 53 56 57 41 56 41 57 48 8b ec`. Destination level = word from `0x34ad40(portal)`. Hooked by dungeon_lockout.cpp.
 3. A ready-made server -> client **system message** sender was not located; use the raw packet send of section 4 or a D2RLoader client-side message.
 4. Stat-update packet sender (0x1d-0x1f family) not located; gold sync argued from the game's own gold code (section 10), **untested**.
 5. The game create function `0x4049d0` has no direct callers (called through a job pointer); the destroy hook covers the reset need, so this is

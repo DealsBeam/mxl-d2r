@@ -41,7 +41,7 @@ Format follows [quests-requirements.md](quests-requirements.md) and [npc-hirelin
 | Piece | D2Sigma code | Tables / data | State today |
 |---|---|---|---|
 | Keys, scrolls of summoning, riftstones, links (open an area) | item spell 16: handler 0x1007f720, red portal 0x10097870 -> 0x10097750 (object 0x24a = 586 one-way portal, once per level and game via DRLG level +0x230 bit 4), object fns 15/35 (0x96fa0/0x96e80) | misc.txt `pSpell 16`, calc1 = level, misc2 | **ported** (plugin 0.13.0, 0.19.0) |
-| Dungeon lockout clock and sealing | D2Dungeon.cpp 0x5da80..0x5e2d0 (state array at game +0x1b24, 12 bytes per level), start 0x5d9d0 -> 0x5df20, warp check 0x5d810 / 0x5cee0 / 0x5d150 (D2DrlgWarp.cpp) | levels.bin extension fields (section 3) | **open** |
+| Dungeon lockout clock and sealing | D2Dungeon.cpp 0x5da80..0x5e2d0 (state array at game +0x1b24, 12 bytes per level), start 0x5d9d0 -> 0x5df20, warp check 0x5d810 / 0x5cee0 / 0x5d150 (D2DrlgWarp.cpp) | levels.bin extension fields (section 3) | **server rules ported** (plugin/src/dungeon_lockout.cpp, lane dungeon-lockout; section 3a); timer UI open |
 | Lockout UI | client `DungeonWidget:*` (0xf4bb0, 0xf4fc0), packet 0x88 | UI layout (not in our extract) | **open** |
 | Treasure goblins | D2Goblins.cpp 0x66120 (tick), 0x66070 (chance), 0x65de0 (pick), 0x65be0 (rebuild candidates); tick table 0x101d90ec run by 0x66230 (D2GS.cpp) | levels `GoblinChance` (+0x15c), monstats3 goblin fields (section 4) | **open** (monsters exist) |
 | Trophies, sigils, marks, relics, riftstones | none (items); cube checker 0x10059d00 | misc.txt, cubemain/cubemainext, uniqueitems `TrophyCarrier2`, `Fist *`/`Lab *` treasure classes | cube conditions **ported** 0.37.0; flag setters = cubemain output slots, spec in plugin-spec.md (needs a D2R hook) |
@@ -135,6 +135,50 @@ AlwaysDisplayName, GoblinChance); the **meaning below is from how the code uses 
 - **The 20 s levels** (Labyrinth, Trials) look like an "entry window" after which the level is sealed for latecomers;
   the 600-1200 s levels (World Stone 1200, Dimensional Plane 600, Uldyssian's Tomb 900, Heart of Darkness 840) look like
   time limits. Same mechanism, different values; the unit is seconds in the code (checked in 0x5df20).
+
+### 3a. Port status (lane dungeon-lockout)
+
+Corrections found while reading the code for the port (all from the D2Sigma decompile):
+- **The clock starts on every successful entry**, not only on portals: the tile warp function 0x5cf90 (calls the warp test
+  0x5d810, then moves the player, then 0x5d9d0), the portal object function 0x96e80 (fn 35; test 0x5d810, set the move
+  message, 0x5d9d0) and the item teleport 0x7fb70 (no test) all call 0x5d9d0 with the destination level. A level with a lock
+  time therefore counts down from the first player who walks in, by stairs, tile or portal.
+- **Per game, not per player.** The 12-byte records are at game +0x1b24; any player entering starts the clock for everybody.
+  Sealed = flag 2 set when the first timed event (0x5e180) fires; the second event (0x5e2d0) only clears the "starting" bit 4.
+  Players already inside stay; the clock does not eject anybody. It only refuses entry (stairs, tiles, portals) afterwards.
+  Leaving and coming back during the countdown is allowed.
+- **Test 0x5d810 (player entering level `dst`)** refuses when: (1) 0x5cee0 fails: player level (stat 12, capped by an engine value)
+  below the level's requirement for the game difficulty (+0x158 + difficulty), difficulty below +0x151, or class lock (+0x15e)
+  not equal to class + 1; (2) the level has a lock time (+0x153 non-zero) and its flag 2 is set; (3) a quest-table condition:
+  the 0x9c-byte table at TxtRecords +0xc60 (vanilla LevelDefBin, row = level) has a non-zero quest id at +4 and the player
+  has none of quest bits 1, 0, 0xe, 0xf for it. (3) is not ported: D2R has no such table access found and the five
+  vanilla quest levels keep D2R's own check (0x516a50). The three Sigma special cases (73, 100, 132) are D2R's own.
+- **What the player sees**: a refusal sets the player's pending unit message 0x13 (0x100b15d0 stores it at +0x6e / +0x70 and
+  sets flag 0x400), which the client turns into its lockout popup; the clock and its title text are the client
+  `DungeonWidget` fed by packet 0x88 (type 1 flags, type 2 milliseconds left, 60 levels per packet, sent on join and on
+  every change). The 20-second levels are real timers with the same widget.
+
+Implemented (mxl-core, switch word `lockout`, report on the `mxl` command and the log):
+- Hook 0x491ff0 (warp action, entry `48 8b c4 53 55 57 41 56 48 83 ec 68 49 8b d8`, 15 bytes): works out the destination level
+  from the linked tile, refuses (returns without the original) when Median's test refuses, and starts the clock when the
+  player's level changed afterwards.
+- Hook 0x58f680 (portal object operate function, entry `48 89 4c 24 08 55 53 56 57 41 56 41 57 48 8b ec`, 16 bytes): same
+  test on the portal's destination word (0x34ad40); refusal = D2R's failure exit (unit message 0x14, return 0); clock starts
+  after a successful move. Town portals and red portals use it. The one-way portal (object 600) uses it only if its operate
+  function in objects.txt is the same one: to confirm in game.
+- Rules in plugin/src/dungeon_logic.h (141 levels from mxl_dungeons.h): requirements, seal, group locking (levels with the same
+  non-zero group take the starter's end time), per-game reset by game pointer or frame counter going backwards. The seal is
+  checked lazily against GetTickCount64 (Median: game events, same wall clock; only difference: Median's events are frame
+  based, so a paused server would differ). Unit tests: plugin/tests/dungeon_test.cpp.
+- Message: the generic failure message 0x14 only (`0x491960`). Median's 0x13 has no D2R counterpart (no D2R caller uses it);
+  no packet is invented.
+
+Left:
+- Timer / popup UI and packet 0x88 (client; needs a D2RLoader client plugin or UI layout).
+- Quest-table condition (3) and the 0x7fb70 item teleport (clock start only; find the D2R item spell that teleports).
+- Game-destroy hook 0x4057c0 (state resets on game pointer or frame regress instead; a new game at the same address whose first
+  lockout event comes after a frame count above the old game's last one would keep stale seals).
+- Confirm in game: hook parameter layout of 0x58f680, the one-way portal object, whether 0x14 produces a visible reaction.
 
 ## 4. Treasure goblins (D2Goblins.cpp)
 
