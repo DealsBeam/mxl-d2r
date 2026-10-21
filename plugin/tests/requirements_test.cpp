@@ -7,6 +7,8 @@
 #include <string>
 #include <utility>
 
+int RunQuestsTests();  // quests_test.cpp
+
 namespace {
 
 struct Fixture {
@@ -107,6 +109,7 @@ int main() {
 	Check(!Evaluate(9, none) && !Evaluate(1, none) && !Evaluate(22, none), "missing callbacks deny");
 	Check(Evaluate(0, none), "none allows without callbacks");
 
+	failures += RunQuestsTests();
 	std::printf(failures == 0 ? "requirements: all tests passed\n" : "requirements: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }
