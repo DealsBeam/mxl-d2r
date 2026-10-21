@@ -72,6 +72,15 @@ Status (2026-10-14):
   Trade Page 1/2 as two 7 x 15 grids side by side (trade.dc6) and "Monster", the stores' grid, as 15 x 15 (store.dc6);
   inventory.txt, three HD layouts and panel art (tools/ui_panels.py: trade, store with its pressed tab replaced,
   stash materials tab with a cube grid pasted over D2R's 3 x 4 recess) done, in-game check pending. Open: classic-mode panels.
+- Character sheet (2026-10-21, in-game check pending): Median's statsheet page 0 (stat-screen.dc6: name bar, life / mana /
+  stamina / experience bars, 4 attributes, 4 resistances, defense, damage + attack rating of the left and right skill)
+  is D2R's HD panel background (ui_panels.py 'charsheet') and tools/ui_layouts.py char_sheet() moves D2R's stat widgets
+  into its boxes. The doubled "ATTACK Damage / Attack Rating" rows were not a string bug: D2R's panel shows the left
+  skill's and the right skill's stats; in Median's layout they sit beside the two weapon portraits as value-only
+  boxes. Not done: Median's pages 2 and 3 (stat-screen.dc6 pages 1-2: ~60 boxes of extra stats such as resistances
+  by type, damage and speed modifiers, find / absorb values) need either code that fills D2R's Advanced Stats panel
+  (advancedstatspanelhd.json, opened by the button on the sheet's right edge; its rows are code-driven) or a plugin
+  stat sheet; the page buttons and the text of those pages live in D2Sigma's code. Also missing: the portrait.
 - Next: HD art. items.json / missiles.json / monsters.json use D2R look-alikes today (item_hd.py, missile_hd.py,
   gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
   backgrounds and tab titles (bug #3): tools/skill_tree_art.py, to test (titles are drawn into per-class 8-frame sprites). All 8 pages are selectable and show their skills since 2026-10-21 (plugin/src/skill_tree.cpp: D2R's panel only handled 3 pages, in reverse order; tools/skill_icons.py splits skilldesc rows shared by several classes). Deferred checks: Median monster art in classic mode, Median-only
