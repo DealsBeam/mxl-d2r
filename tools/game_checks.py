@@ -814,9 +814,40 @@ def check_craftflags():
 
 # lockclock goes first after mxl: entering the Median dungeon is a heavy level load and D2R's client asserts "asset cache
 # exceeded" (512 assets) after a few area changes, then crashes (see docs/bugs.md)
+def check_areacycle():
+    """Bug #24: area changes in one game. MXL_AREAS (comma list, default 2..17) are visited in order with D2R's
+    `cheat goto` / the plugin's `level`; the loader log is searched for the asset cache and biome assertions and the
+    game process for being alive."""
+    name = "Area changes in one game (bug #24: asset cache, empty biome)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    areas = [int(x) for x in os.environ.get("MXL_AREAS", "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17").split(",")]
+    off = g._size(g.LOADER_LOG)
+    n_cache = n_biome = 0
+    notes = []
+    reached = 0
+    for a in areas:
+        guard()
+        st = goto(a)
+        at = st["player"].get("area")
+        txt = g._read_from(g.LOADER_LOG, off)
+        n_cache = txt.count("AssetCache.h")
+        n_biome = txt.count("has no biome") + txt.count("empty biome filename")
+        alive = bool(g.game_pids())
+        notes.append("%d->%s cache=%d biome=%d%s" % (a, at, n_cache, n_biome, "" if alive else " DEAD"))
+        if not alive:
+            break
+        if at == a:
+            reached += 1
+    ok = bool(g.game_pids()) and n_cache == 0 and n_biome == 0
+    add(name, "PASS" if ok else "FAIL", "%d of %d areas reached; asset cache asserts %d, biome asserts %d; %s" % (
+        reached, len(areas), n_cache, n_biome, "; ".join(notes)))
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
-          ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags)]
+          ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
+          ("areacycle", check_areacycle)]
 
 
 def write_report(extra=""):

@@ -402,6 +402,36 @@ class Migrator:
                 self.report.append(f"\nlvlmaze: {len(missing)} maze levels had no lvlmaze row; added copies of a "
                                    f"same-LevelType row for levels {', '.join(missing)}")
 
+    def fold_level_layers(self) -> None:
+        """Levels.txt `Layer` is the key of the per-character map memory (explored rooms per layer, the character's
+        .map / .ma2 / .ma3 save files). D2R keeps it as a hash with 100 buckets indexed by the layer directly
+        (0x1400d5fe0 save, 0x1400d5710 load: `local_1d8[100]`, `local_1d8[layer]`), and all of its levels use 0..99
+        (several levels share a layer, 14 share 0). Median's layers go up to 279: leaving or entering a level with
+        a layer of 100 or more read past that array, the chain it found was garbage and the save loop spun forever
+        (bug #24: the client hangs/crashes after a few area changes, its UI thread logs "Reading From: <name>.ma2"
+        without end). A layer above 99 becomes D2R's own layer of that level id when D2R has the level (Median reuses
+        the ids 133-136 of D2R's Pandemonium levels), else 0, the layer D2R already shares between levels that have
+        no map memory of their own (Median blanks it for its towns too); levels that shared a Median layer share 0."""
+        n = 0
+        for bank in ("base", ""):
+            d = OUT / "data" / "global" / "excel" / bank
+            dr = D2R / bank / "levels.txt"
+            if not (d / "levels.txt").exists() or not dr.exists():
+                continue
+            lh, lrows = read_tsv(d / "levels.txt")
+            dh, drows = read_tsv(dr)
+            li, lid = lh.index("Layer"), lh.index("Id")
+            dli, did = dh.index("Layer"), dh.index("Id")
+            d2r_layer = {r[did]: r[dli] for r in drows if is_record(r)}
+            n = 0
+            for r in lrows:
+                if is_record(r) and r[li].lstrip("-").isdigit() and int(r[li]) > 99:
+                    r[li] = d2r_layer.get(r[lid], "0")
+                    n += 1
+            write_tsv(d / "levels.txt", lh, lrows)
+        self.report.append(f"\nlevels: {n} Median levels had a Layer above 99 (D2R's map memory has 100 buckets); "
+                           f"set to D2R's layer of the same id or 0")
+
     def formula_proxies(self) -> None:
         """D2Sigma's formula functions (hasstate, statlayer, itemstat, tabpoints): tools/formula.py renders each
         distinct call as skill('mxf_N'.mxfn) and lists the calls in work/formulas/proxies.txt. Each becomes a hidden
@@ -518,6 +548,30 @@ class Migrator:
                  "inline constexpr AreaDamage Skills[] = {", *entries, "};", "", "}  // namespace mxl_damage", ""]
         (ROOT / "plugin" / "src" / "mxl_damage.h").write_text("\n".join(lines), encoding="utf-8")
         self.report.append(f"\ndamage: {len(entries)} area-damage skills -> plugin/src/mxl_damage.h")
+
+    def clamp_automap_cels(self) -> None:
+        """AutoMap.txt Cel1-4 above 1498 become -1. D2R's automap atlas has 1499 cels (its own rows end at 1498) and the
+        map memory of a character (.map / .ma0-3, saved per level layer) rejects a stored cel of 1499 or more. A node
+        with such a cel makes the loader (0x1400d5710) cut the chain by writing the node's own offset into its `next`
+        field, and the next save walks that loop for ever (bug #24: the client hangs after a few area changes).
+        Median's table has 19 such cels: 1500 as the filler of the unused Type3/Type4 slots of nine town rows (the
+        automap lookup of the plugin picks among all cels of a row that are not -1) and 1499 as the only cel of one
+        row of level type 36 (a cel the atlas does not have)."""
+        n = 0
+        for bank in ("base", ""):
+            f = OUT / "data" / "global" / "excel" / bank / "automap.txt"
+            if not f.exists():
+                continue
+            h, rows = read_tsv(f)
+            cols = [i for i, c in enumerate(h) if c.startswith("Cel")]
+            n = 0
+            for r in rows:
+                for i in cols:
+                    if r[i].lstrip("-").isdigit() and int(r[i]) > 1498:
+                        r[i] = "-1"
+                        n += 1
+            write_tsv(f, h, rows)
+        self.report.append(f"\nautomap: {n} cels above 1498 (the atlas ends there) set to -1")
 
     def automap_tables(self) -> None:
         """plugin/src/mxl_automap.h: AutoMap.txt rows of Median's own level types (36-51, LevelName mxl_lvltype_<n>).
@@ -1855,6 +1909,7 @@ def main() -> int:
     m.inventory_sizes()
     m.claim_presets()
     m.claim_mazes()
+    m.fold_level_layers()
     m.object_presets()
     m.sound_rows()
     m.skill_costs()
@@ -1875,6 +1930,7 @@ def main() -> int:
     m.damage_tables()
     m.tab_tables()
     m.advanced_stats()
+    m.clamp_automap_cels()
     m.automap_tables()
     m.extra_calc_codes()
     m.formula_proxies()
