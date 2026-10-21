@@ -98,6 +98,36 @@ are done. D2R has no `requirements` file, so it stays plugin data (ship as a sma
 The evaluator is plain logic; the only engine access is "quest bit of player X in difficulty D", "player class",
 "does the player hold item code", "game difficulty".
 
+### Call-site audit and D2R gates (requirement-gates lane, 2026-10-21)
+
+Every reference to the evaluator in D2Sigma, from the Ghidra project (Refs on `0xa11e0`, `0xa1180`, `0xa10f0`, `0x95bc0`
+and each wrapper): the **only** callers are the NPC wrappers of D2NPC.cpp / D2NpcActions.cpp, so **Median does not gate
+item use or equip, skill learning or use, areas, waypoints, portals or quest items with the requirements table** (those
+checks are D2R's own and stay: for example the item requirement function `0x376de0`). The complete list:
+
+| Call site | Requirement read | Gates | D2R |
+|---|---|---|---|
+| `0x94650` / `0x946c0` (client / server), packet handler `0x9a850` kind 1 | npcext +0x0c, flag bit 0 | opens the shop (`0x94370`) | static NPC table `+8` (below) |
+| `0x943e0` / `0x94450`, `0x9a850` kind 2 | npcext +0x10, flag bit 1 | opens the gamble page (`0x94300`) | table `+9` |
+| `0x944e0` / `0x94550`, `0x93e50` | npcext +0x14, flag bit 2 | the hirer entry; `0x93e50` also re-rolls the gamble stock | table `+7` and quest gate `+0x10` |
+| `0x947d0` (client list `0x107400`, `0x106e48`), `0x94740`, `0x948d0` (server, kind 10), `0x949d0` and its callers `0x95140`, `0x959c0`, `0x95a90` | menu slot value 1, the action's own requirement | the 16 npcext slots and nested actions | npc_actions.cpp (done, 0.41.0) |
+| `0x93a30` (vendor restock, reached through a pointer) | +4 of each 0x2c-byte stock entry | per-item stock requirement | unused: the 847 npcstores rows carry 0 |
+
+**Shop, gamble and hire in D2R.** D2R decides the three services from one static table (RVA `0x237ea60`, 43 x 0x1c
+bytes, docs/d2r-addresses.md section 6) that the client menu builder and the server packet handler `0x4b0470` both read,
+so Median's gates have a direct counterpart. Compared field by field (tools/npc_services_data.py ->
+`mxl_npc_services.h` against the dump): the table **already equals Median's effective answer**. Atma, Geglash, Cain (acts 2,
+5) and act2vendor1 are the only shops with a requirement (row 32, always false) and D2R has no shop byte set for them;
+Kashya's hire gate is D2R quest gate 3 = quest 2 bit 0 = row 9, Qual-Kehk's is 37 = quest 36 = row 14; every other trade,
+gamble and hire byte of the 43 entries equals the npcext flag bits. No gamble row has a requirement.
+`requirement_gates.cpp` makes this a checked fact at load and the one place to fix drift: it folds each row
+(`requirement_gates_logic.h`: constants fold, rows that read the player are "dynamic"), clears the trade / gamble / hire byte
+where Median denies and D2R offers, restores a hire quest gate when a row is "quest `a`, bit 0, game difficulty" and the
+table's gate differs, and counts what it cannot express. Writes go through the guarded `PatchWriteU8/U32`; on the shipped
+data **nothing is written** (report: 0 cleared, 0 hire gates set, 0 dynamic). A requirement that reads the player on a shop or
+gamble flag would need a gate in `0x4b0470` (not built: no data uses one, and npc_actions.cpp owns that hook). Tyrael of
+act 4 has flag bit 3 (no D2R hire byte, no requirement; unidentified use, see npc-hirelings.md).
+
 ## 2. D2Quests.cpp
 
 ### 2.1 Structure
