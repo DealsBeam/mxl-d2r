@@ -33,6 +33,7 @@ CONDITIONS = {"IsType", "IsClass", "Desecrated", "Difficulty", "MonsterTestElite
 STAT_MODES = {"accr", "base", "mod"}
 MAX_FORMULA_NAME = 31
 MAX_ITEMS_PER_SET = 6
+ENGINE_AI_ROWS = 155  # D2R build 93847 AI table 0x2396e90
 AUTO_TC = re.compile(r"^(weap|armo|mele|bow|mag[a-z]*|rar[a-z]*)\d+$")
 SCOPE_CODES = {"Skill": "skillcalc", "Missile": "misscalc", "Monster": "moncalc"}
 TOKEN = re.compile(r"\s*(?:(?P<num>\d+)|(?P<str>'[^']*')|(?P<id>[A-Za-z_][A-Za-z0-9_]*)|(?P<op><=|>=|==|!=|[-+*/%^()?:<>,.]))")
@@ -327,6 +328,16 @@ class Validator:
             for r in rows:
                 if not r[i].strip() and r[0] != "Expansion":
                     self.add("error", "monstats", "MonStatsEx", "blank (a required link to monstats2)", r[0], "")
+            # AI: the engine's AI table has 155 entries (monai rows 0-154, docs/d2r-addresses.md section 12); a monster whose
+            # AI is a later row (or no row) runs the "None" think function and stands still
+            ai = d.table("monai")
+            if ai:
+                ai_row = {r[0]: n for n, r in enumerate(ai[1]) if r and r[0]}
+                a = h.index("AI")
+                for r in rows:
+                    name = r[a].strip()
+                    if name and ai_row.get(name, ENGINE_AI_ROWS) >= ENGINE_AI_ROWS:
+                        self.add("error", "monstats", "AI", f"not in the engine's AI table (monai rows 0-{ENGINE_AI_ROWS - 1})", r[0], name)
         # hireling: the name range NameFirst..NameLast must go upwards in string IDs
         hl = d.table("hireling")
         if hl:
