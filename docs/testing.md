@@ -297,6 +297,8 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `use <item code>` | the item-use check and use functions (`0x5817f0` / `0x581680`), the item is removed unless the item spell keeps it (keys and scrolls) |
 | `remove <code> [n]` | takes items out of the inventory |
 | `enter nearest\|<object id>` | walks into a portal object (`0x58f680`, as the click does, so the dungeon lockout hook sees it); the first call right after `use` can fail, repeat it |
+| `missile <row> [dx dy]` | a missile of missiles.txt row <row> from the player towards (+dx, +dy) (default 12, 0), `0x5371a0` as the skills call it. In a town the client does not tick missiles; fire it in a dungeon (bug #24b: row 5507 crashed the client there before 0.48.0's empty-slot functions) |
+| `missilescan [row]` | the rows whose client do / client hit index lands on an empty slot of D2R's tables (counts and the first rows); with a row number: the first 0x60 bytes of that missile record |
 | `tile` | uses the nearest warp tile (`0x491ff0`) |
 | `difficulty <0-2>` | writes the running game's difficulty byte (checks that need Hell rules without a Hell character; quest records are per difficulty) |
 | `class <0-6>` | sets the player's class field (class bound recipes; set it back, the save keeps it) |
@@ -346,7 +348,7 @@ repeats the cast; the mana cost cannot be read from `state` after the fact (rege
 | Arcane Crystal notice | PASS | in Lut Gholein (area 40), `h quest 14 3 set`, `h msg 201 0x1ba`: "You have received: Arcane Crystal" (the same message with Jerhyn spawned in Act 1 does nothing: the vanilla handler is not reached) |
 | Goblin notice | PASS | `MXL_GOBLINS_FORCE=1`, Blood Moor: yellow "A treasure goblin has been sighted nearby!" |
 
-Ormus' shrines and Cain's crystal use the same call as Jerhyn's and were not run. The game-start helper `clear_intro` (tools/game_ctl.py) looped on the Continue button when the main menu scene was bright; the runs here clicked the three calibration screens by hand (`g.click(*g.UI["calib_continue"])` three times, then the menu).
+Ormus' shrines and Cain's crystal use the same call as Jerhyn's and were not run. The game-start helper `clear_intro` (tools/game_ctl.py) looped on the Continue button when the main menu scene was bright; the runs here clicked the three calibration screens by hand. **Fixed 2026-10-22 (lane bug24b):** `clear_intro` now ends when `menu_visible()` sees the main menu (a 12 x 16 grey signature of the left button panel, `MENU_SIG`: mean difference 0 on the menu, about 27 with a dialog dimming it), clicks Continue at most 6 times and holds Esc at most 4 times (never once the menu is up: Esc on the menu opens the exit dialog); checked with synthetic frames (bright menu, three calibration screens, endless calibration, dimmed menu) and on slot 3's live menu, the real calibration screens did not come up on that slot.
 
 ### Results with the harness commands (2026-10-21, background mode, slot 2, plugin 0.47.0 + harness)
 

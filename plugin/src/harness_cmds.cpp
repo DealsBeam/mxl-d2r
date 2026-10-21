@@ -566,6 +566,79 @@ auto CmdEnter(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `missile <row> [dx dy]`: a missile of missiles.txt row <row> from the player towards (player + dx, dy) (default 12, 0),
+// the same call the skills use (0x5371a0). Bug #24b: the client's missile "do" function table has no entry for a
+// missile row whose pCltDoFunc is empty, so any such missile crashes the client; this creates one on demand.
+auto CmdMissile(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long row = 0, dx = 12, dy = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &row) || row < 0 || row > 0x7fff ||
+	    (t.n >= 3 && !hcmd::ParseInt(t.tok[2], &dx)) || (t.n >= 4 && !hcmd::ParseInt(t.tok[3], &dy))) {
+		return Fail(c, "usage: missile <missiles.txt row> [dx dy]");
+	}
+	int32_t px = 0, py = 0;
+	if (!d2r::UnitXY(c->player, &px, &py)) {
+		return Fail(c, "missile: player has no position");
+	}
+	d2r::MissileParams params;
+	std::memset(&params, 0, sizeof(params));
+	params.flags = 0x820;
+	params.owner = c->player;
+	params.origin = c->player;
+	params.missile = static_cast<int32_t>(row);
+	params.targetX = px + static_cast<int32_t>(dx);
+	params.targetY = py + static_cast<int32_t>(dy);
+	Unit* m = d2r::api.createMissile(c->game, &params);
+	Out("missile row %lld: %s", row, m != nullptr ? "created" : "refused");
+	return m != nullptr ? true : Fail(c, "missile: createMissile returned no unit");
+}
+
+// `missilescan`: every missiles.txt row whose client do / client hit function index lands on an empty slot of D2R's
+// tables (0x2358430, bound at 0x2358a60; 0x2358710, bound at 0x2358a64): the client calls those through a null pointer
+// (bug #24b). Lists the first rows of each kind and the counts.
+auto CmdMissileScan(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	const uint32_t flag = d2r::DataFlag(c->game);
+	long long dumpRow = -1;
+	if (t.n >= 2 && hcmd::ParseInt(t.tok[1], &dumpRow)) {  // `missilescan <row>`: the record's first 0x60 bytes
+		const uint8_t* r = Fn<const uint8_t* (*)(uint32_t, int32_t)>(0x166040)(flag, static_cast<int32_t>(dumpRow));
+		char hex[0x60 * 3 + 1] = "";
+		for (int i = 0; r != nullptr && i < 0x60; ++i) {
+			std::snprintf(hex + i * 3, 4, "%02x ", r[i]);
+		}
+		Out("missile record %lld: %s", dumpRow, r != nullptr ? hex : "none");
+		return true;
+	}
+	const int32_t rows = Fn<int32_t (*)(uint32_t)>(0x1b89a0)(flag);
+	const auto record = Fn<const uint8_t* (*)(uint32_t, int32_t)>(0x166040);
+	const int32_t doBound = *reinterpret_cast<const int32_t*>(g_base + 0x2358a60);
+	const int32_t hitBound = *reinterpret_cast<const int32_t*>(g_base + 0x2358a64);
+	const auto* doTable = reinterpret_cast<const uint64_t*>(g_base + 0x2358430);
+	const auto* hitTable = reinterpret_cast<const uint64_t*>(g_base + 0x2358710);
+	int badDo = 0, badHit = 0, lastDo = -9;
+	char listDo[400] = "", listHit[200] = "";
+	for (int32_t row = 0; row < rows; ++row) {
+		const uint8_t* r = record(flag, row);
+		if (r == nullptr) {
+			continue;
+		}
+		const int16_t d = d2r::At<int16_t>(r, 0x28), h = d2r::At<int16_t>(r, 0x2a);
+		if (d >= 0 && d < doBound && doTable[d] == 0) {
+			if (badDo++ < 12 || (row - lastDo != 1 && std::strlen(listDo) < sizeof(listDo) - 24)) {  // the first rows, then each run's start
+				std::snprintf(listDo + std::strlen(listDo), sizeof(listDo) - std::strlen(listDo), " %d(do %d)", row, d);
+			}
+			lastDo = row;
+		}
+		if (h >= 0 && h < hitBound && hitTable[h] == 0) {
+			if (badHit++ < 12) {
+				std::snprintf(listHit + std::strlen(listHit), sizeof(listHit) - std::strlen(listHit), " %d(hit %d)", row, h);
+			}
+		}
+	}
+	Out("missilescan: %d rows, client do bound %d, client hit bound %d", rows, doBound, hitBound);
+	Out("missilescan: %d rows call an empty client do slot:%s", badDo, listDo);
+	Out("missilescan: %d rows call an empty client hit slot:%s", badHit, listHit);
+	return true;
+}
+
 // Use the nearest warp tile (stairs, doors to another area): the server's warp action 0x491ff0 (game, player, tile).
 // `sysmsg <type> <colour> <text...>`: a system line to the player through the chat packet 0x26 (client_messages.cpp);
 // the type and colour bytes are free so the client's reading of them can be found in game.
@@ -1500,7 +1573,7 @@ auto CmdHire(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
 	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel | "
-	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
+	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
@@ -1562,10 +1635,9 @@ struct Verb {
 const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
-    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
+    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
-
     {"dump", CmdDump, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 
