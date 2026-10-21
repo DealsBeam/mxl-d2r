@@ -222,7 +222,7 @@ bit 0xc) with the set function.
 | quest bit clear | `0x325990` | same; tail `jmp 0xa1b810` | likely | same prologue, other mask table (`0x1d99750`), not seen executing |
 | player quest record | `rec = *(u64*)(0x34b240(player) + game[0x104]*8 + 0x40)` | | verified | repeated in a1q4, a1q6 handlers |
 | create quest item by code | `0x517530` | `(game, player, code /*r8d*/, itemLevel /*r9d, 0 = player's level*/, [rsp+0x20] quality/seed arg, [rsp+0x28] = 1)` -> item* or null; creates via `0x43d530`, adds to the inventory (`0x471500`), sends the item packet (`0x535f60`) | likely | matches 1.13c `0x36470` (`QUESTS.CPP`, create + inventory + packet); callers pass `'bkd '`, `'rin '` |
-| find item by code in inventory | `0x441980` | `(game, player, code)` -> item or null | likely | used before the scroll hand-over in `0x5e0830` |
+| find item by code in inventory | `0x441980` | `(game, player, code)` -> item or null (`D2Game\src\Items\Items.cpp`; walks the inventory, compares `0x36ef50(item)` with the code, and for quest items also stat 0x164 against the game difficulty) | verified | read; used before the scroll hand-over in `0x5e0830`; entry bytes `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48` |
 | monster drop item creation | `0x43fbf0` | `(game, monster, type /*2 in Andariel*/, out*, ..., -1, 0)`; builds a 0x84..0xc8-byte item-gen struct and calls `0x43cd50` | likely | matches 1.13c `0x11a70`'s role (the drop step of the kill handler) |
 | item-gen core | `0x43cd50` | | guess | callee of `0x43fbf0` |
 
