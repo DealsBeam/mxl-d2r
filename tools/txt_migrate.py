@@ -344,6 +344,38 @@ class Migrator:
                 self.report.append(f"\nlvlprest: {len(unclaimed)} preset levels had no preset (1.10 used preset 0); "
                                    f"added 'None' copies claiming levels {', '.join(unclaimed)}")
 
+    def object_presets(self) -> None:
+        """Maps name objects through ObjPreset.txt in D2R (per act); Median's maps use its own flat table. D2R's rows
+        stay and Median's table is added as Index 1000 + slot in every act (tools/objpreset.py); tools/ds1_remap.py
+        rewrites Median's maps to those indexes. Median's added objects get Class = Name so ObjectClass can name them."""
+        import objpreset
+        src = ROOT / "extract" / "mxl" / "data" / "global" / "excel" / "objpreset.bin"
+        if not src.exists():
+            return
+        flat = objpreset.load_flat(src)
+        row_to_id = {e["row"]: e["id"] for e in self.idmap["objects"]}
+        for bank in ("base", ""):
+            d = OUT / "data" / "global" / "excel" / bank
+            dp = D2R / bank / "objpreset.txt"
+            if not (d / "objects.txt").exists() or not dp.exists():
+                continue
+            oh, orows = read_tsv(d / "objects.txt")
+            filled = objpreset.fill_classes(oh, orows)
+            write_tsv(d / "objects.txt", oh, orows)
+            ci = oh.index("Class")
+            idc = oh.index("*ID") if "*ID" in oh else None
+            classes = [""] * (max(int(r[idc]) if idc is not None and r[idc].isdigit() else i
+                                  for i, r in enumerate(orows)) + 1)
+            for i, r in enumerate(orows):
+                classes[int(r[idc]) if idc is not None and r[idc].isdigit() else i] = r[ci]
+            ph, prows = read_tsv(dp)
+            rows, st = objpreset.build(ph, prows, flat, row_to_id, classes)
+            write_tsv(d / "objpreset.txt", ph, rows)
+            if bank == "base":
+                self.report.append(f"\nobjpreset: D2R's {len(prows)} rows + Median's flat table ({st['slots']} slots x 5 "
+                                   f"acts = {st['added']} rows at Index 1000+slot); {filled} added objects got Class = Name; "
+                                   f"{st['class_not_first']} slots name a class an earlier row shares")
+
     def claim_mazes(self) -> None:
         """A level with DrlgType 1 (maze) needs a lvlmaze row. Median leaves a few without one (D2Sigma or unused
         levels); D2R sizes every level of an act when the act loads and asserts, then crashes, on them. Each gets
@@ -1749,6 +1781,7 @@ def main() -> int:
     m.inventory_sizes()
     m.claim_presets()
     m.claim_mazes()
+    m.object_presets()
     m.sound_rows()
     m.skill_costs()
     m.fill_skilldesc()
