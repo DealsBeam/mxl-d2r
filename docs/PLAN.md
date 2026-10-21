@@ -133,6 +133,14 @@ Work happens on the forge (git.werdegames.com/WerdeGames/mxl-d2r): one branch an
    monster HD models last.
 5. **Phase 6** (TCP/IP, saves, `d2rl pack`), then Phase 7.
 
+## Removed or deferred for now (owner, 2026-10-21)
+Switched off or not worked on until the HD single-player port works; revisit later.
+- **Classic graphics mode (G):** no classic-only work until all HD work is done. The classic panels already merged stay
+  as they are.
+- **Terror zones** (D2R's "desecrated zones": "Corrupted tremors strike ..." messages, hourly zones with boosted monster
+  level, experience and drops): off. tools/terror_zones.py writes D2R's desecratedzones.json with every
+  ladder_enabled / non_ladder_enabled flag false into the mod.
+
 ## Phase 7: Private realm (after single-player works; preliminary)
 Characters stored on our own server, games hosted through D2RLoader TCP/IP (the D2R Reimagined / Project Lage
 model). Draft plan, edit before starting: [realm-plan.md](realm-plan.md).
