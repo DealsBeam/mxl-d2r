@@ -34,6 +34,7 @@ STAT_MODES = {"accr", "base", "mod"}
 MAX_FORMULA_NAME = 31
 MAX_ITEMS_PER_SET = 6
 ENGINE_AI_ROWS = 155  # D2R build 93847 AI table 0x2396e90
+PLUGIN_AI = {"andariel_ai": 155}  # AI ids the plugin serves past the table (plugin/src/monster_ai.cpp, tools/monster_ai_data.py)
 AUTO_TC = re.compile(r"^(weap|armo|mele|bow|mag[a-z]*|rar[a-z]*)\d+$")
 SCOPE_CODES = {"Skill": "skillcalc", "Missile": "misscalc", "Monster": "moncalc"}
 TOKEN = re.compile(r"\s*(?:(?P<num>\d+)|(?P<str>'[^']*')|(?P<id>[A-Za-z_][A-Za-z0-9_]*)|(?P<op><=|>=|==|!=|[-+*/%^()?:<>,.]))")
@@ -336,7 +337,7 @@ class Validator:
                 a = h.index("AI")
                 for r in rows:
                     name = r[a].strip()
-                    if name and ai_row.get(name, ENGINE_AI_ROWS) >= ENGINE_AI_ROWS:
+                    if name and ai_row.get(name, ENGINE_AI_ROWS) >= ENGINE_AI_ROWS and ai_row.get(name) != PLUGIN_AI.get(name):
                         self.add("error", "monstats", "AI", f"not in the engine's AI table (monai rows 0-{ENGINE_AI_ROWS - 1})", r[0], name)
         # hireling: the name range NameFirst..NameLast must go upwards in string IDs
         hl = d.table("hireling")
