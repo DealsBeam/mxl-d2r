@@ -115,6 +115,17 @@ waypoint panel (`D2Waypoints.cpp`, `ui/Waypoint.cpp`) lists every level of the t
 
 D2R's own five rows name 39 levels and leave Act 4's slots 4-9 empty; 39 + 8 Median levels = 47 > 5 x 9 = 45.
 
+**Panel patch, what the lane client-ui found (2026-10-22), not done.** The button table is a static array of 9 entries of 8 bytes
+(`{u32 level number, u8 listed}`) at `0x2a969e0` (zeroed by `0x1ea9b0` from `0x1eaa31` to `0x1eaaa8`, count dword `0x2a969d4`),
+directly in front of the vector `0x2a96a28` of 0x34-byte actinfo entries, so it cannot be grown in place; it has to be relocated.
+Functions that address it (RIP-relative disp32): `0x1e9b40` (button builder, size 0x8ac, `0x1ea198`), `0x1ea9b0` (tab fill, `0x1eaa31`
+and `0x1eacb4`, tab index in `edx`, entry stride 0x34), `0x1ebf50` (`0x1ec05a`), `0x1ec508` (`0x1ec582`); the count dword has 12 users in all (`0x1e9c3f`, `0x1ea230`, `0x1ebad4`, `0x1ec56e`, `0x1ec79f`, `0x1ec935`, `0x1ec982`, ...). The fill loop compares with 9 (`mov r12d, 9`
+at `0x1eab08`). The buttons themselves come from the panel's layout JSON (one widget per slot), so a tab with more than 9 levels needs
+extra button widgets in the layout and a layout override for HD. Plan: hook `0x1ea9b0`, allocate a 16-entry table, patch the disp32s of the
+four functions above (whole instructions, no rip-relative copies), raise the loop bound, add the layout widgets, then give each
+Median waypoint level its own act in `tools/waypoints_data.py`. Not started: the number of users and the unverifiable layout part
+exceed what this lane could test.
+
 **Fix (data, `tools/waypoints_data.py`, a build step after txt_migrate).** No remap and no save work. The generated `actinfo.txt`
 (D2R's rows, both banks) puts each Median waypoint level whose own act has no free slot into Act 4's six free slots, in act
 order: `silver_city`, `duncraig`, `tran_athulua`, `island_of_skartara`, `caldeum`, `torajan_jungles`. They appear under tab IV
