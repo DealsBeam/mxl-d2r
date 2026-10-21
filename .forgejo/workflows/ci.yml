@@ -1,0 +1,49 @@
+# CI on the CI server (CI server, runner ci-runner, label mxl-cross; image ci-image). Code only: no game files are
+# needed or present. What runs:
+#   plugin  cross-build of mxl-core.dll (clang-cl + lld-link + xwin MSVC CRT/SDK; same ABI as the MSVC build on the game PC)
+#   tests   the pure unit tests (plugin/tests) built natively with g++ and run
+#   tools   Python syntax check of tools/
+# The boot check and the in-game smoke run (tools/game_ctl.py) need the game and stay on the game PC.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plugin:
+    runs-on: mxl-cross
+    steps:
+      - uses: https://git.werdegames.com/actions-mirror/checkout@v4
+      - name: PluginSDK submodule
+        run: git submodule update --init --depth 1 third_party/PluginSDK
+      - name: Build mxl-core.dll
+        run: |
+          cmake -S plugin -B build -DCMAKE_TOOLCHAIN_FILE=plugin/cmake/xwin-toolchain.cmake -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j6 --target mxl_core
+          ls -la build/mxl-core.dll
+
+  tests:
+    runs-on: mxl-cross
+    steps:
+      - uses: https://git.werdegames.com/actions-mirror/checkout@v4
+      - name: Build unit tests
+        run: |
+          cmake -S plugin/tests -B build-tests -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-tests -j6 --target tests
+      - name: Run unit tests
+        run: |
+          set -e
+          for t in mxl_tests craft_tests goblin_tests; do ./build-tests/$t; done
+
+  tools:
+    runs-on: mxl-cross
+    steps:
+      - uses: https://git.werdegames.com/actions-mirror/checkout@v4
+      - name: Python syntax
+        run: python3 -m compileall -q tools

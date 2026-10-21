@@ -15,21 +15,5 @@ if(MSVC)
 	set_property(TARGET mxl_core PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")  # no VC++ runtime dependency
 endif()
 
-# Unit tests for the pure parts (not in the plugin DLL): cmake --build build/plugin --config Release --target mxl_tests
-add_executable(mxl_tests EXCLUDE_FROM_ALL tests/requirements_test.cpp tests/quests_test.cpp tests/dungeon_test.cpp tests/npc_actions_test.cpp src/requirements.cpp)
-target_compile_features(mxl_tests PRIVATE cxx_std_20)
-if(MSVC)
-	target_compile_options(mxl_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
-endif()
-
-add_executable(craft_tests EXCLUDE_FROM_ALL tests/craft_test.cpp)
-target_compile_features(craft_tests PRIVATE cxx_std_20)
-if(MSVC)
-	target_compile_options(craft_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
-endif()
-
-add_executable(goblin_tests EXCLUDE_FROM_ALL tests/goblins_test.cpp)
-target_compile_features(goblin_tests PRIVATE cxx_std_20)
-if(MSVC)
-	target_compile_options(goblin_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
-endif()
+# Unit tests for the pure parts (not in the plugin DLL): tests/CMakeLists.txt
+add_subdirectory(tests)
