@@ -12,9 +12,10 @@
 //           (requirements.cpp) and the action runs (npc_actions_logic.h). Other kinds go to the original untouched.
 //
 // Realm rule: the client only draws the lines and sends the kind; requirements and effects are server code, in the
-// separate section below. Actions: respec (Akara) and the free crafting materials (the five Cains) are done; the travel
-// packages (D2R has its own travel lines), Imbue / Add sockets / Personalize (D2R's ImbueItemsPanel is bound to quest
-// state) are logged only and their lines are not shown.
+// separate section below. Actions: respec (Akara) and the free crafting materials (the five Cains) are done here. The
+// travel packages (with their waypoint grant) and Imbue / Add sockets / Personalize are D2R's own: it shows its lines under
+// the same quest bits and its server code spends the reward, so no line is drawn and nothing is hooked; npc_services.cpp
+// reads the game's tables at load and reports whether they match Median's rows (section 1.6 of npc-hirelings.md).
 //
 // Entry bytes checked against the dump of build 93847; whole instructions, no rip-relative.
 #include "npc_actions.h"
@@ -22,6 +23,7 @@
 #include "d2r.h"
 #include "mxl_requirements.h"
 #include "npc_actions_logic.h"
+#include "npc_services.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -167,7 +169,7 @@ void HandleKind(Game* game, Unit* player, uint32_t kind, uint32_t npcId) noexcep
 	case npc::Result::Denied: Log("requirement not met (kind, npc class)", static_cast<int>(kind), npcClass); break;
 	case npc::Result::Done: Log("done (kind, npc class)", static_cast<int>(kind), npcClass); break;
 	case npc::Result::Nothing: Log("nothing to do (kind, npc class)", static_cast<int>(kind), npcClass); break;
-	case npc::Result::Stubbed: Log("not implemented (kind, npc class)", static_cast<int>(kind), npcClass); break;
+	case npc::Result::Native: Log("D2R runs this service itself (kind, npc class)", static_cast<int>(kind), npcClass); break;
 	}
 }
 
@@ -195,7 +197,7 @@ struct ClientLine {
 };
 ClientLine g_lines[MaxClientLines];
 int g_lineCount = 0;
-int g_stubSlots = 0;
+int g_nativeSlots = 0;
 
 auto OnLine(int index) noexcept -> uint8_t {
 	if (index >= 0 && index < g_lineCount) {
@@ -253,15 +255,15 @@ void BuilderHook(uint8_t dataFlag) {
 // Lines the client shows: the top-level slots whose action the server can run and that have a label.
 void CollectLines() noexcept {
 	g_lineCount = 0;
-	g_stubSlots = 0;
+	g_nativeSlots = 0;
 	for (int i = 0; i < mxl_npc::SlotCount; ++i) {
 		const mxl_npc::Slot& s = mxl_npc::Slots[i];
 		if (s.sub != 0 || s.label == 0) {
 			continue;
 		}
 		const npc::Support sup = npc::SlotSupport(i);
-		if (sup == npc::Support::Stub) {
-			++g_stubSlots;
+		if (sup == npc::Support::Native) {
+			++g_nativeSlots;
 		} else if (sup == npc::Support::Run && g_lineCount < MaxClientLines) {
 			g_lines[g_lineCount++] = {s.npcClass, s.label, npc::KindOf(s.npcRow, s.slot)};
 		}
@@ -288,8 +290,10 @@ auto InstallNpcActions(const D2RL::PluginContext* context, char* report, size_t 
 	ok += context->InstallInlineHook(MenuBuilderRva, BuilderEntry, sizeof(BuilderEntry), reinterpret_cast<void*>(&BuilderHook),
 	                                 reinterpret_cast<void**>(&g_builderOriginal)) ? 1 : 0;
 	if (ok == 2) {
-		std::snprintf(report, reportSize, "on: %d menu lines (Akara respec, Cain crafting materials); %d stubbed services", g_lineCount,
-		              g_stubSlots);
+		char native[160];
+		VerifyNativeServices(g_base, native, sizeof(native));
+		std::snprintf(report, reportSize, "on: %d menu lines (Akara, Cain); %d slots are D2R's own, %s", g_lineCount, g_nativeSlots,
+		              native);
 	} else {
 		std::snprintf(report, reportSize, "partial: %d of 2 hooks installed (menu packet 0x4b0470, menu builder 0x1147a0)", ok);
 	}

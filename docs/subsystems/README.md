@@ -27,7 +27,7 @@ size. Buckets from docs/PLAN.md: **(a)** data-only, **(b)** D2RLoader service, *
 | D2Quests.cpp, D2QuestFlags.cpp | 60, 1 | copy of D2Game's act quests plus ~15 reward hooks (Griswold's Heart, catalyst drops, dialog rewards, Baal relic orb) | c | read | [quests-requirements.md](quests-requirements.md); no uber content here |
 | D2SpecialEvents.cpp, D2Events.cpp | 7, 4 | not events: a per-game join filter (min level, name lists; D2GS) and a "call at frame N" queue | e | read (2026-10-21) | [ubers-events.md](ubers-events.md); cut |
 | D2Goblins.cpp | 3 | treasure goblins: 15 s per-player tick, chance from levels +0x15c, 20 goblin rows in monstats3 | c | read (2026-10-21) | [ubers-events.md](ubers-events.md) section 4; not ported (M) |
-| D2Monsters.cpp, D2MonUMods.cpp, D2AI.cpp, D2MonDesc.cpp | 2, 1, 9, 3 | monster mods, AI, monster tooltips | c | partial | D2Monsters (spawn/death sounds) and D2MonUMods (unique counter) read, [ubers-events.md](ubers-events.md); D2AI, D2MonDesc still to read |
+| D2Monsters.cpp, D2MonUMods.cpp, D2AI.cpp, D2MonDesc.cpp | 2, 1, 9, 3 | monster sounds, unique mods, AI, monster tooltips | a/d | read (2026-10-21) | [monsters-ai.md](monsters-ai.md): vanilla D2Game rebuilds except `andariel_ai` (47 bosses; D2R's AI table ends at 155, **fixed in data**: tools/monster_ai_data.py + validate rule; native port open, 3-5 d), the Summoner resist test and a nest init (skipped); mods are data; tooltips are D2R's (d) |
 | D2Hirelings.cpp | 23 | hire-time class stat bonuses; the rest is minion scaling (done, pet_scaling.cpp) | a/b | read | [npc-hirelings.md](npc-hirelings.md); hireling.txt already converted |
 | D2Resurrect.cpp | 2 | resurrect | c | done | resurrect_2 -> D2R Revive; Habeas Corpus |
 | D2Experience.cpp | 1 | experience rules | a | to read | |
@@ -73,8 +73,7 @@ D2RLoader's packet services if a ported feature sends them.
 
 ## Next to read (largest open modules)
 1. ~~D2Quests.cpp + D2Requirements.cpp~~ read (quests-requirements.md). ~~Where the ubers live~~ read ([ubers-events.md](ubers-events.md)):
-   they are data plus item spell 16, the dungeon lockout (D2Dungeon.cpp) and goblins; remaining: D2AI.cpp / D2MonDesc.cpp,
-   the Drlg/Landscape files. (The cube craft flags are set by recipe output slots, see plugin-spec.md "Cube conditions".)
+   they are data plus item spell 16, the dungeon lockout (D2Dungeon.cpp) and goblins; remaining: the Drlg/Landscape files. ~~D2AI.cpp / D2MonDesc.cpp~~ read ([monsters-ai.md](monsters-ai.md)). (The cube craft flags are set by recipe output slots, see plugin-spec.md "Cube conditions".)
 2. ~~D2NpcActions.cpp + npcext~~ read (npc-hirelings.md).
 3. ~~D2Craft.cpp (32) + cubemainext~~ read: fields are cost/100, second condition (op, param, value), the two stat layers (plugin-spec.md "Cube conditions"). The craft-flag setters are cubemain output-slot effects (slot byte 7/9 sets a player/game flag, 6 pays gold; flags live in game memory only), found 2026-10-21; port spec in the same section, needs the D2R transmute output dispatcher address.
 4. ~~D2Hirelings.cpp~~ read (npc-hirelings.md).

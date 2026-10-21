@@ -15,6 +15,9 @@ Trade window (Median's trade.dc6): two 7 x 15 grids side by side. Store (store.d
 tabs; the page has its last tab drawn pressed, so the unpressed tab from page 3 (same place) is pasted over it
 (PATCHES), because D2R's tab bar draws the active tab itself.
 
+Character sheet (stat-screen.dc6, page 0): the main page of Median's statsheet (the other two pages are its
+extra stat pages, see docs/PLAN.md), empty boxes that tools/ui_layouts.py fills with D2R's stat text widgets.
+
 Stash, materials tab: D2R's panel (PANEL/Stash/AdditionalStash/PANEL_AdditionalStash_Consumables) shows the
 Horadric Cube as a small 3 x 4 recess. Median's cube grid is 15 x 10, so the cube picture of crafting.dc6 is pasted
 over the recess at the size of the cube view in the layout (CUBE_VIEW; tools/ui_layouts.py reads the same numbers).
@@ -40,7 +43,7 @@ CLASSIC_W, CLASSIC_H = 512, 704
 HD_W, HD_H = 1162, 1507
 # sprite name -> (dc6, page)
 PANELS = {"inventory": ("character-inventory", 0), "cube": ("crafting", 0), "stash": ("stash", 0),
-          "trade": ("trade", 0), "store": ("store", 0)}
+          "trade": ("trade", 0), "store": ("store", 0), "charsheet": ("stat-screen", 0)}
 # sprite name -> [(left, top, right, bottom, new top)] in classic pixels
 MOVES = {"stash": [(112, 86, 403, 134, 615)]}
 # sprite name -> [(page, left, top, right, bottom)]: pixels of another page of the same DC6 pasted in place

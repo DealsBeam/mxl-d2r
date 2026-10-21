@@ -17,14 +17,14 @@ Median XL tables fit the 32,768-row limits (largest: cubemain 7,500, missiles 5,
 - [x] `tools/mpq_extract.py`: all 56 Median MPQs -> `extract/mxl/` (8,528 files, 832 MB, manifest.json)
 - [x] `tools/casc_extract.py`: D2R 93847 baseline -> `extract/d2r/93847/` (1,072 files). See [d2r-baseline.md](d2r-baseline.md)
 - [x] `tools/mxl_names.py`: placeholder names resolved, Median rows renumbered after D2R's -> `work/named/`. See [id-mapping.md](id-mapping.md)
-- [~] Sigma table schemas: tooling + structure for all 37 tables, 14 named or partly named. See [sigma-tables.md](sigma-tables.md)
+- [~] Sigma table schemas: tooling + structure for all 37 tables; 32 named or partly named, 27 complete (2026-10-21). See [sigma-tables.md](sigma-tables.md)
 - [x] `tools/formula.py`: all 17,116 formulas decoded from bytecode, 11,329 table cells rewritten with D2R names. See [formulas.md](formulas.md)
 - [x] `tools/txt_migrate.py`: all tables in D2R layout, merged with D2R's rows, both banks -> `work/mod/`. See [txt-migrate.md](txt-migrate.md)
 - [x] `tools/tbl2json.py`: 21,268 strings -> D2R JSON (native loading, both string folders). See [strings.md](strings.md)
 
 - [x] `tools/validate.py` + `tools/build.py`: D2R-schema validation; 2 errors left (Median's own broken formulas). See [validation.md](validation.md)
 
-Remaining: finish Sigma field names (with Phase 3 triage), link skills2code once skills2 is named.
+Remaining: the Sigma fields no code reaches (armor2/weapons2, missiles2, itemtypesext, propertiesext, parts of statscreen/misc2; named with Phase 3 triage when a reader turns up). skills2 is named and its formula fields are linked to skills2code.
 Next: Phase 2 (install into D2R, `d2rl compile`, first boot).
 
 ## Phase 2: Data port
@@ -84,6 +84,15 @@ Status (2026-10-14):
   Trade Page 1/2 as two 7 x 15 grids side by side (trade.dc6) and "Monster", the stores' grid, as 15 x 15 (store.dc6);
   inventory.txt, three HD layouts and panel art (tools/ui_panels.py: trade, store with its pressed tab replaced,
   stash materials tab with a cube grid pasted over D2R's 3 x 4 recess) done, in-game check pending. Open: classic-mode panels.
+- Character sheet (2026-10-21, in-game check pending): Median's statsheet page 0 (stat-screen.dc6: name bar, life / mana /
+  stamina / experience bars, 4 attributes, 4 resistances, defense, damage + attack rating of the left and right skill)
+  is D2R's HD panel background (ui_panels.py 'charsheet') and tools/ui_layouts.py char_sheet() moves D2R's stat widgets
+  into its boxes. The doubled "ATTACK Damage / Attack Rating" rows were not a string bug: D2R's panel shows the left
+  skill's and the right skill's stats; in Median's layout they sit beside the two weapon portraits as value-only
+  boxes. Not done: Median's pages 2 and 3 (stat-screen.dc6 pages 1-2: ~60 boxes of extra stats such as resistances
+  by type, damage and speed modifiers, find / absorb values) need either code that fills D2R's Advanced Stats panel
+  (advancedstatspanelhd.json, opened by the button on the sheet's right edge; its rows are code-driven) or a plugin
+  stat sheet; the page buttons and the text of those pages live in D2Sigma's code. Also missing: the portrait.
 - Next: HD art. items.json / missiles.json / monsters.json use D2R look-alikes today (item_hd.py, missile_hd.py,
   gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
   backgrounds and tab titles (bug #3): tools/skill_tree_art.py, to test (titles are drawn into per-class 8-frame sprites). All 8 pages are selectable and show their skills since 2026-10-21 (plugin/src/skill_tree.cpp: D2R's panel only handled 3 pages, in reverse order; tools/skill_icons.py splits skilldesc rows shared by several classes). Deferred checks: Median monster art in classic mode, Median-only

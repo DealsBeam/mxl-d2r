@@ -74,6 +74,10 @@ Reading aids that apply everywhere:
 | 9 | Server handler of the menu packet 0x38 `(kind, npc id)` | `0x4b0470` | verified |
 | 10 | Gold stat 14/15 client sync | no explicit packet needed (section 10) | likely |
 | 11 | Quest handlers 13, 14, 25, 38, 40 | section 11 | verified |
+| 12 | **AI table entry getter** `(unit, mode)` -> entry; `mode` 0 = the monster's own AI (monstats `+0x52`, bounds-checked against 155, else entry 0), 1-17 = a command mode | `0x4a36c0` | verified |
+| 12 | AI table (155 entries x 0x20: `+0` kind, `+8` init, `+0x10` think, `+0x18` alt) and the mode table (18 entries, same layout) | `0x2396e90` / `0x23981f0` | verified |
+| 12 | AI think dispatcher per tick `(game, unit)` / AI set-state `(game, unit, ctl, mode)` | `0x4a2a00` / `0x4a2690` | verified |
+| 12 | AI helpers: wait `(game, unit, frames)`, use skill `(game, unit, mode, skill, target, x, y, flag)`, flee `(game, unit, target, mode, n)`, unit seed pointer `(unit)` | `0x4a6d10` / `0x4a7bc0` / `0x4a7df0` / `0x34a1e0` | verified / verified / likely / verified |
 
 ## 1. Cube output / recipe result
 
@@ -558,8 +562,11 @@ craft, catalyst, etc.) and return; otherwise call the original. The "Talk" line 
 | Vanilla respec packet | `0x4b2530` = packet 0x39 (`CCMD_RESPEC`; 0x38 is `CCMD_SUBSCRIBE_TO_VENDOR`) | requires NPC table byte `+5`, and the quest `byte[+0x10] - 1` bit 1; then `0x580f20(game, player, 0)` and, when `+0x10 != 0`, `0x5d9ae0(game, player)` |
 | Respec | `0x580f20` | `0x4360f0` (skills: refunds into stat 5, `0x46f220`, `0x474d20`), `0x52ddf0` (stat points back to the charstats start values), `0x470c90` (equipment re-check), `0x2f3760`, `0x474d60`, `0x491960(player, 2, player)` |
 | Respec bookkeeping | `0x5d9ae0` | quest 41: sets bit 0, clears bit 1; if bit 0xf is clear the respec quest (a1q1 `+0x12`) is deactivated ("deactivated respec quest") |
-| Imbue / sockets / personalize panel | panel 0xd = `ImbueItemsPanel` (`0xc7aa0`) | client opener `0x1e3e20` (mode 1 at `0x2a96960`, then `0x1e5b20`), called by `0x10dd30` (an NPC-menu function) and from the server-to-client message handler `0x1e3c00` (byte `+5`: 0 open, 4, 5, 6/7 close). Class check `0x10d150` (current NPC class): 0x9a Charsi, 0x1ff Larzuk, 0x200 Anya. Server per-NPC checks `0x36aed0`, `0x36b410`, `0x36b1d0` |
-| Travel | client special line handler `0x1162f0` sends packet 0x37 with the NPC table `+0xc` destination | D2R's own; Median only adds the waypoint grant |
+| Imbue / sockets / personalize panel | panel 0xd = `ImbueItemsPanel` (`0xc7aa0`) | client opener `0x1e3e20` (mode 1 at `0x2a96960`, then `0x1e5b20`), called by the line handler `0x10dd30` and from the server-to-client message handler `0x1e3c00` (packet 0x58, byte `+5`: 0 open, 4, 5, 6/7 close). Class check `0x10d150` (current NPC class `0x2a48764`): 0x9a Charsi, 0x1ff Larzuk, 0x200 Anya. Item filters (D2Common, client and server): `0x36aed0` imbue, `0x36b410` sockets, `0x36b1d0` personalize |
+| Service lines (client) | fix table RVA `0x22a70e0`, 9 x 24 bytes (class u32, quest u32, bit u32, condition u32, function), count dword `0x22a71b8`; consumer `0x1141d0` (the NPC menu opener) | Charsi q3 b1 -> `0x109100` (line `0xfb1`), Larzuk q35 b1 -> `0x109300` (`0x58dc`), Anya q38 b1 -> `0x109400` (`0x58dd`), all with handler `0x10dd30`; Warriv q6 b0 and Meshif q14 b0 add the travel lines. Run on the client's own quest record `0x2a48778` |
+| Service confirmation (server) | packet `0x2e`: `0x4ae280` (21 bytes) -> `0x4fc230(game, player, packet, delayed)`; delayed run from the task `0x4b6050` | NPC `0x53b8f0`, NPC table row `0x3971a0` (`+0xb` service 1/2/3, `+0x10` quest + 1), quest bit 1 via `0x325c50`; spends the reward with `0x5da1c0` / `0x548b60` / `0x547c60` (bit 0 set, bit 1 cleared). Server packet table: handler = `0x1d2a790 + id * 8` (0x38 = `0x4b0470`) |
+| Travel | client special line handler `0x1162f0` sends packet 0x37; server `0x4a9880` | NPC table row (static table `0x237ea60`, 0x1c bytes: `+0xb` service, `+0xc` destination s32, `+0x10` gate byte = quest + 1): gated lines test bit 0 of quest `gate - 1`, travel with `0x4f2e40(game, player, level, 0)`, then set the arrival act town's waypoint. D2R grants what Median grants; checked by npc_services.cpp |
+| Waypoint record | `0x3d6670(version, level, u16* wp)` level -> waypoint field (levels row `+0xec`, 0xff = none); `0x3d6930(record, wp)` test; `0x3d6890(record, wp)` set (`*(u16*)(rec + 2 * T[wp].word) \|= T[wp].mask`, tables `0x2389010`, 112 entries); `0x4812c0(client, record)` sends packet 0x63 (record to the client, which also opens its waypoint UI); `0x40b540` sets every waypoint | record = `*(playerData + 0x58 + difficulty * 8)`, playerData = `0x34b240(player)`, difficulty = `game + 0x104`, version = `game + 0x106`. Object operate `0x58fe00` is the in-game touch (set, `0x481030` packet 0x64, `0x4812c0`). Entry bytes: `0x3d6890` `48 89 5c 24 08 57 48 83 ec 20 0f b7 da 48 8b f9`, `0x3d6670` `48 89 5c 24 08 48 89 6c 24 18 56 57 41 56 48 83` |
 
 ## 10. Gold stat changes and the client
 
@@ -594,6 +601,56 @@ use quest-record bits as in section 2).
 
 The quest-bit helpers in these handlers are the section 2 ones (`0x325c50` test, `0x325c00` set, `0x325990` clear). Quest 40 in D2R keeps vanilla
 bit 0xb unused as far as read; the plugin can set it itself.
+
+## 12. Monster AI dispatch (lane monster-ai, 2026-10-21; docs/subsystems/monsters-ai.md)
+
+Read in the analysed Ghidra project (`Decompile.java` of the functions below; all 169 think functions of the table were decompiled for comparison)
+plus `d2r_find.py`; nothing hooked. Compared with D2Sigma `D2AI.cpp` (table at `0x101d8480`, stride 0x10) and 1.13c D2Game's AI table.
+
+**Getter `0x4a36c0 (unit, mode)`** (entry bytes `48 89 74 24 20 57 48 83 ec 30 48 89 5c 24 40 33`; `.pdata` splits it into a 0xa-byte stub and a body):
+```
+monstats = **(unit + 0x10)                 // unit type 1 only (asserts otherwise)
+mode == 0 (after a mode 10-12 state test):  ai = u16 monstats[+0x52]
+                                            return (0 <= ai < 0x9b) ? 0x2396e90 + ai*0x20 : 0x2396e90   // out of range = "None"
+mode != 0:                                  return 0x23981f0 + mode*0x20
+```
+So a monai row at index 155 or higher (Median's `andariel_ai` as txt_migrate appends it) runs entry 0, whose think function `0x78d20` is a bare `ret`.
+The tables are plain `.data` pointers; entries 0-154 line up one to one with `monai.txt` rows 0-154 (checked by name: Idle 1, Summoner 53,
+Hireable 61, FetishShaman 65, MosquitoNest 83, Nihlathak 128, ColBarbFrenzy 154) and the table ends exactly where the mode table begins
+(`0x2396e90 + 0x9b * 0x20 = 0x23981f0`), so it cannot grow in place.
+
+**Entry layout** (0x20 bytes, absolute VAs): `+0` u32 kind (0 = no target search, NPCs; 1 and 3 = hostile target search; 2 = ally/minion
+target search `0x595750`; 5 and 6 = command-mode search `0x4a6760`; chosen by a `switch` in `0x4a2a00`), `+8` init (called once when the AI is set,
+by `0x4a2690`), `+0x10` think `(game, unit, args*)`, `+0x18` alt think (used instead of `think` when the AI is set again while `think` is already the
+active handler). D2Sigma's entry is `{think, alt, kind, init}` (16 bytes); D2Sigma `D2AI.cpp` 0x4a280 sits in the alt slot and 0x4a110 in the init slot.
+
+**Per-state prelude** at `0x2396e78` (state 0) and `0x2396e88` (state 1): two pointers (`0x5d7e10`, `0x5d7b60`) called before the handler by `0x4a2690` and `0x4a2a00`.
+
+**Think arguments** (`args*`, 0x40 bytes; Sigma's fields are 4 bytes at half the offsets): `+0` ctl (the monster's AI control: three scratch ints at
+`ctl+0x44/+0x48/+0x4c`, zeroed whenever the AI is set), `+0x10` target unit, `+0x20` i32 distance to the target, `+0x24` i32 "in reach" flag,
+`+0x28` the monstats row, `+0x38` u8 difficulty (0-2).
+
+**monstats row fields the AI functions read** (D2R, from `0x5b4d50` and `0x5aba70`): `+0x52` u16 AI id; `aip1..aip8` as u16 at `0x90 + 6*(n-1) + 2*difficulty`
+(Sigma `0x56 + ...`); `Skill1..5` u16 at `0x1c4`, `0x1c6`, `0x1c8`, `0x1ca`, `0x1cc` (Sigma `0x170`...); `Sk1mode..5` u8 at `0x1d4`..`0x1d8` (Sigma `0x180`...).
+Game frame `game+0x170` (Sigma `+0xa8`). Random: seed pointer `0x34a1e0(unit)` (= `unit+0x28`), `s = lo*0x6ac690c5 + hi`, roll = `(u32)s % 100`.
+
+**Helpers** (D2R, matched to D2Sigma `D2AI.cpp` by structure):
+
+| D2R | Signature | D2Sigma twin |
+|---|---|---|
+| `0x4a6d10` | wait `(game, unit, frames)`, 0 frames = 1 | `0x4b270` (D2AI.cpp:0xb4) |
+| `0x4a7bc0` | use skill `(game, unit, u8 mode (< 0x10), skill id, target unit, x, y, flag)`; refused -> waits 10 | `0x4b310` (:0x116) |
+| `0x4a7df0` | move away / flee `(game, unit, target, u8 mode, n)` | Sigma thunk `0x422e0` |
+| `0x4a78e0` | set a mode action `(game, unit, mode, target)` | Sigma thunk `0x422c0` |
+| `0x595f80` | nearest suitable target `(game, unit, &u8 difficulty, 0)` | Sigma `0x41c50` (returns the distance too) |
+| `0x5a0b80` | Summoner AI init (Act 2 quest 5 hook, `Quests\a2q5.cpp`) | Sigma `0x41c70` |
+| `0x4a3680` | the **Idle** think: `if room: wait(200)` | `0x4a210`: `wait(250)` |
+| `0x5af320` | alt think of Hireable, FetishShaman, Nihlathak, mode 4: clear state 0xc, AiSet, wait(1) | `0x4a280`, identical |
+
+Entry bytes (16): `0x4a2690` `48 85 c9 0f 84 8a 02 00 00 55 53 56 57 41 55 48`; `0x4a2a00` `48 89 54 24 10 48 89 4c 24 08 55 41 56 41 57 48`;
+`0x4a6d10` `48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 70 45`; `0x4a7bc0` `48 89 6c 24 10 48 89 74 24 20 57 48 83 ec 50 41`;
+`0x595f80` `4c 8b dc 53 41 54 41 55 41 56 41 57 48 81 ec 50`; `0x4a3680` `48 89 5c 24 08 57 48 83 ec 20 48 8b f9 48 8b da`;
+`0x5b4d50` (Summoner) `48 89 5c 24 08 55 56 57 41 54 41 55 41 56 41 57`; `0x5aba70` (Andariel) `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48`.
 
 ## Appendix A. Quest descriptor table (D2R, verified)
 

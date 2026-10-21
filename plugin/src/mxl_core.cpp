@@ -41,7 +41,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.43.0";
+constexpr const char* PluginVersion = "0.44.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -58,7 +58,7 @@ char g_craftReport[96] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
 char g_goblinsReport[192] = "off: not the expected game image";
-char g_npcReport[192] = "off: not the expected game image";
+char g_npcReport[256] = "off: not the expected game image";
 char g_hirelingsReport[192] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
 char g_reqGatesReport[256] = "off: not the expected game image";

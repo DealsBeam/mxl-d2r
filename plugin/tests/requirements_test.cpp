@@ -10,6 +10,7 @@
 int RunQuestsTests();  // quests_test.cpp
 int RunDungeonTests();  // dungeon_test.cpp
 int RunNpcActionsTests();  // npc_actions_test.cpp
+int RunNpcServicesTests();  // npc_services_test.cpp
 int RunRequirementGatesTests();  // requirement_gates_test.cpp
 int RunHirelingsTests();  // hirelings_test.cpp
 int RunCombatTests();  // combat_test.cpp
@@ -117,6 +118,7 @@ int main() {
 	failures += RunQuestsTests();
 	failures += RunDungeonTests();
 	failures += RunNpcActionsTests();
+	failures += RunNpcServicesTests();
 	failures += RunRequirementGatesTests();
 	failures += RunHirelingsTests();
 	failures += RunCombatTests();
