@@ -315,8 +315,130 @@ def vendor() -> str:
     return t
 
 
+# Character sheet (stat-screen.dc6 page 0, 512 x 704): boxes in classic pixels (left, top, right, bottom)
+CS_NAME = (115, 57, 352, 94)
+CS_VITALS = {"hp": (70, 152, 172, 187), "mana": (70, 210, 172, 245), "stamina": (340, 152, 442, 187)}
+CS_XP = (340, 210, 442, 245)
+CS_XPBAR = (118, 99)
+CS_ROWS = [(471, 494), (497, 520), (523, 546), (550, 573)]
+CS_ATTR_VALUE, CS_ATTR_LABEL = (65, 108), (108, 197)     # left four rows: value box | label box
+CS_RES_LABEL, CS_RES_VALUE = (315, 404), (404, 447)      # right four rows: label box | value box
+CS_ATTRS = [("StrengthTitle", "StrengthStat", "StrengthPointButton"), ("DexTitle", "DexStat", "DexPointButton"),
+            ("VitalityTitle", "VitalityStat", "VitalityPointButton"), ("EnergyTitle", "EnergyStat", "EnergyPointButton")]
+CS_RES = [("FireResistanceTitle", "FireText", "Fire"), ("ColdResistanceTitle", "ColdText", "Cold"),
+          ("LightningResistanceTitle", "LightningText", "Lightning"), ("PoisonResistanceTitle", "PoisonText", "Poison")]
+CS_DEFENSE = (207, 553, 305, 574)       # the bar under the shield
+CS_DEFENSE_TITLE = (207, 579, 305, 600)
+CS_SKILLS = {"left": 91, "right": 321}  # x of the 99-pixel boxes beside the two weapon portraits
+CS_SKILL_ROWS = {"Damage": (351, 374), "Rating": (378, 401)}
+CS_POINTS = (60, 618, 455, 650)
+OFF = -5000
+
+
+def span_n(text: str, marker: str, n: int = 0) -> tuple[int, int]:
+    """Like block_span, for the n-th (0-based) widget with that marker."""
+    i = -1
+    for _ in range(n + 1):
+        i = text.index(marker, i + 1)
+    start = text.rindex("{", 0, i)
+    depth, j = 0, start
+    while True:
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return start, j + 1
+        j += 1
+
+
+def edit(text: str, name: str, fn, n: int = 0) -> str:
+    s, e = span_n(text, f'"name": "{name}"', n)
+    return text[:s] + fn(text[s:e]) + text[e:]
+
+
+def put(text: str, name: str, x: int, y: int, w: int | None = None, h: int | None = None, n: int = 0,
+        size: int | None = None, align: str | None = None, label: str | None = None, scale: float | None = None) -> str:
+    """Moves/resizes the widget (its first "rect"), optionally with a numeric point size, horizontal alignment,
+    a literal text and a scale."""
+    def fn(b: str) -> str:
+        r = rect(x, y, w, h)
+        if scale:
+            r = r[:-2] + f', "scale": {scale} }}'
+        b = RECT.sub(lambda _m: f'"rect": {r}', b, count=1)
+        if size:
+            b = re.sub(r'"pointSize":\s*"\$\w+"', f'"pointSize": {size}', b)
+        if align:
+            b = re.sub(r'("alignment":\s*\{\s*"h":\s*)"\w+"', rf'\1"{align}"', b)
+        if label:
+            b = re.sub(r'"text":\s*"[^"]*"', f'"text": "{label}"', b, count=1)
+        return b
+    return edit(text, name, fn, n)
+
+
+def cbox(b: tuple) -> tuple[int, int, int, int]:
+    x, y = hd(b[0], b[1])
+    x2, y2 = hd(b[2], b[3])
+    return x, y, x2 - x, y2 - y
+
+
+def char_sheet() -> str:
+    """D2R's character panel with Median's statsheet page 0 as background (ui_panels.py, PANEL\\mxl\\charsheet) and
+    D2R's stat text widgets moved into its empty boxes. The attack rows lose their two-line labels (D2R's
+    "ATTACK Damage" / "ATTACK Rating" for the left and right skill; the boxes are small and Median marks them with
+    icons), the resistances get short labels."""
+    t = re.sub(r'"name":\s+"', '"name": "', baseline("characterstatspanelhd.json"))  # the right skill's widgets have 2 spaces
+    t = t.replace('"PANEL\\\\Character_Sheet\\\\Character_Background"', '"PANEL\\\\mxl\\\\charsheet"')
+    # name bar: name left, "Level n Class" right
+    x, y, w, h = cbox(CS_NAME)
+    t = put(t, "CharacterName", x + 10, y, 260, h)
+    t = put(t, "FullClassInfo", x + 270, y, w - 280, h, size=20, align="right")
+    # flanking bars: life, mana, stamina (title, current / max), experience
+    for key, (cur, mx, sep, title) in {"hp": ("CurrentHP", "MaxHP", 1, "HPTitle"),
+                                       "mana": ("CurrentMana", "MaxMana", 2, "ManaTitle"),
+                                       "stamina": ("CurrentStamina", "MaxStamina", 0, "StaminaTitle")}.items():
+        X, Y, W, H = cbox(CS_VITALS[key])
+        u = W / 230
+        t = put(t, title, X, Y, round(96 * u), H, size=20)
+        t = put(t, cur, X + round(96 * u), Y, round(56 * u), H, size=20)
+        t = put(t, "separator", X + round(152 * u), Y, round(16 * u), H, n=sep, size=20)
+        t = put(t, mx, X + round(164 * u), Y, round(60 * u), H, size=20)
+    X, Y, W, H = cbox(CS_XP)
+    t = put(t, "CombinedXP", X, Y, W, H, size=20, align="center")
+    t = edit(t, "XpProgress", lambda b: RECT.sub(
+        lambda _m: f'"rect": {{ "x": {hd(*CS_XPBAR)[0]}, "y": {hd(*CS_XPBAR)[1]}, "scale": 0.6 }}', b, count=1))
+    # attributes: value in the narrow box, label in the wide one, the +1 button just right of the row
+    for (title, stat, button), (r0, r1) in zip(CS_ATTRS, CS_ROWS):
+        t = put(t, title, *cbox((CS_ATTR_LABEL[0], r0, CS_ATTR_LABEL[1], r1)), size=20)
+        t = put(t, stat, *cbox((CS_ATTR_VALUE[0], r0, CS_ATTR_VALUE[1], r1)), size=24)
+        bx, by = hd(CS_ATTR_LABEL[1] + 3, (r0 + r1) / 2)
+        t = put(t, button, bx, by - 23, scale=0.55)
+    # resistances
+    for (title, text, label), (r0, r1) in zip(CS_RES, CS_ROWS):
+        t = put(t, title, *cbox((CS_RES_LABEL[0], r0, CS_RES_LABEL[1], r1)), size=20, label=label)
+        t = put(t, text, *cbox((CS_RES_VALUE[0], r0, CS_RES_VALUE[1], r1)), size=22)
+    # defense: value in the bar under the shield, label below it
+    t = put(t, "ArmorClass", *cbox(CS_DEFENSE), size=24)
+    t = put(t, "ArmorClassTitle", *cbox(CS_DEFENSE_TITLE), size=20)
+    # attack stats of the left / right skill: values only, beside the weapon portraits
+    for n, (side, left) in enumerate(CS_SKILLS.items()):
+        t = put(t, f"{side.capitalize()}SkillStats", 0, 0)
+        for group, (r0, r1) in CS_SKILL_ROWS.items():
+            X, Y, W, H = cbox((left, r0, left + 99, r1))
+            t = put(t, group, X, Y, W, H, n=n)
+            half = H // 2
+            t = put(t, f"Attack{group}Stat", 0, 0, W, H, n=n, size=20)
+            t = put(t, f"Attack{group}StatTop", 0, 0, W, half, n=n, size=16)
+            t = put(t, f"Attack{group}StatBottom", 0, half, W, H - half, n=n, size=16)
+            t = put(t, f"Attack{group}Title", OFF, OFF, 10, 10, n=n)
+    # stat points left at the bottom of the panel
+    t = put(t, "CombinedPointsInfo", *cbox(CS_POINTS), size=22)
+    return t
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / "characterstatspanelhd.json").write_text(char_sheet(), encoding="utf-8")
     (OUT / "skillstreepanelhd.json").write_text(skill_tree(), encoding="utf-8")
     (OUT / "skillstreepanel.json").write_text(classic_skill_tree(), encoding="utf-8")
     (OUT / "playerinventoryoriginallayouthd.json").write_text(inventory_original(), encoding="utf-8")
