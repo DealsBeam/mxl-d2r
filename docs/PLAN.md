@@ -139,6 +139,11 @@ Work happens on the forge (git.werdegames.com/WerdeGames/mxl-d2r): one branch an
 ## Removed or deferred for now (owner, 2026-10-21)
 Switched off or not worked on until the HD single-player port works; revisit later.
 Everything else follows Median XL (owner, 2026-10-21); gaps and approximations are tracked in [unported.md](unported.md).
+- **Custom HD art is the very last step** (owner, 2026-10-22): everything Median draws that vanilla D2R can't reproduce
+  gets the closest vanilla HD stand-in first. That covers about 330 missile and overlay animations, monster models, the
+  121 Median areas without a D2R HD scene (and Median-edited vanilla maps), and UI art. All other work on the port
+  (code, data, maps) is completed and verified before the custom HD pass starts. Stand-ins are listed in unported.md
+  as "custom art, last".
 - **Classic graphics mode (G):** no classic-only work until all HD work is done. The classic panels already merged stay
   as they are.
 - **Terror zones** (D2R's "desecrated zones": "Corrupted tremors strike ..." messages, hourly zones with boosted monster
