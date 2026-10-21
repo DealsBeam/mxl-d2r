@@ -1065,8 +1065,9 @@ def check_median_ai():
 
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
-          ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("reenter", check_dungeon_reenter), ("areacycle", check_areacycle), ("casts", check_casts), ("equipevents", check_equip_events), ("medianai", check_median_ai)]
+          # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
+          ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
+          ("areacycle", check_areacycle), ("casts", check_casts), ("equipevents", check_equip_events), ("medianai", check_median_ai)]
 
 
 def write_report(extra=""):
