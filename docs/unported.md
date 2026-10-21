@@ -11,14 +11,14 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 
 | Area | Median | Port now | Status | Needs / notes |
 |---|---|---|---|---|
-| Monster AI `andariel_ai` (47 monsters: Andariel, Maghda, Radament, Zoltun Kulle, Lilith, Scholars, Malthaels, ...) | own AI routine | D2R's Andariel AI (moves, attacks; skills 1-2 only, no summons/towers) | approx | native port, ~3-5 days + in-game testing ([monsters-ai.md](subsystems/monsters-ai.md)) |
-| Summoner AI | first skill branch by an `aip3`% roll | D2R's (by target cold/fire resist) | approx | small native hook |
-| MosquitoNest init | Median init | D2R's | open | one enabled monster |
-| Max resistance cap | 90 | D2R 95 | open | D2R's resist read is behind a protection thunk; find another hook point ([combat-stats.md](subsystems/combat-stats.md)) |
-| Absorb stats 184/189/417 | Median absorb | none | open | same hook point as the resist cap; which items roll them |
-| Mercenary caps | Median caps | D2R's | open | [combat-stats.md](subsystems/combat-stats.md) |
+| Monster AI `andariel_ai` (47 monsters: Andariel, Maghda, Radament, Zoltun Kulle, Lilith, Scholars, Malthaels, ...) | own AI routine | native port as AI id 155 (`monster_ai.cpp`, getter hook); "medianai" off word = D2R's Andariel AI | verify | in-game check pending; not ported: the controlled-monster branch and the dead phase 2 ([monsters-ai.md](subsystems/monsters-ai.md)) |
+| Summoner AI | first skill branch by an `aip3`% roll | same rule, two byte patches (`0x5b4e49`, `0x5b4fed`) | verify | [monsters-ai.md](subsystems/monsters-ai.md) |
+| MosquitoNest init | Median init | native init written into the AI table entry 83 | verify | one enabled monster |
+| Max resistance cap | 90 | 90 (immediate of D2R's clamp patched in the per-hit resist step 0x4523e0, the character sheet and the hireling panel; mercenaries use the same branch) | verify | verified in game on the player (fire resist 300: 75 / 85 / 90 caps took 25 / 15 / 10% of the damage); mercenary not exercised ([combat-stats.md](subsystems/combat-stats.md) section 2) |
+| Absorb stats 184/189/417 (D2R 369/373/446) | each absorbed amount that heals the defender is cut by 189 (divisor), 184 (percent) and 417 (percent per damage type) | same, hook on D2R's absorb step 0x450670 | verify | verified in game (player with absorb 40%: the credit drops with 446 layer 1 = 50). Not rolled by items in general: monster stats from monprop (`time` / `stam` rows, 439 / 965 uses) and skills; stat 184 also on two runewords and the Barbarian hireling. Median's second helper 0x10057c10 (the same stats on the damage fields) has no caller and is not ported |
+| Mercenary caps | resist cap 90, avoid / dodge / evade caps (not the block cap) | resist: yes (same branch as players); avoid / dodge / evade: the 0x44ef70 hook accepts hirelings | verify | no mercenary was hired in the test; build and logic verified only ([combat-stats.md](subsystems/combat-stats.md) section 2) |
 | Andariel catalyst / Act 2-5 bonus drops | treasure class dropped once per player on the ground | item created in the killer's inventory | deviation | D2R treasure-class drop per player not wired; multiplayer gives only the killer one |
-| Quest reward notices (client messages 0x5f-0x61) | shown | not shown | open | client message sender |
+| Quest reward notices (client messages 0x5f-0x61) | Median's popup / message | a line in the message log ("You have received: ...", neutral wording, D2Sigma's text not found) | approx | Median's own text and art with custom art last; sender: [d2r-addresses.md](d2r-addresses.md) section 13 |
 | Quest 5 repeat guard (`0x9e8b0`) | Median guard | not ported | open | purpose unclear in D2R ([quests-requirements.md](subsystems/quests-requirements.md) 5b) |
 | Quest 8 event-2 handler (`0x5a2830`) | Median handler | not read | open | |
 | Cain crafting materials | per-item submenu (4 entries) | one line, gives everything owed | approx | D2R menu record holds 5 lines; submenu = plugin-owned record |
@@ -26,13 +26,13 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 | Craft player flags | keyed by player name | keyed by unit id (rejoin = new flags) | approx | name lookup |
 | Craft per-game flags reset | game end | game pointer change / frame counter | approx | game-destroy hook (`0x4057c0` has a rip-relative prologue) |
 | Gold payment client update | Median sends the update | assumed D2R stat sync | verify | stat-update packet sender not located |
-| Dungeon lockout client timer and popup (packet 0x88, message 0x13) | shown | refusal only ("can't do that") | open | client widget + packet |
+| Dungeon lockout client timer and popup (packet 0x88, message 0x13) | DungeonWidget with a running timer, popup | log lines in Median's words (refusal reasons, "This area is locked", "Closing in: mm:ss" once at the start, "ONCE YOU EXIT..."), no running timer, no popup art | approx | live timer = OverlayService + NetworkService plugin channel (not written); popup art is custom art, last |
 | Dungeon lockout: item-teleport clock start (`0x7fb70`), quest-table condition | yes | no | open | |
-| Goblin "sighted" packet | client notice | none | open | |
+| Goblin "sighted" packet | client notice (packet 0x5a type 0x15) | a message-log line "A treasure goblin has been sighted nearby!" (neutral wording) | approx | Median's notice text / art not found; custom art last |
 | Hireling starting gear (Head/Torso/Weapon/Shield/Share columns) | per hireling row | none | open | how D2R gives a new hire its gear |
 | Hireling hire/equip state gates (states 0x4c/0x50/0x51) | yes | no | open | state ids unresolved |
 | Tyrael travel quest gate | quest 28 | D2R quest 26 | approx | harmless (portal, no menu line) |
-| Item event ids 11/12/32/33/34, immunity checks on open wounds / crushing blow (monster stat 373) | attacker-takes-fire/cold/magic damage, flat life/cast on event (33/34), monsters with stat 0xbd immune to 15/16 | none | open | D2R dispatcher of itemeventfunc not found (stat record +0x48/+0x4a); see [items-xp.md](subsystems/items-xp.md) section 5 for the search done |
+| Item event ids 11/12/32/33/34, immunity checks on open wounds / crushing blow (monster stat 373) | attacker-takes-fire/cold/magic damage, flat life/cast on event (33/34), monsters with stat 0xbd immune to 15/16 | none | open | D2R dispatcher of itemeventfunc not found (stat record +0x48/+0x4a; the registration is not in the main image's word reads or in D2RCore.dll); see [items-xp.md](subsystems/items-xp.md) section 5 for the search done and the candidates ruled out |
 | Class-locked items (stat 492) | requirement check fails for other classes (players and mercenaries) | players only (hook 0x36bc50) | verify | equip a locked unique on two classes; mercenary branch not ported |
 | Ethereal roll (item level 100+) | `rand(1000) <= qualities word2` (2.6%, quality 1 included), +25% stats, 75% durability | same rate/effect, but D2R's gate (5%, quality 1 and 5 excluded) stays in front; low quality never ethereal | approx | replace the `0x442d60` block fully to allow quality 1 |
 | Socket roll (quality 1-3) | `rand() % 7` sockets, 6 of 7 items | same, through D2R's setter (size clipping); gen-forced sockets keep D2R's code | verify | compare socket rates in game; Median's quality 5-9 branch (6 sockets) is dead in the 1.13c call sites |
@@ -43,7 +43,7 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 
 | Area | Median | Port now | Status | Needs / notes |
 |---|---|---|---|---|
-| Waypoints Vizjun (155) and level 242 | in the panel | saved, no panel button | open | waypoint panel code patch (more than 9 per tab or a 6th tab) |
+| Waypoints Vizjun (155) and level 242 | in the panel | saved, no panel button | open | waypoint panel code patch (more than 9 per tab or a 6th tab); RE notes in [areas-drlg.md](subsystems/areas-drlg.md) section 3b (lane client-ui: table relocation, 5 functions, layout widgets; not done) |
 | Median waypoints in the panel (6) | own acts | listed in Act 4's free slots, usable after reaching Act 4 | approx | same panel patch |
 | Character sheet | portrait, pages 2-3 art | page 0 art; pages 2-3 as rows of D2R's Advanced Stats panel | approx | plugin panel for Median's own page art |
 | Stat pages: Str/Dex damage bonus, total / % bonus / base columns | computed by code | missing | open | plugin ([stat-screen.md](subsystems/stat-screen.md)) |

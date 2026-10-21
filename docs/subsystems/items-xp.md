@@ -227,6 +227,29 @@ Off words `classlock`, `ethereal`, `sockets`, `dyes`. All four were read in the 
   and the candidates `0x4734f0` (equip checks), `0x461530` (missile creation), `0x50a050` are other code. Next step: find the
   readers of the stat record `+0x48` in the stat-list code (`0x2f0000-0x300000`) and `0x3d4000-0x3d5000`, or break on an item
   with id 6 in game. Monster stat 373 (Median `0xbd`, immune to open wounds and crushing blow) is a data stat on the monster.
+  Second pass (lane caps-events, 2026-10-22), all negative:
+  - Median's side is clear: the 1.13c registration function (D2Sigma `0xbb9f0`, the D2UnitFind code) fills a per-item event
+    list and looks the handler up in the table `0x101d94e8 + 4 * func` with the three function ids at `item mod record + 0x5c`
+    and the event ids three words before; the handlers are then called by the generic unit-event system. D2R needs the
+    analogue: a table lookup by function id or a switch.
+  - Byte scans of the main image (`.text` 0x1000-0x2300000) for word reads/compares of record offsets `+0x44 / +0x46 / +0x48 /
+    +0x4a` (movzx / movsx / mov ax / cmp word) find 6 / 31 / 29 / 6 sites and no function that reads both an event and a
+    function word except: `0x461628`/`0x461642` (missile record, `MissMode.cpp`), `0x991905` (a record copy that moves the
+    words to `+0x92 / +0x94 / +0x96` of another struct; its readers `0x5d81b7` and `0x984105` are monster AI distances),
+    `0x126fa81` (client record copy by index) and `0x2329e6` (unit struct) - none is the dispatcher. `FieldDispatch` finds no
+    "read word, call through table" site for `+0x48` / `+0x4a` either.
+  - The assert strings `eEventType < snEventFunctions` / `scpfnEventFunctions[eEventType]` at `0x1d19328` / `0x1d19368` belong
+    to `PlrModes.cpp` (player mode events, functions `0x42ae90` / `0x42aef0`), not to item events.
+  - The 8-byte-pointer table scan (ids 6-10, 13-21, 28-31 non-null, 0-5 and 22-27 null) matches nothing in `.data` / `.rdata`;
+    a looser scan (6 zero slots) gives 30 dense false positives. D2RLoader's own `D2RCore.dll` reads none of the words in
+    its `.text` either (`movzx` of `+0x4a`: none; `+0x48`: five unrelated copies).
+  - Not yet tried: an in-game test. The data already carries Median's stats 396 (`attacker_takes_cold_damage`, func 12) and 397
+    (`attacker_takes_fire_damage`, func 11, also on `damagedbymissile`) and 265 (func 33) / 376 (func 34); equip an item that
+    rolls 397 (the harness has no equip verb; packets `0x1a` / `0x19`, or a save file) and let a monster hit the character. If
+    D2R ignores unknown function ids nothing happens, and the dispatcher must be found by tracing the item's equip (a write
+    watch on the stat-list event array) rather than by scanning.
+  Monster stat 373 (Median `0xbd`, immune to open wounds and crushing blow) is a data stat on the monster; it is the same
+  stat as Median 189 of the absorb credit (combat-stats.md section 2.4).
 - **Party experience (0x5e830): not done, multiplayer only.** Solo play is identical; Median pays every member in range the
   full award, 1.13c splits by weights. The share loop in the kill function `0x44ece0` was not read.
 

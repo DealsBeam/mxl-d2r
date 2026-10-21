@@ -6,7 +6,7 @@
   tbl2json.py        strings                  -> work/mod/data/local/lng/
   txt_migrate.py     D2R table layout         -> work/mod/data/global/excel/{base,}
   waypoints_data.py  actinfo.txt (waypoint panel slots for Median's extra waypoints) -> work/mod, plugin/src/mxl_waypoints.h
-  monster_ai_data.py Median-only monster AI -> D2R's (andariel_ai, the engine's AI table has 155 rows)
+  monster_ai_data.py checks the plugin's monster AI id (andariel_ai = monai row 155, served by plugin/src/monster_ai.cpp)
   cube_tables.py     cube conditions          -> plugin/src/mxl_cube.h (+ cubemain stat ids, ext item conditions)
   sigma_data.py      requirements, dungeon lockout and goblin data -> plugin/src/mxl_{requirements,dungeons,goblins}.h
   items_data.py      runeword properties 8-13 -> plugin/src/mxl_runewords.h

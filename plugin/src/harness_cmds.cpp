@@ -9,6 +9,7 @@
 // "h: <verb> OK" or "h: <verb> FAIL <reason>".
 #include "harness_cmds_logic.h"
 
+#include "client_messages.h"
 #include "craft_flags.h"
 #include "d2r.h"
 #include "dungeon_lockout.h"
@@ -525,6 +526,24 @@ auto CmdEnter(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 }
 
 // Use the nearest warp tile (stairs, doors to another area): the server's warp action 0x491ff0 (game, player, tile).
+// `sysmsg <type> <colour> <text...>`: a system line to the player through the chat packet 0x26 (client_messages.cpp);
+// the type and colour bytes are free so the client's reading of them can be found in game.
+auto CmdSysmsg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long type = 0, colour = 0;
+	if (t.n < 4 || !hcmd::ParseInt(t.tok[1], &type) || !hcmd::ParseInt(t.tok[2], &colour)) {
+		return Fail(c, "usage: sysmsg <chat type> <colour> <text...>");
+	}
+	char text[256] = "";
+	for (int i = 3; i < t.n; ++i) {
+		std::snprintf(text + std::strlen(text), sizeof(text) - std::strlen(text), "%s%s", i > 3 ? " " : "", t.tok[i]);
+	}
+	if (!SendClientChat(c->player, static_cast<uint8_t>(type), static_cast<uint8_t>(colour), text)) {
+		return Fail(c, "send failed (messages off or no client)");
+	}
+	Out("sysmsg type %lld colour %lld: %s", type, colour, text);
+	return true;
+}
+
 auto CmdTile(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Unit* tile = nullptr;
 	double best = 1e18;
@@ -1009,7 +1028,7 @@ struct Verb {
 const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
-    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
+    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
     {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 
