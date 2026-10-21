@@ -280,8 +280,8 @@ auto FindMonsterById(Ctx* c, uint32_t id) noexcept -> Unit* {
 
 // Items of the player's inventory (all pages: backpack, cube, stash, equipped).
 template <typename F>
-void EachItem(Ctx* c, F f) noexcept {
-	void* inv = Fn<InventoryFn>(RvaInventory)(c->player, "harness", 0);
+void EachItemOf(Unit* owner, F f) noexcept {
+	void* inv = Fn<InventoryFn>(RvaInventory)(owner, "harness", 0);
 	if (inv == nullptr) {
 		return;
 	}
@@ -294,6 +294,11 @@ void EachItem(Ctx* c, F f) noexcept {
 		}
 		item = next;
 	}
+}
+
+template <typename F>
+void EachItem(Ctx* c, F f) noexcept {
+	EachItemOf(c->player, f);
 }
 
 auto ItemCode(Ctx* c, Unit* item, char out[5]) noexcept -> void {
@@ -1038,10 +1043,192 @@ auto CmdRemove(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return removed > 0 ? true : Fail(c, "remove: no such item");
 }
 
+// `dump player|client|mon <class>|ground`: raw memory for the RE work behind the plugin's own offsets (player name,
+// monstats treasure class fields, items on the ground).
+void HexDump(const char* label, const uint8_t* p, int len) noexcept {
+	for (int off = 0; off < len; off += 32) {
+		char hex[120];
+		int n = 0;
+		for (int i = 0; i < 32 && off + i < len; ++i) {
+			n += std::snprintf(hex + n, sizeof(hex) - static_cast<size_t>(n), "%02x%s", p[off + i], i % 4 == 3 ? " " : "");
+		}
+		Out("%s+%03x %s", label, off, hex);
+	}
+}
+
+auto CmdDump(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: dump player | dump client | dump mon <class> | dump ground");
+	}
+	if (hcmd::LowerEq(t.tok[1], "player")) {
+		const auto* data = Fn<PlayerDataFn>(RvaPlayerData)(c->player);
+		Out("player unit %p, data %p, unit+0x10 %p", static_cast<void*>(c->player), static_cast<const void*>(data),
+		    d2r::At<void*>(c->player, 0x10));
+		if (data != nullptr) {
+			HexDump("pdata", data, 0x80);
+		}
+		return true;
+	}
+	if (hcmd::LowerEq(t.tok[1], "client")) {
+		int guard = 0;
+		for (auto* client = d2r::At<uint8_t*>(c->game, GameClients); client != nullptr && guard < 64;
+		     client = d2r::At<uint8_t*>(client, ClientNext), ++guard) {
+			Out("client %p state %d", static_cast<void*>(client), d2r::At<int32_t>(client, ClientState));
+			HexDump("client", client, 0x200);
+		}
+		return true;
+	}
+	if (hcmd::LowerEq(t.tok[1], "mon")) {
+		long long cls = 0;
+		if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &cls)) {
+			return Fail(c, "usage: dump mon <class>");
+		}
+		const auto* rec = Fn<ItemRecordFn>(0x976e0)(c->dataFlag, static_cast<int32_t>(cls));
+		if (rec == nullptr) {
+			return Fail(c, "dump mon: no monstats row");
+		}
+		HexDump("monstats", rec, 0x200);
+		return true;
+	}
+	if (hcmd::LowerEq(t.tok[1], "ground")) {
+		int n = 0;
+		EachUnit(c->game, HashItems, [&](Unit* it) {
+			if (TypeOf(it) != 4 || n >= 40) {
+				return;
+			}
+			int32_t x = 0, y = 0;
+			d2r::UnitXY(it, &x, &y);
+			char code[5];
+			ItemCode(c, it, code);
+			const auto* data = Fn<ItemDataFn>(0x34a500)(it);
+			++n;
+			Out("ground id=%u code=%s class=%d mode=%d at %d,%d ilvl=%d quality=%d", IdOf(it), code, ClassOf(it), ModeOf(it), x, y,
+			    data != nullptr ? d2r::At<int32_t>(data, 0x28) : -1, data != nullptr ? d2r::At<int32_t>(data, 0) : -1);
+		});
+		Out("ground items %d (mode 3 or 5 = on the ground)", n);
+		return true;
+	}
+	return Fail(c, "dump: player | client | mon <class> | ground");
+}
+
+// `merc`: the player's mercenary unit and every item in its inventory (equipped ones have page 255).
+constexpr uint64_t RvaFindMerc = 0x4ff1a0;     // (game, player, 7, 0) -> the player's mercenary unit or null
+constexpr uint64_t RvaNpcMercList = 0x502b70;  // (game, npc, &scratch) -> list: entries pointer at +0x18, count at +0x20
+constexpr uint64_t RvaClientOf = 0x48fde0;     // (player) -> its client record
+constexpr uint64_t RvaOpenHireList = 0x540640; // (game, client, npc): fills the NPC's mercenary list and tells the client
+constexpr uint64_t RvaHireCost = 0x3c17b0;     // (expansion, player, hireling id, npc row byte +10, difficulty, &out): out[5] = price
+using FindMercFn = Unit* (*)(Game*, Unit*, int32_t, int32_t);
+using MercListFn = uint8_t* (*)(Game*, Unit*, void*);
+using HireCostFn = int32_t (*)(int32_t, Unit*, uint32_t, uint8_t, uint32_t, uint32_t*);
+
+auto CmdMerc(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+	if (merc == nullptr) {
+		return Fail(c, "merc: the player has no mercenary");
+	}
+	Out("merc id=%u class=%d level=%d mode=%d life=%d/%d", IdOf(merc), ClassOf(merc), Stat(merc, StatLevel), ModeOf(merc),
+	    Stat(merc, StatLife) >> 8, Stat(merc, 7) >> 8);
+	int items = 0;
+	EachItemOf(merc, [&](Unit* it) {
+		++items;
+		DescribeItem(c, it);
+	});
+	Out("merc items %d", items);
+	return true;
+}
+
+// `mercreq`: the item requirement check (0x36bc50, the one item_gen.cpp hooks) of every backpack item against the player's
+// mercenary: whether Median's mercenary lists (class lock, weapon / shield types) let it be equipped.
+constexpr uint64_t RvaRequirement = 0x36bc50;  // (item, unit, flag, &str, &dex, &level, flag2) -> 1 usable
+using RequirementFn = uint64_t (*)(Unit*, Unit*, int32_t, uint32_t*, uint32_t*, uint32_t*, int32_t);
+
+auto CmdMercReq(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+	if (merc == nullptr) {
+		return Fail(c, "mercreq: the player has no mercenary");
+	}
+	int n = 0;
+	EachItemOf(c->player, [&](Unit* it) {
+		if (Fn<ItemByteFn>(RvaItemPage)(it) != 0) {
+			return;
+		}
+		char code[5];
+		ItemCode(c, it, code);
+		uint32_t str = 9, dex = 9, level = 9;
+		const uint64_t r = Fn<RequirementFn>(RvaRequirement)(it, merc, 0, &str, &dex, &level, 0);
+		Out("mercreq code=%s usable=%d str=%u dex=%u level=%u", code, static_cast<int>(r & 0xff), str, dex, level);
+		++n;
+	});
+	Out("mercreq items %d", n);
+	return true;
+}
+
+// `hire [npc class] [n]`: hires the n-th (default first) free mercenary of the nearest hirer the way the client's hire
+// button does: packet 0x36 (npc id, list index, price, current mercenary id or -1) into the server handler.
+auto CmdHire(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long cls = -1, which = 0;
+	if ((t.n > 1 && !hcmd::ParseInt(t.tok[1], &cls)) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &which))) {
+		return Fail(c, "usage: hire [npc class] [n]");
+	}
+	Unit* npc = NearestMonster(c, cls, true);
+	if (npc == nullptr) {
+		return Fail(c, "hire: no such NPC alive in this area");
+	}
+	uint8_t scratch[64] = {};
+	const uint8_t* list = Fn<MercListFn>(RvaNpcMercList)(c->game, npc, scratch);
+	const uint8_t* npcRow = static_cast<const uint8_t*>(Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(npc)));
+	if (list == nullptr || npcRow == nullptr) {
+		return Fail(c, "hire: the NPC has no mercenary list");
+	}
+	if (d2r::At<uint64_t>(list, 0x20) == 0) {  // the list is made when the player opens the hire menu: do what that does
+		void* client = Fn<void* (*)(Unit*)>(RvaClientOf)(c->player);
+		Fn<void (*)(Game*, void*, Unit*)>(RvaOpenHireList)(c->game, client, npc);
+		list = Fn<MercListFn>(RvaNpcMercList)(c->game, npc, scratch);
+		if (list == nullptr) {
+			return Fail(c, "hire: the NPC has no mercenary list");
+		}
+	}
+	const auto* entries = d2r::At<const uint8_t*>(list, 0x18);
+	const uint64_t count = d2r::At<uint64_t>(list, 0x20);
+	Out("hire: %llu list entries", static_cast<unsigned long long>(count));
+	long long seen = 0;
+	for (uint64_t i = 0; entries != nullptr && i < count && i < 64; ++i) {
+		const uint8_t* e = entries + i * 0x10;
+		const uint32_t hired = d2r::At<uint32_t>(e, 8), avail = d2r::At<uint32_t>(e, 0xc);
+		Out("hire: entry %llu index=%u id=%u hired=%u avail=%u", static_cast<unsigned long long>(i), d2r::At<uint16_t>(e, 0),
+		    d2r::At<uint32_t>(e, 4), hired, avail);
+		if (hired != 0 || avail == 0 || seen++ != which) {
+			continue;
+		}
+		uint32_t out[16] = {};
+		if (Fn<HireCostFn>(RvaHireCost)(c->dataFlag != 1 ? 1 : 0, c->player, d2r::At<uint32_t>(e, 4), npcRow[10],
+		                                 d2r::At<uint8_t>(c->game, 0x104), out) == 0) {
+			return Fail(c, "hire: price lookup failed");
+		}
+		Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 1);
+		uint8_t pkt[17] = {0x36};
+		const uint32_t id = IdOf(npc), index = d2r::At<uint16_t>(e, 0), cost = out[5], mercId = merc != nullptr ? IdOf(merc) : 0xffffffffU;
+		std::memcpy(pkt + 1, &id, 4);
+		std::memcpy(pkt + 5, &index, 4);
+		std::memcpy(pkt + 9, &cost, 4);
+		std::memcpy(pkt + 13, &mercId, 4);
+		Out("hire: entry %llu, price %u, gold %d", static_cast<unsigned long long>(i), cost, Stat(c->player, StatGold));
+		if (Stat(c->player, StatGold) < static_cast<int32_t>(cost)) {
+			Fn<SetStatFn>(RvaSetStat)(c->player, StatGold, static_cast<int32_t>(cost) + 1000, 0);
+		}
+		const auto handler = reinterpret_cast<PacketFn>(*reinterpret_cast<const uint64_t*>(g_base + RvaPacketTable + 0x36 * 8));
+		handler(c->game, c->player, pkt, 17);
+		Unit* now = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+		Out("hire: mercenary now %s (class %d)", now != nullptr ? "present" : "absent", now != nullptr ? ClassOf(now) : -1);
+		return now != nullptr ? true : Fail(c, "hire: the server did not hire (see the log)");
+	}
+	return Fail(c, "hire: no free entry %lld", which);
+}
+
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
-	Out("verbs: state | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel | "
-	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
+	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel | "
+	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
 	return true;
 }
@@ -1102,7 +1289,7 @@ const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
-    {"help", CmdHelp, true},     {"menu", CmdMenu, true},
+    {"dump", CmdDump, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

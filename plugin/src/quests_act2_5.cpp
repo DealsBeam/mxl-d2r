@@ -47,6 +47,7 @@ using d2r::Unit;
 using questeng::api;
 using questeng::Bit;
 using questeng::Difficulty;
+using questeng::DropBonusPerPlayer;
 using questeng::Record;
 
 constexpr uint64_t SummonerKillRva = 0x5a5490;
@@ -154,7 +155,8 @@ auto Give(Game* game, Unit* player, uint32_t code, int32_t itemLevel = 0) noexce
 
 // ---- bonus catalysts --------------------------------------------------------------------------------------------
 
-void GiveOnKill(const Event& e, int flagBit, bool (*rule)(int, int32_t, bool), uint32_t code, const char* name) noexcept {
+void GiveOnKill(const Event& e, int flagBit, bool (*rule)(int, int32_t, bool), const quests::BonusTc& tc, uint32_t code,
+                const char* name) noexcept {
 	if (e.game == nullptr || e.unit == nullptr || e.player == nullptr) {
 		return;
 	}
@@ -162,7 +164,8 @@ void GiveOnKill(const Event& e, int flagBit, bool (*rule)(int, int32_t, bool), u
 	if (record == nullptr || !rule(Difficulty(e.game), ClassOf(e.unit), Bit(record, QuestFlagRecord, flagBit))) {
 		return;
 	}
-	if (Give(e.game, e.player, code)) {
+	// Once per player on the ground like Median; the inventory item is the fallback (class not resolved).
+	if (DropBonusPerPlayer(e.game, e.unit, e.player, tc) > 0 || Give(e.game, e.player, code)) {
 		api.bitSet(record, QuestFlagRecord, flagBit);
 	} else {
 		Log(name, static_cast<int>(code), 0);
@@ -170,14 +173,14 @@ void GiveOnKill(const Event& e, int flagBit, bool (*rule)(int, int32_t, bool), u
 }
 
 void SummonerKillHook(void* quest, uint8_t* event) {
-	GiveOnKill(ReadEvent(event), quests::FlagLearning, quests::ShouldGiveLearningOnKill, quests::CodeCatalystLearning,
-	           "learning catalyst not created, code");
+	GiveOnKill(ReadEvent(event), quests::FlagLearning, quests::ShouldGiveLearningOnKill, quests::TcLearning,
+	           quests::CodeCatalystLearning, "learning catalyst not created, code");
 	g_summonerKillOriginal(quest, event);
 }
 
 void IzualKillHook(void* quest, uint8_t* event) {
-	GiveOnKill(ReadEvent(event), quests::FlagJewelcraft, quests::ShouldGiveJewelcraftOnKill, quests::CodeCatalystJewelcraft,
-	           "jewelcraft catalyst not created, code");
+	GiveOnKill(ReadEvent(event), quests::FlagJewelcraft, quests::ShouldGiveJewelcraftOnKill, quests::TcJewelcraft,
+	           quests::CodeCatalystJewelcraft, "jewelcraft catalyst not created, code");
 	g_izualKillOriginal(quest, event);
 }
 

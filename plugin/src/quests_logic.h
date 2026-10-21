@@ -53,6 +53,23 @@ constexpr auto ShouldGiveHeart(uint16_t npcClass, uint16_t message, bool rescued
 	return npcClass == NpcAkara && message == MsgCainRescued && rescuedBit;
 }
 
+// Median's bonus treasure classes are data: three monstats rows of NPCs carry them (D2Quests.cpp 0x9ec20 / 0x9ef10 /
+// 0x9f600 read word +0x86 / +0x8e / +0x8e of the row, i.e. TreasureClass1 or TreasureClass1(N)). The handlers roll that
+// class once for every player in the game, on the ground at the victim, item level = the victim's level (0x9e9f0 /
+// 0x9ed00 loop to the game's player count at game+0x8c), and set the "handed out" flag afterwards whatever dropped.
+struct BonusTc {
+	int32_t row;     // monstats row that holds the class name
+	int difficulty;  // column set: 0 = TreasureClass1, 1 = TreasureClass1(N), 2 = TreasureClass1(H)
+};
+constexpr BonusTc TcCatalyst{155, 0};    // warriv1:  "Quest Cata Disenchant" (3o[ )
+constexpr BonusTc TcLearning{177, 1};    // drognan:  "Quest Cata Learning" in TreasureClass1(N) (0o[ )
+constexpr BonusTc TcJewelcraft{367, 1};  // tyrael2:  "Quest Cata Jewelcraft" in TreasureClass1(N) (jcat)
+constexpr int MaxDropPlayers = 8;
+// How many times the class is rolled: once per player in the game, at least once.
+constexpr auto DropCount(int players) noexcept -> int {
+	return players < 1 ? 1 : (players > MaxDropPlayers ? MaxDropPlayers : players);
+}
+
 // Quest 6 event 8 (a kill while the quest is active): Andariel in Normal, once (the flag is set afterwards).
 constexpr auto ShouldGiveCatalystOnKill(int difficulty, int32_t monsterClass, bool flagSet) noexcept -> bool {
 	return difficulty == 0 && monsterClass == MonsterAndariel && !flagSet;

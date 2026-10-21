@@ -67,7 +67,9 @@ Reading aids that apply everywhere:
 | 7 | Create item from an item-gen struct (1.13c `0x11490`) | `0x43cd50` | verified |
 | 7 | Create item of a class (struct builder, quality / ilvl / flags) | `0x43d530` | verified |
 | 7 | Unique-item-by-index creator | not found: no equivalent function; see section 7 | open |
-| 8 | **Game destroy** `(u64 game id)` ("Deallocate game %p") | `0x4057c0` (called by the idle sweep `0x406e40`) | verified |
+| 8 | **Game destroy** `(u64 game id)` ("Deallocate game %p") | `0x4057c0` (called by the idle sweep `0x406e40`; its prologue has a rip-relative load, so it cannot be hooked) | verified |
+| 8 | **Per-game client teardown** `(Game*)`: the game-end event the plugin hooks (`game_end.cpp`; entry `40 56 48 83 ec 20 48 8b b1 38 01 00 00`, clean prologue) | `0x486be0` | verified (game_checks `gameend`) |
+| 8 | Game struct: first client record `+0x138` (next `+0x628`, client state at `+4`, 4 = in the game); the players in a game are counted from that list (Median reads a count word at game `+0x8c`) | `quests_common.h` | verified |
 | 8 | **Game create** (name, password, ... 14 args) | `0x4049d0` (no direct callers) | likely |
 | 9 | Client NPC menu table (48 x 0x48 bytes, heap, global ptr) | pointer `0x2a48830`, count `0x2a48838`, filled by `0x360d0` | verified |
 | 9 | Client menu builder / NPC row index / click-send | `0x1147a0` / `0x113990` / `0x117510` | verified |
@@ -153,8 +155,9 @@ start with a `jmp [rip+..]` thunk, entry bytes `ff 25 f2 51 b3 03 90 90 90 90 ..
 56 57 41 54 41 56`, already used by existing plugin code). The cost is checked by the search; the payment is the
 post-hook's job: take `param*100` from stat 14 first, the rest from stat 15. Whether the client sees the new gold
 without an extra packet: probably yes, no explicit update is needed (evidence in section 10; not tested in game).
-Flags: nothing to find in D2R, they live in plugin memory keyed per game pointer and player name (see the port spec).
-Clear the flags in the game-destroy hook `0x4057c0` (section 8); clearing when the game pointer changes is also enough.
+Flags: nothing to find in D2R, they live in plugin memory keyed per game pointer and character name (the name is the first 16
+bytes of the player data `0x34b240(unit)`; `craft_flags.cpp`). They are cleared in the game-end hook `0x486be0` (section 8,
+`game_end.cpp`); a changed game pointer clears them as well.
 
 ## 2. Act 1 quest rewards (Barbarian milestone)
 

@@ -99,3 +99,49 @@ Output size: 0.7 MB (<= 96 px art) to 2.8 MB (larger) per animation, about 500 M
 confirmation. Effort: after the first confirmed effect, wiring all classes is a data run (hours); calibrating scale,
 height and timing per art (looks, not code) is the real cost, roughly 1-2 days for the 330 animations, less with a
 per-class review sheet. Monster-only missile art and the 11 missing CelFiles are out of scope.
+
+## 6. Vanilla stand-ins first (tools/effects_hd.py, 2026-10-22)
+
+Custom HD art is the last step (PLAN.md), so every Median missile and overlay row gets D2R's own HD effect now.
+`tools/effects_hd.py` runs after `missile_hd.py` in `tools/build.py` and writes `work/mod/effects_hd.md` (row -> HD effect,
+class, confidence). Numbers of the last full run are in unported.md "Graphics (HD)".
+
+What it decides, per row (not per CelFile, as `missile_hd.py` does):
+
+| Class | When | Effect |
+|---|---|---|
+| exact | the row's art (missile CelFile, overlay Filename) is a D2R file that a D2R row with an HD effect also uses | the HD model of that D2R row; when several D2R rows share the art (39 CelFiles have 2-7 models) the row most like the Median row wins: shared element/shape words of name, art and the skills that reach it (skills.txt -> missile -> sub/hit missiles), moving / hit / sub / loop role, then Vel, Range, Light, Trans |
+| variant | exact or stand-in effect whose definition is rewritten | `mxl_<model>_s<percent>.json` (missiles) or the overlay file itself: every `TransformDefinitionComponent` scale and position times k. Only stand-ins need it (k from the ratio of Median's classic art to the stand-in's art, damped `ratio^0.7`, 0.6-1.8, 0.1 steps, left alone within 15%); an exact row has no scale of its own in classic data, so none is generated |
+| stand-in | Median-only art, or D2R art no D2R row draws in HD | cost over candidates (D2R rows with an HD effect and DCC art): 3.0 x colour distance (mean palette colour of the DCC frames, hue weighted by saturation) + 1.2 x size ratio + 0.35 x frame-count ratio + role mismatches - 1.7 per shared family word (fire, ice, elec, poison, arcane, holy, bone, blood, dark, wind, earth, nature, blade, trap, buff) - 0.7 per shape word (nova, orb, bolt, explode, trail, wall, storm, front/back, small/large, cast) - 0.4 per shared word; hand-picked look-alikes (missile_hd.py LOOKALIKE) win for their art |
+
+Findings that matter beyond this tool:
+
+- **D2R's lookup key is not the plain lowercase name.** In `hd/missiles/missiles.json` and `hd/overlays/<folder>/` the key is
+  the name lowercased, spaces as `_`, and an `_` in front of every digit run after a non-digit: `spike1` -> `spike_1`,
+  `cyclonearmor1front` -> `cyclonearmor_1front` (all 333 overlay files and 742 of 756 missile keys follow it; the other 14
+  are D2R's own misspellings: nihlathak/nehlithak). `missile_hd.py` wrote the plain name only; `effects_hd.py` writes both.
+- The overlay's HD file is `hd/overlays/<Character column>/<normalised overlay name>.json`. Median's 316 new overlay rows have an
+  empty `Character`, which draws no HD overlay at all; `effects_hd.py` sets `Character` to the folder of the effect it uses (in
+  `excel/overlay.txt` and `excel/base/overlay.txt`) and writes the row's own file there.
+- 16 missile definitions hold several `VfxDefinitionComponent` entities behind `UnitSourceSkillFilterComponent` (the entity with
+  filter "" is the default; the others replace it for one source skill, e.g. Fire Wall, Meteor, Battle Cry). A Median skill with
+  another name gets the default entity, which is the intended generic look.
+- **What an HD definition can carry of Median's per-row differences:** only the transform scale/position of each entity
+  (used), `ModelFadeInDefinitionComponent.alpha` (3 arrow models), and one `SpotLightDefinitionComponent` (colour, power, angle;
+  1 definition, not used: the engine may still draw the missile light from missiles.txt Light/Red/Green/Blue, to be checked).
+  There is no tint, transparency, speed or animation-timing field: of the 1,345 non-logic exact missile rows, 866 differ in
+  light radius, 790 in light colour, 140 in Trans, 782 in Vel, 296 in animation timing from the D2R row they follow; those
+  differences are not shown.
+- **Tint** would mean editing the particles: 51 of 373 missile and 74 of 331 overlay definitions take their colour from a
+  gradient texture (`textures/gradient/T_FX_*gradient*`), the rest from constants baked into the `.particles` program. A
+  same-length path replacement (section 1) plus a hue-shifted gradient texture would recolour the gradient ones, but
+  patched particles were never confirmed in game (section 3), so colour is matched by choosing the stand-in whose
+  art colour is closest instead.
+- **In game (slot 1, background mode, 2026-10-22):** casting player skills could not be driven: the harness `pkt` verb
+  (client packets 0x3b, 0x3c, 0x05, 0x0c, 0x03) is accepted but the Barbarian neither casts nor moves after `cheat goto 2`
+  (its mode stays 5, town neutral). Monsters were used instead: `h spawn 821 2` (Stone Clan goats, skill
+  `stone_clan_skill_missile` -> stand-in) in the Blood Moor, 14 screenshots 0.45 s apart, before and after copying the generated
+  `hd/missiles/missiles.json`, both `overlay.txt` and the generated hd definitions into the slot's mod. The stand-in effects
+  load and draw (new fire bursts and the stand-in missiles appear where the "before" run showed only the old rings), the
+  game loads without new error classes (the assert lines seen, `sub.nCelNum`, `ii < NUM_LEVEL_TYPES`, unique item index, were
+  also in a run without the files). The look of single stand-ins is not signed off; no Sorceress run.
