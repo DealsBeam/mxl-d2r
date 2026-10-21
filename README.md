@@ -28,4 +28,4 @@ Ignored working folders: `extract/` (raw game/MXL extractions), `work/` (scratch
 
 See [docs/PLAN.md](docs/PLAN.md). Handoff notes for porting another classic mod: [docs/porting-playbook.md](docs/porting-playbook.md).
 
-The main remote is [the forge](https://git.werdegames.com/WerdeGames/mxl-d2r); the GitHub copy is kept as `github`. New-PC setup is in [docs/setup.md](docs/setup.md).
+The main remote is [the forge](https://git.werdegames.com/WerdeGames/mxl-d2r); the GitHub copy is kept as `github`. New-PC setup is in [docs/setup.md](docs/setup.md). CI: see [docs/setup.md#ci](docs/setup.md#ci).
