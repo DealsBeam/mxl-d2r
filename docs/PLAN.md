@@ -137,6 +137,7 @@ Work happens on the forge (git.werdegames.com/WerdeGames/mxl-d2r): one branch an
 
 ## Removed or deferred for now (owner, 2026-10-21)
 Switched off or not worked on until the HD single-player port works; revisit later.
+Everything else follows Median XL (owner, 2026-10-21); gaps and approximations are tracked in [unported.md](unported.md).
 - **Classic graphics mode (G):** no classic-only work until all HD work is done. The classic panels already merged stay
   as they are.
 - **Terror zones** (D2R's "desecrated zones": "Corrupted tremors strike ..." messages, hourly zones with boosted monster
