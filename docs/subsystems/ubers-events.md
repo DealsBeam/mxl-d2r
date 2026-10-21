@@ -170,15 +170,21 @@ Implemented (mxl-core, switch word `lockout`, report on the `mxl` command and th
   non-zero group take the starter's end time), per-game reset by game pointer or frame counter going backwards. The seal is
   checked lazily against GetTickCount64 (Median: game events, same wall clock; only difference: Median's events are frame
   based, so a paused server would differ). Unit tests: plugin/tests/dungeon_test.cpp.
-- Message: the generic failure message 0x14 only (`0x491960`). Median's 0x13 has no D2R counterpart (no D2R caller uses it);
-  no packet is invented.
+- Message: the generic failure message 0x14 (`0x491960`, D2R shows "Impossible.") and, since lane client-ui, text lines in the
+  player's message log through D2R's chat packet 0x26 (d2r-addresses.md section 13): refusal for requirements "(Required Level: N)"
+  (string 11189) / "Requires Hell difficulty" / "Only for the <class>"; refusal for a sealed level "This area is locked" + "Join another
+  game to enter again" (11192); at the clock start, to every player in the game, "Closing in: mm:ss" (11191) and "ONCE YOU EXIT YOU
+  CANNOT GO BACK" (11193). Median's 0x13 and packet 0x88 have no D2R counterpart: no packet is invented. Verified in game
+  (slot 2, Hell rules, level 253: "Closing in: 01:00", then after 68 s "This area is locked / Join another game to enter again").
 
 Left:
-- Timer / popup UI and packet 0x88 (client; needs a D2RLoader client plugin or UI layout).
+- Live timer and popup art (packet 0x88 DungeonWidget): the clock is a single log line at the start. A running countdown needs the
+  PluginSDK OverlayService (drawText from a frame callback) fed by a NetworkService channel (`sendToClient`, 224 bytes); popup art is
+  custom art (last).
 - Quest-table condition (3) and the 0x7fb70 item teleport (clock start only; find the D2R item spell that teleports).
 - Game-destroy hook 0x4057c0 (state resets on game pointer or frame regress instead; a new game at the same address whose first
   lockout event comes after a frame count above the old game's last one would keep stale seals).
-- Confirm in game: hook parameter layout of 0x58f680, the one-way portal object, whether 0x14 produces a visible reaction.
+- Confirmed in game (lane client-ui): 0x14 shows "Impossible." in the log. Still open: the one-way portal object.
 
 ## 4. Treasure goblins (D2Goblins.cpp)
 
