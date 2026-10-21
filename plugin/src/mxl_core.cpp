@@ -27,6 +27,7 @@
 #include "goblins.h"
 #include "hirelings.h"
 #include "items_ext.h"
+#include "item_gen.h"
 #include "npc_actions.h"
 #include "requirement_gates.h"
 #include "skill_tree.h"
@@ -67,6 +68,7 @@ char g_reqGatesReport[256] = "off: not the expected game image";
 char g_combatReport[192] = "off: not the expected game image";
 char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
+char g_itemGenReport[320] = "off: not the expected game image";
 int g_missileHitsInstalled = 0;
 
 constexpr D2RL::PluginInfo Info {
@@ -91,7 +93,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc reqgates hirelings skilltree combat props runewords xp; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc reqgates hirelings skilltree combat props runewords xp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -203,6 +205,10 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		std::snprintf(text, sizeof(text), "items %s | runewords with extra properties %d (refused %d), found by Jewel padding %d | kills with a changed experience %d of %d",
 		              g_itemsExtReport, extended, refused, padded, changed, seen);
 		Say(command, text);
+		char gen[400];
+		ItemGenSummary(text, sizeof(text));
+		std::snprintf(gen, sizeof(gen), "item generation %s | %s", g_itemGenReport, text);
+		Say(command, gen);
 	}
 	return D2RL::ConsoleCommandResult::Handled;
 }
@@ -408,6 +414,14 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallItemsExt(context, rw, xp, g_itemsExtReport, sizeof(g_itemsExtReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: items %s", g_itemsExtReport);
+			context->LogInfo(line);
+			const bool cl = !Off("classlock"), et = !Off("ethereal"), so = !Off("sockets"), dy = !Off("dyes");
+			if (!cl && !et && !so && !dy) {
+				std::snprintf(g_itemGenReport, sizeof(g_itemGenReport), "%s", OffNote);
+			} else {
+				InstallItemGen(context, cl, et, so, dy, g_itemGenReport, sizeof(g_itemGenReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: item generation %s", g_itemGenReport);
 			context->LogInfo(line);
 		}
 		if (Off("trace")) {  // diagnosis word, not a part: turns the state trace on (bug #22)

@@ -86,16 +86,16 @@ the dispatcher is reached from the property function `0x3d4620`). Only 1 + 1 sta
 | Address | What it does | Bucket | Status | Content |
 |---|---|---|---|---|
 | 0x7e0f0 | byte 0 of the qualities row for a quality below 10 (`work/sigma/qualities.txt`, 5-byte rows [0] used here, [1] 1 for qualities 1-3 = runewords allowed (section 3), [2] 25 for most qualities, [4] 1 from quality 5) | a | open | |
-| 0x7e120 | Median's ethereal roll after generation: items with durability (`0x7fff0`: base flags, stat 0x49 non-zero, not indestructible stat 0x98) of item type 45 or 50: if a 1000-sided die passes, or the item is already ethereal, or the generator flag 4 is set, `0x7fdd0` makes it ethereal (flag `0x400000` set, `0x100000` cleared, +25 percent on type 45's five stats or on stat 0x1f) and durability and maximum durability become 75 percent (minimum 1). inferred | c | open | ethereal drops |
+| 0x7e120 | Median's ethereal roll after generation: items with durability (`0x7fff0`: base flags, stat 0x49 non-zero, not indestructible stat 0x98) of item type 45 or 50: if a 1000-sided die passes, or the item is already ethereal, or the generator flag 4 is set, `0x7fdd0` makes it ethereal (flag `0x400000` set, `0x100000` cleared, +25 percent on type 45's five stats or on stat 0x1f) and durability and maximum durability become 75 percent (minimum 1). **Confirmed by the disassembly**: the die is `rand(1000) <= word [qualities row + 2]` (25 for qualities 1-4, 6, 7, 0 for 5, 8, 9: about 2.6 percent), the +25 is `value + value * 25 / 100`, the tail call `0x7fd70` is the durability step; the call is only reached for item level 100+ (it replaces 1.13c's call inside that branch). D2R's own branch (`0x442d60`) lets 5 in 100 through to `0x3d3510` (+50 percent, then durability / 2 + 1) | c | **shipped** (`ethereal`) | ethereal drops |
 | 0x7e3b0 | thunk for 7e120, patched over the call at D2Game `0x10c88`: 1.13c's own branch of the generator `0x10a20` for item level above 99. read | | | |
-| 0x7e240 | Median's version of the call 1.13c makes for quality 1-3 items at D2Game `0x106b0` / `0x10ca9` (old target `0x6fc2ec90`): looks like a socket roll (base flag `+0x137`, quality row byte 4 clear, generator flag 8 clear, a time-seeded `rand`, then `0x800b0` writes stat 0xc2 clipped to the base's maximum). inferred (the arithmetic `rand() / 7` is odd) | c | open | sockets on normal items |
+| 0x7e240 | Median's version of the call 1.13c makes for quality 1-3 items at D2Game `0x106b0` / `0x10ca9` (old target `0x6fc2ec90`): a socket roll. **Read (disassembled; the decompiler had mixed up the registers)**: base flag `+0x137` (can have sockets), quality row byte 4 (`FixedRoll`) clear, generator flag 8 clear, then `rand() % 7` is the count: none for a remainder of 0 (1 in 7), else the remainder 1-6 through `0x800b0` (stat 0xc2, clipped to what the item holds). For `FixedRoll` qualities (5-9) the same function gives 6 sockets (clipped), unless a unique's row flag `0x10` is set; the 1.13c call sites only reach it for qualities 1-3, so that branch is dead in practice | c | **shipped** (`sockets`) | sockets on normal items |
 | 0x7e3c0, 0x7e3e0 | pick one of two 1.13c functions by the flags `0x1000000` / `0x10000000` (thunks to D2Game) | | | |
 | 0x7e400 | qualities row accessor (table at +0x68, 5-byte rows) | a | n/a | |
 | 0x7e450, 0x7e830 | read / set-clear a mask in the item data flags (+0x18) | | | |
-| 0x7e470 | **item requirement check** `(player, item, &strOk, &dexOk, &lvlOk)`: strength, dexterity and level against the item's requirements (`0x7ff70` / `0x7fef0`: record values plus stat 91 `item_req_percent`, minus 10 when ethereal), then **Median's class lock**: item stat 463 (D2R 492) gives class + 1; the player must be that class, and the base's class requirement (7 = none) must match too; a second branch for the other unit kind (`0x100bf9e0`) checks the same two conditions against the base class from the item type table. read | c | open | the 14 cube recipes `properties_422` (7 classes x 2: unique conversions that lock an item to a class). D2R keeps stat 492 but nobody reads it |
+| 0x7e470 | **item requirement check** `(player, item, &strOk, &dexOk, &lvlOk)`: strength, dexterity and level against the item's requirements (`0x7ff70` / `0x7fef0`: record values plus stat 91 `item_req_percent`, minus 10 when ethereal), then **Median's class lock**: item stat 463 (D2R 492) gives class + 1; the player must be that class, and the base's class requirement (7 = none) must match too; a second branch for the other unit kind (`0x100bf9e0`) checks the same two conditions against the base class from the item type table (the mercenary). read | c | **shipped for players** (`classlock`) | the 14 cube recipes `properties_422` (7 classes x 2: unique conversions that lock an item to a class). D2R keeps stat 492 but nobody reads it. D2R's check is `0x36bc50` (section 5) |
 | 0x7e670 | pack a 1-4 character code into a dword, padding spaces | | n/a | |
 | 0x7e6c0 | colour index clamp: 1..21 -> 0..20, else 0 | | | |
-| 0x7e6d0 | item colour: if stat 183 (D2R 368) is above 0 the dye (1..21) is the palette index, else 1.13c's. Patched at 2 module-5 and 4 module-3 sites. read | d | open (item_spells.cpp sets the stat; whether D2R paints with it is **untested**) | dyes (bug #11) |
+| 0x7e6d0 | item colour: if stat 183 (D2R 368) is above 0 the dye (1..21) is the palette index, else 1.13c's. Patched at 2 module-5 and 4 module-3 sites. read | d | **shipped** (`dyes`; item_spells.cpp sets the stat, the colour function `0x3710d0` is hooked; look in game) | dyes (bug #11) |
 | 0x7e750 | weapon Strength / Dexterity damage bonus of an item record (u16 at `+0x106` / `+0x108`, 1 means 100), default 50 for non-items; used by the damage code (`0x8adac`, `0x8ade4`) | a | n/a (the other lane's D2Damage; the columns are in weapons.txt) | |
 | 0x7e7d0 | bit 2 of the item record's flags dword `+0xdc` (assert D2Items.cpp 0x19c); patched at D2Game `0x11e8f` / `0x4ee05` | | | |
 | 0x7e860 | range check on the sets table | | | |
@@ -186,19 +186,49 @@ D2SetItems.cpp has four helpers (count worn pieces of a set, a piece's presence,
 6-slot set record (`+0x110`); D2R does the same. Median's sets are data only: no `setitems` / `sets` columns overflow,
 Orphan's Call is split. Nothing to port. Tooltip colouring of the other pieces is the client (D2ItemDesc).
 
-## 5. Item colour, generation and flags (not shipped)
+## 5. Item colour, generation and flags (shipped by the item-gen lane: `item_gen.cpp`, `item_gen_logic.h`)
 
-Specs for the next lane:
+Off words `classlock`, `ethereal`, `sockets`, `dyes`. All four were read in the D2R dump; none has been seen in game yet
+(docs/testing.md). Entry bytes below are whole instructions, no rip-relative.
 
-- **Class lock (0x7e470).** Hook D2R's requirement check (the function that reads `item class requirement` and the three
-  `StatStrReq/Dex/Level` values; not located yet, `0x376de0` is only the level requirement and has 3 callers) and deny
-  when `GetStat(item, 492)` is non-zero and not class + 1. Only 14 recipes set it.
-- **Dye paint (0x7e6d0).** Check in game whether a dyed item changes colour in D2R (stat 368 holds 1..21).
-- **Ethereal and sockets (0x7e120, 0x7e240).** The two D2Game call sites differ; D2R's analogue is the generator function
-  behind `0x43cd50`/`0x43d530` (docs/d2r-addresses.md). Compare the ethereal and socket rates in game before porting.
-- **Immunity checks and ids 11 / 12 / 32 / 33 / 34 (item events).** Find D2R's event function table first.
-- **Party experience (0x5e830).** Find the multiplayer branch of the kill function `0x44ece0` (the share loop) and give
-  every member in range the full award instead of a split.
+- **Class lock (0x7e470 -> D2R `0x36bc50`).** D2R's requirement check is `0x36bc50(item, unit, flag, &strOk, &dexOk, &levelOk, flag2)`
+  (entry `4c 89 4c 24 20 44 89 44 24 18`): item record `+0x11a` / `+0x11c` strength / dexterity, `item_req_percent` (stat 91), minus 10
+  when ethereal, `0x376de0` for the level, then the item type's class requirement (type record `+0x20`, 7/8 = none). The hook runs
+  the original and turns a success into a failure when the unit is a player and `GetStat(item, 492) = class + 1` (value 8 =
+  Median's "no class" locks nothing) is not the player's class (`ClassLockAllows`). Mercenaries (Median's second branch) are
+  left to the original. The cube output `properties_422` already writes the stat.
+- **Ethereal (0x7e120 -> D2R `0x442d60` + `0x3d3510`).** `0x442d60(game, &item, gen)` (entry `40 53 55 41 56 48 83 ec 50`) is 1.13c's
+  `0x10a20`: the quality switch, then for item level 100+ (not when gen `+0xc0` bit 2) of weapons / armour with durability,
+  quality other than 1 and 5: `rand(100) < 5` or gen `+0x54 & 0x400000` or gen `+0xc0 & 4` calls `0x3d3510(item)` (entry
+  `48 89 5c 24 10 57 48 83 ec 20`: flag 0x400000, +50 percent on stats 0x15-0x18, 0x9f, 0xa0 for weapons (type 0x2d) or on
+  0x1f) and then halves the durability (`max / 2 + 1`). Median differs in the rate (about 2.6 percent by quality), the +25
+  percent and the 75 percent durability (`item_gen_logic.h`). Hook A wraps `0x442d60` (remembers item and gen record, fixes
+  the durability afterwards), hook B replaces `0x3d3510` while hook A runs (forced items always; the others are accepted with
+  probability 26/50 so the overall rate is Median's; accepted items get Median's effect; the fix-up gives 75 percent or puts back
+  what D2R halved). One difference kept from D2R: it never makes quality 1 (low) and 5 (set) ethereal, Median's 7e120 allows
+  quality 1.
+- **Sockets (0x7e240 -> D2R `0x441fc0`).** `0x441fc0(game, item, gen)` (entry `48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20`)
+  is D2R's socket roll for quality 1-3, called from `0x442d60` and `0x443670` (the two 1.13c call sites). D2R rolls
+  `rand(100) <= 32` for `rand(max) + 1` sockets (cap 3 / 4 / 6 by difficulty), Median `rand() % 7` clipped to what the
+  base holds. The hook replaces it for unforced items (gen `+0xc0 & 0x10` or `+0x54 & 0x800` keep D2R's code) of bases that can
+  have sockets (`0x373610`, record `+0x147`; Sigma `+0x137`) and are not flagged by `0x374660` (record `+0x142`), then calls D2R's
+  own socket setter `0x375560(item, count)`, which clips to the item's size. Per the arithmetic 6 in 7 normal items of a
+  socketable base get sockets (D2R: 1 in 3); that is Median's code as read, compare in the game.
+- **Dye paint (0x7e6d0 -> D2R `0x3710d0`).** `0x3710d0(player, item, &colourByte, mode)` (entry
+  `48 89 5c 24 08 44 89 4c 24 20 55 56 57`) is D2R's item colour: owner colour states, unique / set / affix colour records,
+  then `0x376970`; it writes `(kind << 5) + colour` into the byte (`0x376600`) and returns the palette entry
+  `0x145dfb0(kind, colour)` (`kind` = items record `+0x151`, or `+0x152` for `mode != 0`), 0 when the item has no colour.
+  Median's `7e6d0` checks stat 183 first, so the hook reads stat 368 first: 1..21 gives palette index 0..20 and the same
+  composition as D2R's. The stat is 5 bits signed in the data (Send Bits 5, Save Bits 5), so 16..21 may arrive as -16..-11
+  at the client: `DyeIndex` adds 32 to negatives. If the game still shows nothing for 16..21 widen Send Bits to 6.
+- **Item events 11 / 12 / 32 / 33 / 34 and the immunity of 15 / 16: not located.** The itemstatcost loader `0x31e310`
+  puts `itemevent1` / `itemevent2` at stat record `+0x44` / `+0x46` and `itemeventfunc1` / `2` at `+0x48` / `+0x4a` (int16).
+  The dispatcher that reads them was not found: no pointer table of 32+ D2Game functions with the gaps of ids 0-5 / 22-27,
+  and the candidates `0x4734f0` (equip checks), `0x461530` (missile creation), `0x50a050` are other code. Next step: find the
+  readers of the stat record `+0x48` in the stat-list code (`0x2f0000-0x300000`) and `0x3d4000-0x3d5000`, or break on an item
+  with id 6 in game. Monster stat 373 (Median `0xbd`, immune to open wounds and crushing blow) is a data stat on the monster.
+- **Party experience (0x5e830): not done, multiplayer only.** Solo play is identical; Median pays every member in range the
+  full award, 1.13c splits by weights. The share loop in the kill function `0x44ece0` was not read.
 
 ## 6. D2R addresses found here
 
@@ -215,7 +245,12 @@ Specs for the next lane:
 | item inventory (sockets) | `0x34a360`, `0x388c10`, `0x38aab0`, `0x38aba0` | (unit, file, line), first node, node unit, next node |
 | unit data bank | `0x34a0e0(unit)` -> byte | `unit + 0x1bd` |
 | stat list lookup | `0x2f5b80(unit, state, flags)` | state 0xab = runeword |
-| item flag set | `0x36d8f0(item, mask, on)` | `0x4000000` runeword |
+| item flag set | `0x36d8f0(item, mask, on)` | `0x4000000` runeword, `0x400000` ethereal, `0x800` socketed |
+| item requirement check | `0x36bc50` | section 5 |
+| item generator quality switch | `0x442d60` | `(game, &item, gen)`; gen `+0x54` item flags, `+0xc0` generator flags |
+| make ethereal | `0x3d3510` | `(item)` |
+| socket roll / setter | `0x441fc0` / `0x375560` | `(game, item, gen)` / `(item, count)` |
+| item colour | `0x3710d0` | `(player, item, &byte, mode)`; palette `0x145dfb0(kind, colour)` |
 
 ## 7. Tools
 
@@ -232,13 +267,13 @@ references by raw bytes, which finds callers in code Ghidra did not disassemble)
 | Runeword Jewel padding | c | shipped |
 | Kill experience penalty | c | shipped |
 | Party experience split | c | open (multiplayer) |
-| Item events 11/12/32/33/34, immunity of 15/16 | c | open (D2R event table) |
-| Class lock stat 463 | c | open (14 recipes) |
-| Ethereal / socket / ilvl 100 generation | c | open (compare in game) |
-| Dye colour | d | open (check in game) |
+| Item events 11/12/32/33/34, immunity of 15/16 | c | open (dispatcher not found, section 5) |
+| Class lock stat 463 | c | shipped (`classlock`, hook `0x36bc50`) |
+| Ethereal / socket generation | c | shipped (`ethereal`, `sockets`; hooks `0x442d60`, `0x3d3510`, `0x441fc0`) |
+| Dye colour | d | shipped (`dyes`, hook `0x3710d0`; check in game) |
 | Item actions, sets | e | D2R covers them |
 
-## 9. In-game checks (none done)
+## 9. In-game checks (none done; the item generation ones are also in docs/testing.md)
 
 1. `mxl` shows `items on: ...` with both hooks "hooked"; each failure names the entry that differed.
 2. Make Gehenna (or any runeword whose row has extras, e.g. rows 6-11) and read the tooltip: the lines of slots 8-13
@@ -248,6 +283,7 @@ references by raw bytes, which finds callers in code Ghidra did not disassemble)
 4. Kill a monster 10 levels below the player at level 60 (expect half the experience of an equal-level kill), 20 levels
    below (3%), and one 10 levels above at level 60 (50% in Median; D2R's bonus would pay about 117%).
 5. `mxl-core-off.txt` with `runewords` and `xp` restores D2R's behaviour.
+6. Item generation (`classlock`, `ethereal`, `sockets`, `dyes`): `mxl` prints `item generation on: ...` and counters; see docs/testing.md.
 
 ## 10. Uncertainties
 
