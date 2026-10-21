@@ -18,7 +18,7 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 | Absorb stats 184/189/417 | Median absorb | none | open | same hook point as the resist cap; which items roll them |
 | Mercenary caps | Median caps | D2R's | open | [combat-stats.md](subsystems/combat-stats.md) |
 | Andariel catalyst / Act 2-5 bonus drops | treasure class dropped once per player on the ground | item created in the killer's inventory | deviation | D2R treasure-class drop per player not wired; multiplayer gives only the killer one |
-| Quest reward notices (client messages 0x5f-0x61) | shown | not shown | open | client message sender |
+| Quest reward notices (client messages 0x5f-0x61) | Median's popup / message | a line in the message log ("You have received: ...", neutral wording, D2Sigma's text not found) | approx | Median's own text and art with custom art last; sender: [d2r-addresses.md](d2r-addresses.md) section 13 |
 | Quest 5 repeat guard (`0x9e8b0`) | Median guard | not ported | open | purpose unclear in D2R ([quests-requirements.md](subsystems/quests-requirements.md) 5b) |
 | Quest 8 event-2 handler (`0x5a2830`) | Median handler | not read | open | |
 | Cain crafting materials | per-item submenu (4 entries) | one line, gives everything owed | approx | D2R menu record holds 5 lines; submenu = plugin-owned record |
@@ -26,9 +26,9 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 | Craft player flags | keyed by player name | keyed by unit id (rejoin = new flags) | approx | name lookup |
 | Craft per-game flags reset | game end | game pointer change / frame counter | approx | game-destroy hook (`0x4057c0` has a rip-relative prologue) |
 | Gold payment client update | Median sends the update | assumed D2R stat sync | verify | stat-update packet sender not located |
-| Dungeon lockout client timer and popup (packet 0x88, message 0x13) | shown | refusal only ("can't do that") | open | client widget + packet |
+| Dungeon lockout client timer and popup (packet 0x88, message 0x13) | DungeonWidget with a running timer, popup | log lines in Median's words (refusal reasons, "This area is locked", "Closing in: mm:ss" once at the start, "ONCE YOU EXIT..."), no running timer, no popup art | approx | live timer = OverlayService + NetworkService plugin channel (not written); popup art is custom art, last |
 | Dungeon lockout: item-teleport clock start (`0x7fb70`), quest-table condition | yes | no | open | |
-| Goblin "sighted" packet | client notice | none | open | |
+| Goblin "sighted" packet | client notice (packet 0x5a type 0x15) | a message-log line "A treasure goblin has been sighted nearby!" (neutral wording) | approx | Median's notice text / art not found; custom art last |
 | Hireling starting gear (Head/Torso/Weapon/Shield/Share columns) | per hireling row | none | open | how D2R gives a new hire its gear |
 | Hireling hire/equip state gates (states 0x4c/0x50/0x51) | yes | no | open | state ids unresolved |
 | Tyrael travel quest gate | quest 28 | D2R quest 26 | approx | harmless (portal, no menu line) |

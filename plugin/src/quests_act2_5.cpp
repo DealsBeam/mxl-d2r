@@ -22,12 +22,14 @@
 //
 // Flags "bonus catalyst handed out" are bits of quest record 47 of the difficulty (Act 1 uses bit 0 there). The treasure
 // class drops of D2Sigma become direct creations in the killer's inventory, as in Act 1. Messages 0x5f-0x61 (client
-// notices) are not shown.
+// notices) are lines in the player's message log (client_messages.h; the text is neutral, the D2Sigma text is not known).
 //
 // Entry bytes are whole instructions from the dump of build 93847 (docs/d2r-addresses.md section 11 and Appendix A);
 // no rip-relative operands.
 #include "quests_act2_5.h"
 
+#include "client_messages.h"
+#include "client_messages_logic.h"
 #include "d2r.h"
 #include "quests_common.h"
 #include "quests_logic.h"
@@ -207,12 +209,20 @@ void TyraelActivateHook(void* quest, uint8_t* event) {
 
 // ---- dialog rewards ---------------------------------------------------------------------------------------------
 
+void Notice(Unit* player, const char* what, int count) noexcept {
+	char line[96];
+	clientmsg::RewardLine(what, count, line, sizeof(line));
+	SendClientMessage(player, line, clientmsg::Tan);
+}
+
 void JerhynHook(void* quest, uint8_t* event) {
 	const Event e = ReadEvent(event);
 	if (e.game != nullptr && e.player != nullptr && e.npc == quests::NpcJerhyn && e.message == quests::MsgJerhynCrystal) {
 		void* record = Record(e.game, e.player);
 		if (quests::ShouldGiveCrystalJerhyn(e.npc, e.message, Bit(record, quests::QuestDuriel, quests::BitDurielTalk))) {
-			Give(e.game, e.player, quests::CodeArcaneCrystal);
+			if (Give(e.game, e.player, quests::CodeArcaneCrystal)) {
+				Notice(e.player, "Arcane Crystal", 1);
+			}
 		}
 	}
 	g_jerhynOriginal(quest, event);
@@ -224,7 +234,9 @@ void CainHook(void* quest, uint8_t* event) {
 		void* record = Record(e.game, e.player);
 		if (quests::ShouldGiveCrystalCain(e.npc, e.message, Bit(record, quests::QuestKhalimsWill, quests::BitKhalimDone),
 		                                  Bit(record, quests::QuestKhalimsWill, quests::BitKhalimTalk))) {
-			Give(e.game, e.player, quests::CodeArcaneCrystal);
+			if (Give(e.game, e.player, quests::CodeArcaneCrystal)) {
+				Notice(e.player, "Arcane Crystal", 1);
+			}
 		}
 	}
 	g_cainOriginal(quest, event);
@@ -239,8 +251,12 @@ void OrmusHook(void* quest, uint8_t* event) {
 		                              Bit(record, quests::QuestBlade, quests::BitBladeDone))) {
 			uint32_t* seed = d2r::api.unitSeed(e.player);
 			const int count = quests::ShrineCount(Difficulty(e.game));
+			int given = 0;
 			for (int i = 0; seed != nullptr && i < count; ++i) {
-				Give(e.game, e.player, quests::ShrineCodes[d2r::RandomBelow(seed, quests::ShrineCodeCount)]);
+				given += Give(e.game, e.player, quests::ShrineCodes[d2r::RandomBelow(seed, quests::ShrineCodeCount)]) ? 1 : 0;
+			}
+			if (given > 0) {
+				Notice(e.player, "Shrine", given);
 			}
 		}
 	}

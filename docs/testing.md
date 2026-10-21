@@ -298,9 +298,24 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `difficulty <0-2>` | writes the running game's difficulty byte (checks that need Hell rules without a Hell character; quest records are per difficulty) |
 | `class <0-6>` | sets the player's class field (class bound recipes; set it back, the save keeps it) |
 | `pkt <hex bytes>` | any client packet into the server handler table |
+| `sysmsg <type> <colour> <text...>` | one chat packet 0x26 to the player (docs/d2r-addresses.md section 13): type 4 = message-log line, 5 = overhead bubble; colour byte 0-11 |
 
 Where the answers cannot come from a call they come from the screenshot: the NPC popup text (`cain_menu.png`) and
 D2R's own cheat output.
+
+### Client messages (lane client-ui, 2026-10-22, background mode, slot 2, plugin 0.48.0, window-only screenshots)
+
+| Row | Result | What the screenshot shows |
+|---|---|---|
+| `sysmsg 4 <colour>` / `sysmsg 5` | PASS | message-log lines in the colour of the byte (1 red, 2 green, 3 blue, 8 orange, 9 yellow); type 5 a bubble above the player |
+| Lockout refusal, requirements | PASS | Normal, `h use b60X` + `h enter nearest` (level 125 char, level 251 needs Hell): red "Requires Hell difficulty" then D2R's "Impossible." |
+| Lockout clock | PASS | Hell rules, key `b62X` into level 253: orange "Closing in: 01:00" and "ONCE YOU EXIT YOU CANNOT GO BACK" |
+| Lockout sealed | PASS | 68 s after the first entry: red "This area is locked" / "Join another game to enter again" |
+| Heart notice | PASS | `h quest 4 1 set`, `h msg 148 0x76`: "You have received: Griswold's Heart" |
+| Arcane Crystal notice | PASS | in Lut Gholein (area 40), `h quest 14 3 set`, `h msg 201 0x1ba`: "You have received: Arcane Crystal" (the same message with Jerhyn spawned in Act 1 does nothing: the vanilla handler is not reached) |
+| Goblin notice | PASS | `MXL_GOBLINS_FORCE=1`, Blood Moor: yellow "A treasure goblin has been sighted nearby!" |
+
+Ormus' shrines and Cain's crystal use the same call as Jerhyn's and were not run. The game-start helper `clear_intro` (tools/game_ctl.py) looped on the Continue button when the main menu scene was bright; the runs here clicked the three calibration screens by hand (`g.click(*g.UI["calib_continue"])` three times, then the menu).
 
 ### Results with the harness commands (2026-10-21, background mode, slot 2, plugin 0.47.0 + harness)
 
