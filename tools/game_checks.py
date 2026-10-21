@@ -44,7 +44,7 @@ user32 = ctypes.windll.user32
 
 def new_run():
     """Own run folder for this process (runs/current.txt is shared between lanes)."""
-    name = "checks-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    name = "checks-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-s%d" % g.SLOT  # two slots may start in the same second
     d = os.path.join(g.RUNS, name)
     os.makedirs(d, exist_ok=True)
     g.current_run = lambda create=False: d
@@ -72,7 +72,7 @@ def unlock():
 
 
 def backup_saves():
-    dst = os.path.join(g.RUNS, "save-backup-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    dst = os.path.join(g.RUNS, "save-backup-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-s%d" % g.SLOT)
     shutil.copytree(SAVES, dst)
     return dst
 
@@ -647,6 +647,15 @@ def check_lockout():
 
 
 def check_lockout_clock():
+    """Hell rules in a Hell dungeon: god mode so the test character survives (see god())."""
+    god(True)
+    try:
+        _check_lockout_clock()
+    finally:
+        god(False)
+
+
+def _check_lockout_clock():
     n1 = "Dungeon lockout: clock starts on entry; re-entry inside the lock time (Hell rules, level 253 infernal_cave_2, 60 s)"
     n2 = "Dungeon lockout: level sealed after the lock time"
     if not need_game():
@@ -1004,10 +1013,52 @@ def check_equip_events():
     H("unequip rhand")
 
 
+def god(on):
+    """D2R's god cheat around the checks that could kill the test character (Hell dungeon, bosses): a dead character
+    makes later warps close the game. Off everywhere else: it also gives infinite mana and blocks damage."""
+    enable_debug()
+    con("cheat god %d" % (1 if on else 0))
+    time.sleep(0.5)
+
+
+def check_median_ai():
+    """Native andariel_ai (plugin monster_ai.cpp, AI id 155) on Andariel (156), Maghda (1693) and Radament the Fallen (1897):
+    spawned next to the player outside town, each must act (change mode or distance) and the player must take damage."""
+    name = "Median andariel_ai: Andariel, Maghda, Radament the Fallen act (move / attack)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    god(True)
+    goto(2)
+    close_menu()
+    notes, shots, ok_all = [], [], True
+    for cls in (156, 1693, 1897):
+        st0 = hstate()
+        life0 = st0["player"].get("life")
+        H("spawn %d" % cls)
+        modes, dists = set(), set()
+        for _ in range(12):
+            time.sleep(0.5)
+            st = hstate()
+            for m in st["mons"]:
+                if m.get("class") == cls:
+                    modes.add(m.get("mode"))
+                    dists.add(m.get("dist", m.get("distance")))
+        life1 = hstate()["player"].get("life")
+        shots.append(sh("medianai_%d" % cls))
+        acted = len(modes) > 1 or len(dists) > 1  # the player is in god mode for the run: judged by the monster's modes
+        ok_all = ok_all and acted
+        notes.append("%d: modes %s, distances %s, player life %s -> %s" % (cls, sorted(x for x in modes if x is not None),
+                     sorted(x for x in dists if x is not None)[:6], life0, life1))
+        H("kill nearest %d" % cls)
+        time.sleep(1)
+    god(False)
+    add(name, "PASS" if ok_all else "FAIL", "; ".join(notes), shots)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
           ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("reenter", check_dungeon_reenter), ("areacycle", check_areacycle), ("casts", check_casts), ("equipevents", check_equip_events)]
+          ("reenter", check_dungeon_reenter), ("areacycle", check_areacycle), ("casts", check_casts), ("equipevents", check_equip_events), ("medianai", check_median_ai)]
 
 
 def write_report(extra=""):
