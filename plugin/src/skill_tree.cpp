@@ -1,4 +1,4 @@
-// Eight skill pages in the skill tree panel (docs/plugin-spec.md, "Skill tree pages").
+// Eight skill pages (nine for the Sorceress) in the skill tree panel (docs/plugin-spec.md, "Skill tree pages").
 //
 // SkillsTreePanel (D2Client SkillsTreePanel.cpp; the HD and the classic panel are the same class) is built for
 // three pages plus a fourth "tab" for the common / item skills (a controller feature, no widget in the stock layout):
@@ -10,21 +10,82 @@
 //     current tab is the global 0x3bbd8bc; tab 3 is the item-skills tab (seven compares "== 3" decide that the skill
 //     counter, the cancel buttons and the skill button draw hooks are skipped for it); the controller bumpers wrap
 //     0..3 (0x14c6810) and the tab styling loop covers tabs 0..3 (0x14c789b).
-// Median has 8 pages per class, and its page n is the n-th tab left to right. So:
-//   - the page loop starts at page 8 and counts the tab widget down (Tab7 .. Tab0), i.e. page p lives in "Tab<p-1>";
-//   - the clamp, the controller wrap and the styling loop allow 8 tabs;
-//   - the "== 3" compares test 127 (no tab, so the item-skills tab never shows).
+// Median has 8 pages per class (9 for the Sorceress: Coven and Reward), and its page n is the n-th tab left to right. So:
+//   - the page loop starts at page 9 and counts the tab widget down (Tab8 .. Tab0), i.e. page p lives in "Tab<p-1>"
+//     (the layout has 9 tab widgets; a class without a 9th page has an empty Tab8);
+//   - the clamp, the controller wrap and the styling loop allow 9 tabs;
+//   - the "== 3" compares test 127 (no tab, so the item-skills tab never shows);
+//   - the tab setter is hooked: a class with 8 pages (mxl_tabs.h ClassTabs, from the skilldesc pages of its skills)
+//     must not select tab 9. A mouse click on that (blank) tab is ignored; the controller bumpers wrap 8 -> 1 / 1 -> 8.
 // Before this, tabs 4-8 clicked as tab 4, no skill of pages 4-8 had a button, and the three pages that did were
 // shown in the reverse order (tab 1 drew the skills of page 3 on the sockets and arrows of page 1).
 // Every site is checked byte for byte; all or nothing through one D2RLoader mutation transaction.
 #include "skill_tree.h"
 
+#include "d2r.h"
+#include "mxl_tabs.h"
+
 #include <D2RLPlugin/mutations.h>
+
+#include <intrin.h>
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 namespace {
+
+constexpr int32_t CommonTabs = 8;
+constexpr uint64_t TabSetterRva = 0x14c3b10;  // (panel, tab): SkillsTreePanelMessage:ActivateTab
+constexpr uint8_t TabSetterEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30};
+constexpr uint64_t CurrentTabRva = 0x3bbd8bc;  // int: the selected tab
+constexpr uint64_t LocalSlotRva = 0x8b2d0;     // () -> slot of the local player
+constexpr uint64_t SlotUnitRva = 0x9a480;      // (slot) -> the player unit of that slot or null
+// the calls of the tab setter in the controller bumper (return addresses; 0x14c6810)
+constexpr uint64_t BumperReturns[] = {0x14c6bd3, 0x14c6be6, 0x14c6c07};
+constexpr uint8_t LocalSlotEntry[] = {0x8b, 0x05, 0x2e, 0x84, 0x99, 0x02, 0xc3};
+constexpr uint8_t SlotUnitEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x83, 0xf9, 0x08};
+constexpr uint64_t ImageSpan = 0x4000000;
+constexpr int UnitClass = 0x04;  // u32: player class
+
+using TabSetterFn = void (*)(void* panel, int32_t tab);
+using LocalSlotFn = int32_t (*)();
+using SlotUnitFn = void* (*)(int32_t slot);
+
+uint64_t g_base = 0;
+TabSetterFn g_tabSetter = nullptr;
+LocalSlotFn g_localSlot = nullptr;
+SlotUnitFn g_slotUnit = nullptr;
+
+// Tabs of the local player's class (8 when it cannot be told).
+auto LocalTabs() noexcept -> int32_t {
+	void* unit = g_slotUnit(g_localSlot());
+	if (unit == nullptr) {
+		return CommonTabs;
+	}
+	const uint32_t cls = d2r::At<uint32_t>(unit, UnitClass);
+	return cls < sizeof(mxl_tabs::ClassTabs) / sizeof(mxl_tabs::ClassTabs[0]) ? mxl_tabs::ClassTabs[cls] : CommonTabs;
+}
+
+void TabSetterHook(void* panel, int32_t tab) {
+	if (g_tabSetter == nullptr) {
+		return;
+	}
+	const int32_t tabs = tab >= CommonTabs ? LocalTabs() : CommonTabs;
+	if (tab >= tabs) {  // a tab this class does not have
+		const uint64_t ret = reinterpret_cast<uint64_t>(_ReturnAddress());
+		bool bumper = ret - g_base >= ImageSpan;  // not D2R's own code (a thunk): assume the bumper
+		for (const uint64_t r : BumperReturns) {
+			bumper = bumper || ret - g_base == r;
+		}
+		if (!bumper) {
+			return;  // a click on the blank tab
+		}
+		const int32_t current = *reinterpret_cast<const int32_t*>(g_base + CurrentTabRva);
+		tab = current == 0 ? tabs - 1 : 0;  // next from the last tab, previous from the first
+	}
+	g_tabSetter(panel, tab);
+}
 
 struct Site {
 	uint64_t rva;
@@ -34,13 +95,13 @@ struct Site {
 };
 
 constexpr Site Sites[] = {
-	// tab setter: clamp to 0..3 -> 0..7 ("mov eax, 3")
-	{0x14c3b28, 4, {0x03, 0x00, 0x00, 0x00}, {0x07, 0x00, 0x00, 0x00}},
-	// controller bumper: next tab wraps at 3 -> 7 ("cmp eax, 3"), previous tab wraps to 3 -> 7 ("mov edx, 3")
-	{0x14c6bc4, 1, {0x03}, {0x07}},
-	{0x14c6bfb, 4, {0x03, 0x00, 0x00, 0x00}, {0x07, 0x00, 0x00, 0x00}},
-	// tab styling loop: tabs 0..3 -> 0..7 ("cmp ebx, 4")
-	{0x14c789d, 1, {0x04}, {0x08}},
+	// tab setter: clamp to 0..3 -> 0..8 ("mov eax, 3")
+	{0x14c3b28, 4, {0x03, 0x00, 0x00, 0x00}, {0x08, 0x00, 0x00, 0x00}},
+	// controller bumper: next tab wraps at 3 -> 8 ("cmp eax, 3"), previous tab wraps to 3 -> 8 ("mov edx, 3")
+	{0x14c6bc4, 1, {0x03}, {0x08}},
+	{0x14c6bfb, 4, {0x03, 0x00, 0x00, 0x00}, {0x08, 0x00, 0x00, 0x00}},
+	// tab styling loop: tabs 0..3 -> 0..8 ("cmp ebx, 4")
+	{0x14c789d, 1, {0x04}, {0x09}},
 	// "cmp [current tab], 3" (the item-skills tab) -> 127: draw hook, controller prompt, three in the panel
 	// refresh, two for the item header
 	{0x14c408a, 1, {0x03}, {0x7f}},
@@ -50,16 +111,16 @@ constexpr Site Sites[] = {
 	{0x14c7bc6, 1, {0x03}, {0x7f}},
 	{0x14c8211, 1, {0x03}, {0x7f}},
 	{0x14c8231, 1, {0x03}, {0x7f}},
-	// build function: page counter 3 -> 8 (r13d and [rsp+0x3c]), tab widget index counter 0 -> 7 ([rsp+0x38], eax)
+	// build function: page counter 3 -> 9 (r13d and [rsp+0x3c]), tab widget index counter 0 -> 8 ([rsp+0x38], eax)
 	//   was: mov r14d,3 / mov [rbp-0x30],r14 / mov r13d,r14d / mov [rsp+0x3c],r14d / mov byte [rbx+rax],0 /
 	//        xor eax,eax / mov [rsp+0x38],eax / mov [rbp+0x130],rbx / nop
-	//   now: push 3; pop r14 / mov [rbp-0x30],r14 / push 8; pop r13 / mov [rsp+0x3c],r13d / mov byte [rbx+rax],0 /
-	//        mov eax,7 / mov [rsp+0x38],eax / mov [rbp+0x130],rbx / nop
+	//   now: push 3; pop r14 / mov [rbp-0x30],r14 / push 9; pop r13 / mov [rsp+0x3c],r13d / mov byte [rbx+rax],0 /
+	//        mov eax,8 / mov [rsp+0x38],eax / mov [rbp+0x130],rbx / nop
 	{0x14c488a, 38,
 	 {0x41, 0xbe, 0x03, 0x00, 0x00, 0x00, 0x4c, 0x89, 0x75, 0xd0, 0x45, 0x8b, 0xee, 0x44, 0x89, 0x74, 0x24, 0x3c, 0xc6, 0x04,
 	  0x03, 0x00, 0x33, 0xc0, 0x89, 0x44, 0x24, 0x38, 0x48, 0x89, 0x9d, 0x30, 0x01, 0x00, 0x00, 0x0f, 0x1f, 0x00},
-	 {0x6a, 0x03, 0x41, 0x5e, 0x4c, 0x89, 0x75, 0xd0, 0x6a, 0x08, 0x41, 0x5d, 0x44, 0x89, 0x6c, 0x24, 0x3c, 0xc6, 0x04, 0x03,
-	  0x00, 0xb8, 0x07, 0x00, 0x00, 0x00, 0x89, 0x44, 0x24, 0x38, 0x48, 0x89, 0x9d, 0x30, 0x01, 0x00, 0x00, 0x90}},
+	 {0x6a, 0x03, 0x41, 0x5e, 0x4c, 0x89, 0x75, 0xd0, 0x6a, 0x09, 0x41, 0x5d, 0x44, 0x89, 0x6c, 0x24, 0x3c, 0xc6, 0x04, 0x03,
+	  0x00, 0xb8, 0x08, 0x00, 0x00, 0x00, 0x89, 0x44, 0x24, 0x38, 0x48, 0x89, 0x9d, 0x30, 0x01, 0x00, 0x00, 0x90}},
 	// build function, loop end: next tab widget index "inc eax" -> "dec eax"
 	{0x14c531a, 2, {0xff, 0xc0}, {0xff, 0xc8}},
 };
@@ -78,6 +139,16 @@ auto InstallSkillTree(const D2RL::PluginContext* context, char* report, size_t r
 		std::snprintf(report, reportSize, "off: no transaction");
 		return false;
 	}
+	// the two calls of the hook: the entry bytes must be the ones read from the dump
+	g_base = context->exeBase;
+	if (std::memcmp(reinterpret_cast<const void*>(g_base + LocalSlotRva), LocalSlotEntry, sizeof(LocalSlotEntry)) != 0 ||
+	    std::memcmp(reinterpret_cast<const void*>(g_base + SlotUnitRva), SlotUnitEntry, sizeof(SlotUnitEntry)) != 0) {
+		mutations->cancelTransaction(context, transaction);
+		std::snprintf(report, reportSize, "off: local player lookup did not match");
+		return false;
+	}
+	g_localSlot = reinterpret_cast<LocalSlotFn>(g_base + LocalSlotRva);
+	g_slotUnit = reinterpret_cast<SlotUnitFn>(g_base + SlotUnitRva);
 	int staged = 0;
 	for (const Site& s : Sites) {
 		const D2RL::Mutations::BytePatchRequest request {
@@ -99,12 +170,36 @@ auto InstallSkillTree(const D2RL::PluginContext* context, char* report, size_t r
 		}
 		++staged;
 	}
+	const D2RL::Mutations::InlineHookRequest hook {
+		.structSize   = D2RL::Mutations::InlineHookRequestSize,
+		.flags        = 0,
+		.rva          = TabSetterRva,
+		.expected     = TabSetterEntry,
+		.expectedSize = sizeof(TabSetterEntry),
+		.reserved     = 0,
+		.target       = reinterpret_cast<void*>(&TabSetterHook),
+		.reserved2    = 0,
+	};
+	D2RL::Mutations::OperationHandle hookOperation = 0;
+	if (mutations->stageInlineHook(context, transaction, &hook, &hookOperation) != D2RL::Mutations::Result::Success) {
+		mutations->cancelTransaction(context, transaction);
+		std::snprintf(report, reportSize, "off: tab setter did not match");
+		return false;
+	}
 	D2RL::Mutations::CommitResult result {.structSize = D2RL::Mutations::CommitResultSize};
 	if (mutations->commit(context, transaction, &result) != D2RL::Mutations::Result::Success) {
 		mutations->cancelTransaction(context, transaction);
 		std::snprintf(report, reportSize, "off: commit failed (reason %u)", static_cast<unsigned>(result.failureReason));
 		return false;
 	}
-	std::snprintf(report, reportSize, "on: %d sites, 8 pages (page n = tab n, no item-skills tab)", staged);
+	void* original = nullptr;
+	if (mutations->getInlineHookOriginal(context, transaction, hookOperation, &original) != D2RL::Mutations::Result::Success ||
+	    original == nullptr) {
+		// the patched image is live and the hook is in; without the original, clicks would crash: nothing can undo it
+		std::snprintf(report, reportSize, "FAILED: tab setter original missing");
+		return false;
+	}
+	g_tabSetter = reinterpret_cast<TabSetterFn>(original);
+	std::snprintf(report, reportSize, "on: %d sites + tab setter hook, 9 pages (8 for classes without a 9th; page n = tab n, no item-skills tab)", staged);
 	return true;
 }

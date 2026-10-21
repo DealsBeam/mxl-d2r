@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "work" / "mod" / "data" / "global" / "ui" / "layouts"
 BASE = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "ui" / "layouts"
 GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
-TABS = 8
+TABS = 9  # tab widgets: Median has 9 pages for the Sorceress, 8 for the others (their 9th tab is blank and ignored by the plugin)
 LEFT, RIGHT, TOP, HEIGHT = 130, 1018, 160, 99
 CLASSIC_TABS = {"x": 231, "y": -132, "width": 90, "height": 108}  # D2R classic tab column (3 tabs of "height")
 
