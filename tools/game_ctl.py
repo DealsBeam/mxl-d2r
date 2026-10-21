@@ -555,6 +555,7 @@ def start(timeout=120):
         off = _size(LOADER_LOG)
         since = time.strftime("%Y-%m-%d %H:%M:%S")
         prev_fg = user32.GetForegroundWindow()
+        harness_switch(BG)  # background mode needs the plugin test harness; foreground runs keep it off
         si = subprocess.STARTUPINFO()
         if BG:
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -603,7 +604,20 @@ def stop(timeout=20):
     if "D2R.exe" in out:
         log("D2R.exe still alive, killing")
         subprocess.run(["taskkill", "/F", "/IM", "D2R.exe"], capture_output=True)
+    harness_switch(False)  # normal play never runs with the harness on
     log("stopped")
+
+
+def harness_switch(on: bool) -> None:
+    """Create or remove mxl-testharness.txt next to mxl-core.dll (the plugin test harness reads it at load)."""
+    p = os.path.join(GAME_DIR, r"mods\MedianXL\d2rloader\plugins\mxl-testharness.txt")
+    try:
+        if on:
+            open(p, "a").close()
+        elif os.path.exists(p):
+            os.remove(p)
+    except OSError as e:
+        log(f"harness switch {'on' if on else 'off'} failed: {e}")
 
 
 def console_bg(cmd, timeout=10):
