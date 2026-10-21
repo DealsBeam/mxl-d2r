@@ -162,6 +162,73 @@ Status 2026-10-21: the full smoke passes in background mode while the user worke
 never entered the game window, the game window was never the foreground window (sampled every 25 ms), and D2R's
 `SetCursorPos` never reached the system.
 
+### Parallel slots: up to three games at once (tools/game_slots.py, tools/parallel_smoke.py)
+
+A slot is a full copy of D2R 3.3 build 93847 with D2RLoader and the mod, its own save folder and its own run lock.
+Every `game_ctl.py` command takes `--slot N` (or env `MXL_SLOT=N`; default 1) and then only ever touches that slot's
+process and window.
+
+| Slot | Game folder | Saves (`Saved Games\Diablo II Resurrected\mods\...`) | Loader | Lock | Harness words |
+|---|---|---|---|---|---|
+| 1 | `C:\Program Files (x86)\Diablo II Resurrected` (Battle.net install) | `MedianXL` | `D2RLoader.exe` | `game.lock.1` and the old `game.lock` | none |
+| 2 | `D:\D2R-93847` | `MedianXL-s2` | `D2RLoader-s2.exe` | `game.lock.2` | `volserial tag=s2` |
+| 3 | `D:\D2R-93847-s3` | `MedianXL-s3` | `D2RLoader-s3.exe` | `game.lock.3` | `volserial tag=s3` |
+
+Set up (setup.md has the robocopy): `py -3 tools/game_slots.py setup` writes each slot's `modinfo.json` savepath (both
+copies), copies `d2rloader.toml` / `debugsettings.json` from slot 1 when missing, makes the save folder and the
+renamed loader copy; `status` shows folders, running processes and locks; `install` / `install_mod.py --slot all`
+installs the built mod into every slot (the data is built once and copied; `--slot N`, `--savepath` for one). The
+plugin DLL of slot 2 and 3 comes along with the install; slot 1's belongs to the release.
+
+Locks are directories in `%USERPROFILE%\mxl-d2r-runs`: `game.lock.N` (slot 1 also `game.lock`, so lanes that still
+`mkdir game.lock` keep working). `game_ctl start` takes the lock of its slot (owner file `owner.txt` with the run name
+and PID; a lock whose owner PID is gone is replaced) and `stop` releases it. A lock made by hand (no `owner.txt`) is
+taken to mean "the caller holds it" and is never removed by `game_ctl`. `game_slots.py lock N [OWNER]` / `unlock N`
+by hand.
+
+**There is no single-instance check.** The string `DiabloII Check For Other Instances` is in D2R.exe, but no mutex,
+event, window or named pipe with that name exists in a running D2RLoader (handles listed with
+NtQuerySystemInformation, windows with EnumWindows / HWND_MESSAGE; the harness `diag` mode also logs every named
+object, FindWindow and NtTerminateProcess), and a second D2RLoader in another folder starts fine next to the first.
+What killed a copy of the game on another drive was something else, found with the harness `diag` mode:
+
+- D2RLoader reads `%LOCALAPPDATA%\Blizzard Entertainment\ClientSdk\cookie.bin` (the Battle.net session record that
+  proves the 30-day online check) at the "frontend launch" startup step and decrypts it (Botan CryptoBox) with a key
+  that is `base64(SHA-1(...))` of data including the **volume serial number of the drive the loader runs from**
+  (`FUN_1419ed830`: `GetModuleFileNameW` + `GetVolumeInformationW`). The cookie was written by the install on `C:`;
+  from `D:` the key is another one, the integrity check fails, `Botan::Decoding_Error` is thrown and nothing catches
+  it: the process dies with an `APPCRASH` (exception 0xe06d7363) about 8 s after the launch, no crash report. Without
+  the cookie D2R shows the "not been online in the last 30 days" dialog (OK quits), so hiding it is no way out.
+- The harness word `volserial` makes `NtQueryVolumeInformationFile(FileFsVolumeInformation)` report the serial of
+  `C:` (read at load), so the key matches and the cookie decrypts. It also refuses every write open of `cookie.bin`
+  (the user's real session file is never rewritten by a test instance). Slots on `C:` need no word.
+- Tools that look for "the" game by name would still find a test instance. The old `game_ctl.stop` closes the first
+  window titled `Diablo II: Resurrected` and then kills every `D2RLoader.exe`: a lane on the old tools closed or
+  killed the other lane's game (seen: slot 2 and 3 games ended cleanly or silently at the moment the slot 1 lane
+  stopped; with the renamed loader and the tagged title the same two games ran through while the other lane's game
+kept running). So slots 2 and 3 run a renamed copy of the loader (`D2RLoader-sN.exe`, made by `game_slots.py setup`) and
+  the harness word `tag=s2` renames the window to `Diablo II: Resurrected [s2]`; `game_ctl` finds its window by process
+  and accepts the tagged title. Slot 1 is the plain `D2RLoader.exe` / `Diablo II: Resurrected` as before.
+
+The harness block is per process: `Local\mxl-testharness-input-<game PID>` (plugin 0.46.0 as released uses the one
+shared name `Local\mxl-testharness-input`, which `game_ctl` still falls back to, fine for a single instance such as
+slot 1). The console output file `mxl-testharness-console.txt` and the trace log live in the slot's own plugin folder.
+`mxl-testharness.txt` is a list of words written by `game_ctl start` (env `MXL_HARNESS_WORDS` overrides it): `volserial`,
+`tag=NAME`, `nocookie` (hide cookie.bin: only for experiments), `diag` (log named objects, file opens, C++ exceptions
+and process exit to `mxl-testharness-diag-<pid>.log`, plus the cookie record and CryptoBox input of D2RLoader 1.3.1).
+
+`py -3 tools/parallel_smoke.py [--slots 1,2,3] [--name N]` takes the locks (a slot whose lock is held is skipped),
+runs `game_ctl.py smoke --slot N` for each with `MXL_RUN=<N>-sN`, staggered by 4 s, samples the real cursor and the
+foreground window every 25 ms (`tools/input_watch.py`: stops all games when a test instance becomes the foreground
+window or the cursor teleports into a game window and stays), samples CPU / RAM / GPU every 3 s
+(`tools/resource_sample.ps1`, per process, GPU through the Windows GPU Engine counters) and writes
+`parallel-summary.md` into the run folder. Windows cascade (`100 + 60 (N-1)`, `60 + 40 (N-1)` on the primary monitor,
+client 1600 x 900) and are sent to the bottom of the z-order at launch.
+
+Results 2026-10-21 (RX 9070 XT, 32 logical cores, 64 GB; the user worked on the PC meanwhile):
+
+RESULTS_PLACEHOLDER
+
 ## Scripted checks (tools/game_checks.py, 2026-10-21, foreground input)
 
 Console commands and measured coordinates: [dev-console.md](dev-console.md). Results of the partial run (the run was
