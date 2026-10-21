@@ -11,6 +11,7 @@ int RunQuestsTests();  // quests_test.cpp
 int RunDungeonTests();  // dungeon_test.cpp
 int RunNpcActionsTests();  // npc_actions_test.cpp
 int RunRequirementGatesTests();  // requirement_gates_test.cpp
+int RunHirelingsTests();  // hirelings_test.cpp
 
 namespace {
 
@@ -116,6 +117,7 @@ int main() {
 	failures += RunDungeonTests();
 	failures += RunNpcActionsTests();
 	failures += RunRequirementGatesTests();
+	failures += RunHirelingsTests();
 	std::printf(failures == 0 ? "requirements: all tests passed\n" : "requirements: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }

@@ -23,6 +23,7 @@
 #include "quests_act1.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
+#include "hirelings.h"
 #include "npc_actions.h"
 #include "requirement_gates.h"
 #include "skill_tree.h"
@@ -56,6 +57,7 @@ char g_questsReport[192] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
 char g_goblinsReport[192] = "off: not the expected game image";
 char g_npcReport[192] = "off: not the expected game image";
+char g_hirelingsReport[192] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
 char g_reqGatesReport[256] = "off: not the expected game image";
 int g_missileHitsInstalled = 0;
@@ -82,7 +84,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc reqgates skilltree; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc reqgates hirelings skilltree; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -173,6 +175,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "npc actions %s", g_npcReport);
 	command->plugin->WriteConsoleMessage(line);
 	std::snprintf(line, sizeof(line), "requirement gates %s", g_reqGatesReport);
+	command->plugin->WriteConsoleMessage(line);
+	std::snprintf(line, sizeof(line), "hirelings %s", g_hirelingsReport);
 	command->plugin->WriteConsoleMessage(line);
 	return D2RL::ConsoleCommandResult::Handled;
 }
@@ -331,6 +335,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallRequirementGates(context, g_reqGatesReport, sizeof(g_reqGatesReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: requirement gates %s", g_reqGatesReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("hirelings")) {
+				std::snprintf(g_hirelingsReport, sizeof(g_hirelingsReport), "%s", OffNote);
+			} else {
+				InstallHirelings(context, g_hirelingsReport, sizeof(g_hirelingsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: hirelings %s", g_hirelingsReport);
 			context->LogInfo(line);
 		}
 		{
