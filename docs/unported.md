@@ -70,3 +70,20 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 | HD scene of Median-only presets (`data/hd/env/preset/mxl/...json`, baked terrain model + biome) | own tiles | none: the HD client logs `empty biome filename` once and the area still loads | open | HD terrain per preset cannot be authored; a preset-to-D2R-preset redirect would need a plugin hook on the scene loader (`0x6a0e20`) |
 | Automap cels 1499/1500 of Median (one level-type-36 row, filler cels of nine town rows) | own cel | -1 (no tile) | approx | atlas of D2R ends at 1498 |
 | Per-level map memory of Median levels with Layer above 99 | own layer per level | D2R's layer of the same id or 0 (shared records) | approx | D2R's table has 100 buckets (needs a plugin patch of 0x1400d5fe0 / 0x1400d5710 to hold more) |
+
+## Sigma table fields found in the phase 1 leftover
+
+Behaviour of fields that were unnamed until 2026-10-22 ([sigma-tables.md](sigma-tables.md)); none of them is read by the port.
+
+| Area | Median | Port now | Status | Needs / notes |
+|---|---|---|---|---|
+| Akara respec confirm prompt (npcext `Slot01PromptConfirm` = 1, `PromptLabel`) | asks before spending the respec | respec runs at once from the menu line (`npc_actions.cpp`) | open | client dialog (or a second menu step) before the action |
+| Monster spawn overlays (monstats3 `Overlay1/2`, `BossOverlay1/2`, `OverlayType`; `FUN_1008c380`) | an overlay plays on the monster when it spawns (treasure goblins, rift inspectors, Mephisto, Azgar) | none | open | needs a spawn hook that starts an overlay on the unit |
+| Monster name colour (monstats3 `Flags` rank bits Elite / Veteran / Uber / Heroic / Boss, `NameColor`; `FUN_1008b470`) | name colour 9 / 12 / 8 / 2 / 4 by rank, else `NameColor` | D2R's own name colours | approx | name text colour is drawn by D2R's UI |
+| Monster automap markers (monstats3 `Automap`, `AutomapShowName`, `AutomapNameColor`, `AutomapVectorColor`; `FUN_1004b620`) | marker and name on the automap for flagged monsters | none | open | D2R automap has no per-monster hook found |
+| Item hover text in interact mode (misc2 `InteractString`; `FUN_1007c930`) | "Right click to reveal trophy challenge" on the 20 trophy items | D2R's default | open | string 12325; needs the item-interact mode hover |
+| Infographic help panel (misc2 `Infographic`, item event 13, packet 0x16, `FUN_1009a9e0`; infographics table) | the client opens a help panel (catalyst of disenchantment) | none | open | panel art and text are in the infographics table; client UI |
+| Hide the item level line (itemtypesext `NoShowILvl`; `FUN_10078fb0`) | 10 item types (rune, thng, cyc1-3, trph, erun, tent, embl, cyng) do not show "Item Level" | D2R shows it when its option is on | open | D2R item description hook |
+| Palette shift of missiles (missiles2 `PalShift`, 25 rows; `FUN_1008b100`) | the missile gets a palette shift when created | none (D2R's HD missile art is not palette based) | open | probably no equivalent in HD; check on the 25 rows (Countess firewall, thunderstone, megademon inferno, ...) |
+| Loot filter fields (misc2/armor2/weapons2 `Flags` bit 0 `Filterable`, `Classifications`; `D2LootFilter.cpp`) | Median's own loot filter lists and rules | D2R has its own loot filter | deviation | no port planned |
+| Hell treasure class of objects (objects2 `Treasureclass_H`) | the Halloween chest (row 587) drops class 1106 on Hell | D2R's class for the object's difficulty | open | only that chest sets it; event content |
