@@ -25,10 +25,15 @@ Classic mode (G): playerinventoryoriginallayout.json, playerinventoryexpansionla
 bankexpansionlayout.json, tradelayout.json, vendorpanellayout.json and characterstatspanel.json get the same Median art
 (tools/ui_panels.py, 320 x 432 DC6) and positions scaled by CK = 432 / 704 (see the classic block below).
 
-Writes work/mod/data/global/ui/layouts/skillstreepanelhd.json, skillstreepanel.json, playerinventoryoriginallayouthd.json,
+Waypoint panel (Phase 4): D2R's HD panel makes one button per waypoint level of the tab, at a fixed stride (123 design pixels, nine fit
+the 1162 x 1507 panel); the plugin lists every Median waypoint under its act (waypoints.cpp), up to 12 in Act 3, so the layout's
+stride is WAYPOINT_STRIDE and the 12 buttons fit the panel's list area. The buttons are not widgets of the layout: the panel
+builds them from the "UnselectableButtonTemplate" at run time ("Act<n>_Button<i>").
+
+Writes work/mod/data/global/ui/layouts/waypointspaneloriginalhd.json, skillstreepanelhd.json, skillstreepanel.json, playerinventoryoriginallayouthd.json,
 playerinventoryexpansionlayouthd.json, horadriccubelayouthd.json, bankexpansionlayouthd.json, tradelayouthd.json and
 vendorpanellayouthd.json (after txt_migrate.py).
-Usage: python tools/ui_layouts.py
+Usage: python tools/ui_layouts.py [--out <layouts dir>]   (default work/mod/data/global/ui/layouts)
 """
 import re
 import sys
@@ -69,6 +74,16 @@ def block_span(text: str, marker: str) -> tuple[int, int]:
                     end += 1
                 return start, end
         j += 1
+
+
+WAYPOINT_STRIDE = 100  # D2R's buttonOffset is 123 (button art 129 high); the list area holds 12 at 100
+
+
+def waypoint_panel() -> str:
+    """The HD waypoint panel (the Expansion layout is based on this one) with the button stride the 12-button tab needs."""
+    t = baseline("waypointspaneloriginalhd.json")
+    assert '"buttonOffset": 123,' in t
+    return t.replace('"buttonOffset": 123,', f'"buttonOffset": {WAYPOINT_STRIDE},')
 
 
 def tabs_json() -> str:
@@ -646,7 +661,11 @@ def classic_layouts() -> dict[str, str]:
 
 
 def main() -> int:
+    global OUT
+    if "--out" in sys.argv:
+        OUT = Path(sys.argv[sys.argv.index("--out") + 1])
     OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / "waypointspaneloriginalhd.json").write_text(waypoint_panel(), encoding="utf-8")
     for name, text in classic_layouts().items():
         (OUT / name).write_text(text, encoding="utf-8")
     (OUT / "characterstatspanelhd.json").write_text(char_sheet(), encoding="utf-8")
@@ -658,7 +677,7 @@ def main() -> int:
     (OUT / "bankexpansionlayouthd.json").write_text(stash(), encoding="utf-8")
     (OUT / "tradelayouthd.json").write_text(trade(), encoding="utf-8")
     (OUT / "vendorpanellayouthd.json").write_text(vendor(), encoding="utf-8")
-    print(f"skillstreepanel(hd).json: {TABS} tabs; inventory and cube 15 x 10, stash 14 x 14, trade 7 x 15 x 2, stores 15 x 15 on Median's panels")
+    print(f"skillstreepanel(hd).json: {TABS} tabs; inventory and cube 15 x 10, stash 14 x 14, trade 7 x 15 x 2, stores 15 x 15 on Median's panels, waypoint panel stride {WAYPOINT_STRIDE}")
     return 0
 
 
