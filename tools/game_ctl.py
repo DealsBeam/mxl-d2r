@@ -263,8 +263,10 @@ def click(fx, fy, button="left", move_only=False):
     l, t, r, b = client_rect(h)
     x = int(l + fx * (r - l))
     y = int(t + fy * (b - t))
+    user32.SetCursorPos(x - 4, y - 4)  # D2R buttons ignore a click that arrives without a hover first
+    time.sleep(0.2)
     user32.SetCursorPos(x, y)
-    time.sleep(0.25)
+    time.sleep(0.4)
     if move_only:
         return
     down, up = (0x0002, 0x0004) if button == "left" else (0x0008, 0x0010)
@@ -407,16 +409,28 @@ def console(cmd):
 
 # Fractional click targets (fx, fy) of the 1600x900 client rect. "seen" ones were measured from screenshots;
 # "guess" ones are untested (the 2026-10-21 run was blocked by D2R's 30-day online license check before the menu).
-UI = {
-    "calib_continue": (0.500, 0.838),   # seen: Gamma / Screen Space / Color Blind calibration screens
-    "license_ok": (0.498, 0.537),       # seen: "not been online in the last 30 days" dialog (OK quits the game)
-    "menu_play": (0.5, 0.45),           # guess
-    "char_create": (0.85, 0.9),         # guess
-    "barb_class": (0.5, 0.5),           # guess
-    "name_box": (0.5, 0.88),            # guess
-    "create_ok": (0.5, 0.95),           # guess
-    "play_btn": (0.5, 0.92),            # guess
+UI = {  # fractions of the 1600 x 900 client rect, measured 2026-10-21
+    "calib_continue": (0.500, 0.838),   # Gamma / Screen Space / Color Blind calibration screens
+    "license_ok": (0.498, 0.537),       # "not been online in the last 30 days" dialog (OK quits the game)
+    "menu_play": (0.394, 0.897),        # main menu Play (plays the selected character)
+    "char_create": (0.895, 0.867),      # main menu Create New
+    "barb_class": (0.450, 0.480),       # hero select: the Barbarian
+    "name_box": (0.500, 0.830),         # hero select: Character Name
+    "create_ok": (0.893, 0.930),        # hero select: Create (enters the game, Normal)
+    "save_exit": (0.500, 0.440),        # Esc menu: Save and Exit
+    "skill_tab0": (0.686, 0.190),       # skill tree: first of 8 tabs
+    "skill_tab_dx": 0.0290,             # skill tree: tab spacing
 }
+
+
+def in_game() -> bool:
+    """The red life orb (bottom left of the HUD) is on screen."""
+    from PIL import ImageGrab, ImageStat
+    l, t, r, b = client_rect(need_window())
+    w, h = r - l, b - t
+    box = (l + int(.235 * w), t + int(.87 * h), l + int(.265 * w), t + int(.92 * h))
+    rr, gg, bb = ImageStat.Stat(ImageGrab.grab(bbox=box, all_screens=True).convert("RGB")).mean
+    return rr > 90 and rr > 2 * gg and rr > 2 * bb
 
 
 class Report:
@@ -524,34 +538,47 @@ def run_smoke():
                     "(Battle.net) by the user; not attempted by this script.")
             return
         rep.add("1b main menu reached", True, [os.path.basename(shot("menu"))])
-        # ---- everything below is untested guesswork; tune UI fractions from the screenshots ----
-        click(*UI["menu_play"]); time.sleep(3)
-        shot("charselect")
-        click(*UI["char_create"]); time.sleep(2)
-        click(*UI["barb_class"]); time.sleep(1)
-        click(*UI["name_box"]); type_text(CHAR_NAME); time.sleep(1)
-        shot("create")
-        click(*UI["create_ok"]); time.sleep(3)
-        click(*UI["play_btn"])
-        time.sleep(15)
-        step_shot(rep, "3a in town", "town")
+        time.sleep(2)
+        click(0.62, 0.40)  # warm-up on empty scenery: the menu swallows its first click
+        time.sleep(1)
+        if os.path.exists(os.path.join(SAVES, CHAR_NAME + ".d2s")):
+            click(*UI["menu_play"])  # the character exists and is selected
+        else:
+            click(*UI["char_create"]); time.sleep(3)
+            click(*UI["barb_class"]); time.sleep(2)
+            click(*UI["name_box"]); type_text(CHAR_NAME); time.sleep(1)
+            shot("create")
+            click(*UI["create_ok"])
+        time.sleep(16)
+        if not in_game() and os.path.exists(os.path.join(SAVES, CHAR_NAME + ".d2s")):
+            click(*UI["menu_play"]); time.sleep(16)  # retry once
+        ok = in_game()
+        rep.add("2 enter game", ok, [os.path.basename(shot("town"))], "" if ok else "life orb not found: not in game")
+        if not ok:
+            return
         step_shot(rep, "3b character sheet (C)", "charsheet", "c")
-        key("c")
+        key("esc"); time.sleep(0.8)
         step_shot(rep, "3c skill tree (T)", "skilltree", "t")
-        for i in range(1, 9):  # tab positions are a guess
-            click(0.62, 0.12 + 0.08 * i)
-            step_shot(rep, f"3d skill tab {i}", f"skilltab{i}", wait=1.0)
-        key("t")
+        x0, y0 = UI["skill_tab0"]
+        for i in range(8):
+            click(x0 + UI["skill_tab_dx"] * i, y0)
+            step_shot(rep, f"3d skill tab {i + 1}", f"skilltab{i + 1}", wait=1.0)
+        key("esc"); time.sleep(0.8)
         step_shot(rep, "3e inventory (I)", "inventory", "i")
-        key("i")
-        key("esc"); time.sleep(1)
+        key("esc"); time.sleep(0.8)
+        key("esc"); time.sleep(1.5)
         shot("escmenu")
-        click(0.5, 0.45); time.sleep(8)  # Save and Exit (guess)
-        shot("charselect2")
-        click(*UI["play_btn"]); time.sleep(15)
-        step_shot(rep, "4 reload", "town_reload")
-        key("esc"); time.sleep(1)
-        click(0.5, 0.45); time.sleep(8)
+        click(*UI["save_exit"]); time.sleep(8)
+        saved = os.path.exists(os.path.join(SAVES, CHAR_NAME + ".d2s")) and not in_game()
+        rep.add("4a save and exit", saved, [os.path.basename(shot("charselect2"))])
+        click(*UI["menu_play"]); time.sleep(16)
+        ok = in_game()
+        rep.add("4b reload", ok, [os.path.basename(shot("town_reload"))], "" if ok else "life orb not found")
+        if ok:
+            step_shot(rep, "4c inventory after reload", "inventory_reload", "i")
+            key("esc"); time.sleep(0.8)
+            key("esc"); time.sleep(1.5)
+            click(*UI["save_exit"]); time.sleep(8)
     finally:
         try:
             stop()
