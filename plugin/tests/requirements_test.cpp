@@ -8,6 +8,7 @@
 #include <utility>
 
 int RunQuestsTests();  // quests_test.cpp
+int RunDungeonTests();  // dungeon_test.cpp
 
 namespace {
 
@@ -110,6 +111,7 @@ int main() {
 	Check(Evaluate(0, none), "none allows without callbacks");
 
 	failures += RunQuestsTests();
+	failures += RunDungeonTests();
 	std::printf(failures == 0 ? "requirements: all tests passed\n" : "requirements: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }

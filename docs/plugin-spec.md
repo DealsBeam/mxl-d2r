@@ -678,6 +678,10 @@ levels.bin rows are 0x220 bytes; the generator reads the extension +0x151..+0x15
 section 3). `mxl_dungeons::Entry` `{level (D2R id), lockSeconds, lockGroup, minDifficulty, levelReq[3], classLock,
 unk152, unk155, portalObject, unk15b}`, one entry per level where any of them is non-zero (141 levels).
 
+**Used by** plugin/src/dungeon_lockout.cpp + dungeon_logic.h (lane dungeon-lockout): the clock starts when a player enters a level with a lock time
+(stairs, tile or portal), seals it for the rest of the game when it runs out; entry also needs minDifficulty, levelReq[difficulty] and the class lock.
+Status and what is left: docs/subsystems/ubers-events.md section 3a.
+
 | Field | Offset | Meaning |
 |---|---|---|
 | lockSeconds | +0x153 u16 | seconds until the level seals after a portal into it is used (0 = no clock). +0x154, listed separately in the research doc, is its high byte (values up to 1200 need it) |
