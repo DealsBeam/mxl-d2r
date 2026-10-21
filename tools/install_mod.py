@@ -53,6 +53,11 @@ def main() -> int:
     # level types point at its own (e.g. tiles/mxl/quest/yshari/basewall.dt1). Note: Median's .ds1 maps still use
     # Median's object numbers; objects 573+ were renumbered (docs/txt-migrate.md) and need remapping later.
     shutil.copytree(MXL_TILES, data / "global" / "tiles")
+    # The maps name monsters and objects by Median's row numbers; D2R kept its own added rows, so Median's rows from
+    # 734 (monstats) / 573 (objects) moved. Renumber them in the installed copy (tools/ds1_remap.py).
+    from ds1_remap import remap_tree
+    s = remap_tree(data / "global" / "tiles")
+    print("ds1 ids: " + ", ".join(f"{k}={v}" for k, v in sorted(s.items())))
     # Median-only missile and overlay animations (.dcc): D2R crashes on a missing classic graphics file. Median-only
     # inventory pictures (items/*.dc6, the invfile/uniqueinvfile/setinvfile names): classic mode (G) draws items from
     # them. Files D2R already has are left alone so its own effects and items keep matching their HD versions.

@@ -157,14 +157,14 @@ entries of the submenu that the top-level slot before them opens.
 | ... Cain sub 2 | 28642 / 40518 "catalyst of disenchantment" | 28 = AND(10; 19: quest 6 bit 0 on Normal; 23: lacks `3o[ `) | 28 -> 16 (17) | creates `3o[ ` | **done** |
 | ... Cain sub 3 | 28643 / 40519 "catalyst of learning" | 29 = AND(10; 20: quest 13 bit 0 on Nightmare; 24: lacks `0o[ `) | 29 -> 17 (17) | creates `0o[ ` | **done** |
 | ... Cain sub 4 | 28644 / 40520 "catalyst of jewelcraft" | 30 = AND(10; 21: quest 25 bit 0 on Nightmare; 25: lacks `jcat`) | 30 -> 18 (17) | creates `jcat` | **done** |
-| Charsi (154) | 4017 / 28265 "imbue" | 16 (quest 3 bit 1) | 20 (11) | client: opens the imbue page, mode 1 | stub |
-| Larzuk (511) | 22748 / 22748 "add sockets" | 17 (quest 35 bit 1) | 22 (13) | client: opens the sockets page | stub |
-| Drehya / Anya (512) | 22749 / 22749 "personalize" | 18 (quest 38 bit 1) | 21 (12) | client: opens the personalize page | stub |
-| Warriv act 1 (155) | 3382 "go east" | 11 (quest 6 bit 0) | 23 (1) = rows 5 (8: travel to level 40) + 1 (16: continue) + 9 (15: waypoint 40) | grants the Lut Gholein waypoint, moves the player there | stub (D2R's own) |
-| Warriv act 2 (175) | 3383 "go west" | none | 4 (8) | travel to level 1 | stub (D2R's own) |
-| Meshif act 2 (210) | 3384 "sail east" | 12 (quest 14 bit 0) | 24 (1) = rows 6 (level 75) + 2 + 10 (waypoint 75) | Kurast Docks + waypoint | stub (D2R's own) |
-| Meshif act 3 (264) | 3385 "sail west" | none | 5 (8) | travel to level 40 | stub (D2R's own) |
-| Tyrael act 4 (367) | 22738 "travel to harrogath" | 13 (quest 28 bit 0) | 25 (1) = rows 8 (level 109) + 3 + 12 (waypoint 109) | Harrogath + waypoint | stub (D2R's own) |
+| Charsi (154) | 4017 / 28265 "imbue" | 16 (quest 3 bit 1) | 20 (11) | client: opens the imbue page, mode 1 | **D2R native** (1.6) |
+| Larzuk (511) | 22748 / 22748 "add sockets" | 17 (quest 35 bit 1) | 22 (13) | client: opens the sockets page | **D2R native** (1.6) |
+| Drehya / Anya (512) | 22749 / 22749 "personalize" | 18 (quest 38 bit 1) | 21 (12) | client: opens the personalize page | **D2R native** (1.6) |
+| Warriv act 1 (155) | 3382 "go east" | 11 (quest 6 bit 0) | 23 (1) = rows 5 (8: travel to level 40) + 1 (16: continue) + 9 (15: waypoint 40) | grants the Lut Gholein waypoint, moves the player there | **D2R native** (1.6) |
+| Warriv act 2 (175) | 3383 "go west" | none | 4 (8) | travel to level 1 | **D2R native** (1.6) |
+| Meshif act 2 (210) | 3384 "sail east" | 12 (quest 14 bit 0) | 24 (1) = rows 6 (level 75) + 2 + 10 (waypoint 75) | Kurast Docks + waypoint | **D2R native** (1.6) |
+| Meshif act 3 (264) | 3385 "sail west" | none | 5 (8) | travel to level 40 | **D2R native** (1.6) |
+| Tyrael act 4 (367) | 22738 "travel to harrogath" | 13 (quest 28 bit 0) | 25 (1) = rows 8 (level 109) + 3 + 12 (waypoint 109) | Harrogath + waypoint | **D2R native** (1.6) |
 
 Everything else in npcactions is client-side confirmation: rows 13 (type 18, string 321) and 14 (type 20, string 3650) sit
 in front of every Cain item row and only show a client message; types 4-7, 9, 10, 21 are used by no slot. Charsi's
@@ -177,16 +177,10 @@ whose requirement holds. The port shows one "crafting materials" line; the serve
 "give me what I am owed". A real submenu needs a second dialog page and is not worth it (open question 10).
 Item quality 1 in the rows is mapped to normal (2); the item level is the row's (1).
 
-**Why travel is a stub.** D2R already has the travel lines (client records 175 and 264: a special line with handler `0x1162f0`
-that sends packet 0x37 and reads the destination from the NPC table `+0xc`; Warriv act 1 and Tyrael talk through the dialog).
-Median adds only a waypoint grant and its own gating; both belong with the warp/lockout work, not with the menu.
-
-**Why Imbue / sockets / personalize are stubs.** D2R's `ImbueItemsPanel` (panel 0xd) is one widget for Charsi, Larzuk (0x1ff)
-and Anya (0x200), picked by the NPC class (`0x10d150`). The client can open it (`0x1e3e20` sets the mode and calls
-`0x1e5b20`; the NPC-menu function `0x10dd30` is the existing caller), but the server side of the panel (item drop,
-confirmation) checks the vanilla quest state (`0x36aed0`, `0x36b410`, `0x36b1d0` per NPC) and the reward is a one-time
-quest reward. Median's lines are repeatable under rows 16-18, so the server checks must be replaced first. Not done; the
-lines are not shown (a visible button that does nothing is worse than none).
+**Travel packages, Imbue / sockets / personalize: D2R's own.** Median's slots only open a client page or send the player to a
+level; D2R already has each service and binds it to the same quest bits, so no line is drawn, nothing is hooked, and
+npc_services.cpp checks the tables at load (section 1.6). The earlier plan to replace the server checks was wrong: Median's
+lines are not repeatable (the reward is spent, see 1.6) and the conditions are D2R's own.
 
 **Design (npc_actions.cpp, npc_actions_logic.h, mxl_npc_actions.h).**
 
@@ -205,10 +199,58 @@ lines are not shown (a visible button that does nothing is worse than none).
   item through `0x441980`) and the action: create item via `0x517530` (as the Act 1 quests do), respec via `0x580f20` and
   then `0x5d9ae0` (what the vanilla respec packet `0x4b2530` does: the reset, then quest 41 loses bit 1 and the respec
   quest is deactivated, so the respec is used up exactly as in D2R). Every outcome (not found, denied, done, nothing,
-  stub) goes to the log with the kind and the NPC class.
+  D2R-native) goes to the log with the kind and the NPC class.
 - Requirement rows are not drawn on the client (the realm rule: Median logic is server-side). A line can therefore show
   while its requirement fails; the server then logs "requirement not met" and does nothing. Known cost; a server-to-client
   visibility message would fix it.
+
+### 1.6 Imbue, sockets, personalize and the travel packages are D2R's own (lane npc-services, 2026-10-21)
+
+**What Median does.** D2Sigma's three page actions (types 11, 12, 13 at `0x95470`, `0x95490`, `0x954b0`) only call one
+D2Client function and store the page mode (1 Charsi imbue, 3 Anya personalize, 2 Larzuk sockets); type 12 is personalize and
+type 13 is sockets (the first port had them the other way round). The services themselves run in vanilla D2Game: free, no gold,
+the item checks of D2Common, and the reward is spent when used. Sigma's quest module hooks neither quest 3 (Charsi) nor 35
+(Larzuk, only a validity stub before the vanilla handler); for quest 38 (Anya) it adds an event-2 handler that re-arms the
+quest state when a flag byte is set. So the lines are visible while the reward is pending (requirement rows 16, 17, 18 =
+quest 3, 35, 38 bit 1) and a service is used once per reward, not repeatably (the earlier "repeatable" note was wrong).
+The travel packages move the player to a town level (types 8: levels 1, 40, 75, 109) and, for the quest-gated ones, set the
+waypoint of the arrival town (type 15, `0x94ab0`: level to waypoint number, then the player's waypoint record).
+
+**What D2R does (build 93847).**
+
+- Client menu opener `0x1141d0` walks a fix table at RVA `0x22a70e0` (9 entries of 24 bytes: class, quest, bit, condition,
+  function; count dword at `0x22a71b8`) and runs the function when the quest bit has the condition. The entries:
+  Charsi (154) quest 3 bit 1 -> `0x109100` adds the line "Imbue" (string `0xfb1`), Larzuk (511) quest 35 bit 1 -> `0x109300`
+  ("Socket", `0x58dc`), Anya (512) quest 38 bit 1 -> `0x109400` ("Personalize", `0x58dd`), Warriv (155) quest 6 bit 0 and
+  Meshif (210) quest 14 bit 0 -> the travel lines. The three service lines share the click handler `0x10dd30`: close the
+  list, mode 1, `0x1e3e20` -> `0x1e5b20` opens `ImbueItemsPanel`, and the panel picks Charsi / Larzuk / Anya from the open
+  menu's NPC class (`0x10d150` = `0x2a48764`). The per-class item filter is `0x36aed0` (imbue), `0x36b410` (sockets),
+  `0x36b1d0` (personalize); the same three run on the server.
+- The server handler for the confirmation is packet `0x2e` (`0x4ae280`, 21 bytes: service u32, NPC id, item id, target
+  position) -> `0x4fc230` (PlrMsg.cpp, also run from the delayed task `0x4b6050`). It finds the NPC (`0x53b8f0`, range 50),
+  reads the NPC table row (`0x3971a0`: `+0xb` service 1 imbue / 2 sockets / 3 personalize, `+0x10` quest + 1), requires
+  quest `+0x10 - 1` bit 1 (`0x325c50`), checks the item with the filter above, performs the change and spends the reward
+  through `0x5da1c0` (quest 3), `0x548b60` (quest 35), `0x547c60` (quest 38): bit 0 set, bit 1 cleared. The panel is closed
+  with the client message `0x58` (byte `+5` = 6).
+- NPC travel is packet `0x37` (`0x4a9880`; the client sends it from the dialog / special line `0x1162f0`): the NPC table row
+  gives the destination (`+0xc`) and the gate (`+0x10`, quest + 1; 0 = ungated); gated lines require that quest's bit 0,
+  travel with `0x4f2e40(game, player, level, 0)`, and then set the waypoint of the arrival act's town: `0x3d6670(version,
+  level, &wp)` (level to waypoint field) and `0x3d6890(record, wp)` (set the flag; record = `*(playerData + 0x58 + difficulty
+  * 8)`, playerData from `0x34b240`). Tyrael's way to Harrogath is also the object function `0x5e57e0` (quest 26 bit 0 or 0xd,
+  quest 28 set, travel to level 109, waypoint 109).
+
+**Result.** For the quest-gated lines D2R's condition is Median's requirement row, and the waypoint grant is the same as Median's
+(Lut Gholein 40 for Warriv, Kurast Docks 75 for Meshif, Harrogath 109 for Tyrael; the "west" trips are ungated and grant none,
+as in Median). `npc_services.cpp` reads the NPC table (`0x237ea60`: `+0xb`, `+0xc`, `+0x10`) and the fix table and reports
+`N of 8 D2R-native services match Median's rows` in the `npc actions` line; it writes nothing. On build 93847 seven of eight
+match. The exception is Tyrael: D2R gates on quest 26 (gate byte 27, "Terror's End" done) and Median's row 13 reads quest 28
+(set by the first walk through Tyrael's portal), so D2R lets the first trip happen earlier. It is left as it is (D2R's is the
+looser and the first trip is the portal anyway); `Judge` reports it as `quest gate differs`.
+
+Not done, and why: no hook, no menu line, no copy of the panel. A Median line would only duplicate the D2R line under the same
+bit. Costs and item filters are D2R's vanilla ones; if Median's item types need a different filter (e.g. more bases accept
+sockets), the fix is in the item data the filters read (flags in weapons / armor / misc, `+0xe4`, `+0x13a`, `+0x155` of the
+item row), not in code here.
 
 ## 2. Hirelings
 
@@ -370,8 +412,7 @@ or harmful, take it out of `hireling_tables` (the only line that writes it).
    greeting choice. Size: S-M. Low priority.
 
 **(c) Native hook in mxl-core**
-6. Travel packages: hook on the NPC menu / travel call so Warriv, Meshif and Tyrael follow Median's rows (grant a
-   waypoint, send to a level id), gated by quest flags (needs requirements, another lane). Size: M.
+6. Travel packages: **done as D2R-native** (1.6): D2R's own packet 0x37 path travels and grants the arrival town's waypoint under the same quest bits; checked at load by npc_services.cpp. Size: 0.
 7. Cain's replacement materials: server-side "create item" action plus the per-item "player lacks it" test. Size: S
    once requirements exist; M with a menu hook.
 8. Restock for the rare group: only if the gated shops are revived. Size: M. **Defer** (see 11).
@@ -379,8 +420,8 @@ or harmful, take it out of `hireling_tables` (the only line that writes it).
 **(d) UI rebuild**
 9. NPC menu entries Median adds (Respec, Imbue, Sockets, Personalize, travel entries, Cain's submenu). D2R builds its
    menu in code, so this is a hook on the menu builder and the click path, with strings from Median's tables; the
-   pages that open (Imbue, Sockets, Personalize) exist in D2R. Size: L. The first thing a player will miss is
-   Akara's respec and the Charsi/Larzuk/Anya services; do those first.
+   pages that open (Imbue, Sockets, Personalize) exist in D2R, and so do their menu lines (1.6): only Akara's respec and
+   Cain's materials needed code. Size: L, done.
 10. Hire panel changes (Barbarian entry, hiredescext names): data plus an icon; the act 5 hirers are D2R's own NPCs
     (Qual-Kehk). Size: S.
 
@@ -411,7 +452,7 @@ or harmful, take it out of `hireling_tables` (the only line that writes it).
    Cain has the same monster ids (monstats rows 244-246, 265, 520 in the converted data).
 9. 0x10067e20 (stat layer scaling by count): which minions it applies to.
 10. A real Cain submenu (one entry per missing material, as Median draws it) needs a second menu page; D2R has no such widget in the NPC menu. Worth it only if the one-line "give what I am owed" feels wrong.
-11. Imbue / sockets / personalize: what must change on the server side of D2R's ImbueItemsPanel (per-NPC checks `0x36aed0`, `0x36b410`, `0x36b1d0`, one-time quest reward) so Median's repeatable lines can use it; then the client opener (mode 1, `0x1e3e20` and `0x1e5b20`) is the line handler.
+11. Imbue / sockets / personalize: answered in 1.6. D2R shows its own lines under the same quest bits and spends the reward itself; nothing to replace. Open: whether Median's item types pass the D2R item filters (`0x36aed0`, `0x36b410`, `0x36b1d0`) as Median intends (an in-game test with new base items), and the Tyrael gate (D2R quest 26, Median quest 28).
 
 ## Hireling data check (2026-10-21)
 

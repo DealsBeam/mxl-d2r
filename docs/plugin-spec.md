@@ -724,10 +724,21 @@ pages of all classes, many item skills): the row is now split per sheet ("row~cl
 tree skill finds its own icon in its class sheet (bug #3b: empty sockets on masteries, wrong icons where a class-less
 skill came first). Classes with more than 62 tree icons get smaller HD frames (Amazon 113 px, Barbarian 116 px).
 
+## Runewords and kill experience (`items_ext.cpp`, off words `runewords`, `xp`)
+
+Details, addresses and evidence in [subsystems/items-xp.md](subsystems/items-xp.md). Three hooks, each checked against
+the entry bytes of build 93847:
+
+| Hook | D2R | What |
+|---|---|---|
+| runeword properties | `0x3d44c0(item, owner)` | the seven properties of D2R's record, then up to six more from `mxl_runewords.h` (Median's runes.txt slots 8-13, `tools/items_data.py`) through the same call `0x3d4620(6, item, owner, 0, index, 0, &prop, 0xab, 0x40, 0)`; only for the row whose index and first rune code match the generated table |
+| runeword matcher | `0x372260(item)` | the original first; if it finds nothing, Median's padded match: Jewels at the front of the rune list up to the socket count (never for rows made only of Jewels) |
+| kill experience | `0x44fef0(plvl, mlvl, xp)` | Median's level-gap formula instead of 1.13c's tables |
+
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc skilltree`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests lockout goblins npc reqgates hirelings skilltree runewords xp`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500

@@ -15,10 +15,19 @@ Trade window (Median's trade.dc6): two 7 x 15 grids side by side. Store (store.d
 tabs; the page has its last tab drawn pressed, so the unpressed tab from page 3 (same place) is pasted over it
 (PATCHES), because D2R's tab bar draws the active tab itself.
 
+Character sheet (stat-screen.dc6, page 0): the main page of Median's statsheet (the other two pages are its
+extra stat pages, see docs/PLAN.md), empty boxes that tools/ui_layouts.py fills with D2R's stat text widgets.
+
 Stash, materials tab: D2R's panel (PANEL/Stash/AdditionalStash/PANEL_AdditionalStash_Consumables) shows the
 Horadric Cube as a small 3 x 4 recess. Median's cube grid is 15 x 10, so the cube picture of crafting.dc6 is pasted
 over the recess at the size of the cube view in the layout (CUBE_VIEW; tools/ui_layouts.py reads the same numbers).
 The sprite is taken from the extracted D2R files (extract/d2r/93847).
+
+Classic mode (G): the same pages scaled to D2R's classic panel (320 x 432; the virtual screen is 640 x 480) as DC6
+files in data/global/ui/panel/mxl/<name>.dc6 (4 tiles of 256 / 64 x 256 / 176; inventory 8 = two sets), quantized to
+D2R's palette. Median's 512 x 704 page becomes 314 x 432 (x 0.6136 both ways), at the outer screen edge of the
+320-pixel panel (6 transparent pixels beside the middle of the screen for the left panels, at the right of the
+inventory). tools/ui_layouts.py places the grids and widgets with the same factor.
 
 Usage: python tools/ui_panels.py
 """
@@ -27,7 +36,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from skill_icons import decode_frame, palette, read_dc6  # noqa: E402
+from PIL import Image  # noqa: E402
+from skill_icons import decode_frame, palette, read_dc6, write_dc6  # noqa: E402
+from skill_tree_art import encode, quantizer  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "extract" / "mxl" / "data" / "global" / "themes" / "classic_sigma" / "game" / "panels"
@@ -36,11 +47,15 @@ CUBE_ART = ("crafting", 0, (39, 208, 474, 498))  # Median's cube grid picture: d
 # where the cube view sits in the materials tab, in HD pixels (x, y, width, height); 15 x 10 cells of 54 x 50.6
 CUBE_VIEW = (177, 720, 810, 506)
 OUT = ROOT / "work" / "mod" / "data" / "hd" / "global" / "ui" / "panel" / "mxl"
+CLASSIC_OUT = ROOT / "work" / "mod" / "data" / "global" / "ui" / "panel" / "mxl"
 CLASSIC_W, CLASSIC_H = 512, 704
+PANEL_W, PANEL_H = 320, 432                   # D2R's classic panel
+CLASSIC_SCALE = PANEL_H / CLASSIC_H           # Median's page -> classic panel, both ways (314 x 432)
+RIGHT_PANELS = {"inventory"}                  # the others are left panels
 HD_W, HD_H = 1162, 1507
 # sprite name -> (dc6, page)
 PANELS = {"inventory": ("character-inventory", 0), "cube": ("crafting", 0), "stash": ("stash", 0),
-          "trade": ("trade", 0), "store": ("store", 0)}
+          "trade": ("trade", 0), "store": ("store", 0), "charsheet": ("stat-screen", 0)}
 # sprite name -> [(left, top, right, bottom, new top)] in classic pixels
 MOVES = {"stash": [(112, 86, 403, 134, 615)]}
 # sprite name -> [(page, left, top, right, bottom)]: pixels of another page of the same DC6 pasted in place
@@ -133,7 +148,39 @@ def main() -> int:
         write_sprite(low, HD_W // 2, HD_H // 2, scale(rows, HD_W // 2, HD_H // 2))
         print(f"   panel {name}: {dc6}.dc6 page {page} -> {HD_W}x{HD_H}")
     cube_in_stash()
+    classic_panels(pal)
     return 0
+
+
+def classic_panels(pal=None) -> None:
+    """Median's pages as classic panel DC6 files (see the module text)."""
+    q = None
+    for name, (dc6, page) in PANELS.items():
+        src = SRC / f"{dc6}.dc6"
+        out = CLASSIC_OUT / f"{name}.dc6"
+        newest = max(src.stat().st_mtime, Path(__file__).stat().st_mtime)
+        if out.exists() and out.stat().st_mtime >= newest:
+            continue
+        pal = pal or palette()
+        # indices 225-254 of the units palette are dark shades, but the UI palette has hot pink there: not used
+        ui_pal = pal[:225] + [(1, 255, 1)] * 31
+        q = q or quantizer(ui_pal)
+        rows = page_rows(src, page, pal)
+        move_boxes(rows, MOVES.get(name, []))
+        patch_rows(rows, src, PATCHES.get(name, []), pal)
+        im = Image.new("RGBA", (CLASSIC_W, CLASSIC_H))
+        im.putdata([p for r in rows for p in r])
+        w = round(CLASSIC_W * CLASSIC_SCALE)
+        small = im.convert("RGBa").resize((w, PANEL_H), Image.LANCZOS).convert("RGBA")
+        panel = Image.new("RGBA", (PANEL_W, PANEL_H))
+        panel.paste(small, (0 if name in RIGHT_PANELS else PANEL_W - w, 0))
+        frames = []
+        for _set in range(2 if name == "inventory" else 1):
+            for box in ((0, 0, 256, 256), (256, 0, 320, 256), (0, 256, 256, 432), (256, 256, 320, 432)):
+                tile = panel.crop(box)
+                frames.append((tile.width, tile.height, 0, 0, encode(tile, q, ui_pal)))
+        write_dc6(out, frames)
+        print(f"   classic panel {name}: {dc6}.dc6 page {page} -> {w}x{PANEL_H}")
 
 
 def cube_in_stash() -> None:

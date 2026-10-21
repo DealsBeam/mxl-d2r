@@ -21,16 +21,18 @@ constexpr auto KindOf(int npcRow, int slot) noexcept -> uint32_t {
 
 // npcactions types (docs/subsystems/npc-hirelings.md section 1.2)
 enum Type : int32_t {
-	Compound = 1, Page = 3, Travel = 8, Imbue = 11, Sockets = 12, Personalize = 13, Respec = 14, Waypoint = 15,
+	Compound = 1, Page = 3, Travel = 8, Imbue = 11, Personalize = 12, Sockets = 13, Respec = 14, Waypoint = 15,
 	Continue = 16, CreateItem = 17, Confirm = 18, Message = 20,
 };
 
-// Run: the server does it. Stub: known, logged, not done (travel is D2R's own; the panel services need quest-state work).
-enum class Support : uint8_t { None, Run, Stub };
-enum class Result : uint8_t { NotFound, Denied, Done, Nothing, Stubbed };
+// Run: the server does it. Native: D2R already does it under the same condition (the imbue / sockets / personalize lines
+// and NPC travel with its waypoint grant; npc_services_logic.h checks that against the game's tables), so no line is
+// drawn and nothing is run.
+enum class Support : uint8_t { None, Run, Native };
+enum class Result : uint8_t { NotFound, Denied, Done, Nothing, Native };
 
 constexpr auto Merge(Support a, Support b) noexcept -> Support {
-	return a == Support::Run || b == Support::Run ? Support::Run : (a == Support::Stub || b == Support::Stub ? Support::Stub : Support::None);
+	return a == Support::Run || b == Support::Run ? Support::Run : (a == Support::Native || b == Support::Native ? Support::Native : Support::None);
 }
 
 constexpr auto SupportOf(int row, int depth = 0) noexcept -> Support {
@@ -47,7 +49,7 @@ constexpr auto SupportOf(int row, int depth = 0) noexcept -> Support {
 	case Imbue:
 	case Sockets:
 	case Personalize:
-		return Support::Stub;
+		return Support::Native;
 	case Compound: {
 		Support s = Support::None;
 		for (const int32_t v : a.value) {
@@ -109,7 +111,7 @@ inline void Note(const Host& h, const char* what, int a, int b) noexcept {
 
 constexpr auto Join(Result a, Result b) noexcept -> Result {
 	if (a == Result::Done || b == Result::Done) return Result::Done;
-	if (a == Result::Stubbed || b == Result::Stubbed) return Result::Stubbed;
+	if (a == Result::Native || b == Result::Native) return Result::Native;
 	if (a == Result::Denied || b == Result::Denied) return Result::Denied;
 	return Result::Nothing;
 }
@@ -145,8 +147,8 @@ inline auto RunAction(int row, const Host& h, int depth = 0) noexcept -> Result 
 	case Imbue:
 	case Sockets:
 	case Personalize:
-		Note(h, "action not implemented (type, row)", a.type, row);
-		return Result::Stubbed;
+		Note(h, "D2R's own service, nothing to run (type, row)", a.type, row);
+		return Result::Native;
 	default:
 		return Result::Nothing;
 	}
