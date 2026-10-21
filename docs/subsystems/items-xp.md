@@ -243,9 +243,14 @@ Off words `classlock`, `ethereal`, `sockets`, `dyes`. All four were read in the 
   - The 8-byte-pointer table scan (ids 6-10, 13-21, 28-31 non-null, 0-5 and 22-27 null) matches nothing in `.data` / `.rdata`;
     a looser scan (6 zero slots) gives 30 dense false positives. D2RLoader's own `D2RCore.dll` reads none of the words in
     its `.text` either (`movzx` of `+0x4a`: none; `+0x48`: five unrelated copies).
-  - Not yet tried: an in-game test. The data already carries Median's stats 396 (`attacker_takes_cold_damage`, func 12) and 397
+  - In-game test (lane harness-cast, 2026-10-22; `py -3 tools/game_checks.py equipevents`, docs/testing.md "Player actions"):
+    `h equip 115 397=50 396=40 rhand` wears an item with both thorns stats (the equip applies the item's stats: a strength ring
+    changes the owner's stat 0), monsters hit the player, and `stat player 397` / `396` stay 0 while the item itself holds
+    them. D2R does not carry the event stats to the owner's list, so the events are not registered at equip. Next: a write watch
+    on the owner's stat list during `0x471500`, or compare both stat lists (`0x2f5b80`).
+  - Earlier note, before the harness had an equip verb: not yet tried: an in-game test. The data already carries Median's stats 396 (`attacker_takes_cold_damage`, func 12) and 397
     (`attacker_takes_fire_damage`, func 11, also on `damagedbymissile`) and 265 (func 33) / 376 (func 34); equip an item that
-    rolls 397 (the harness has no equip verb; packets `0x1a` / `0x19`, or a save file) and let a monster hit the character. If
+    rolls 397 (`h equip` does this now) and let a monster hit the character. If
     D2R ignores unknown function ids nothing happens, and the dispatcher must be found by tracing the item's equip (a write
     watch on the stat-list event array) rather than by scanning.
   Monster stat 373 (Median `0xbd`, immune to open wounds and crushing blow) is a data stat on the monster; it is the same

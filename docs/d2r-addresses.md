@@ -696,6 +696,23 @@ Ready-made path, called not hooked, verified in game (slot 2, background mode):
 - Not done: a real timer widget. D2RLoader's PluginSDK has OverlayService (frame callback, drawText) and NetworkService (plugin
   channel `sendToClient`, 224-byte payload) for a client-side countdown; the notice is a log line for now (docs/unported.md).
 
+## 14. Player actions (lane harness-cast, 2026-10-22; plugin/src/harness_cmds.cpp)
+
+Server side, called from the game-frame hook (verified in the game):
+
+| What | RVA | Notes |
+|---|---|---|
+| walk / run packet handlers | table `0x1d2a790` ids 1 / 3 | 210 byte packets: `{id, curX u16, curY u16, destX u16, destY u16, pathLen byte ...}`; checks `0x34c2c0` (dead), `0x4fe1f0` (position within a tolerance of the packet's), `0x325370` (path distance <= 15) |
+| player move | `0x42d2c0` | `(game, unit, Skill* or 0, mode, x, y, 0, 0)`: mode 2 walk, 3 run, returns 0 on success; what the walk packet ends in, the server finds the path |
+| cast at a position / at a unit | `0x4fdb40(game, player, x, y, 1, Skill*)` / `0x4f8de0(game, player, type, id, Skill*, 1, shift)` | both use the player's active left skill; the unit form walks into range first |
+| skill by id | `0x33dcd0(player, id, -1)` | `Skill*`: `+0` row pointer (i16 id), `+8` next, `+0x10` skill mode (7 attack, 10 cast, 11 / 15 passive), `+0x40` base level |
+| skill list, usability | `0x34b6e0(unit)`, `0x33f360(unit, Skill*)` | list head with the first `Skill*` at `+0`; usability 0 ok, 2 passive / requirements, 5 no weapon |
+| active skills | `0x34a540` (left), `0x34b400` (right) | select with packet 0x3c (handler `0x4b4250`: `{0x3c, id u16, ...}`, byte 4 = 0x80 for the left skill) |
+| add a skill level | `0x438670(version, player, id)` | spends one point of stat 5, no prerequisite check |
+| equip | `0x471500` place, `0x382df0(int32 loc[4])` body location 1-12 | location struct `{mode 1 = equipped, page, x\|y, bodyloc}`; `0x471e90` is the generic move |
+| missiles | unit type 3 in the game's hash table base `0x646` | counted per server frame |
+| player busy | `0x4249f0(unit)` | nonzero blocks skill use (item on the cursor, trade) |
+
 ## Appendix A. Quest descriptor table (D2R, verified)
 
 `0x239c5c0`, 36 entries of 0x20 bytes: `+0` init function VA, `+8` u32 act (0-4), `+0xc` u32 (`0x64` or 0), `+0x10`
