@@ -65,8 +65,9 @@ which bank a Median character loads is still to be confirmed in game. Report: `w
 ## Open items found here (for plugins / later phases)
 - **Runewords**: 197 of 237 use property slots 8-13; D2R's runes.txt has 7.
 - **Objects**: `OperateRange` (545), `SpawnMax` (223), `TrapProb` (161), `Parm5-7` (~100), `Act` (584) have no D2R
-  column. Median's object rows 573+ moved after D2R's (IDs 587+); **Median's map files (.ds1) reference objects by
-  number and must be remapped in Phase 5.**
+  column. Median's object rows 573+ moved after D2R's (IDs 587+). Median's map files (.ds1) reference objects through
+  Median's flat ObjPreset table and monsters by MonStats row: `txt_migrate.object_presets` adds that table to
+  ObjPreset.txt and `tools/ds1_remap.py` (run by install_mod.py) renumbers the maps (docs/subsystems/areas-drlg.md).
 - **Automap**: Median's new level types 36-44, 51 have no D2R automap name. Test whether naming them
   "Act N - X" in lvltypes is enough, or whether the engine needs a plugin.
 - **Calc codes**: Median added 38 skill-formula variables (`syn1-6`, `bl12..bdz7`, `area`, `skcn` used ~1,600 times,

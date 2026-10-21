@@ -62,6 +62,11 @@ Status (2026-10-14):
   files exist nowhere (several are vanilla's own dead rows: nul, gore20, pentacle; Median's: extra/icestormimpactvar3,
   extra/spikefiendmamamissile, extra/auraresistcoldcast, extra/firesmoke.dcc, extra/lifedrain.dcc, extra/genericsplash,
   'expansion|baaldeathghostie01'): classic mode may fail on those if they ever spawn.
+- Map ids (2026-10-21, lane areas): Median's .ds1 maps named objects through Median's flat ObjPreset table and Median-only
+  monsters by Median's MonStats row; D2R resolves objects per act and moved Median's rows from 734. Fixed in the pipeline:
+  txt_migrate adds Median's table to ObjPreset.txt, tools/ds1_remap.py (called by install_mod.py) renumbers the maps
+  (27,556 objects, 4,095 monsters in 470 maps). tools/area_audit.py audits levels/lvlprest/lvltypes/lvlmaze/lvlwarp and
+  the maps; details in docs/subsystems/areas-drlg.md. Needs a rebuild + install, then the in-game check (testing.md).
 - Classic mode draws the mod's item pictures (confirmed 2026-10-07).
 - Monsters (2026-10-07): install_mod.py ships Median's monster files D2R lacks (5,994 files, 363 MB, COF + DCC);
   tools/animdata_merge.py merges animdata.d2 (D2R base, +2,529 Median records, Median's speed on 245 shared ones;
