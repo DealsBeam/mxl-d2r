@@ -572,7 +572,7 @@ craft, catalyst, etc.) and return; otherwise call the original. The "Talk" line 
 
 `0x2f7d10(unit, stat, value, layer)` and `0x2f5020` start with a 10-byte `jmp [rip+x]` (the D2RLoader / protection thunk) followed by the real body
 (`0x2f7d1a`, sets the stat in the unit's stat list; asserts `0x2f1dc0`, calls `0x2f9b10`, `0x2f3030` and the stat-change path). The stat engine
-itself is not readable (the dump holds the thunk target in `0x3e2a248`). Evidence for "no explicit client update needed": the game's own gold
+itself is not in the dump (the thunk target is in `0x3e2a248`): the thunks are not a protection layer but **D2RLoader's own module D2RCore.dll** (see below). Evidence for "no explicit client update needed": the game's own gold
 changes do not send anything: the gold pickup code (`PlrModes.cpp`, function `0x42c110`) does `0x2f5020(unit, 14)`, compares with the cap
 (`0x2f5c60` family), then `0x2f7d10(unit, 14, newGold)` and **no packet call follows** (its only network calls are the item pickup packet `0x535f60`);
 the same `0x2f7d10(unit, 0xe, ...)` is used by item creation for stackable gold (`0x43cd50`, `0x43ef10`). In 1.13c the stat list of a player
@@ -581,6 +581,19 @@ payment (`0x2f7d10(player, 14, gold - cost, 0)`, bank `15`) should show up on th
 refresh is ever needed, the cheapest forcing step is to re-set the stat (set 14 to the old value and then to the new one). The stat-update packet
 sender itself was not located (no packet-id constant for 0x1d-0x1f near the network service in 102 sender functions; the builder is behind the
 stat callback). Confidence: likely.
+
+### D2RCore.dll (lane caps-events, 2026-10-22)
+
+Thirty-nine main-image stat functions (`0x2f5020` GetStat, `0x2f7d10` SetStat, `0x2f5c60`, `0x2f4d20`, `0x2f48c0`, ...) are
+10-byte `ff 25 disp32 90 90 90 90` thunks whose slots (`0x3e2a2xx`, filled at start-up) point into **D2RCore.dll**, a PE
+that D2RLoader maps at a random `0xc0de5xxxxxx` address (timestamp `0x6ab37824`; sections `.text` 0x1000, `.rdata`
+0x53b000, `.data` 0x6fb000, `.d2rlapi` 0x80e000, `.d2rsym` 0x838000). It holds a reimplemented stat engine: the getter body
+is at core RVA `0x3d8bd0`, stats live in sorted 16-byte `{key = stat << 32 | layer, value}` entries, stat ids go up to
+0x8000. Everything that is *not* one of those 39 thunks is ordinary main-image code and hookable: the resist code
+(`0x4523e0`), the damage table (`0x44df10`), the absorb step (`0x450670`). D2RLoader also redirects some call sites to
+wrappers in a stub area (`0x3e2b496+`; slot `0x3e2aab0` -> core `0x826720`, which calls the original `0x4523e0` and tracks
+damage in state `0xe7` / stat `0x54`); an inline hook on the *callee* still sees every call. Reading the core: attach to
+the game process (`ReadProcessMemory`) and dump the module; it is not in `D2RLoader_*_dump.exe`.
 
 ## 11. Quest handlers (read)
 

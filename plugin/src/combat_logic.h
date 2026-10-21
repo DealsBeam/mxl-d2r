@@ -5,6 +5,7 @@
 //
 //   dodge, avoid, evade (stats 338-340, players only here): chance <= min(75, 60 + "maximum avoid chance" stat)
 //   block chance: <= min(80, 50 + "maximum block chance" stat); and <= 50 when the unit has the Indomitable skill
+//   elemental resistances (players and mercenaries): <= min(90, 75 + the element's maximum-resistance stat)
 #pragma once
 
 #include <algorithm>
@@ -32,6 +33,17 @@ inline constexpr int32_t BlockBase = 50;
 inline constexpr int32_t BlockMax = 80;
 inline constexpr int32_t IndomitableBlock = 50;
 
+// Resistance ceiling. D2R's damage code (0x4523e0) and the two client displays (character sheet 0x14e6e70, hireling
+// panel 0x14f3400) all clamp 75 + max-resistance to 95; D2Sigma clamps to 90. The immediate in each clamp is one byte
+// of a `mov r32, 0x5f`.
+inline constexpr int32_t ResistBase = 75;
+inline constexpr int32_t ResistMaxD2R = 95;
+inline constexpr int32_t ResistMaxMedian = 90;
+
+constexpr auto ResistCap(int32_t maxResistStat, int32_t hardCap) noexcept -> int32_t {
+	return std::min(ResistBase + maxResistStat, hardCap);
+}
+
 constexpr auto AvoidCap(int32_t maxAvoidStat) noexcept -> int32_t {
 	return std::clamp(AvoidBase + maxAvoidStat, 0, AvoidMax);
 }
@@ -39,6 +51,57 @@ constexpr auto AvoidCap(int32_t maxAvoidStat) noexcept -> int32_t {
 constexpr auto BlockCap(int32_t maxBlockStat, bool indomitable) noexcept -> int32_t {
 	const int32_t cap = std::clamp(BlockBase + maxBlockStat, 0, BlockMax);
 	return indomitable ? std::min(cap, IndomitableBlock) : cap;
+}
+
+// Absorb (D2Sigma 0x10057a20, D2R 0x450670). A hit's elemental damage is first cut by the defender's absorb-percent stat
+// (at most 40%) and then by the flat absorb stat; the cut amount heals the defender (D2R adds it to the damage block's
+// absorbed total at +0x130, which 0x451820 turns into life). D2Sigma does the same cuts but runs each healed amount
+// through three defender stats before crediting it: Median 189 (divisor), 184 (percent off) and 417 (percent off, per
+// damage type). They are monster stats (monprop 'time' / 'stam' rows and a few skills); no item rolls them. D2R ids:
+inline constexpr int32_t StatAbsorbDivisor = 373;   // Median 189 (also the open wounds / crushing blow immunity flag)
+inline constexpr int32_t StatAbsorbPercent = 369;   // Median 184
+inline constexpr int32_t StatAbsorbTypePercent = 446;  // Median 417, layer = damage type below
+inline constexpr int32_t AbsorbPercentCap = 40;
+inline constexpr int32_t AbsorbFloor = 0x100;  // 1 point of life in D2's 8.8 fixed point
+
+// Median's damage type (the layer of stat 417), from the resistance stat of D2R's table entry; 0 for the others.
+constexpr auto AbsorbLayer(int32_t resistStat) noexcept -> int32_t {
+	switch (resistStat) {
+	case 0x27: return 1;  // fire
+	case 0x29: return 2;  // lightning
+	case 0x25: return 3;  // magic
+	case 0x2b: return 4;  // cold
+	case 0x2d: return 5;  // poison
+	default: return 0;
+	}
+}
+
+// D2Sigma 0x10057d00: amount / divisor, never below 1 point; unchanged when either is 0.
+constexpr auto AbsorbDivide(int32_t amount, int32_t divisor) noexcept -> int32_t {
+	if (amount == 0 || divisor == 0) {
+		return amount;
+	}
+	return std::max(amount / divisor, AbsorbFloor);
+}
+
+// D2Sigma 0x10057ee0: amount minus `percent` of it, never below 1 point; unchanged when either is 0.
+constexpr auto AbsorbReduce(int32_t amount, int32_t percent) noexcept -> int32_t {
+	if (amount == 0 || percent == 0) {
+		return amount;
+	}
+	const auto cut = static_cast<int32_t>(static_cast<int64_t>(amount) * percent / 100);
+	return std::max(amount - cut, AbsorbFloor);
+}
+
+// What the defender is healed by one absorbed amount (D2Sigma applies the three stats in this order).
+constexpr auto AbsorbCredit(int32_t amount, int32_t divisor, int32_t percent, int32_t typePercent) noexcept -> int32_t {
+	return AbsorbReduce(AbsorbReduce(AbsorbDivide(amount, divisor), percent), typePercent);
+}
+
+// The absorb-percent step: the stat is limited to 40, the cut is that percent of the damage.
+constexpr auto AbsorbPercentCut(int32_t damage, int32_t stat) noexcept -> int32_t {
+	const int32_t pct = std::min(stat, AbsorbPercentCap);
+	return pct > 0 ? static_cast<int32_t>(static_cast<int64_t>(damage) * pct / 100) : 0;
 }
 
 // Ethereal items: D2Sigma 0x1007fdd0 (D2ItemStats.cpp) adds 25% to the weapon damage stats (0x15-0x18, 0x9f, 0xa0) or
