@@ -43,8 +43,7 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 
 | Area | Median | Port now | Status | Needs / notes |
 |---|---|---|---|---|
-| Waypoints Vizjun (155) and level 242 | in the panel | saved, no panel button | open | waypoint panel code patch (more than 9 per tab or a 6th tab); RE notes in [areas-drlg.md](subsystems/areas-drlg.md) section 3b (lane client-ui: table relocation, 5 functions, layout widgets; not done) |
-| Median waypoints in the panel (6) | own acts | listed in Act 4's free slots, usable after reaching Act 4 | approx | same panel patch |
+| Waypoint panel: every Median waypoint under its own act (up to 27 per tab) | 10/11/12/4/10 per act | done (plugin hook of the tab fill + relocated button table, HD layout stride 100) | done | [areas-drlg.md](subsystems/areas-drlg.md) section 3b; a travel click from a real waypoint object is not yet checked in game; the panel patch is HD only (SD layout not touched) |
 | Character sheet | portrait, pages 2-3 art | page 0 art; pages 2-3 as rows of D2R's Advanced Stats panel | approx | plugin panel for Median's own page art |
 | Stat pages: Str/Dex damage bonus, total / % bonus / base columns | computed by code | missing | open | plugin ([stat-screen.md](subsystems/stat-screen.md)) |
 | Skill tree: Sorceress 9th tab | 9 tabs | 8 | open | |

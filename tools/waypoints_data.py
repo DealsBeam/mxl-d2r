@@ -5,15 +5,15 @@ What the engine allows (found in the 93847 image, docs/d2r-addresses.md "Waypoin
     save keeps it (the first 16 bytes of each 24-byte "WS" record) and packet 0x63 sends it; Median's D2Common has the very
     same 112-entry table. Median's numbers 50..90 therefore need no remap and no extra save data.
   * The waypoint panel does not: its tabs come from actinfo.txt, five rows (one per act) of nine level names
-    (waypoint1..waypoint9), and the panel code holds exactly 9 slots per act (its tables are 9 entries long). Only a level named
-    there gets a button, so 47 waypoint levels (39 + Median's 8) cannot all be listed in 5 x 9 = 45 slots; D2R's own five acts use
-    39 of them (Act 4 only 3).
+    (waypoint1..waypoint9), and the panel code holds exactly 9 slots per act (its tables are 9 entries long). Median's acts hold
+    10, 11, 12, 4 and 10 waypoints (39 of Diablo II's + 8 of its own).
 
-What this does: reads Median's levels.txt, checks the numbers (unique, below 112), and writes actinfo.txt (D2R's, with the
-Median levels that have a free slot added, same file for both banks) plus plugin/src/mxl_waypoints.h (every waypoint level and
-the tab that lists it, for the plugin's startup check). Extras go to the first act with a free slot: their own act, else the next
-free one in act order; with Median's tables that is Act 4 (6 free slots), so the remaining extras stay unlisted (still
-activated, saved and usable as destinations by the server; just no button) and are named in the report.
+What this does: reads Median's levels.txt, checks the numbers (unique, below 112), and writes
+  * plugin/src/mxl_waypoints.h: every waypoint level with the tab (1-5, its levels.txt Act + 1) the panel lists it under. The
+    plugin (waypoints.cpp) fills each tab from this list, so every level has a button in its own act, more than nine to a tab;
+  * actinfo.txt (D2R's, with the Median levels whose own act has a free slot added, same file for both banks): what the panel
+    lists without the plugin patch (mxl-core-off.txt word `waypoints`, or an image the patch does not recognise). Extras never
+    leave their own act, so with the patch off Act 1-3 and 5 keep D2R's nine and only Silver City (Act 4) is added.
 
 Usage: python tools/waypoints_data.py [--root <repo with extract/ and work/>] [--mod-out <mod dir>] [--out <header>]
   --mod-out defaults to <root>/work/mod; use a temporary directory to test without touching the shared build.
@@ -75,35 +75,32 @@ def main() -> int:
     ah, arows = read_tsv(d2r / "actinfo.txt")
     acol = {name: i for i, name in enumerate(ah)}
     slot_cols = [acol[f"waypoint{k}"] for k in range(1, SLOTS + 1)]
-    name_to_level = {n: (lid, wp) for lid, n, _a, wp in levels}
-    tab_of = {}   # level id -> 1-based tab (actinfo row)
+    name_to_level = {n: lid for lid, n, _a, _wp in levels}
     free = []
     for t, row in enumerate(arows):
         row += [""] * (len(ah) - len(row))
-        for c in slot_cols:
-            if row[c] in name_to_level:
-                tab_of[name_to_level[row[c]][0]] = t + 1
         free.append([c for c in slot_cols if not row[c]])
-    extras = [lv for lv in levels if lv[0] not in tab_of]
-    # extras whose own act has a free slot first (they stay in their act), then the rest by waypoint number
-    extras.sort(key=lambda lv: (not (0 <= lv[2] < len(arows) and free[lv[2]]), lv[3]))
+    listed = {name for row in arows for c in slot_cols if (name := row[c]) in name_to_level}
+    # the plugin's list: every waypoint level under its own act (levels.txt Act 0-4 = tab 1-5)
+    tab_of = {lid: act + 1 if 0 <= act < len(arows) else 0 for lid, _n, act, _wp in levels}
+    per_tab = {}
+    for t in tab_of.values():
+        per_tab[t] = per_tab.get(t, 0) + 1
+    # actinfo.txt (no plugin patch): the extras that fit a free slot of their own act
     unlisted = []
-    for lid, name, act, wp in extras:
-        order = ([act] if 0 <= act < len(arows) else []) + [t for t in range(len(arows)) if t != act]
-        home = next((t for t in order if free[t]), None)
-        if home is None:
+    for lid, name, act, wp in sorted((lv for lv in levels if lv[1] not in listed), key=lambda lv: lv[3]):
+        if 0 <= act < len(arows) and free[act]:
+            arows[act][free[act].pop(0)] = name
+        else:
             unlisted.append((lid, name, wp))
-            continue
-        arows[home][free[home].pop(0)] = name
-        tab_of[lid] = home + 1
 
     text = "\r\n".join("\t".join(r) for r in [ah] + arows) + "\r\n"
     for d in (mod_out, mod_out / "base"):
         d.mkdir(parents=True, exist_ok=True)
         (d / "actinfo.txt").write_bytes(text.encode("utf-8"))
 
-    lines = [GENERATED, "// Every level with a waypoint number (levels.txt Waypoint != 255) and the waypoint panel tab (1-5, actinfo row) that",
-             "// lists it; 0 = no button (the panel holds 9 slots per act).", "#pragma once", "", "#include <cstdint>", "",
+    lines = [GENERATED, "// Every level with a waypoint number (levels.txt Waypoint != 255), by waypoint number, and the waypoint panel tab (1-5: its",
+             "// act) that lists it; 0 = no tab (act outside 1-5). Up to wp::MaxButtons levels per tab (waypoints_logic.h).", "#pragma once", "", "#include <cstdint>", "",
              "namespace mxl_wp {", "", "struct Level {", "\tint16_t level;", "\tuint8_t number;", "\tuint8_t tab;", "};", "",
              "inline constexpr Level Levels[] = {"]
     for lid, name, _act, wp in sorted(levels, key=lambda lv: lv[3]):
@@ -111,8 +108,8 @@ def main() -> int:
     lines += ["};", "inline constexpr int Count = sizeof(Levels) / sizeof(Levels[0]);", "", "}  // namespace mxl_wp", ""]
     args.out.write_text("\n".join(lines), encoding="utf-8")
 
-    print(f"   waypoints: {len(levels)} levels, numbers 0-{max(seen)} (record {RECORD_BITS} bits); "
-          f"{len(tab_of)} listed in the panel, {len(unlisted)} without a button"
+    print(f"   waypoints: {len(levels)} levels, numbers 0-{max(seen)} (record {RECORD_BITS} bits); panel tabs "
+          + ", ".join(f"{t}: {n}" for t, n in sorted(per_tab.items())) + f" levels; actinfo.txt fallback lacks {len(unlisted)}"
           + (": " + ", ".join(f"{n} ({lid}, number {wp})" for lid, n, wp in unlisted) if unlisted else "")
           + f" -> {mod_out / 'actinfo.txt'}")
     return 0

@@ -54,11 +54,32 @@ int RunWaypointsTests() {
 		}
 	}
 	Check(above38 == 8, "eight numbers past the old 39");
-	// the panel holds 9 slots per act: no tab is asked for more
+	// Median's acts hold 10, 11, 12, 4 and 10 waypoints: every level has a tab, none past the plugin's table
+	Check(perTab[0] == 0 && perTab[1] == 10 && perTab[2] == 11 && perTab[3] == 12 && perTab[4] == 4 && perTab[5] == 10, "levels per act");
+	Check(s.listed == s.levels && s.unlisted == 0 && s.overflow == 0, "every waypoint level has a button");
+	Check(s.widest == 12, "the widest tab lists 12");
 	for (int tab = 1; tab <= wp::PanelTabs; ++tab) {
-		Check(perTab[tab] <= wp::PanelSlots, "no tab lists more than 9 levels");
+		Check(perTab[tab] <= wp::MaxButtons, "no tab lists more than the button table holds");
 	}
-	Check(s.listed + s.unlisted == s.levels, "listed + unlisted = all");
-	Check(perTab[0] == s.unlisted, "tab 0 is the unlisted ones");
+
+	// tab lists: ascending waypoint number, the extras after the vanilla ones; Act 3 has Caldeum, Torajan Jungles and Vizjun
+	int16_t lv[wp::MaxButtons] = {};
+	Check(wp::LevelsOfTab(1, lv, wp::MaxButtons) == 10 && lv[0] == 1 && lv[8] == 35 && lv[9] == 153, "Act 1: town ... Catacombs 2, Duncraig");
+	Check(wp::LevelsOfTab(3, lv, wp::MaxButtons) == 12 && lv[0] == 75 && lv[8] == 101 && lv[9] == 138 && lv[10] == 141 && lv[11] == 155,
+	      "Act 3: nine of Diablo II, then Caldeum, Torajan Jungles, Vizjun");
+	Check(wp::LevelsOfTab(4, lv, wp::MaxButtons) == 4 && lv[3] == 139, "Act 4: three of Diablo II, Silver City");
+	Check(wp::LevelsOfTab(5, lv, wp::MaxButtons) == 10 && lv[9] == 242, "Act 5: nine of Diablo II, t_r_d_lra");
+	Check(wp::LevelsOfTab(2, lv, 4) == 4 && lv[3] == 57, "a short buffer takes the first ones");
+	Check(wp::LevelsOfTab(0, lv, wp::MaxButtons) == 0 && wp::LevelsOfTab(6, lv, wp::MaxButtons) == 0, "tabs outside 1-5 list nothing");
+
+	// the synthetic actinfo rows the plugin runs the engine's tab fill over
+	wp::ActRow rows[wp::MaxRows];
+	Check(wp::FillRows(3, rows, wp::MaxRows) == 2, "Act 3 needs two rows");
+	Check(rows[0].built == 0 && rows[0].level[0] == 75 && rows[0].level[8] == 101 && rows[1].level[0] == 138 && rows[1].level[2] == 155,
+	      "rows hold the levels nine to a row");
+	Check(rows[1].level[3] == 0 && rows[1].number[0] == 0xff && rows[1].number[8] == 0xff, "unused slots are level 0, numbers unset");
+	Check(wp::FillRows(4, rows, wp::MaxRows) == 1 && rows[0].level[3] == 139 && rows[0].level[4] == 0, "Act 4 fits one row");
+	Check(wp::FillRows(6, rows, wp::MaxRows) == 0, "no row for a tab without levels");
+	Check(wp::FillRows(3, rows, 1) == 1, "rows are capped by the buffer");
 	return failures;
 }
