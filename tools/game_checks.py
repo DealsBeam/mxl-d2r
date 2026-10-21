@@ -812,9 +812,11 @@ def check_craftflags():
     H("flag game 50 clear")
 
 
-CHECKS = [("mxl", check_mxl), ("goblins", check_goblins), ("respec", check_respec), ("cain", check_cain),
-          ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout), ("cow", check_cow),
-          ("goldcraft", check_goldcraft), ("craftflags", check_craftflags), ("lockclock", check_lockout_clock)]
+# lockclock goes first after mxl: entering the Median dungeon is a heavy level load and D2R's client asserts "asset cache
+# exceeded" (512 assets) after a few area changes, then crashes (see docs/bugs.md)
+CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
+          ("cain", check_cain), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
+          ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags)]
 
 
 def write_report(extra=""):

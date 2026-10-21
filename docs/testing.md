@@ -302,6 +302,32 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 Where the answers cannot come from a call they come from the screenshot: the NPC popup text (`cain_menu.png`) and
 D2R's own cheat output.
 
+### Results with the harness commands (2026-10-21, background mode, slot 2, plugin 0.47.0 + harness)
+
+`py -3 tools/game_checks.py all` (MXL_SLOT=2), evidence in `%USERPROFILE%\mxl-d2r-runs\checks-20261021-210224\` (all rows
+except the lockout clock) and `checks-20261021-211130\` (lockout clock, sealed). Real-input watchdog (cursor and foreground
+window every 25 ms): no abort in any run, the game window was never the foreground window, the cursor never moved into it.
+
+| Row | Result | Evidence |
+|---|---|---|
+| `mxl` command | PASS | 14 feature lines |
+| Goblins (FORCE=1) | PASS | `h kill nearest` x2 in the Blood Moor: `h state` goblins 0 -> 1 spawned, log `goblin 2796 spawned in level 2` |
+| Akara respec | PASS | `h interact 148`, menu list shows Talk, Trade, vanilla respec (`0x2ba0`) and the plugin line (`handler=plugin@`); `h menu 3`: strength 90 -> 30, 60 stat points refunded, log `npc actions: done (48, 148)` |
+| Cain crafting materials line (bug #23) | PASS | menu opens, no `menu record is full` log line, `cain_menu.png` shows TALK / CRAFTING MATERIALS / CANCEL |
+| Griswold's Heart | PASS | `h msg 148 0x76` with quest 4 bit 1: new item base `600`, unique index 69, plus the vanilla ring |
+| Andariel catalyst, Warriv re-issue | PASS | `h spawn 156` + `h kill nearest 156`: 1 catalyst `3o[`; second kill: still 1; removed, `h interact 155`: re-issued. (Quest 6 must be active when the game is created and the flag, quest 47 bit 0, clear: game_checks patches the closed save first) |
+| Dungeon lockout: refusal | PASS | Normal, `h use b60X` + `h enter nearest`: refused 0 -> 1, still in town |
+| Dungeon lockout: clock, re-entry, sealed | PASS | Hell rules (`h difficulty 2`, level 125), key `b62X` (level 253): entry, clocks 0 -> 1; re-entry after 18 s allowed; after 68 s the entry is refused (refused counter +2, stays in town) |
+| Cow portal recipe | PASS | leg in the cube: Normal town no recipe; Hell town recipe 2 runs and a class-60 portal object appears (the handler needs Baal killed in that difficulty: `h quest 40 0 set`); Hell field no recipe |
+| Cube gold payment | PASS | row 6327 (50,000): 400000 -> 350000; row 6328 (100,000) with 20,000 carried: carried 0, bank 100000 -> 20000 |
+| Craft flags | PASS | player flag: row 6369 (assassin) sets flag 1, then row 6350 is offered; game flag: key row 7102 sets game flag 50, a second try is refused |
+
+Notes: the cube conditions of Median rows are partly on the player (`stat player 378`, `536`, `532`) and partly on the item
+(op 18: item stat 532 == 1), see `game_checks.check_goldcraft` / `check_craftflags`. `h cubecraft` returns no item for
+portal recipes; look at `h state`. Observed, not fixed (docs/bugs.md #24): entering a Median dungeon level through a portal
+can crash the client after a few area changes in one game (assert `asset cache exceeded`, null call), so the lockout clock
+check runs first and the full run ends with a crash on some runs.
+
 ## Scripted checks (tools/game_checks.py, 2026-10-21, foreground input)
 
 Console commands and measured coordinates: [dev-console.md](dev-console.md). Results of the partial run (the run was
