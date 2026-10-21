@@ -16,6 +16,8 @@
 // client DungeonWidget and the 0x88 state packet.
 #include "dungeon_lockout.h"
 
+#include "client_messages.h"
+#include "client_messages_logic.h"
 #include "d2r.h"
 #include "dungeon_logic.h"
 #include "game_end.h"
@@ -98,11 +100,27 @@ void Log(const char* what, int32_t a, int32_t b) noexcept {
 	}
 }
 
-// True when the player may enter `dst`; otherwise sends the failure message. Median shows its own message (code 0x13,
-// D2Sigma 0x100b15d0) and the client's DungeonWidget; D2R has no text for that, so the player gets D2R's generic
-// "failed" reaction (the one the portal function itself uses) and nothing else.
+// Median's refusal texts (string table ids 11189 / 11192) as lines in the player's message log: D2R has no popup for
+// the lockout, the vanilla chat line stands in for it (the popup art is custom art, docs/unported.md).
+void TellRefusal(Unit* player, const dungeon::Entry& e, const dungeon::Who& who, dungeon::Verdict v) noexcept {
+	if (v == dungeon::Verdict::Sealed) {
+		SendClientMessage(player, clientmsg::SealedLine1, clientmsg::Red);
+		SendClientMessage(player, clientmsg::SealedLine2, clientmsg::Red);
+		return;
+	}
+	char lines[3][64];
+	const int n = clientmsg::RequirementLines(e.levelReq[who.difficulty < 3 ? who.difficulty : 2], e.minDifficulty,
+	                                          e.classLock, who.level, who.difficulty, who.cls, lines);
+	for (int i = 0; i < n; ++i) {
+		SendClientMessage(player, lines[i], clientmsg::Red);
+	}
+}
+
+// True when the player may enter `dst`; otherwise sends the failure message (D2R's generic "failed" reaction, the one
+// the portal function itself uses) and the reason as text. Median's own message is unit message 0x13 and its popup.
 auto Allowed(Game* game, Unit* player, int32_t src, int32_t dst) noexcept -> bool {
-	if (dst <= 0 || dungeon::Find(dst) == nullptr) {
+	const dungeon::Entry* entry = dst > 0 ? dungeon::Find(dst) : nullptr;
+	if (entry == nullptr) {
 		return true;
 	}
 	const dungeon::Who who{g_getStat(player, StatLevel, 0), static_cast<int32_t>(d2r::At<uint32_t>(player, UnitClass)),
@@ -121,6 +139,7 @@ auto Allowed(Game* game, Unit* player, int32_t src, int32_t dst) noexcept -> boo
 	}
 	Log(v == dungeon::Verdict::Sealed ? "level sealed, entry refused" : "entry requirements not met, refused", src, dst);
 	g_unitMessage(player, MessageFailed, player);
+	TellRefusal(player, *entry, who, v);
 	return false;
 }
 
@@ -141,6 +160,13 @@ void Entered(Game* game, Unit* player, int32_t src) noexcept {
 	}
 	if (started) {
 		Log("clock started", src, now);
+		// Median's DungeonWidget (packet 0x88) shows the clock to everybody in the game: a log line with the time
+		// instead ("Closing in: mm:ss", string 11191) and the warning of string 11193.
+		const dungeon::Entry* entry = dungeon::Find(now);
+		char line[64];
+		clientmsg::ClosingLine(entry->lockSeconds, line, sizeof(line));
+		SendGameMessage(game, line, clientmsg::Orange);
+		SendGameMessage(game, clientmsg::ExitWarning, clientmsg::Orange);
 	}
 }
 

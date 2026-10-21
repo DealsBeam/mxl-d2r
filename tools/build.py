@@ -6,7 +6,7 @@
   tbl2json.py        strings                  -> work/mod/data/local/lng/
   txt_migrate.py     D2R table layout         -> work/mod/data/global/excel/{base,}
   waypoints_data.py  actinfo.txt (waypoint panel slots for Median's extra waypoints) -> work/mod, plugin/src/mxl_waypoints.h
-  monster_ai_data.py Median-only monster AI -> D2R's (andariel_ai, the engine's AI table has 155 rows)
+  monster_ai_data.py checks the plugin's monster AI id (andariel_ai = monai row 155, served by plugin/src/monster_ai.cpp)
   cube_tables.py     cube conditions          -> plugin/src/mxl_cube.h (+ cubemain stat ids, ext item conditions)
   sigma_data.py      requirements, dungeon lockout and goblin data -> plugin/src/mxl_{requirements,dungeons,goblins}.h
   items_data.py      runeword properties 8-13 -> plugin/src/mxl_runewords.h
@@ -17,6 +17,7 @@
   animdata_merge.py  merge Median animation data into D2R's animdata
   hd_skill_anims.py  HD skill animation data for Median skills
   missile_hd.py      HD models for Median's missiles (by CelFile) -> hd/missiles/missiles.json
+  effects_hd.py      every Median missile/overlay row -> exact D2R HD effect, scaled variant or closest stand-in; overlay.txt Character -> hd/missiles, hd/overlays, work/mod/effects_hd.md
   terror_zones.py    D2R terror zones off for now (all difficulty flags false in desecratedzones.json)
   (missile_art.py    Median's own missile/overlay animations as HD flipbook effects; not a step until confirmed in game,
                      docs/hd-effects.md; run it by hand)
@@ -36,7 +37,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decode"], ["tbl2json.py"],
-         ["txt_migrate.py"], ["waypoints_data.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["hd_monsters.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
+         ["txt_migrate.py"], ["waypoints_data.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["hd_monsters.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["effects_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
          ["validate.py"]]
 
 

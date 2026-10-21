@@ -20,6 +20,8 @@
 // Entry bytes verified against the dump of build 93847 (docs/d2r-addresses.md); whole instructions, no rip-relative.
 #include "quests_act1.h"
 
+#include "client_messages.h"
+#include "client_messages_logic.h"
 #include "d2r.h"
 #include "quests_common.h"
 #include "quests_logic.h"
@@ -121,6 +123,9 @@ void GiveHeart(Game* game, Unit* player) noexcept {
 	if (got != static_cast<uint32_t>(heart->uniqueIndex)) {
 		Log("Griswold's Heart came out as another unique, got/wanted", static_cast<int>(got), heart->uniqueIndex);
 	}
+	char line[96];
+	clientmsg::RewardLine("Griswold's Heart", 1, line, sizeof(line));
+	SendClientMessage(player, line, clientmsg::Tan);
 }
 
 void HeartHook(void* quest, uint8_t* event) {
