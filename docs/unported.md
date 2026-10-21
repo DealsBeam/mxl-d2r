@@ -11,9 +11,9 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 
 | Area | Median | Port now | Status | Needs / notes |
 |---|---|---|---|---|
-| Monster AI `andariel_ai` (47 monsters: Andariel, Maghda, Radament, Zoltun Kulle, Lilith, Scholars, Malthaels, ...) | own AI routine | D2R's Andariel AI (moves, attacks; skills 1-2 only, no summons/towers) | approx | native port, ~3-5 days + in-game testing ([monsters-ai.md](subsystems/monsters-ai.md)) |
-| Summoner AI | first skill branch by an `aip3`% roll | D2R's (by target cold/fire resist) | approx | small native hook |
-| MosquitoNest init | Median init | D2R's | open | one enabled monster |
+| Monster AI `andariel_ai` (47 monsters: Andariel, Maghda, Radament, Zoltun Kulle, Lilith, Scholars, Malthaels, ...) | own AI routine | native port as AI id 155 (`monster_ai.cpp`, getter hook); "medianai" off word = D2R's Andariel AI | verify | in-game check pending; not ported: the controlled-monster branch and the dead phase 2 ([monsters-ai.md](subsystems/monsters-ai.md)) |
+| Summoner AI | first skill branch by an `aip3`% roll | same rule, two byte patches (`0x5b4e49`, `0x5b4fed`) | verify | [monsters-ai.md](subsystems/monsters-ai.md) |
+| MosquitoNest init | Median init | native init written into the AI table entry 83 | verify | one enabled monster |
 | Max resistance cap | 90 | D2R 95 | open | D2R's resist read is behind a protection thunk; find another hook point ([combat-stats.md](subsystems/combat-stats.md)) |
 | Absorb stats 184/189/417 | Median absorb | none | open | same hook point as the resist cap; which items roll them |
 | Mercenary caps | Median caps | D2R's | open | [combat-stats.md](subsystems/combat-stats.md) |
