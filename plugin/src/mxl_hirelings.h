@@ -33,4 +33,19 @@ inline constexpr int32_t StatColdMastery = 331;  // Median 331
 inline constexpr int32_t StatMedian184 = 369;  // Median 184
 inline constexpr int32_t StatMedian485 = 514;  // Median 485
 
+// Median hireclasses (hire class -> the character class it equips as; weapon / shield item types it may use
+// (allow) minus the ones excluded again (deny); -1 ends a list). Item types are migrated itemtypes rows.
+struct MercClass {
+	int32_t monsterClass;
+	int32_t equivalentClass;
+	int32_t allow[7];
+	int32_t deny[7];
+};
+inline constexpr MercClass MercClasses[] = {
+	{271, 0, {27, -1}, {-1}},
+	{338, 3, {33, 34, -1}, {112, -1}},
+	{359, 1, {30, 2, -1}, {212, -1}},
+	{561, 4, {30, -1}, {198, -1}},
+};
+
 }  // namespace mxl_hirelings

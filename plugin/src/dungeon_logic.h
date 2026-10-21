@@ -57,6 +57,14 @@ public:
 		}
 		frame_ = frame;
 	}
+	// The game is over (game-end hook): its clocks go, if they are that game's.
+	void Forget(const void* game) noexcept {
+		if (game != nullptr && game == game_) {
+			game_ = nullptr;
+			frame_ = 0;
+			Reset();
+		}
+	}
 	void Reset() noexcept {
 		for (Slot& s : slots_) {
 			s = Slot{};

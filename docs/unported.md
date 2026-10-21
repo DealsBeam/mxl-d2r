@@ -17,23 +17,23 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 | Max resistance cap | 90 | D2R 95 | open | D2R's resist read is behind a protection thunk; find another hook point ([combat-stats.md](subsystems/combat-stats.md)) |
 | Absorb stats 184/189/417 | Median absorb | none | open | same hook point as the resist cap; which items roll them |
 | Mercenary caps | Median caps | D2R's | open | [combat-stats.md](subsystems/combat-stats.md) |
-| Andariel catalyst / Act 2-5 bonus drops | treasure class dropped once per player on the ground | item created in the killer's inventory | deviation | D2R treasure-class drop per player not wired; multiplayer gives only the killer one |
+| Andariel catalyst / Act 2-5 bonus drops | treasure class dropped once per player on the ground | same: D2R's TC executor `0x441300` once per player in the game, at the victim (monstats word +0xc0 + difficulty * 0x10); the inventory item stays as the fallback when the class cannot be resolved | verify | Andariel checked in game (catalyst on the ground, still one after a second kill); Summoner / Izual use the same helper, not run in game; multiplayer count not run |
 | Quest reward notices (client messages 0x5f-0x61) | shown | not shown | open | client message sender |
 | Quest 5 repeat guard (`0x9e8b0`) | Median guard | not ported | open | purpose unclear in D2R ([quests-requirements.md](subsystems/quests-requirements.md) 5b) |
 | Quest 8 event-2 handler (`0x5a2830`) | Median handler | not read | open | |
 | Cain crafting materials | per-item submenu (4 entries) | one line, gives everything owed | approx | D2R menu record holds 5 lines; submenu = plugin-owned record |
 | Cain menu line visibility (bug #23) | shown | added in code, never seen on screen | verify | look at Cain's menu in game |
-| Craft player flags | keyed by player name | keyed by unit id (rejoin = new flags) | approx | name lookup |
-| Craft per-game flags reset | game end | game pointer change / frame counter | approx | game-destroy hook (`0x4057c0` has a rip-relative prologue) |
+| Craft player flags | keyed by player name | keyed by player name (character name at player data +0, fallback unit id) | verify | checked in game (flags survive a unit id change); a second character of the same name in one game would share them, as in Median |
+| Craft per-game flags reset | game end | reset on the game-end event (`game_end.cpp`, client teardown `0x486be0`), plus the old game pointer / frame guard | verify | event fires once per left game (checked: games ended 0 -> 1); `0x4057c0` has a rip-relative prologue and is only called by the idle sweep |
 | Gold payment client update | Median sends the update | assumed D2R stat sync | verify | stat-update packet sender not located |
 | Dungeon lockout client timer and popup (packet 0x88, message 0x13) | shown | refusal only ("can't do that") | open | client widget + packet |
 | Dungeon lockout: item-teleport clock start (`0x7fb70`), quest-table condition | yes | no | open | |
 | Goblin "sighted" packet | client notice | none | open | |
-| Hireling starting gear (Head/Torso/Weapon/Shield/Share columns) | per hireling row | none | open | how D2R gives a new hire its gear |
-| Hireling hire/equip state gates (states 0x4c/0x50/0x51) | yes | no | open | state ids unresolved |
+| Hireling starting gear (Head/Torso/Weapon/Shield/Share columns) | per hireling row | D2R's own look; a fresh hire has no items | deviation | checked in game: a new Rogue carries 0 items in its inventory and still draws a bow, so D2R's gear is a visual taken from its own class data, not items to create; the columns have no D2R counterpart. Share is converted |
+| Hireling hire/equip gates (Median ids 0x4c/0x50/0x51 and the hireclasses lists) | item type ids: potion types and weapon / shield types the class may wield | ported: weapon / shield types by class refused in the `0x36bc50` hook (`MercClasses`, `item_gen.cpp`); class-locked items check the merc's `equivalentcharclass` | verify | checked in game on the Rogue (bow allowed, crossbow, spears, swords, polearms, scythes, axes, maces, shield refused); the other three classes are unit-tested only; potion branch (`0x672a0`) not ported |
 | Tyrael travel quest gate | quest 28 | D2R quest 26 | approx | harmless (portal, no menu line) |
 | Item event ids 11/12/32/33/34, immunity checks on open wounds / crushing blow (monster stat 373) | attacker-takes-fire/cold/magic damage, flat life/cast on event (33/34), monsters with stat 0xbd immune to 15/16 | none | open | D2R dispatcher of itemeventfunc not found (stat record +0x48/+0x4a); see [items-xp.md](subsystems/items-xp.md) section 5 for the search done |
-| Class-locked items (stat 492) | requirement check fails for other classes (players and mercenaries) | players only (hook 0x36bc50) | verify | equip a locked unique on two classes; mercenary branch not ported |
+| Class-locked items (stat 492) | requirement check fails for other classes (players and mercenaries) | players and mercenaries (hook 0x36bc50; a merc counts as its `equivalentcharclass`) | verify | equip a locked unique on two classes and on a mercenary |
 | Ethereal roll (item level 100+) | `rand(1000) <= qualities word2` (2.6%, quality 1 included), +25% stats, 75% durability | same rate/effect, but D2R's gate (5%, quality 1 and 5 excluded) stays in front; low quality never ethereal | approx | replace the `0x442d60` block fully to allow quality 1 |
 | Socket roll (quality 1-3) | `rand() % 7` sockets, 6 of 7 items | same, through D2R's setter (size clipping); gen-forced sockets keep D2R's code | verify | compare socket rates in game; Median's quality 5-9 branch (6 sockets) is dead in the 1.13c call sites |
 | Dye colour | stat 183 paints the item | stat 368 through the item colour hook 0x3710d0 | verify | look in game; dyes 16-21 may need Send Bits 6 on stat 368 |

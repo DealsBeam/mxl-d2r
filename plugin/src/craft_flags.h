@@ -16,3 +16,5 @@ auto CraftFlagTest(const void* player, int flag, bool gameWide) noexcept -> bool
 void SetCraftFlag(const void* player, int flag, bool game, bool on) noexcept;
 // Binds the unit-id getter and stat functions (cheap, no hooks); cube_conditions calls it from its installer.
 void CraftBind(uint64_t exeBase) noexcept;
+// The game with this pointer ended: its flags are dropped (registered with game_end.cpp by InstallCraftFlags).
+void CraftForgetGame(const void* game) noexcept;

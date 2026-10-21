@@ -53,6 +53,7 @@ constexpr uint8_t ItemGenEntry[] = {0x40, 0x55, 0x53, 0x56, 0x41, 0x54, 0x41, 0x
 
 using questeng::Bit;
 using questeng::Difficulty;
+using questeng::DropBonusPerPlayer;
 using questeng::EventMessage;
 using questeng::EventNpcClass;
 using questeng::EventPlayer;
@@ -148,7 +149,10 @@ void KillHook(void* quest, uint8_t* event) {
 			const bool flag = Bit(record, quests::FlagQuest, quests::FlagCatalyst);
 			const auto monster = static_cast<int32_t>(d2r::At<uint32_t>(victim, UnitClass));
 			if (record != nullptr && quests::ShouldGiveCatalystOnKill(Difficulty(game), monster, flag)) {
-				if (api.createItem(game, player, quests::CodeCatalyst, 0, 2, 1) != nullptr) {
+				// Median rolls the class on the ground once per player and sets the flag whatever dropped; the
+				// inventory item is only the fallback for a class that could not be resolved.
+				if (DropBonusPerPlayer(game, victim, player, quests::TcCatalyst) > 0 ||
+				    api.createItem(game, player, quests::CodeCatalyst, 0, 2, 1) != nullptr) {
 					api.bitSet(record, quests::FlagQuest, quests::FlagCatalyst);
 				}
 			}

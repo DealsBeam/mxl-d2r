@@ -21,6 +21,7 @@
 #include "missile_hits.h"
 #include "mana_costs.h"
 #include "craft_flags.h"
+#include "game_end.h"
 #include "cube_conditions.h"
 #include "quests_act1.h"
 #include "quests_act2_5.h"
@@ -60,6 +61,7 @@ char g_manaCostsReport[160] = "off: not the expected game image";
 char g_missileHitsReport[512] = "";
 char g_cubeReport[192] = "off: not the expected game image";
 char g_craftReport[96] = "off: not the expected game image";
+char g_gameEndReport[96] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
 char g_quests2Report[224] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
@@ -175,6 +177,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "cube conditions %s", g_cubeReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "craft flags %s", g_craftReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "game end %s (games ended %d)", g_gameEndReport, GameEndCount());
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "act 1 quests %s", g_questsReport);
 	Say(command, line);
@@ -319,6 +323,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			}
 			std::snprintf(g_cubeReport, sizeof(g_cubeReport), "%s", report);
 			std::snprintf(line, sizeof(line), "mxl-core: cube conditions %s", report);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("gameend")) {
+				std::snprintf(g_gameEndReport, sizeof(g_gameEndReport), "%s", OffNote);
+			} else {
+				InstallGameEnd(context, g_gameEndReport, sizeof(g_gameEndReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: game end %s", g_gameEndReport);
 			context->LogInfo(line);
 		}
 		{

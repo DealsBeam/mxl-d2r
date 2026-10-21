@@ -3,7 +3,9 @@
 // Class lock. Median's requirement check (D2Items.cpp 0x1007e470) also fails when the item carries stat 463 (D2R 492) =
 // class + 1 and the player is another class; the 14 recipes `properties_422` lock a unique to a class that way. D2R keeps the
 // stat but nobody reads it. Hook: the item requirement check 0x36bc50 (item, unit, flag, &strOk, &dexOk, &levelOk, flag2),
-// the original runs first and a success is turned into a failure for a player of another class.
+// the original runs first and a success is turned into a failure for a player of another class. A mercenary gets the same
+// lock against the class it equips as (hireclasses +4) plus Median's weapon / shield type lists (hirelings_logic.h,
+// hireclasses StateListA/B, which are item type ids: 0x1007e470 -> 0x10066fd0 -> 0xbf950 "item is of type").
 //
 // Ethereal. D2R's generator 0x442d60 (1.13c 0x10a20) lets 5 of 100 items of item level 100+ become ethereal through 0x3d3510
 // (+50% damage / defence) and then halves the durability. Median's 0x1007e120 rolls `rand(1000) <= qualities.txt[quality].word2`
@@ -27,6 +29,7 @@
 #include "item_gen.h"
 
 #include "d2r.h"
+#include "hirelings_logic.h"
 #include "item_gen_logic.h"
 
 #include <cstdint>
@@ -72,9 +75,11 @@ constexpr int32_t StatMaxDurability = 0x49;
 constexpr int32_t StatDefence = 0x1f;
 constexpr int32_t WeaponStats[] = {0x15, 0x16, 0x17, 0x18, 0x9f, 0xa0};
 constexpr int32_t ItemTypeWeapon = 0x2d;
+constexpr int32_t ItemTypeShield = 2;  // itemtypes row `shie`
 constexpr uint32_t FlagEthereal = 0x400000;
 constexpr uint32_t FlagSocketed = 0x800;
 constexpr int UnitTypePlayer = 0;
+constexpr int UnitTypeMonster = 1;
 constexpr int UnitTypeItem = 4;
 constexpr const char* NoFile = "mxl-core item_gen";
 
@@ -123,6 +128,8 @@ SetSocketsFn g_setSockets = nullptr;
 
 int g_lockChecked = 0;
 int g_lockDenied = 0;
+int g_mercChecked = 0;
+int g_mercDenied = 0;
 int g_etherealSeen = 0;
 int g_etherealMade = 0;
 int g_socketsRolled = 0;
@@ -146,12 +153,41 @@ auto Matches(uint64_t base, uint64_t rva, const uint8_t* bytes, size_t size) noe
 
 // --- Class lock ---------------------------------------------------------------------------------------------------
 
+// A mercenary (a monster of one of the four hire classes): Median's class lock against the class it equips as, and its
+// weapon / shield type lists (hirelings_logic.h). Armour is left to D2R, whose mercenary has the slots for it.
+uint64_t MercRequirement(Unit* item, Unit* merc, uint64_t result) {
+	const auto* hireClass = hire::MercClassOf(g_unitClass(merc, NoFile, 0));
+	if (hireClass == nullptr) {
+		return result;
+	}
+	++g_mercChecked;
+	const int32_t lock = g_getStat(item, StatClassLock, 0);
+	if (lock != 0 && !item_gen::ClassLockAllows(lock, hireClass->equivalentClass)) {
+		++g_mercDenied;
+		return 0;
+	}
+	if (g_isType(item, ItemTypeWeapon) != 0 || g_isType(item, ItemTypeShield) != 0) {
+		if (!hire::MercMayWield(*hireClass, [item](int32_t type) { return g_isType(item, type) != 0; })) {
+			++g_mercDenied;
+			return 0;
+		}
+	}
+	return result;
+}
+
 uint64_t RequirementHook(Unit* item, Unit* unit, int32_t a3, uint32_t* r4, uint32_t* r5, uint32_t* r6, int32_t a7) {
 	const uint64_t result = g_originalRequirement(item, unit, a3, r4, r5, r6, a7);
 	if ((result & 0xff) == 0 || item == nullptr || unit == nullptr) {
 		return result;
 	}
-	if (g_unitType(item) != UnitTypeItem || g_unitType(unit) != UnitTypePlayer) {
+	if (g_unitType(item) != UnitTypeItem) {
+		return result;
+	}
+	const int unitType = g_unitType(unit);
+	if (unitType == UnitTypeMonster) {
+		return MercRequirement(item, unit, result);
+	}
+	if (unitType != UnitTypePlayer) {
 		return result;
 	}
 	++g_lockChecked;
@@ -365,6 +401,6 @@ auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool eth
 }
 
 void ItemGenSummary(char* text, size_t size) noexcept {
-	std::snprintf(text, size, "class lock denied %d of %d locked-item checks | ethereal %d of %d at item level 100+ | sockets given %d of %d rolls | dyed colours drawn %d",
-	              g_lockDenied, g_lockChecked, g_etherealMade, g_etherealSeen, g_socketsGiven, g_socketsRolled, g_dyed);
+	std::snprintf(text, size, "class lock denied %d of %d locked-item checks, mercenary equip refused %d of %d | ethereal %d of %d at item level 100+ | sockets given %d of %d rolls | dyed colours drawn %d",
+	              g_lockDenied, g_lockChecked, g_mercDenied, g_mercChecked, g_etherealMade, g_etherealSeen, g_socketsGiven, g_socketsRolled, g_dyed);
 }
