@@ -100,10 +100,10 @@ int RunNpcActionsTests() {
 	Check(SlotSupport(SlotOf(244, 0)) == Support::Run, "Cain crafting materials page runs");
 	Check(SlotSupport(SlotOf(244, 2)) == Support::Run, "Cain catalyst entry runs");
 	for (const int cls : {154, 511, 512}) {
-		Check(SlotSupport(SlotOf(cls, 0)) == Support::Stub, "Charsi / Larzuk / Anya services are stubbed");
+		Check(SlotSupport(SlotOf(cls, 0)) == Support::Native, "Charsi / Larzuk / Anya services are D2R's own");
 	}
 	for (const int cls : {155, 175, 210, 264, 367}) {
-		Check(SlotSupport(SlotOf(cls, 0)) == Support::Stub, "travel packages are stubbed");
+		Check(SlotSupport(SlotOf(cls, 0)) == Support::Native, "travel packages are D2R's own");
 	}
 
 	// item values: quality 1 is the default (normal), others pass
@@ -153,13 +153,13 @@ int RunNpcActionsTests() {
 		Check(RunSlot(KindFor(246, 3), 246, h) == Result::Done && f.created.back() == C("0o[ "), "second catalyst");
 	}
 
-	// stubs: logged, no effect
+	// D2R-native services: logged, no effect
 	{
 		Fixture f;
 		f.bits.insert({6, 0});  // row 11: Warriv's "go east" (quest 6, Andariel)
 		const npc::Host h = MakeHost(f);
-		Check(RunSlot(KindFor(155, 0), 155, h) == Result::Stubbed && f.notes > 0 && f.created.empty() && f.respecs == 0,
-		      "travel package is logged and does nothing");
+		Check(RunSlot(KindFor(155, 0), 155, h) == Result::Native && f.notes > 0 && f.created.empty() && f.respecs == 0,
+		      "travel package is D2R's own: logged, nothing run");
 		Check(RunSlot(KindFor(154, 0), 154, h) == Result::Denied, "Charsi's imbue keeps its quest gate");
 	}
 
