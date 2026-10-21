@@ -299,11 +299,36 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `tile` | uses the nearest warp tile (`0x491ff0`) |
 | `difficulty <0-2>` | writes the running game's difficulty byte (checks that need Hell rules without a Hell character; quest records are per difficulty) |
 | `class <0-6>` | sets the player's class field (class bound recipes; set it back, the save keeps it) |
-| `pkt <hex bytes>` | any client packet into the server handler table |
+| `pkt <hex bytes>` | any client packet into the server handler table (fixed-size packets only: the walk / run packets 1 and 3 are 210 bytes with the client's path, a short one is read as garbage; use `move`) |
+| `equip <code> [stat=value ...] [q=n] [ilvl=n] <bodyloc>` / `unequip <bodyloc>` | creates the item and wears it (the game's place function `0x471500` with the location from `0x382df0`, so the owner gets the item's stats: a +77 strength ring raises stat 0 by 77 and `unequip` takes it back); body locations `head neck torso rhand lhand rring lring belt feet gloves altr altl` or 1-12; `state` prints `body=<n>` on worn items |
+| `move <x> <y> [walk] [packet]` / `moveto <unit id>\|nearest [class]` | the player walks / runs to a position (state's x / y units) through `0x42d2c0(game, player, 0, 3, x, y, 0, 0)`, the call the walk packet ends in (the server finds the path); poll `state` for the arrival. `packet` sends the 210 byte walk packet through the handler table instead and prints the checks it makes (dead, position, distance <= 15) |
+| `skills` / `skill [left\|right <id>]` | the player's skill list (id, base level, skill mode, the game's usability code from `0x33f360`: 0 usable, 2 passive or requirements, 5 no weapon), or selects the active left / right skill (packet 0x3c) |
+| `setskill <id> <level>` | gives a skill levels with the game's own `0x438670` (stat 5 refilled each step, restored after); Median skills with prerequisites work, the prerequisite check is skipped |
+| `cast <id> [x y\|unit <id>\|nearest [class]\|self]` | selects the skill as the left skill, then uses it the way the cast packets do (`0x4fdb40` at a position, `0x4f8de0` at a unit: a melee skill walks up to the monster first and the cast starts when it is in reach, so repeat it for a wandering target); prints the usability code, mode and mana at the call |
+| `missiles [reset]` | live missile units (type 3, hash base `0x646`) and the distinct missiles seen by any server frame since `reset` (class ids; short-lived ones are counted); `state` ends with the same line |
 | `sysmsg <type> <colour> <text...>` | one chat packet 0x26 to the player (docs/d2r-addresses.md section 13): type 4 = message-log line, 5 = overhead bubble; colour byte 0-11 |
 
 Where the answers cannot come from a call they come from the screenshot: the NPC popup text (`cain_menu.png`) and
 D2R's own cheat output.
+
+### Player actions (lane harness-cast, 2026-10-22, background mode, slot 2, plugin 0.48.0 + harness)
+
+The `pkt` verb could not make the player act: the walk and run packets (1 / 3) are 210 bytes with the client's own path, and the
+cast packets run through the character's active skill. `move`, `skill`, `setskill`, `cast`, `equip` and the missile counter now
+drive the player server side with the game's own functions (no input of any kind; `py -3 tools/game_checks.py casts equipevents`).
+
+| Row | Result | Evidence |
+|---|---|---|
+| `move` | PASS | `move 4725 5440` from 4704,5424: mode 3 (run), arrived at 4725,5440 within ~5 s |
+| `cast` earthquake_2 (Median 1271, Barbarian) | PASS | melee: walks to the monster, mode 7, mana spent at the call (1000 -> 989 at level 5), 4-6 distinct missiles (earthquake missile classes 4164-4167, 5535-5537) |
+| `cast` Bash (126) | PASS | mode 7, mana 1005 -> 996, no missile (a melee hit) |
+| `cast` Fire Bolt (36, a Sorceress spell cast by the Barbarian) | PASS | mode 10, missile class 58; the game does not check the class here. The only character in the slot is a Barbarian, and Median's Sorceress skills with a missile and no prerequisite are rare (frigid_nova 485 answers usability 2 and does not run) |
+| `equip` + `unequip` | PASS | worn item `body=4` / `body=7`; a +77 strength ring: stat 0 30 -> 107, back to 30 |
+| Item events (stat 396 / 397) | documents the open item | `equip 115 397=50 396=40 rhand`: the item holds the stats (`stat <item id> 397` = 50) and monsters hit the player, but `stat player 397` and `396` stay 0: D2R does not carry these event stats from the item to the owner's list (strength does); the damage to the attacker could not be read (`stat <monster id> 6` reads 0). The dispatcher is still not found; see docs/subsystems/items-xp.md section 5 |
+
+Notes for whoever extends this: `cast` needs the skill to be the active left skill (the unit cast uses the player's active skill), the
+harness selects it; a melee skill cast at a unit makes the player run to it first and the class 18 monsters wander off, so the check
+repeats the cast; the mana cost cannot be read from `state` after the fact (regeneration refills in a few frames), only at the call.
 
 ### Client messages (lane client-ui, 2026-10-22, background mode, slot 2, plugin 0.48.0, window-only screenshots)
 

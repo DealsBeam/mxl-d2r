@@ -94,6 +94,22 @@ constexpr uint64_t RvaStatsChanged = 0x34dbe0;  // (unit, 1)
 constexpr uint64_t RvaUnitPosition = 0x34a110;
 constexpr uint64_t RvaItemByte54 = 0x36ca10;
 constexpr uint64_t RvaMoveBlocked = 0x350a20;   // (unit, x, y, mask)
+// player actions (lane harness-cast; D2Game PlrMsg.cpp handlers 0x4ac050.. read from the Ghidra decompile)
+constexpr uint64_t RvaSkillById = 0x33dcd0;     // (unit, skill id, owner item id or -1) -> Skill* or null (list at unit+0x100)
+constexpr uint64_t RvaLeftSkill = 0x34a540;     // (unit) -> Skill* on the left button
+constexpr uint64_t RvaRightSkill = 0x34b400;    // (unit) -> Skill* on the right button
+constexpr uint64_t RvaAddSkillLevel = 0x438670; // (version byte, unit, skill id): one skill point (cost from stat 5) -> 1 / 0
+constexpr uint64_t RvaCastAtPoint = 0x4fdb40;   // (game, unit, x, y, 1, Skill*): packets 5 / 0xc call it with the active skill
+constexpr uint64_t RvaCastAtUnit = 0x4f8de0;    // (game, unit, target type, target id, Skill*, 1, shift): packets 6 / 7 / 0xd / 0xe
+constexpr uint64_t RvaBodyLoc = 0x382df0;       // (int32 loc[4], body location 1-12)
+constexpr uint64_t RvaSkillList = 0x34b6e0;     // (unit) -> list head: first Skill* at +0, Skill +8 = next, +0x10 skill mode, +0x40 base level
+constexpr uint64_t RvaSkillUsable = 0x33f360;   // (unit, Skill*) -> 0 usable; 1 mana / cooldown, 2 requirements, 3 invalid, 7 no level...
+constexpr uint64_t RvaPlayerAction = 0x42d2c0;  // (game, unit, Skill* or null, mode, x, y, 0, 0): what the walk / cast packets end in
+constexpr uint64_t RvaPlayerBusy = 0x4249f0;    // (unit): nonzero blocks skill use (item on the cursor / trade)
+constexpr uint64_t RvaDeadCheck = 0x34c2c0;     // (unit) -> 1 dead / dying
+constexpr uint64_t RvaPosCheck = 0x4fe1f0;      // (unit, x, y, tolerance) -> 0 when the unit is within the tolerance of x,y
+constexpr uint64_t RvaPathDistance = 0x325370;  // (unit, x, y) -> distance used by the walk packet check (<= 15 accepted)
+constexpr uint64_t RvaUnitClientOf = 0x48fde0;  // (unit) -> client
 // client
 constexpr uint64_t RvaClientFind = 0x9a5d0;     // (id, type) -> client unit
 constexpr uint64_t RvaMenuRecord = 0x113990;    // (npc unit) -> row index in the NPC menu table
@@ -101,7 +117,7 @@ constexpr uint64_t RvaMenuOpenFlag = 0x2a486a4, RvaMenuNpcValid = 0x2a48760, Rva
 constexpr uint64_t RvaMenuTable = 0x2a48830, RvaMenuCount = 0x2a48838;
 // offsets
 constexpr int GameClients = 0x138, ClientNext = 0x628, ClientState = 0x04, GameFrame = 0x170, GameDifficulty = 0x104;
-constexpr int HashMonsters = 0x4c6, HashItems = 0x5c6, HashObjects = 0x546;  // game + (base + (id & 0x7f)) * 8
+constexpr int HashMonsters = 0x4c6, HashItems = 0x5c6, HashObjects = 0x546, HashMissiles = 0x646;  // game + (base + (id & 0x7f)) * 8
 constexpr int UnitNextInHash = 0x158, UnitClass = 0x04, UnitId = 0x08, UnitMode = 0x0c;
 constexpr int StatLife = 6, StatMana = 8, StatLevel = 12, StatGold = 14, StatGoldBank = 15, StatDurability = 0x48;
 
@@ -157,6 +173,20 @@ using InvChangeFn = uint8_t (*)(Unit*, int32_t*, int32_t*, uint32_t*, uint32_t*,
 using StatsChangedFn = void (*)(Unit*, int32_t);
 using UnitPositionFn = uint32_t (*)(Unit*);
 using BlockedFn = int32_t (*)(Unit*, int32_t, int32_t, int32_t);
+using SkillByIdFn = uint8_t* (*)(Unit*, int32_t, int32_t);
+using ActiveSkillFn = uint8_t* (*)(Unit*);
+using AddSkillFn = int32_t (*)(uint32_t, Unit*, uint32_t);
+using CastPointFn = int32_t (*)(Game*, Unit*, uint32_t, uint32_t, uint32_t, void*);
+using CastUnitFn = void (*)(Game*, Unit*, uint32_t, uint32_t, void*, uint32_t, uint32_t);
+using BodyLocFn = int32_t* (*)(int32_t*, int32_t);
+using SkillListFn = uint8_t** (*)(Unit*);
+using SkillUsableFn = int32_t (*)(Unit*, void*);
+using PlayerActionFn = int64_t (*)(Game*, Unit*, void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+using PlayerBusyFn = int32_t (*)(Unit*);
+using DeadCheckFn = int32_t (*)(Unit*);
+using PosCheckFn = int32_t (*)(Unit*, uint32_t, uint32_t, int32_t);
+using PathDistanceFn = int32_t (*)(Unit*, int32_t, int32_t);
+using UnitClientFn = void* (*)(Unit*);
 using ClientFindFn = Unit* (*)(uint32_t, int32_t);
 using MenuRecordFn = int32_t (*)(Unit*);
 using MenuHandlerFn = uint8_t (*)(uint8_t);
@@ -195,6 +225,9 @@ auto Fail(Ctx* c, const char* fmt, ...) noexcept -> bool {
 }
 
 auto TypeOf(const Unit* u) noexcept -> int32_t { return d2r::At<int32_t>(u, d2r::UnitType); }
+
+auto SkillIdOf(const uint8_t* skill) noexcept -> int;  // defined with the player actions below
+void PrintMissiles(Ctx* c) noexcept;
 
 auto FindPlayer(Game* game) noexcept -> Unit* {
 	int guard = 0;
@@ -308,9 +341,10 @@ void DescribeItem(Ctx* c, Unit* item) noexcept {
 	int32_t loc[8] = {};
 	Fn<ItemLocationFn>(RvaItemLocation)(loc, item);
 	const auto* data = Fn<uint8_t* (*)(Unit*)>(0x34a500)(item);  // item data: +0 quality, +0x34 unique index
-	Out("item id=%u code=%s class=%d page=%d x=%d y=%d qty=%d stat532=%d quality=%d unique=%d", IdOf(item), code, ClassOf(item),
+	Out("item id=%u code=%s class=%d page=%d x=%d y=%d qty=%d stat532=%d quality=%d unique=%d body=%d", IdOf(item), code, ClassOf(item),
 	    static_cast<int>(Fn<ItemByteFn>(RvaItemPage)(item)), loc[2] & 0xffff, (loc[2] >> 16) & 0xffff, Stat(item, 70), Stat(item, 532),
-	    data != nullptr ? d2r::At<int32_t>(data, 0) : -1, data != nullptr ? d2r::At<int32_t>(data, 0x34) : -1);
+	    data != nullptr ? d2r::At<int32_t>(data, 0) : -1, data != nullptr ? d2r::At<int32_t>(data, 0x34) : -1,
+	    loc[0] == 1 ? loc[3] : 0);
 }
 
 auto FindItemByCode(Ctx* c, uint32_t code, int page) noexcept -> Unit* {
@@ -345,6 +379,8 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 		DescribeItem(c, it);
 	});
 	Out("items %d", items);
+	Out("skills left=%d right=%d", SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(p)), SkillIdOf(Fn<ActiveSkillFn>(RvaRightSkill)(p)));
+	PrintMissiles(c);
 	int mons = 0;
 	EachUnit(c->game, HashMonsters, [&](Unit* u) {
 		if (TypeOf(u) == 1 && IsAlive(u) && DistTo(p, u) < 40 && mons < 12) {
@@ -708,8 +744,9 @@ auto CmdClass(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 }
 
 // Port of 0x517530 with a choice of where the item goes and stats set before the client hears of it.
+// bodyLoc 1-12 equips the item instead (Place with a body location, as the packet 0x1a handler's move does).
 auto MakeItem(Ctx* c, uint32_t code, int quality, int ilvl, int page, const int (*stats)[3], const long long* values, int nstats,
-              char* why, size_t whySize) noexcept -> Unit* {
+              char* why, size_t whySize, int bodyLoc = 0) noexcept -> Unit* {
 	int32_t classId = 0;
 	const uint8_t* rec = Fn<ItemByCodeFn>(RvaItemByCode)(c->dataFlag, code, &classId);
 	if (rec == nullptr) {
@@ -762,20 +799,28 @@ auto MakeItem(Ctx* c, uint32_t code, int quality, int ilvl, int page, const int 
 		Fn<GroundDropFn>(RvaGroundDrop)(c->game, c->player, item, spot, out[0], out[1]);
 		return item;
 	}
-	void* inv = Fn<InventoryFn>(RvaInventory)(c->player, "harness", 0);
-	const int32_t record = Fn<InvRecordFn>(RvaInvRecord)(c->player, page == 3 ? 3 : 0, d2r::At<uint8_t>(c->game, 0x106) != 1);
-	uint16_t x = 0, y = 0;
-	if (inv == nullptr || Fn<FindSpotFn>(RvaFindSpot)(inv, item, record, &x, &y, page) == 0) {
-		Fn<FreeItemFn>(RvaFreeItem)(c->game, item);
-		std::snprintf(why, whySize, "item: no room in %s", page == 3 ? "the cube" : "the inventory");
-		return nullptr;
-	}
 	int32_t loc[4] = {};
-	Fn<LocInitFn>(RvaLocInit)(loc, page, static_cast<int32_t>((static_cast<uint32_t>(y) << 16) | x));
+	if (bodyLoc > 0) {
+		Fn<BodyLocFn>(RvaBodyLoc)(loc, bodyLoc);
+	} else {
+		void* inv = Fn<InventoryFn>(RvaInventory)(c->player, "harness", 0);
+		const int32_t record = Fn<InvRecordFn>(RvaInvRecord)(c->player, page == 3 ? 3 : 0, d2r::At<uint8_t>(c->game, 0x106) != 1);
+		uint16_t x = 0, y = 0;
+		if (inv == nullptr || Fn<FindSpotFn>(RvaFindSpot)(inv, item, record, &x, &y, page) == 0) {
+			Fn<FreeItemFn>(RvaFreeItem)(c->game, item);
+			std::snprintf(why, whySize, "item: no room in %s", page == 3 ? "the cube" : "the inventory");
+			return nullptr;
+		}
+		Fn<LocInitFn>(RvaLocInit)(loc, page, static_cast<int32_t>((static_cast<uint32_t>(y) << 16) | x));
+	}
 	uint32_t itemId = IdOf(item);
-	if (loc[0] != 0 || Fn<PlaceFn>(RvaPlace)(c->player, loc, &itemId, 1, 0) == 0) {
+	if ((bodyLoc <= 0 && loc[0] != 0) || Fn<PlaceFn>(RvaPlace)(c->player, loc, &itemId, 1, 0) == 0) {
 		Fn<FreeItemFn>(RvaFreeItem)(c->game, item);
-		std::snprintf(why, whySize, "item: placing failed");
+		if (bodyLoc > 0) {
+			std::snprintf(why, whySize, "equip: the item does not fit body location %d or it is occupied (unequip first)", bodyLoc);
+		} else {
+			std::snprintf(why, whySize, "item: placing failed");
+		}
 		return nullptr;
 	}
 	Fn<SendItemFn>(RvaSendItem)(c->game, c->player, item, 1, 2, loc[0], loc[1], loc[3], loc[2]);
@@ -786,45 +831,90 @@ auto MakeItem(Ctx* c, uint32_t code, int quality, int ilvl, int page, const int 
 	return item;
 }
 
-auto CmdItem(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
-	if (t.n < 2) {
-		return Fail(c, "usage: item <code> [stat=value ...] [q=quality] [ilvl=n] [inv|cube|ground]");
-	}
+// Shared by `item` and `equip`: <code> then stat=value pairs, q=, ilvl=, uniq=, a page word (inv cube ground) or a body location.
+struct ItemSpec {
 	int stats[8][3] = {};
 	long long values[8] = {};
-	int nstats = 0, quality = 2, ilvl = 0, page = 0;
+	int nstats = 0, quality = 2, ilvl = 0, page = 0, bodyLoc = 0;
+};
+
+auto ParseItemSpec(Ctx* c, const hcmd::Tokens& t, ItemSpec* spec) noexcept -> bool {
 	g_uniq = -1;
 	for (int i = 2; i < t.n; ++i) {
 		long long v = 0;
 		if (hcmd::LowerEq(t.tok[i], "inv")) {
-			page = 0;
+			spec->page = 0;
 		} else if (hcmd::LowerEq(t.tok[i], "cube")) {
-			page = 3;
+			spec->page = 3;
 		} else if (hcmd::LowerEq(t.tok[i], "ground")) {
-			page = -1;
+			spec->page = -1;
 		} else if (std::strncmp(t.tok[i], "q=", 2) == 0 && hcmd::ParseInt(t.tok[i] + 2, &v)) {
-			quality = static_cast<int>(v);
+			spec->quality = static_cast<int>(v);
 		} else if (std::strncmp(t.tok[i], "uniq=", 5) == 0 && hcmd::ParseInt(t.tok[i] + 5, &v)) {
 			g_uniq = static_cast<int>(v);
 		} else if (std::strncmp(t.tok[i], "ilvl=", 5) == 0 && hcmd::ParseInt(t.tok[i] + 5, &v)) {
-			ilvl = static_cast<int>(v);
-		} else if (nstats < 8 && hcmd::ParseStatArg(t.tok[i], &stats[nstats][0], &stats[nstats][1], &values[nstats])) {
-			++nstats;
+			spec->ilvl = static_cast<int>(v);
+		} else if (spec->nstats < 8 &&
+		           hcmd::ParseStatArg(t.tok[i], &spec->stats[spec->nstats][0], &spec->stats[spec->nstats][1], &spec->values[spec->nstats])) {
+			++spec->nstats;
+		} else if (std::strchr(t.tok[i], '=') == nullptr && hcmd::ParseBodyLoc(t.tok[i]) != 0) {
+			spec->bodyLoc = hcmd::ParseBodyLoc(t.tok[i]);
 		} else {
-			return Fail(c, "item: cannot read '%.40s'", t.tok[i]);
+			return Fail(c, "%s: cannot read '%.40s'", c->verb, t.tok[i]);
 		}
 	}
+	return true;
+}
+
+auto CmdItem(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: item <code> [stat=value ...] [q=quality] [ilvl=n] [inv|cube|ground]  (equip: h equip)");
+	}
+	ItemSpec s;
+	if (!ParseItemSpec(c, t, &s)) {
+		return false;
+	}
+	if (s.bodyLoc != 0) {
+		return Fail(c, "item: a body location needs the equip verb");
+	}
 	char why[120] = "";
-	Unit* item = MakeItem(c, hcmd::CodeToDword(t.tok[1]), quality, ilvl, page, stats, values, nstats, why, sizeof(why));
+	Unit* item = MakeItem(c, hcmd::CodeToDword(t.tok[1]), s.quality, s.ilvl, s.page, s.stats, s.values, s.nstats, why, sizeof(why));
 	if (item == nullptr) {
 		return Fail(c, "%s", why);
 	}
 	DescribeItem(c, item);
-	for (int i = 0; i < nstats; ++i) {
-		Out("  stat %d:%d = %d", stats[i][0], stats[i][1], Stat(item, stats[i][0], stats[i][1]));
+	for (int i = 0; i < s.nstats; ++i) {
+		Out("  stat %d:%d = %d", s.stats[i][0], s.stats[i][1], Stat(item, s.stats[i][0], s.stats[i][1]));
 	}
 	return true;
 }
+
+// `equip <code> [stat=value ...] [q=n] [ilvl=n] [uniq=n] <body location>`: creates the item with the stats set first and
+// puts it on the body location (head amulet body rhand lhand rring lring belt boots gloves altr altl, or 1-12), the way
+// the equip packet does: the player's stats and the item events see it equipped. The location must be free (`unequip`).
+auto CmdEquip(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 3) {
+		return Fail(c, "usage: equip <code> [stat=value ...] [q=n] [ilvl=n] [uniq=n] <head|amulet|body|rhand|lhand|rring|lring|belt|boots|gloves>");
+	}
+	ItemSpec s;
+	if (!ParseItemSpec(c, t, &s)) {
+		return false;
+	}
+	if (s.bodyLoc == 0) {
+		return Fail(c, "equip: name the body location (rhand, lhand, body, head, amulet, rring, lring, belt, boots, gloves)");
+	}
+	char why[160] = "";
+	Unit* item = MakeItem(c, hcmd::CodeToDword(t.tok[1]), s.quality, s.ilvl, 0, s.stats, s.values, s.nstats, why, sizeof(why), s.bodyLoc);
+	if (item == nullptr) {
+		return Fail(c, "%s", why);
+	}
+	DescribeItem(c, item);
+	for (int i = 0; i < s.nstats; ++i) {
+		Out("  stat %d:%d = %d", s.stats[i][0], s.stats[i][1], Stat(item, s.stats[i][0], s.stats[i][1]));
+	}
+	return true;
+}
+
 
 // `cuberec <index>`: hex dump of a cubemain record (0x16c bytes) for diagnosing a recipe that does not match.
 auto CmdCuberec(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
@@ -879,6 +969,32 @@ auto RemoveItem(Ctx* c, Unit* item) noexcept -> bool {
 	Fn<SendItemFn>(RvaSendItem)(c->game, c->player, item, 0x20, 4, 0, 0, 0, location[2]);
 	Fn<ByteSetFn>(RvaSetByte5c)(item, 0);
 	Fn<FreeItemFn>(RvaFreeItem)(c->game, item);
+	return true;
+}
+
+// `unequip <body location>`: takes the item off that slot and frees it (RemoveItem, the same path as `remove`).
+auto CmdUnequip(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	const int loc = t.n >= 2 ? hcmd::ParseBodyLoc(t.tok[1]) : 0;
+	if (loc == 0) {
+		return Fail(c, "usage: unequip <head|amulet|body|rhand|lhand|rring|lring|belt|boots|gloves|1-12>");
+	}
+	Unit* found = nullptr;
+	EachItem(c, [&](Unit* it) {
+		int32_t where[8] = {};
+		Fn<ItemLocationFn>(RvaItemLocation)(where, it);
+		if (found == nullptr && where[0] == 1 && where[3] == loc) {
+			found = it;
+		}
+	});
+	if (found == nullptr) {
+		return Fail(c, "unequip: nothing on body location %d", loc);
+	}
+	char code[5];
+	ItemCode(c, found, code);
+	if (!RemoveItem(c, found)) {
+		return Fail(c, "unequip: the game refused to take %s off", code);
+	}
+	Out("unequip %d: %s removed", loc, code);
 	return true;
 }
 
@@ -965,11 +1081,242 @@ auto CmdRemove(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return removed > 0 ? true : Fail(c, "remove: no such item");
 }
 
+// --- player actions without input: move, skills, casting (lane harness-cast) --------------------------------------------
+// The server handlers of the client packets are PlrMsg.cpp functions of the packet table; the walk / run packets (ids 1
+// and 3) are 210 bytes and carry the client's path, a path length of 0 lets the server find it. Casting calls the
+// functions the cast packets (5 location, 6 unit, 0xc / 0xd right button) end in, with the Skill* looked up by id.
+
+auto SkillIdOf(const uint8_t* skill) noexcept -> int {
+	const uint8_t* row = skill != nullptr ? d2r::At<const uint8_t*>(skill, 0) : nullptr;
+	return row != nullptr ? static_cast<int>(*reinterpret_cast<const int16_t*>(row)) : -1;
+}
+auto SkillBaseLevel(const uint8_t* skill) noexcept -> int { return skill != nullptr ? d2r::At<int32_t>(skill, 0x40) : -1; }
+
+auto PlayerPos(Ctx* c, int32_t* x, int32_t* y) noexcept -> bool { return d2r::UnitXY(c->player, x, y); }
+
+// Walk (id 1) or run (id 3) packet into the server handler; returns the handler's code (0 = accepted) or -1 without a handler.
+auto SendWalkPacket(Ctx* c, uint8_t id, int destX, int destY) noexcept -> int64_t {
+	uint8_t pkt[hcmd::WalkPacketSize];
+	int32_t px = 0, py = 0;
+	PlayerPos(c, &px, &py);
+	const size_t n = hcmd::BuildWalkPacket(pkt, id, px, py, destX, destY);
+	const uint64_t h = *reinterpret_cast<const uint64_t*>(g_base + RvaPacketTable + id * 8);
+	if (h == 0) {
+		return -1;
+	}
+	using WalkPacketFn = uint64_t (*)(Game*, Unit*, const uint8_t*, int32_t);
+	return static_cast<int64_t>(reinterpret_cast<WalkPacketFn>(h)(c->game, c->player, pkt, static_cast<int32_t>(n)) & 0xffffffffU);
+}
+
+// `move <x> <y> [walk] [packet]`: server-side path move to a sub-tile position (state x / y are in the same units). Runs
+// unless `walk`. Default: the call the walk packet handler ends in (0x42d2c0 with no skill and mode 2 walk / 3 run, the
+// server finds the path); `packet` sends the 210 byte walk packet through the handler table instead (the handler also
+// checks the position and a distance of at most 15 per packet) and prints the checks it makes.
+auto CmdMove(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long x = 0, y = 0;
+	if (t.n < 3 || !hcmd::ParseInt(t.tok[1], &x) || !hcmd::ParseInt(t.tok[2], &y) || x < 0 || y < 0 || x > 0xffff || y > 0xffff) {
+		return Fail(c, "usage: move <x> <y> [walk] [packet]   (positions as in `state`)");
+	}
+	bool walk = false, packet = false;
+	for (int i = 3; i < t.n; ++i) {
+		walk = walk || hcmd::LowerEq(t.tok[i], "walk");
+		packet = packet || hcmd::LowerEq(t.tok[i], "packet");
+	}
+	int32_t px = 0, py = 0;
+	PlayerPos(c, &px, &py);
+	int64_t rc = 0;
+	if (packet) {
+		rc = SendWalkPacket(c, walk ? 1 : 3, static_cast<int>(x), static_cast<int>(y));
+		Out("move packet checks: dead=%d position=%d (0 ok) distance=%d (<= 15) client=%p", Fn<DeadCheckFn>(RvaDeadCheck)(c->player),
+		    Fn<PosCheckFn>(RvaPosCheck)(c->player, static_cast<uint32_t>(px), static_cast<uint32_t>(py), 0x32),
+		    Fn<PathDistanceFn>(RvaPathDistance)(c->player, static_cast<int32_t>(x), static_cast<int32_t>(y)), Fn<UnitClientFn>(RvaUnitClientOf)(c->player));
+	} else {
+		rc = Fn<PlayerActionFn>(RvaPlayerAction)(c->game, c->player, nullptr, walk ? 2 : 3, static_cast<uint32_t>(x), static_cast<uint32_t>(y), 0, 0) &
+		     0xffffffffLL;
+	}
+	Out("move from %d,%d to %lld,%lld (%s%s): code %lld, mode now %d (0 = accepted; poll `state` for the arrival)", px, py, x, y,
+	    walk ? "walk" : "run", packet ? ", packet" : "", static_cast<long long>(rc), ModeOf(c->player));
+	return rc == 0 ? true : Fail(c, "move: the server refused (code %lld)", static_cast<long long>(rc));
+}
+
+// `moveto <unit id> | nearest [class]`: `move` to a monster's / NPC's position (the path stops next to it).
+auto CmdMoveTo(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0, cls = -1;
+	Unit* u = nullptr;
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "nearest") && (t.n < 3 || hcmd::ParseInt(t.tok[2], &cls))) {
+		u = NearestMonster(c, cls, false);
+	} else if (t.n >= 2 && hcmd::ParseInt(t.tok[1], &id)) {
+		u = FindMonsterById(c, static_cast<uint32_t>(id));
+	} else {
+		return Fail(c, "usage: moveto <unit id> | moveto nearest [class]");
+	}
+	int32_t ux = 0, uy = 0;
+	if (u == nullptr || !d2r::UnitXY(u, &ux, &uy)) {
+		return Fail(c, "moveto: no such live monster");
+	}
+	const int64_t rc = Fn<PlayerActionFn>(RvaPlayerAction)(c->game, c->player, nullptr, 3, static_cast<uint32_t>(ux), static_cast<uint32_t>(uy), 0, 0) & 0xffffffffLL;
+	Out("moveto unit id=%u class=%d at %d,%d: handler code %lld, mode now %d", IdOf(u), ClassOf(u), ux, uy, static_cast<long long>(rc),
+	    ModeOf(c->player));
+	return rc == 0 ? true : Fail(c, "moveto: the server refused the path (code %lld)", static_cast<long long>(rc));
+}
+
+// Selects an active skill through packet 0x3c's handler; returns the skill id that is active afterwards.
+auto SelectSkill(Ctx* c, long long id, bool left) noexcept -> int {
+	uint8_t pkt[9];
+	const size_t n = hcmd::BuildSelectSkillPacket(pkt, static_cast<int>(id), left);
+	const auto handler = reinterpret_cast<PacketFn>(*reinterpret_cast<const uint64_t*>(g_base + RvaPacketTable + 0x3c * 8));
+	handler(c->game, c->player, pkt, static_cast<int32_t>(n));
+	return SkillIdOf(left ? Fn<ActiveSkillFn>(RvaLeftSkill)(c->player) : Fn<ActiveSkillFn>(RvaRightSkill)(c->player));
+}
+
+// `skill` prints the active skills; `skill left|right <id>` selects one (packet 0x3c's handler: the skill needs a level,
+// see `setskill`, or an item that grants it).
+auto CmdSkill(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 3) {
+		long long id = 0;
+		const bool left = hcmd::LowerEq(t.tok[1], "left");
+		if ((!left && !hcmd::LowerEq(t.tok[1], "right")) || !hcmd::ParseInt(t.tok[2], &id) || id < 0 || id > 0xffff) {
+			return Fail(c, "usage: skill [left|right <skill id>]");
+		}
+		const int now = SelectSkill(c, id, left);
+		Out("skill %s %lld: active now %d", left ? "left" : "right", id, now);
+		return now == id ? true : Fail(c, "skill: the game did not select %lld (no level in it? try setskill)", id);
+	}
+	Out("skill left=%d right=%d", SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(c->player)), SkillIdOf(Fn<ActiveSkillFn>(RvaRightSkill)(c->player)));
+	return true;
+}
+
+// `setskill <id> <level>`: raises the skill with the game's own skill-point function (0x438670, packet 0x3b's body without
+// its prerequisite checks) with a refilled stat 5 pool each step, then restores stat 5. Lowering writes the base level.
+auto CmdSetSkill(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0, level = 0;
+	if (t.n < 3 || !hcmd::ParseInt(t.tok[1], &id) || !hcmd::ParseInt(t.tok[2], &level) || id < 0 || id > 0xffff || level < 0 || level > 200) {
+		return Fail(c, "usage: setskill <skill id> <level 0-200>");
+	}
+	const int pool = Stat(c->player, 5);
+	const uint32_t version = d2r::At<uint8_t>(c->game, 0x106);
+	uint8_t* sk = Fn<SkillByIdFn>(RvaSkillById)(c->player, static_cast<int32_t>(id), -1);
+	int guard = 0;
+	while (SkillBaseLevel(sk) < level && guard++ < 220) {
+		Fn<SetStatFn>(RvaSetStat)(c->player, 5, 255, 0);
+		if (Fn<AddSkillFn>(RvaAddSkillLevel)(version, c->player, static_cast<uint32_t>(id)) == 0) {
+			break;
+		}
+		sk = Fn<SkillByIdFn>(RvaSkillById)(c->player, static_cast<int32_t>(id), -1);
+	}
+	Fn<SetStatFn>(RvaSetStat)(c->player, 5, pool, 0);
+	if (sk != nullptr && SkillBaseLevel(sk) > level) {  // lowering: no game function, write the level
+		*reinterpret_cast<int32_t*>(sk + 0x40) = static_cast<int32_t>(level);
+	}
+	const int now = sk != nullptr ? SkillBaseLevel(sk) : 0;
+	Out("setskill %lld: base level %d (wanted %lld), skill points restored to %d", id, now, level, pool);
+	return now == level ? true : Fail(c, "setskill: stopped at level %d (the game refused the next point)", now);
+}
+
+// `skills`: every skill of the player's list: id, base level, skill mode (+0x10, 0 = unusable as an active skill), the game's
+// usability code (0x33f360: 0 usable, 1 mana / cooldown, 2 requirements, 3 not a skill, 7 no level, 8 charges).
+auto CmdSkills(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	uint8_t** list = Fn<SkillListFn>(RvaSkillList)(c->player);
+	int n = 0;
+	for (uint8_t* sk = list != nullptr ? *list : nullptr; sk != nullptr && n < 400; sk = d2r::At<uint8_t*>(sk, 8), ++n) {
+		Out("skill id=%d level=%d mode=%d owner=%d usable=%d", SkillIdOf(sk), SkillBaseLevel(sk), d2r::At<int32_t>(sk, 0x10), d2r::At<int32_t>(sk, 0x4c),
+		    Fn<SkillUsableFn>(RvaSkillUsable)(c->player, sk));
+	}
+	Out("skills %d", n);
+	return true;
+}
+
+// `cast <skill id> [x y | unit <id> | nearest [class] | self]`: uses the skill the way the cast packets do (location: 0x4fdb40,
+// unit: 0x4f8de0), from the player's own skill list. No target = the player's own position. The action runs over the
+// next frames: poll `state` (mode, mana) and `missiles`.
+auto CmdCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0;
+	hcmd::CastTarget tg;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id) || id < 0 || id > 0xffff || !hcmd::ParseCastTarget(t, 2, &tg)) {
+		return Fail(c, "usage: cast <skill id> [x y | unit <id> | nearest [class] | self]");
+	}
+	uint8_t* sk = Fn<SkillByIdFn>(RvaSkillById)(c->player, static_cast<int32_t>(id), -1);
+	if (sk == nullptr) {
+		return Fail(c, "cast: the player has no skill %lld (setskill %lld 1 first)", id, id);
+	}
+	// Both cast calls use the player's active left skill (the unit one also walks into range first): select it.
+	if (SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(c->player)) != id && SelectSkill(c, id, true) != id) {
+		return Fail(c, "cast: the game would not select skill %lld (a passive, or not usable as an active skill)", id);
+	}
+	const int manaBefore = Stat(c->player, StatMana) >> 8;
+	int32_t px = 0, py = 0;
+	PlayerPos(c, &px, &py);
+	Out("cast checks: usable=%d (0 ok) busy=%d skill mode=%d unit mode=%d", Fn<SkillUsableFn>(RvaSkillUsable)(c->player, sk),
+	    Fn<PlayerBusyFn>(RvaPlayerBusy)(c->player), d2r::At<int32_t>(sk, 0x10), ModeOf(c->player));
+	if (tg.kind == hcmd::CastTarget::Unit || tg.kind == hcmd::CastTarget::Nearest) {
+		Unit* target = tg.kind == hcmd::CastTarget::Unit ? FindMonsterById(c, static_cast<uint32_t>(tg.id)) : NearestMonster(c, tg.cls, false);
+		if (target == nullptr) {
+			return Fail(c, "cast: no such live monster");
+		}
+		Fn<CastUnitFn>(RvaCastAtUnit)(c->game, c->player, 1, IdOf(target), sk, 1, 0);
+		Out("cast skill %lld (level %d) at monster id=%u class=%d dist %.0f: mode now %d, mana %d -> %d", id, SkillBaseLevel(sk), IdOf(target),
+		    ClassOf(target), DistTo(c->player, target), ModeOf(c->player), manaBefore, Stat(c->player, StatMana) >> 8);
+		return true;
+	}
+	const uint32_t x = tg.kind == hcmd::CastTarget::Point ? static_cast<uint32_t>(tg.x) : static_cast<uint32_t>(px);
+	const uint32_t y = tg.kind == hcmd::CastTarget::Point ? static_cast<uint32_t>(tg.y) : static_cast<uint32_t>(py);
+	const int32_t rc = Fn<CastPointFn>(RvaCastAtPoint)(c->game, c->player, x, y, 1, sk);
+	Out("cast skill %lld (level %d) at %u,%u: code %d, mode now %d, mana %d -> %d", id, SkillBaseLevel(sk), x, y, rc, ModeOf(c->player),
+	    manaBefore, Stat(c->player, StatMana) >> 8);
+	return rc == 0 ? true : Fail(c, "cast: the game refused the skill use (code %d; town, no mana, cooldown or busy?)", rc);
+}
+
+// --- missiles ---------------------------------------------------------------------------------------------------------
+hcmd::SeenUnits g_missileSeen;
+volatile LONG g_trackMissiles = 0;
+
+void TrackMissiles(Game* game) noexcept {
+	EachUnit(game, HashMissiles, [&](Unit* u) {
+		if (TypeOf(u) == 3) {
+			g_missileSeen.Add(IdOf(u), ClassOf(u));
+		}
+	});
+}
+
+void PrintMissiles(Ctx* c) noexcept {
+	int live = 0;
+	EachUnit(c->game, HashMissiles, [&](Unit* u) {
+		if (TypeOf(u) != 3) {
+			return;
+		}
+		if (live++ < 10) {
+			int32_t x = 0, y = 0;
+			d2r::UnitXY(u, &x, &y);
+			Out("mis id=%u class=%d mode=%d at %d,%d dist=%.0f", IdOf(u), ClassOf(u), ModeOf(u), x, y, DistTo(c->player, u));
+		}
+	});
+	char sum[160];
+	g_missileSeen.Summary(sum, sizeof(sum));
+	Out("missiles live=%d seen=%d%s tracking=%s [%s]", live, g_missileSeen.n, g_missileSeen.overflow > 0 ? "+" : "",
+	    g_trackMissiles != 0 ? "on" : "off (missiles reset starts it)", sum);
+}
+
+// `missiles`: live missile units and the distinct ones seen since `missiles reset` (every server frame is sampled while
+// tracking, so a short-lived missile is counted). `missiles reset` clears the count and starts tracking.
+auto CmdMissiles(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 2) {
+		if (!hcmd::LowerEq(t.tok[1], "reset")) {
+			return Fail(c, "usage: missiles [reset]");
+		}
+		g_missileSeen.Reset();
+		InterlockedExchange(&g_trackMissiles, 1);
+	}
+	PrintMissiles(c);
+	return true;
+}
+
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
 	Out("verbs: state | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
+	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
+	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	return true;
 }
 
@@ -1029,6 +1376,8 @@ const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
+    {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
+    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 
@@ -1081,6 +1430,13 @@ void HarnessCmdsInit(uint64_t exeBase) noexcept {
 void HarnessGameFrame(void* gamePtr) noexcept {
 	InterlockedIncrement(&g_frames);
 	g_lastGame = gamePtr != nullptr;
+	if (g_ready != 0 && g_trackMissiles != 0 && gamePtr != nullptr) {
+		__try {
+			TrackMissiles(static_cast<Game*>(gamePtr));
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			InterlockedExchange(&g_trackMissiles, 0);
+		}
+	}
 	if (g_ready == 0 || g_job.state != 1 || gamePtr == nullptr) {
 		return;
 	}

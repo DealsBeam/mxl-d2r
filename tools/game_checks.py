@@ -844,10 +844,97 @@ def check_areacycle():
         reached, len(areas), n_cache, n_biome, "; ".join(notes)))
 
 
+def cast_and_watch(skill, level, target, tries=6, shot=None):
+    """setskill, then cast up to `tries` times (a melee cast walks up to a wandering monster and may need another go) and
+    watch the missiles the server frames saw. Returns (cast_ok, cast_lines, mana_dropped, cast_mode_seen, missiles_seen, screenshot or None)."""
+    H("setskill %d %d" % (skill, level))
+    H("missiles reset")
+    ok, lines, dropped, cast_mode, seen, shot_taken = False, [], False, False, 0, None
+    for _ in range(tries):
+        ok, lines = H("cast %d %s" % (skill, target))
+        m = re.search(r"mana (\d+) -> (\d+)", " ".join(lines))
+        dropped = dropped or (bool(m) and int(m.group(2)) < int(m.group(1)))
+        cast_mode = cast_mode or bool(re.search(r"mode now (7|10)", " ".join(lines)))
+        t0 = time.time()
+        while time.time() - t0 < 1.6:
+            time.sleep(0.4)
+            _ok, ml = H("missiles")
+            m = [re.search(r"seen=(\d+)", ln) for ln in ml if ln.startswith("missiles ")]
+            seen = int(m[0].group(1)) if m and m[0] else 0
+            cast_mode = cast_mode or hstate()["player"].get("mode") in (7, 10)
+            if shot and seen > 0 and shot_taken is None:  # the effect is on screen now (window-only capture)
+                shot_taken = sh(shot)
+        if seen > 0 and (dropped or cast_mode):
+            break
+        if not ok:
+            H("spawn 18 1")  # the monster died or is gone
+    return ok, lines, dropped, cast_mode, seen, shot_taken
+
+
+def check_casts():
+    nm = "Server-side skill casts (harness cast): Median Barbarian skills and a Sorceress spell, cast animation, missiles seen"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(2)  # Blood Moor: skills do not work in town
+    kill_all_near()
+    notes, shots, log, good = [], [], [], True
+    # earthquake_2 (Median, melee: the cast walks the player to the monster first) fires earthquake missiles;
+    # Fire Bolt is a Sorceress spell, cast by the Barbarian (the game does not check the class here)
+    cases = [("earthquake_2 (Median Barbarian)", 1271, 5, True, True), ("Bash (vanilla Barbarian)", 126, 1, False, True),
+             ("Fire Bolt (Sorceress spell)", 36, 5, True, False)]
+    for label, skill, level, want_missiles, melee in cases:
+        kill_all_near()
+        H("spawn 18 1")
+        if melee:
+            H("moveto nearest")
+        ok, lines, dropped, cast_mode, seen, shot = cast_and_watch(skill, level, "nearest", shot="cast_%d" % skill)
+        passed = ok and (dropped or cast_mode) and (seen > 0 or not want_missiles)
+        good = good and passed
+        notes.append("%s: cast %s, cast animation %s, mana drop at the call %s, missiles seen %d" % (
+            label, "OK" if ok else "FAIL", cast_mode, dropped, seen))
+        shots.append(shot or sh("cast_%d" % skill))
+        log += lines
+        kill_all_near()
+    add(nm, "PASS" if good else "FAIL", "; ".join(notes), shots, log)
+
+
+def check_equip_events():
+    nm = "Item events (stat 396 / 397 thorns): equip with the harness and take a monster hit (documents the finding, see items-xp.md 5)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(2)
+    kill_all_near()
+    H("unequip rhand")
+    ok1, l1 = H("equip 115 397=50 rhand")
+    st = hstate()
+    weapon = [i for i in st["items"] if str(i.get("code")) == "115" and i.get("body") == 4]
+    # a plain stat proves the equip applies item stats to the player: strength (stat 0) +77 on a ring
+    H("unequip lring")
+    ok3, l3 = H("equip rin 0=77 lring")
+    ok4, s1 = H("stat player 0")
+    H("unequip lring")
+    ok2, s0 = H("stat player 0")
+    str0, str1 = stat_of(s0), stat_of(s1)
+    equips = ok1 and bool(weapon) and ok3 and str1 == (str0 or 0) + 77
+    # the event itself: monsters melee the player while the 397 weapon is worn; the monster's life is not readable yet
+    H("spawn 18 2")
+    time.sleep(12)
+    st2 = hstate()
+    hit = st2["player"].get("life", 0) < st["player"].get("life", 0)
+    ok5, s397 = H("stat player 397")
+    note = ("equip -> worn item body=%s, strength %s -> %s with a +77 ring; player life %s -> %s (monsters hit: %s); player stat 397 reads %s "
+            "(the item event stat is not aggregated into a player stat; the thorns damage dealt to the monster cannot be read yet, "
+            "see items-xp.md section 5)" % (weapon[0].get("body") if weapon else None, str0, str1, st["player"].get("life"),
+                                           st2["player"].get("life"), hit, stat_of(s397)))
+    add(nm, "PASS" if equips and hit else "FAIL", note, [sh("equip_events")], l1 + l3)
+    kill_all_near()
+    H("unequip rhand")
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
           ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle)]
+          ("areacycle", check_areacycle), ("casts", check_casts), ("equipevents", check_equip_events)]
 
 
 def write_report(extra=""):

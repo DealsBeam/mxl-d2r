@@ -46,6 +46,53 @@ int main() {
 
 	Check(LowerEq("Nearest", "nearest") && !LowerEq("near", "nearest"), "case-insensitive compare");
 
+	Check(ParseBodyLoc("rhand") == 4 && ParseBodyLoc("RING") == 6 && ParseBodyLoc("lring") == 7 && ParseBodyLoc("belt") == 8, "body names");
+	Check(ParseBodyLoc("3") == 3 && ParseBodyLoc("0x0c") == 12 && ParseBodyLoc("13") == 0 && ParseBodyLoc("0") == 0 &&
+	          ParseBodyLoc("tail") == 0 && ParseBodyLoc(nullptr) == 0,
+	      "body numbers and rejects");
+
+	uint8_t pkt[256];
+	Check(BuildWalkPacket(pkt, 3, 0x1234, 0x0567, 0x1240, 0x0570) == 210 && pkt[0] == 3 && pkt[1] == 0x34 && pkt[2] == 0x12 &&
+	          pkt[3] == 0x67 && pkt[4] == 0x05 && pkt[5] == 0x40 && pkt[6] == 0x12 && pkt[7] == 0x70 && pkt[8] == 0x05 && pkt[9] == 0 &&
+	          pkt[209] == 0,
+	      "walk packet");
+	Check(BuildSelectSkillPacket(pkt, 154, true) == 9 && pkt[0] == 0x3c && pkt[1] == 154 && pkt[4] == 0x80 && pkt[5] == 0xff && pkt[8] == 0xff,
+	      "select skill packet left");
+	Check(BuildSelectSkillPacket(pkt, 300, false) == 9 && pkt[1] == 0x2c && pkt[2] == 0x01 && pkt[4] == 0, "select skill packet right");
+
+	CastTarget ct;
+	Split("cast 154", &t);
+	Check(ParseCastTarget(t, 2, &ct) && ct.kind == CastTarget::Self, "cast without target");
+	Split("cast 154 self", &t);
+	Check(ParseCastTarget(t, 2, &ct) && ct.kind == CastTarget::Self, "cast self");
+	Split("cast 154 6100 5200", &t);
+	Check(ParseCastTarget(t, 2, &ct) && ct.kind == CastTarget::Point && ct.x == 6100 && ct.y == 5200, "cast point");
+	Split("cast 154 unit 0x1f", &t);
+	Check(ParseCastTarget(t, 2, &ct) && ct.kind == CastTarget::Unit && ct.id == 31, "cast unit");
+	Split("cast 154 nearest", &t);
+	Check(ParseCastTarget(t, 2, &ct) && ct.kind == CastTarget::Nearest && ct.cls == -1, "cast nearest");
+	Split("cast 154 nearest 18", &t);
+	Check(ParseCastTarget(t, 2, &ct) && ct.kind == CastTarget::Nearest && ct.cls == 18, "cast nearest class");
+	Split("cast 154 5", &t);
+	Check(!ParseCastTarget(t, 2, &ct), "one coordinate is not a target");
+	Split("cast 154 -5 3", &t);
+	Check(!ParseCastTarget(t, 2, &ct), "negative coordinate");
+	Split("cast 154 70000 3", &t);
+	Check(!ParseCastTarget(t, 2, &ct), "coordinate over 16 bits");
+	Split("cast 154 unit", &t);
+	Check(!ParseCastTarget(t, 2, &ct), "unit without id");
+
+	SeenUnits seen;
+	Check(seen.Add(10, 5) && seen.Add(11, 5) && seen.Add(12, 7) && !seen.Add(10, 5) && seen.n == 3, "seen units are distinct");
+	char sum[100];
+	Check(seen.Summary(sum, sizeof(sum)) == 2 && std::strcmp(sum, "class 5 x2, class 7 x1") == 0, "seen summary");
+	seen.Reset();
+	Check(seen.n == 0 && seen.Summary(sum, sizeof(sum)) == 0 && sum[0] == '\0', "seen reset");
+	for (uint32_t i = 0; i < SeenUnits::Max + 5; ++i) {
+		seen.Add(i, 1);
+	}
+	Check(seen.n == SeenUnits::Max && seen.overflow == 5, "seen overflow counted");
+
 	std::printf(failures == 0 ? "harness: all tests passed\n" : "harness: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }
