@@ -16,7 +16,7 @@
   missile_hd.py      HD models for Median's missiles (by CelFile) -> hd/missiles/missiles.json
   item_hd.py         HD inventory pictures for Median's items/uniques/sets -> hd/items/*.json; also converts Median-owned item art via item_art.py (bug #18)
   skill_icons.py     Median's skill icons as D2R icon sheets (classic + HD) and skilldesc IconCel
-  ui_panels.py       Median panel art as HD panel backgrounds (inventory, cube)
+  ui_panels.py       Median panel art as HD sprites and classic DC6 panels
   skill_tree_art.py  Median skill tree look: tab titles, stone, arrows per class and tab (HD + classic)
   ui_layouts.py      UI layout overrides (8-tab skill tree, 15x10 inventory and cube)
   validate.py        D2R schema checks        -> work/mod/validate_report.md
