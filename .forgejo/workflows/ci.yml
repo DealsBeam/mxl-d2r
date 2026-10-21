@@ -24,7 +24,7 @@ jobs:
         run: git submodule update --init --depth 1 third_party/PluginSDK
       - name: Build mxl-core.dll
         run: |
-          cmake -S plugin -B build -DCMAKE_TOOLCHAIN_FILE=plugin/cmake/xwin-toolchain.cmake -DCMAKE_BUILD_TYPE=Release
+          cmake -S plugin -B build -DCMAKE_TOOLCHAIN_FILE="$PWD/plugin/cmake/xwin-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j6 --target mxl_core
           ls -la build/mxl-core.dll
 
