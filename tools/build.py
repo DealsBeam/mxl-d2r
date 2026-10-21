@@ -5,6 +5,7 @@
   sigma_tables.py    D2Sigma-only tables      -> work/sigma/
   tbl2json.py        strings                  -> work/mod/data/local/lng/
   txt_migrate.py     D2R table layout         -> work/mod/data/global/excel/{base,}
+  monster_ai_data.py Median-only monster AI -> D2R's (andariel_ai, the engine's AI table has 155 rows)
   cube_tables.py     cube conditions          -> plugin/src/mxl_cube.h (+ cubemain stat ids, ext item conditions)
   sigma_data.py      requirements, dungeon lockout and goblin data -> plugin/src/mxl_{requirements,dungeons,goblins}.h
   npc_actions_data.py  npcext menu slots + npcactions -> plugin/src/mxl_npc_actions.h (string ids resolved through tbl2json output)
@@ -29,7 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decode"], ["tbl2json.py"],
-         ["txt_migrate.py"], ["cube_tables.py"], ["sigma_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"],
+         ["txt_migrate.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"],
          ["validate.py"]]
 
 
