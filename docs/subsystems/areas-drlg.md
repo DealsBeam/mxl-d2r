@@ -90,6 +90,41 @@ Ids >= 70 (all >= 200 in practice) are MonStats rows in Median numbering: `idmap
 (+17 from 734). 62 negative ids (Median's flat MonPreset, 70 rows per act) name plain monsters in other acts'
 rows (act2male, sunless_angel, alkor, mephistospirit...): replaced by the monster's class id.
 
+## 3b. Waypoints (levels 138, 139, 141, 147, 153, 155, 169, 242: numbers 70, 80, 71, 60, 50, 72, 61, 90)
+
+Median numbers its waypoints 0-38 (the 39 of Diablo II) plus `50` (Duncraig, Act 1), `60`/`61` (Tran Athulua, Skartara; Act 2),
+`70`/`71`/`72` (Caldeum, Torajan Jungles, Vizjun; Act 3), `80` (Silver City, Act 4) and `90` (t_r_d_lra, Act 5): the tens digit
+is the act plus 4, only a naming habit of the data.
+
+**How Median stores them.** Not elsewhere: in the same bit field. Median's `D2Common.dll` (from the install) has the waypoint
+test (ordinal 10373) and level-to-number (10436) with a 112-entry bit table (`cmp ax, 0x70`; word `1 + n / 16`, mask
+`1 << n % 16`), byte for byte the table D2R has at `0x2389010`. The 24-byte per-difficulty "WS" record of a 1.13c `.d2s`
+(2-byte header, 5 bytes for Diablo II's 39 bits, 17 spare) therefore carries Median's bits in the spare bytes. D2Sigma's own
+waypoint panel (`D2Waypoints.cpp`, `ui/Waypoint.cpp`) lists every level of the tab's act that has a number, sorted by it, up to
+63 rows; it keeps no data of its own.
+
+**What D2R does (build 93847).**
+
+| Part | Size / behaviour |
+|---|---|
+| Record in memory | 112 bits: table `0x2389010` (112 x `{u16 word, u16 mask}`), count dword `0x23891d0` = 0x70; `0x3d6890` (set) and `0x3d6930` (test) take a number below 0x70 and otherwise hit a debug break path (set does nothing, test returns 0) |
+| Save ("WS": `0x52f090` writes, `0x52e910` reads, `0x3d6820` / `0x3d67c0` copy) | 3 x 24 bytes (normal, nightmare, hell), each the first 16 bytes of the record (header `0x0102` + 14 bytes = bits 0-111) and 8 zero bytes; the load sets bit 0. A number up to 111 survives a save and load; the 8 spare bytes are not kept |
+| Network | packet `0x63` sends the same 16 bytes (`0x4812c0`); the server's use-waypoint handler `0x4b6f10` converts the destination level to a number (`0x3d6670`, levels row `+0xec`, 255 = none) and tests the bit: any number below 112 works, there is no act check |
+| `.d2rl` sidecar | holds the `.d2s` checksum, size and SHA-256 plus its own hash (docs/save-format.md); nothing about waypoints, and nothing needed |
+| Waypoint panel (`WaypointsPanel`: `0x1ecbc0` loads the rows, `0x1ea9b0` fills a tab, `0x1e9b40` builds the buttons) | **the limit**: one tab per `actinfo.txt` row (5), each with `waypoint1`..`waypoint9` level names; each row becomes a 0x34-byte entry (9 levels, 9 numbers) and the listed-button table `0x2a969e0` holds 9 entries. A level in no row has no button (a waypoint object there still sets and saves the bit). The 5 tab-unlock quest ids (`0xff, 7, 0xf, 0x17, 0x1a`) are a fixed array of 5 in the panel object (set at `0x1e9adf`), so a sixth tab cannot be added by data alone |
+
+D2R's own five rows name 39 levels and leave Act 4's slots 4-9 empty; 39 + 8 Median levels = 47 > 5 x 9 = 45.
+
+**Fix (data, `tools/waypoints_data.py`, a build step after txt_migrate).** No remap and no save work. The generated `actinfo.txt`
+(D2R's rows, both banks) puts each Median waypoint level whose own act has no free slot into Act 4's six free slots, in act
+order: `silver_city`, `duncraig`, `tran_athulua`, `island_of_skartara`, `caldeum`, `torajan_jungles`. They appear under tab IV
+(unlocked by D2R's act 4 intro quest `0x17`, so an Act 1-3 player sees them from Act 4 on; the waypoint objects work and save
+from the start). `vizjun` (155) and `t_r_d_lra` (242) have no free slot: the `mxl` line `waypoints` and `area_audit.py` name
+them; they need a panel patch (more than 9 slots per tab, or a sixth tab with its unlock quest and art) to appear.
+`plugin/src/waypoints.cpp` (Off word `waypoints`, read-only) checks at load that the bit table and the entry bytes are the
+analysed ones and that Median's numbers fit and are unique. `tools/area_audit.py` flags a number >= 112 or a duplicate as a
+problem and a waypoint level without a button as a warning.
+
 ## 4. `tools/area_audit.py`
 
 Checks (read-only, `work/mod/data/global/excel`, Median's and D2R's tiles): level ids contiguous and unique, Act 0-4,
@@ -102,8 +137,9 @@ rows it needs. Result on the 2026-10-21 build (`work/mod`, both banks identical)
 them Median's); one problem until the data is rebuilt: the built mod has no Median rows in ObjPreset.txt (the audit run
 on a rebuilt copy: 0 problems). Warnings and info:
 
-- 8 Median waypoint numbers >= 39 (levels 138, 139, 141, 147, 153, 155, 169, 242: 70, 80, 71, 60, 50, 72, 61, 90). The
-  character file stores 39 waypoint bits; not checked further (waypoint lane).
+- 8 Median waypoint numbers >= 39 (levels 138, 139, 141, 147, 153, 155, 169, 242: 70, 80, 71, 60, 50, 72, 61, 90): not a
+  save problem (the record keeps 112 bits); the waypoint panel has 9 slots per act, see section 3b. With the actinfo.txt that
+  `tools/waypoints_data.py` writes, 2 of them (155 vizjun, 242 t_r_d_lra) still have no panel button (a warning in the audit).
 - 2 one-way Vis links (teganze -> torajan_jungles, vizjerei_temple -> ruins_of_ureh), 16 `lvlmaze` rows for levels that
   are presets (vanilla leftovers), 5 level types (45-49) no level uses, type 50 without automap rows, 3 placeholder level
   rows (254, 255, 270; never generated).
@@ -121,4 +157,5 @@ on a rebuilt copy: 0 problems). Warnings and info:
 | ObjPreset.txt with Median's table (`txt_migrate.object_presets`) | done in the pipeline, run `tools/build.py` |
 | `.ds1` monster / object renumbering (`ds1_remap.py`, called by `install_mod.py`) | done; **install + in-game check pending** (docs/testing.md) |
 | Plugin hooks | none needed |
-| Waypoint numbers >= 39, automap for type 50, low-coverage maps | open |
+| Waypoint numbers >= 39 | save and engine fine (112 bits); `actinfo.txt` lists 6 of the 8 extras (Act 4 tab); vizjun and t_r_d_lra need a panel patch; **in-game check pending** (docs/testing.md) |
+| Automap for type 50, low-coverage maps | open |
