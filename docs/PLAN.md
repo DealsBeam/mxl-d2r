@@ -74,7 +74,7 @@ Status (2026-10-14):
   stash materials tab with a cube grid pasted over D2R's 3 x 4 recess) done, in-game check pending. Open: classic-mode panels.
 - Next: HD art. items.json / missiles.json / monsters.json use D2R look-alikes today (item_hd.py, missile_hd.py,
   gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
-  backgrounds and tab titles (bug #3): tools/skill_tree_art.py, to test (titles are drawn into per-class 8-frame sprites). Deferred checks: Median monster art in classic mode, Median-only
+  backgrounds and tab titles (bug #3): tools/skill_tree_art.py, to test (titles are drawn into per-class 8-frame sprites). All 8 pages are selectable and show their skills since 2026-10-21 (plugin/src/skill_tree.cpp: D2R's panel only handled 3 pages, in reverse order; tools/skill_icons.py splits skilldesc rows shared by several classes). Deferred checks: Median monster art in classic mode, Median-only
   areas, Whirlpool (docs/testing.md).
 
 ## Phase 6: Test and release

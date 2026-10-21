@@ -11,8 +11,13 @@ Median's sheets hold up to 158 icons, so each sheet keeps the icons its skills u
 then skills items or the character start grant, then monster-only skills, which share icon 0 once the sheet is
 full. IconCel is renumbered to that order.
 
+One skilldesc row has one IconCel, but Median's skills of different classes (and the class-less item skills) share
+skilldesc rows (the seven Mastery pages of every class use the same few rows), each reading its own class's sheet. So a
+row used from several sheets is split: the sheet of the skill-tree skills keeps the row, the others get a copy named
+"<row>~<class>" that their skills point to (skills.txt), each with its own IconCel.
+
 Writes into work/mod/data (after txt_migrate.py):
-  global/excel/{base,}/skilldesc.txt          IconCel
+  global/excel/{base,}/skilldesc.txt          IconCel (+ the split rows), skills.txt skilldesc of the split users
   global/ui/spells/<xx>skillicon.dc6          classic graphics (Median's frames, repacked)
   hd/global/ui/spells/<class>/<xx>skillicon.sprite (+ .lowend.sprite)   HD graphics (scaled up)
 Usage: python tools/skill_icons.py [--preview DIR]   (--preview also writes PNG strips to look at)
@@ -174,6 +179,13 @@ def median_frames() -> dict[str, int]:
     return {named[i][0]: struct.unpack_from("<H", d, 4 + i * size + 0x16)[0] for i in range(n)}
 
 
+SPLIT = "~"
+
+
+def base_desc(name: str) -> str:
+    return name.split(SPLIT)[0]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--preview", type=Path, help="also write PNG strips of the HD sheets here")
@@ -194,17 +206,39 @@ def main() -> int:
               "gems", "weapons", "armor", "misc", "charstats", "qualityitems"):
         if (excel / f"{t}.txt").exists():
             granted |= {c for r in read_tsv(excel / f"{t}.txt")[1] for c in r}
+    def sheet(r: list[str]) -> str:
+        return r[cc] if r[cc] in TARGETS else ""
+
+    # Each skilldesc row is read from one sheet: that of its skill-tree skills, else of its first user. The other
+    # sheets' users get a copy of the row ("row~class", skills.txt skilldesc repointed).
+    primary: dict[str, str] = {}
+    for r in srows:
+        b = base_desc(r[sd])
+        if is_record(r) and b in frames_of:
+            primary.setdefault(b, sheet(r))
+    tree_sheet: dict[str, str] = {}
+    for r in srows:
+        b = base_desc(r[sd])
+        if is_record(r) and b in frames_of and b in on_tree and sheet(r):
+            tree_sheet.setdefault(b, sheet(r))
+    primary = {b: tree_sheet.get(b, c) for b, c in primary.items()}
+
+    def desc_key(name: str, cls: str) -> str:
+        b = base_desc(name)
+        return b if b not in primary or primary[b] == cls else f"{b}{SPLIT}{cls or 'shared'}"
+
     sheet_of: dict[str, str] = {}
     rank: dict[str, int] = {}
     for i, r in enumerate(srows):
-        if is_record(r) and r[sd] in frames_of:
-            sheet_of.setdefault(r[sd], r[cc] if r[cc] in TARGETS else "")
-            prio = 0 if r[sd] in on_tree else 1 if (r[0] in granted or i < 7) else 2
-            rank[r[sd]] = min(rank.get(r[sd], 2), prio)
+        if is_record(r) and base_desc(r[sd]) in frames_of:
+            key = desc_key(r[sd], sheet(r))
+            sheet_of.setdefault(key, sheet(r))
+            prio = 0 if base_desc(r[sd]) in on_tree and sheet(r) else 1 if (r[0] in granted or i < 7) else 2
+            rank[key] = min(rank.get(key, 2), prio)
     order: dict[str, list[int]] = {k: [] for k in TARGETS}
     seen: dict[str, list[int]] = {k: [] for k in TARGETS}  # icons players can see (tree, items, start)
     for key in sorted(sheet_of, key=lambda k: rank[k]):  # stable: first use within each priority
-        f = frames_of[key] // 2 * 2
+        f = frames_of[base_desc(key)] // 2 * 2
         if f not in order[sheet_of[key]]:
             order[sheet_of[key]].append(f)
             if rank[key] < 2:
@@ -216,16 +250,33 @@ def main() -> int:
     order = {cls: o[:keep[cls]] for cls, o in order.items()}
     icon_cel = {}
     for key, cls in sheet_of.items():
-        f = frames_of[key] // 2 * 2
+        f = frames_of[base_desc(key)] // 2 * 2
         icon_cel[key] = order[cls].index(f) * 2 if f in order[cls] else 0
     for bank in ("base", ""):
         p = OUT / "global" / "excel" / bank / "skilldesc.txt"
+        q = OUT / "global" / "excel" / bank / "skills.txt"
         if p.exists():
             h, rows = read_tsv(p)
             ic = h.index("IconCel")
+            used = set()
+            if q.exists():  # the users of a split row point at its copy
+                qh, qrows = read_tsv(q)
+                qc, qd = qh.index("charclass"), qh.index("skilldesc")
+                for r in qrows:
+                    if is_record(r) and base_desc(r[qd]) in frames_of:
+                        r[qd] = desc_key(r[qd], r[qc] if r[qc] in TARGETS else "")
+                        used.add(r[qd])
+                write_tsv(q, qh, qrows)
+            have = {r[0]: r for r in rows}
+            for key in sorted(used | set(icon_cel)):  # copies of the rows read from more than one sheet
+                if key not in have and base_desc(key) in have:
+                    rows.append([key] + have[base_desc(key)][1:])
+                    have[key] = rows[-1]
             for r in rows:
                 if r[0] in icon_cel:
                     r[ic] = str(icon_cel[r[0]])
+                elif SPLIT in r[0]:
+                    r[ic] = "0"  # a copy for skills outside the base bank's sheets: icon 0
             write_tsv(p, h, rows)
     report = []
     for cls, (sheet, classic, hd) in TARGETS.items():
