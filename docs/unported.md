@@ -65,6 +65,7 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 
 | Area | Median | Port now | Status | Needs / notes |
 |---|---|---|---|---|
-| HD scene of Median-only presets (`data/hd/env/preset/mxl/...json`, baked terrain model + biome) | own tiles | none: the HD client logs `empty biome filename` once and the area still loads | open | HD terrain per preset cannot be authored; a preset-to-D2R-preset redirect would need a plugin hook on the scene loader (`0x6a0e20`) |
+| HD scene of Median-only presets (148 maps, `data/hd/env/preset/mxl/...json`) | own tiles + own HD scene | minimal scene pointing at the closest vanilla biome (floor, light), written by `tools/maps_hd.py` at install; no walls/buildings ([maps-hd.md](maps-hd.md)) | approx | terrain model + wall entities per map; custom HD art last |
+| HD scene of Median-edited vanilla maps (425; 11 with changed size/layout) | edited layout | D2R's own scene for 414 (layout within 25% of D2R's), minimal scene with the scene's biome for 11 | approx | props/walls of D2R's scene stay where D2R put them; the 11 (act2 maggot pieces, act4 mesa, wildtemple tempenter) not seen in game ([bugs.md](bugs.md) maze-level goto) |
 | Automap cels 1499/1500 of Median (one level-type-36 row, filler cels of nine town rows) | own cel | -1 (no tile) | approx | atlas of D2R ends at 1498 |
 | Per-level map memory of Median levels with Layer above 99 | own layer per level | D2R's layer of the same id or 0 (shared records) | approx | D2R's table has 100 buckets (needs a plugin patch of 0x1400d5fe0 / 0x1400d5710 to hold more) |
