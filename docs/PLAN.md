@@ -36,9 +36,21 @@ Migrate 94 standard tables, `d2rl init` / `d2rl compile`, boot with `-txt`, enab
 Triage table: [subsystems/README.md](subsystems/README.md) (2026-10-14, 109 source modules bucketed; largest open: quests, requirements, NPC actions, crafting, hirelings).
 One note per subsystem in `docs/subsystems/`, each feature bucketed:
 (a) data-only, (b) SDK service, (c) native hook, (d) UI rebuild, (e) cut/defer.
+Covered so far (2026-10-21): quests, requirements, NPC and hirelings, ubers and events, craft flags
+(`docs/subsystems/`: quests-requirements.md, npc-hirelings.md, ubers-events.md).
 
 ## Phase 4: Plugins
 mxl-core, mxl-skills, mxl-items, mxl-monsters, mxl-npc, mxl-ui. Every hook checks expected bytes.
+
+Status (2026-10-21, mxl-core 0.42.0). All installed and switching on at boot; gameplay not yet verified by play.
+D2R addresses: [d2r-addresses.md](d2r-addresses.md).
+- Cube conditions: 542 recipes
+- Craft flags and gold: 256 effects
+- Act 1 quests: Griswold's Heart, Andariel catalyst, Warriv re-issue
+- Dungeon lockout: 141 levels, stairs and portals
+- Treasure goblins
+- NPC actions: Akara respec, Cain crafting materials
+- Skill tree: 8 pages
 
 ## Phase 5: Graphics
 First test whether legacy-graphics mode loads modded DCC/DC6. Then decide per asset.
@@ -76,22 +88,27 @@ Status (2026-10-14):
   gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
   backgrounds and tab titles (bug #3): tools/skill_tree_art.py, to test (titles are drawn into per-class 8-frame sprites). All 8 pages are selectable and show their skills since 2026-10-21 (plugin/src/skill_tree.cpp: D2R's panel only handled 3 pages, in reverse order; tools/skill_icons.py splits skilldesc rows shared by several classes). Deferred checks: Median monster art in classic mode, Median-only
   areas, Whirlpool (docs/testing.md).
+- Status (2026-10-21): trade window 7 x 15 (two pages), NPC stores 15 x 15, in-stash cube view: done, in-game check
+  pending. Skill tree: 8 pages with per-class icons. Character sheet: still D2R's, in progress.
 
 ## Phase 6: Test and release
 Smoke tests, saves/reload, TCP/IP, `d2rl pack`.
+- [x] Automated smoke run (`tools/game_ctl.py`: boot, create and play MxlBarb, panels, save and reload, log scan) passes
+- [x] CI on the CI server (`.forgejo/workflows/ci.yml`): plugin cross-build with clang-cl, unit tests, tools syntax
 
 **First milestone:** a playable vertical slice (one class, its items, Act 1).
 
 ## Next (2026-10-20)
 Work happens on the forge (git.werdegames.com/WerdeGames/mxl-d2r): one branch and PR per lane.
 0. **Setup on this PC** (the game PC lost its generated files): D2RLoader 1.3.1, extractions, `tools/build.py`, plugin build,
-   install, Ghidra projects (`..\ghidra\{sigma,d2game,project}`). Written down in [setup.md](setup.md).
+   install, Ghidra projects (`..\ghidra\{sigma,d2game,project}`). Written down in [setup.md](setup.md). Done.
 1. **Test backlog**: ~70 rows wait in [testing.md](testing.md). Played as per-character sessions
    ([test-sessions.md](test-sessions.md)). No new features once the waiting list passes ~10 rows again.
 2. **Milestone: Barbarian, Act 1**: a new Barbarian to Andariel with its tree (tab titles and backgrounds, bug #3),
-   Act 1 quests and vendors, cube recipes (cube conditions, D2Craft.cpp), save/reload, no crash.
+   Act 1 quests and vendors, cube recipes (cube conditions, D2Craft.cpp), save/reload, no crash. Code done;
+   verification pending.
 3. **Engine (Phase 4), in the order players meet it**: requirements + quests/ubers, NPC services, hirelings,
-   monster mods/AI/goblins, damage/combat/properties leftovers, objects/events/respec.
+   monster mods/AI/goblins, damage/combat/properties leftovers, objects/events/respec. In progress.
 4. **Graphics/UI (Phase 5)**: skill tree art, character sheet, trade window, HD effects of common skills, Median
    monster HD models last.
 5. **Phase 6** (TCP/IP, saves, `d2rl pack`), then Phase 7.
@@ -106,6 +123,23 @@ model). Draft plan, edit before starting: [realm-plan.md](realm-plan.md).
 - [ ] 7e Optional: seasons, chat, death feed, trade listings, server-side save checks
 
 Rule for Phases 4-6 meanwhile: Median logic stays server-side in the plugins, and Median's state lives in the save files.
+
+## Progress estimate (2026-10-21)
+
+Judgement estimates, not measurements. Same method as the 2026-10-14 table below.
+
+| Phase | Share of total work | Phase done | Adds to overall |
+|---|---|---|---|
+| 0 Setup | 2% | 100% | 2.0% |
+| 1 Tools (extract, decode, convert) | 12% | 90% | 10.8% |
+| 2 Data port (tables, strings, install, booting) | 10% | 97% | 9.7% |
+| 3 Triage of Median's engine code | 8% | 90% | 7.2% |
+| 4 Plugins (engine behaviour) | 30% | 72% | 21.6% |
+| 5 Graphics | 28% | 30% | 8.4% |
+| 6 Test and release | 10% | 12% | 1.2% |
+| **Total** | **100%** | **60.9%** | **60.9%** |
+
+Phase 7 (private realm) is outside this estimate.
 
 ## Progress estimate (2026-10-14, updated after the Phase 5/3 hour)
 
