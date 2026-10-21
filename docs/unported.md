@@ -32,9 +32,12 @@ with the reason), **verify** (ported, Median behaviour not yet confirmed in game
 | Hireling starting gear (Head/Torso/Weapon/Shield/Share columns) | per hireling row | none | open | how D2R gives a new hire its gear |
 | Hireling hire/equip state gates (states 0x4c/0x50/0x51) | yes | no | open | state ids unresolved |
 | Tyrael travel quest gate | quest 28 | D2R quest 26 | approx | harmless (portal, no menu line) |
-| Item event ids 11/12/32/33/34, immunity checks on open wounds / crushing blow | yes | in progress (lane item-gen) | open | |
-| Class-locked items, ethereal and socket rolls, dye colours | yes | in progress (lane item-gen) | open | |
-| Party experience award (`0x5e830`) | yes | D2R's | open | multiplayer only |
+| Item event ids 11/12/32/33/34, immunity checks on open wounds / crushing blow (monster stat 373) | attacker-takes-fire/cold/magic damage, flat life/cast on event (33/34), monsters with stat 0xbd immune to 15/16 | none | open | D2R dispatcher of itemeventfunc not found (stat record +0x48/+0x4a); see [items-xp.md](subsystems/items-xp.md) section 5 for the search done |
+| Class-locked items (stat 492) | requirement check fails for other classes (players and mercenaries) | players only (hook 0x36bc50) | verify | equip a locked unique on two classes; mercenary branch not ported |
+| Ethereal roll (item level 100+) | `rand(1000) <= qualities word2` (2.6%, quality 1 included), +25% stats, 75% durability | same rate/effect, but D2R's gate (5%, quality 1 and 5 excluded) stays in front; low quality never ethereal | approx | replace the `0x442d60` block fully to allow quality 1 |
+| Socket roll (quality 1-3) | `rand() % 7` sockets, 6 of 7 items | same, through D2R's setter (size clipping); gen-forced sockets keep D2R's code | verify | compare socket rates in game; Median's quality 5-9 branch (6 sockets) is dead in the 1.13c call sites |
+| Dye colour | stat 183 paints the item | stat 368 through the item colour hook 0x3710d0 | verify | look in game; dyes 16-21 may need Send Bits 6 on stat 368 |
+| Party experience award (`0x5e830`) | every member in range gets the full award | D2R's | open | multiplayer only; share loop of 0x44ece0 not read |
 
 ## Data and UI
 
