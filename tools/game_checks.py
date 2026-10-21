@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst lockout cow goldcraft craftflags lockclock. What a click in the world cannot do in background mode (kill a
+catalyst lockout cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -819,6 +819,72 @@ def check_craftflags():
     H("flag game 50 clear")
 
 
+def check_dungeon_reenter():
+    """Bug #24b: a Median dungeon entered, left and entered again in one game. The client's missile tick called D2R's
+    client "do" table through an empty slot for missiles whose pCltDoFunc is empty (row 5507 warp_crash_missile is fired by
+    the monsters of level 251 Butcher's Lair 2 a few seconds after the arrival) and the game died with a call to address 0.
+    The check enters level 251 (`b60X`, Hell rules, the 60 s lock) three times, fires row 5507 in each visit (`h missile`,
+    the same call the monsters use) and needs the game alive and the player in the level every time. It runs after the
+    checks that use `b60X` themselves (a second `use` while the portal stands fails), and 253 is sealed by lockclock by now."""
+    name = "Median dungeon (251) entered three times in one game (bug #24b: empty client missile function slot)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    lvl0 = hstate()["player"]["level"]
+    H("difficulty 2")
+    H("stat player 12 set 125")
+    notes, log, shots, ok = [], [], [], True
+    off = g._size(g.MXL_LOG)
+
+    def heal():
+        H("stat player 7 set 2000000000")
+        H("stat player 6 set 2000000000")
+
+    heal()
+    H("item b60X")
+    _, l = H("use b60X")
+    log += l
+    time.sleep(1.5)
+    ports = [o for o in hstate()["objs"] if o.get("class") in (59, 60, 600)]
+    pid = max(ports, key=lambda o: o["id"])["id"] if ports else None
+    t0 = time.time()
+    for visit in (1, 2, 3):
+        guard()
+        heal()
+        moved = False
+        for _ in range(3):
+            time.sleep(2)
+            _, ll = H("enter %d" % pid) if pid is not None else (False, [])
+            log += ll
+            if ll and "moved" in ll[0]:
+                moved = True
+                break
+        time.sleep(3)
+        area = hstate()["player"].get("area") if g.game_pids() else None
+        fired = []
+        if area == 251:
+            fired = [H("missile 5507")[0], H("missile 5507 -10 8")[0]]
+            time.sleep(4)  # the client ticks the missiles in these seconds
+        alive = bool(g.game_pids())
+        if alive:
+            shots.append(sh("reenter_%d" % visit))
+        notes.append("visit %d at +%.0f s: portal %s moved %s, area %s, missiles %s, alive %s" % (
+            visit, time.time() - t0, pid, moved, area, fired, alive))
+        if not (alive and moved and area == 251 and all(fired)):
+            ok = False
+        if not alive:
+            break
+        heal()
+        goto(1)
+    skipped = [ln for ln in mxl_lines_since(off) if "which D2R leaves empty" in ln]
+    if g.game_pids():
+        H("difficulty 0")
+        H("stat player 12 set %d" % lvl0)
+    add(name, "PASS" if ok and g.game_pids() else "FAIL",
+        "; ".join(notes) + "; plugin log: %s" % ("; ".join(x.split("mxl-core: ")[-1][:80] for x in skipped[:3]) or "no empty-slot call logged"),
+        shots[-2:], log)
+
+
 # lockclock goes first after mxl: entering the Median dungeon is a heavy level load and D2R's client asserts "asset cache
 # exceeded" (512 assets) after a few area changes, then crashes (see docs/bugs.md)
 def check_areacycle():
@@ -854,7 +920,7 @@ def check_areacycle():
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
           ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle)]
+          ("reenter", check_dungeon_reenter), ("areacycle", check_areacycle)]
 
 
 def write_report(extra=""):

@@ -245,6 +245,8 @@ bound 71 at `0x2391404`, dispatcher `0x464ac0`: (game, missile, target or null);
 **`0x2358710`** (record +0x2a, bound 81 at `0x2358a64`). The 1.13 D2Game that D2Sigma calls into is decompiled in
 `mxl_extracted/3_ghidra/D2Game.dll.c` (and a Ghidra project of the launcher's copy, `ghidra_query.ps1 -Project D2Game`).
 
+**Empty table slots (bug #24b, mxl-core 0.48.0+):** the client missile tick `0x1ba040` calls client do `table[record +0x28]` for any index below the bound with no null check (slots 0 and 78-90 are empty), and the server hit dispatcher `0x464ac0` does the same for 1 <= index < 71 (slot 70 is D2Sigma's unported hit 42). A Median missile with an empty pCltDoFunc (45 rows in the main bank, 95 in the base bank; row 5507 `warp_crash_missile` is cast by level 251's monsters) crashed the client with a call to address 0 outside a town. `InstallMissileHits` fills every empty slot of both tables (after the ported functions) with a function that does nothing and logs the first missile row per table; the client hit dispatcher (`0x1b8e60`) and the server do dispatcher (`0x466ce0`, index > 0) check or exclude the empty case and are left alone. Harness: `missilescan` lists the rows that point at an empty slot, `missile <row>` fires one.
+
 | Function | D2Sigma | Median missiles | Port |
 |---|---|---|---|
 | client do 19 / server do 15 | 0x100892f0 / 0x10089930 | 1,110 / 1,017 (Frozen Orb style spawners) | same as D2R's (`0x1a8880` / `0x459380`) |
