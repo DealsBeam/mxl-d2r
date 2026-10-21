@@ -504,14 +504,27 @@ high one, which mxl-core then writes (0.19.0; the 12 summoning scrolls to levels
     one slot, applying both needs the per-item check inside `0x529d50`.
     Plugin: `SearchHook` remembers game and player, `MatchHook` answers 0 for input 0 when `Passes()` fails (record
     index = (record - `0x3e3f60(dataFlag, 0)`) / 0x16c, verified against the getter, else the hook logs once and passes
-    through). Skill level: 31 uses D2R's base-level calc code 41; 30 (0.38.0) adds the +skills: it walks the skill list (`0x34b6e0(unit)` -> first node; node +0 -> record, word id; +8 next; +0x40 level; +0x4c, +0x54) the way calc code blvl does and adds `0x3400a0(unit, node, 0)` (the bonus function the skill-level callers `0x337a70` / `0x338fd8` use when node +0x4c is -1; D2RLoader has a `jmp [rip+x]` at its entry, calling the address is fine). Craft flags exist
-    in the plugin (`SetCraftFlag`) but nothing sets them yet, so ops 38/40 never pass (the 19 flag recipes stay locked) and
-    39/41 always pass. The gold cost is checked, not paid. **Hooks on since 0.38.0**, entry bytes verified by disassembling a memory dump of the running image (build 93847, timestamp 0x6ab3782c):
+    through). Skill level: 31 uses D2R's base-level calc code 41; 30 (0.38.0) adds the +skills: it walks the skill list (`0x34b6e0(unit)` -> first node; node +0 -> record, word id; +8 next; +0x40 level; +0x4c, +0x54) the way calc code blvl does and adds `0x3400a0(unit, node, 0)` (the bonus function the skill-level callers `0x337a70` / `0x338fd8` use when node +0x4c is -1; D2RLoader has a `jmp [rip+x]` at its entry, calling the address is fine). Craft flags are set and the gold is paid by the recipe-executor hook
+    (below, `craft_flags.cpp`). **Hooks on since 0.38.0**, entry bytes verified by disassembling a memory dump of the running image (build 93847, timestamp 0x6ab3782c):
     - `0x529090` search, (rcx = int* result {index at +0, found byte at +4}, rdx = game, r8 = player, r9 = out); 18 bytes `40 55 53 56 57 41 54 41 55 41 56 41 57 48 8d 6c 24 88` (push rbp/rbx/rsi/rdi/r12-r15, `lea rbp,[rsp-0x78]`). It loops the records with `0x3e3f60(game+0x106, i)`, tests the player condition by a jump table (ops 0-13, stat reads `0x2f5020` total / `0x2f48c0` base), then runs `0x529d50` for inputs 0-6.
     - `0x529d50` input match, (rcx = game, rdx = player inventory, r8 = record, r9d = input#, **plus two stack arguments** (out, scratch): the hook forwards all six); 17 bytes `44 89 4c 24 20 55 53 56 41 55 48 8b ec 48 83 ec 68` (`mov [rsp+0x20],r9d` / push rbp, rbx, rsi, r13 / `mov rbp,rsp` / `sub rsp,0x68`). Returns eax non-zero on match; input record at record + 0x14 + 10 * input.
     - `0x3e3f60(ecx = byte game+0x106, edx = index)` returns table base + index * 0x16c (bounds-checked), as assumed.
     `mxl-core-off.txt` word `cube`.
-  - **Port spec: the output effects (flags 7/9, gold 6; not implemented, needs D2R addresses).**
+  - **Output effects: implemented (craft_flags.cpp, option 2, the post-hook).** `tools/cube_effects.py` reads
+    `cubemain.bin` and writes `plugin/src/mxl_cube_effects.h` (256 effects, sorted by row: 65 x byte 6, 135 x byte 7,
+    56 x byte 9; bytes 8 and 10 are accepted but absent). The plugin detours the recipe executor `0x5269c0` (entry
+    bytes `40 55 53 56 57 41 54 41 55 41 56 41 57 48 8d ac 24 08 ea ff ff`, 21 bytes, checked against the dump); after
+    the original returns an output item (non-null) it finds the record's row (same formula as the match hook) and runs
+    the row's effects in slot order: byte 6 pays `param x 100` gold (`craft::Pay`: carried gold, stat 14, first; the rest
+    from the bank, stat 15; set with `0x2f7d10`, nothing goes below 0), 7 / 9 set a player / game flag. Flags are
+    memory only (`craft_state.h`): game flags and player flags are cleared when the game pointer seen by the search or
+    the executor changes (no game-destroy hook; a new game that reuses the same address would keep the old flags, which
+    only means a repeat guard stays closed), and player flags are keyed by the player's unit id (`0x34ab60`), not
+    Median's name key, so a player who leaves and rejoins the same game gets a new id and fresh flags. D2R's own bytes
+    1-4 (portals) are untouched. The gold change is made with the stat setter and no extra packet: if the client does
+    not show the new gold until something else updates it, a stat-update send is needed (to verify in game). Switch:
+    `mxl-core-off.txt` word `craftflags` (flags then never set: the 19 op-38 recipes stay locked, gold is not paid).
+  - **Original port spec (kept for reference).**
     - *Storage.* Nothing to save: Median keeps the flags in game memory only (see above), so no itemstatcost stat or
       save field is needed (and none would match Median: the flags reset when the game ends). The plugin's maps
       (`g_playerFlags`, `g_gameFlags`) are right in kind; change them to be keyed per game (a game pointer, cleared when the
