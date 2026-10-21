@@ -125,7 +125,7 @@ void GiveHeart(Game* game, Unit* player) noexcept {
 	}
 	char line[96];
 	clientmsg::RewardLine("Griswold's Heart", 1, line, sizeof(line));
-	SendClientMessage(player, line, clientmsg::Tan);
+	SendClientNotice(player, line, clientmsg::Tan);
 }
 
 void HeartHook(void* quest, uint8_t* event) {

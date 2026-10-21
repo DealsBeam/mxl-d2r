@@ -40,7 +40,20 @@ using ClientUnitFn = Unit* (*)(void* client, int32_t zero);
 ClientOfFn g_clientOf = nullptr;
 SendChatFn g_sendChat = nullptr;
 ClientUnitFn g_clientUnit = nullptr;
+constexpr int MenuOpenFlagRva = 0x2a486a4;  // client: u32, 1 while the NPC menu is up (harness_cmds.cpp reads the same)
+uint64_t g_base = 0;
 std::atomic<int> g_sent{0}, g_failed{0};
+
+// Notices held for a later server frame (SendClientNotice).
+struct Held {
+	bool used;
+	void* client;
+	int framesOpen;
+	ULONGLONG queuedAt;
+	uint8_t record[clientmsg::ChatRecordSize];
+};
+constexpr int HeldMax = 16;
+Held g_held[HeldMax] = {};
 
 auto Matches(uint64_t address, const uint8_t* expected, size_t n) noexcept -> bool {
 	return std::memcmp(reinterpret_cast<const void*>(address), expected, n) == 0;
@@ -80,6 +93,7 @@ auto InstallClientMessages(const D2RL::PluginContext* context, char* report, siz
 		g_clientOf = reinterpret_cast<ClientOfFn>(base + ClientOfRva);
 		g_sendChat = reinterpret_cast<SendChatFn>(base + SendChatRva);
 		g_clientUnit = reinterpret_cast<ClientUnitFn>(base + ClientUnitRva);
+		g_base = base;
 	}
 	std::snprintf(report, reportSize, "%s", ok ? "on: chat packet 0x26 to one player" : "off: entry bytes of 0x48fde0 / 0x477a30 differ");
 	return ok;
@@ -87,6 +101,79 @@ auto InstallClientMessages(const D2RL::PluginContext* context, char* report, siz
 
 auto SendClientMessage(Unit* player, const char* text, uint8_t colour) noexcept -> bool {
 	return Send(player, clientmsg::TypeSystem, colour, text);
+}
+
+auto SendClientNotice(Unit* player, const char* text, uint8_t colour) noexcept -> bool {
+	if (g_clientOf == nullptr || g_sendChat == nullptr || player == nullptr || text == nullptr) {
+		return false;
+	}
+	__try {
+		if (d2r::At<int32_t>(player, d2r::UnitType) != 0) {
+			return false;
+		}
+		void* client = g_clientOf(player);
+		if (client == nullptr) {
+			g_failed.fetch_add(1);
+			return false;
+		}
+		for (Held& h : g_held) {
+			if (!h.used) {
+				h.used = true;
+				h.client = client;
+				h.framesOpen = 0;
+				h.queuedAt = GetTickCount64();
+				clientmsg::BuildChat(h.record, clientmsg::TypeSystem, colour, d2r::At<uint32_t>(player, 0x08), text);
+				return true;
+			}
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+	}
+	g_failed.fetch_add(1);  // queue full or the unit faulted: the line is dropped
+	return false;
+}
+
+void FlushClientMessages(d2r::Game* game) noexcept {
+	bool any = false;
+	for (const Held& h : g_held) {
+		any = any || h.used;
+	}
+	if (!any || game == nullptr || g_base == 0) {
+		return;
+	}
+	const ULONGLONG now = GetTickCount64();
+	__try {
+		const bool menuOpen = d2r::At<uint32_t>(reinterpret_cast<void*>(g_base), MenuOpenFlagRva) == 1;
+		for (Held& h : g_held) {
+			if (!h.used) {
+				continue;
+			}
+			const uint64_t waited = now - h.queuedAt;
+			bool inGame = false;
+			int guard = 0;
+			for (auto* client = d2r::At<uint8_t*>(game, GameClients); client != nullptr && guard < 64;
+			     client = d2r::At<uint8_t*>(client, ClientNext), ++guard) {
+				if (client == h.client && d2r::At<int32_t>(client, ClientState) == 4) {
+					inGame = true;
+					break;
+				}
+			}
+			if (!inGame) {  // another game's frame; the player left or the game ended when it never turns up
+				if (waited >= clientmsg::NoticeDropMs) {
+					h.used = false;
+					g_failed.fetch_add(1);
+				}
+				continue;
+			}
+			h.framesOpen += menuOpen ? 1 : 0;
+			if (clientmsg::NoticeDue(menuOpen, h.framesOpen, waited)) {
+				h.used = false;
+				g_sendChat(h.client, h.record);
+				g_sent.fetch_add(1);
+			}
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_failed.fetch_add(1);
+	}
 }
 
 auto SendGameMessage(d2r::Game* game, const char* text, uint8_t colour) noexcept -> int {

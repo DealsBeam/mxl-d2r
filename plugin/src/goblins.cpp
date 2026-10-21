@@ -187,6 +187,7 @@ void FrameHook(Game* game) {
 		return;
 	}
 	HarnessGameFrame(game);  // test harness gameplay commands (off in normal play)
+	FlushClientMessages(game);  // quest notices held until the NPC menu is up
 	const uint32_t frame = d2r::At<uint32_t>(game, GameFrame);
 	g_state.Touch(game, frame);
 	if (goblins::IsTickFrame(frame)) {

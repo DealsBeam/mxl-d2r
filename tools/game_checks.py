@@ -540,6 +540,7 @@ def check_respec():
             [ln.strip() for ln in menu[1:]], base0 + 60, s0, base4, s4, refunded, lines[-1][-60:] if lines else "none", q[0]),
         [shot], menu + ml + lines)
     close_menu()
+    H("stat player 4 set %d" % base4)  # the refund raised the unused points: the saved test character keeps the old number
 
 
 def check_cain():
@@ -926,13 +927,19 @@ def check_areacycle():
         reached, len(areas), n_cache, n_biome, "; ".join(notes)))
 
 
-def cast_and_watch(skill, level, target, tries=6, shot=None):
-    """setskill, then cast up to `tries` times (a melee cast walks up to a wandering monster and may need another go) and
-    watch the missiles the server frames saw. Returns (cast_ok, cast_lines, mana_dropped, cast_mode_seen, missiles_seen, screenshot or None)."""
+def cast_and_watch(skill, level, target, tries=6, shot=None, approach=False):
+    """setskill, then cast up to `tries` times and watch the missiles the server frames saw. A melee cast walks the player
+    up to the monster first, and the Fallen of the Blood Moor wander and flee, so a cast at a monster 5-8 sub-tiles away only
+    walks (mode 3) and the next one repeats it (regression hunt 2026-10-22: the same Bash passed or failed from run to run
+    on exactly this): with `approach` the player is moved next to the monster before every try (`moveto nearest`) and the
+    cast follows at once. Returns (cast_ok, cast_lines, mana_dropped, cast_mode_seen, missiles_seen, screenshot or None)."""
     H("setskill %d %d" % (skill, level))
     H("missiles reset")
     ok, lines, dropped, cast_mode, seen, shot_taken = False, [], False, False, 0, None
     for _ in range(tries):
+        if approach:
+            H("moveto nearest")
+            time.sleep(0.4)
         ok, lines = H("cast %d %s" % (skill, target))
         m = re.search(r"mana (\d+) -> (\d+)", " ".join(lines))
         dropped = dropped or (bool(m) and int(m.group(2)) < int(m.group(1)))
@@ -969,7 +976,8 @@ def check_casts():
         H("spawn 18 1")
         if melee:
             H("moveto nearest")
-        ok, lines, dropped, cast_mode, seen, shot = cast_and_watch(skill, level, "nearest", shot="cast_%d" % skill)
+        ok, lines, dropped, cast_mode, seen, shot = cast_and_watch(skill, level, "nearest", tries=10 if melee else 6,
+                                                                       shot="cast_%d" % skill, approach=melee)
         passed = ok and (dropped or cast_mode) and (seen > 0 or not want_missiles)
         good = good and passed
         notes.append("%s: cast %s, cast animation %s, mana drop at the call %s, missiles seen %d" % (

@@ -16,6 +16,14 @@ auto InstallClientMessages(const D2RL::PluginContext* context, char* report, siz
 // the unit is not a player with a client, or the call faulted. Must run on the game (server) thread.
 auto SendClientMessage(d2r::Unit* player, const char* text, uint8_t colour = 0) noexcept -> bool;
 
+// Like SendClientMessage for a line sent from a quest dialog handler (Akara's Heart, the Jerhyn / Cain crystals, Ormus's
+// shrines): it is held until the NPC's speech is over and the menu is up (client_messages_logic.h NoticeDue), because a chat
+// line during the speech freezes it and the NPC menu never opens. FlushClientMessages sends it. True when queued.
+auto SendClientNotice(d2r::Unit* player, const char* text, uint8_t colour = 0) noexcept -> bool;
+
+// Sends the held notices that are due; called once per server frame by the game-frame hook. Game (server) thread.
+void FlushClientMessages(d2r::Game* game) noexcept;
+
 // The same line to every player in the game (the clients in state 4); returns how many got it. Game (server) thread.
 auto SendGameMessage(d2r::Game* game, const char* text, uint8_t colour = 0) noexcept -> int;
 
