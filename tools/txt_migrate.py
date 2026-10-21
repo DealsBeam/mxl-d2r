@@ -232,11 +232,14 @@ class Migrator:
     # Median's grid sizes (inventory.bin, the same for both screen rows): player inventory and Horadric Cube 15 x 10.
     # D2R keeps its own rows (2 per page); only gridX/gridY change, the HD panels come from tools/ui_layouts.py.
     # Classic mode (G) still draws D2R's classic panel art and grid positions. Stash 14 x 14 ("Big Bank": personal
-    # and shared stash pages; saved coordinates are 4 bits, so up to 16 fits).
+    # and shared stash pages; saved coordinates are 4 bits, so up to 16 fits). Trade: two 7 x 15 grids (rows 6/7 of
+    # inventory.bin, trade.dc6). "Monster" is the NPC stores' grid, 15 x 15 (store.dc6); D2R: 10 x 10.
     INVENTORY_SIZES = {"Amazon": (15, 10), "Sorceress": (15, 10), "Necromancer": (15, 10), "Paladin": (15, 10),
                        "Barbarian": (15, 10), "Druid": (15, 10), "Assassin": (15, 10), "Warlock": (15, 10),
                        "Transmogrify Box Page 1": (15, 10), "Transmogrify Box": (15, 10),
-                       "Big Bank Page 1": (14, 14), "Big Bank Page": (14, 14)}
+                       "Big Bank Page 1": (14, 14), "Big Bank Page": (14, 14),
+                       "Trade Page 1": (7, 15), "Trade Page 2": (7, 15), "Trade Page 1-2": (7, 15), "Trade Page 2-2": (7, 15),
+                       "Monster": (15, 15)}
 
     def inventory_sizes(self) -> None:
         n = 0
@@ -252,7 +255,7 @@ class Migrator:
                     r[gx], r[gy] = str(size[0]), str(size[1])
                     n += 1
             write_tsv(p, h, rows)
-        self.report.append(f"\ninventory: {n} rows set to Median's grid sizes (player 15x10, cube 15x10, stash 14x14)")
+        self.report.append(f"\ninventory: {n} rows set to Median's grid sizes (player 15x10, cube 15x10, stash 14x14, trade 7x15, stores 15x15)")
 
     def clean_treasure_classes(self) -> None:
         """Treasure class entries must name an item code, item type, treasure class, unique or set item (D2R's
