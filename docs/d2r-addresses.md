@@ -333,8 +333,8 @@ Read from the Ghidra decompile (lane d2r-addresses-2, 2026-10-21). Entry bytes i
 - Alternative (smaller): patch the call at `0x49218c` to a plugin function with the `0x516a50` signature (return 1 to refuse)
   and also bypass the range test in front of it (it only calls `0x516a50` for the five levels above); a detour of
   `0x491ff0` avoids both.
-- **Signalling to the player.** The vanilla path is silent. A message needs a server -> client packet. No ready-made
-  "send system message" function was located (the telemetry lines in these handlers only log). Raw send works: the game
+- **Signalling to the player.** The vanilla path is silent. A message needs a server -> client packet. The ready-made
+  chat sender `0x477a30` is documented in section 13 (found later; the plugin uses it). Raw send also works: the game
   has a network service singleton `0x649610()` (`lea rax, [global]; ret`), and a packet is sent with
   `(*(void(**)(void*, uint32_t conn, Span*))(*svc + 0x28))(svc, *client, &span)` where `span = {begin, end}` points at the
   packet bytes (see `0x47abc0`, which sends packet 0x0d this way; `client = *(Client**)(0x34b240(player) + 0xf0)`, `*client` is the
@@ -658,6 +658,28 @@ Entry bytes (16): `0x4a2690` `48 85 c9 0f 84 8a 02 00 00 55 53 56 57 41 55 48`; 
 `0x595f80` `4c 8b dc 53 41 54 41 55 41 56 41 57 48 81 ec 50`; `0x4a3680` `48 89 5c 24 08 57 48 83 ec 20 48 8b f9 48 8b da`;
 `0x5b4d50` (Summoner) `48 89 5c 24 08 55 56 57 41 54 41 55 41 56 41 57`; `0x5aba70` (Andariel) `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48`.
 
+## 13. Server -> client text messages (lane client-ui, 2026-10-22; plugin/src/client_messages.cpp)
+
+Ready-made path, called not hooked, verified in game (slot 2, background mode):
+- `0x48fde0(player unit)` -> the player's client (null for a non-player). Entry bytes `40 53 48 83 ec 20 48 8b d9 48 85 c9 74 1e e8`.
+- `0x477a30(client, record)`: trims the 0x147-byte chat record (name <= 60, text <= 255) and writes **packet 0x26** to that client.
+  Entry bytes `48 89 5c 24 18 55 56 57 41 56 41 57 48 81 ec`. The D2Game builder `0x53acf0` (SUnitMsg) uses the same two calls.
+- Record: `+0 0x26`, `+1 chat type`, `+2 language`, `+3 speaker unit type`, `+4 speaker unit id`, `+8 colour`, `+9 name flag`,
+  `+0x0a name[0x3d]`, `+0x47 text[0xff]`. Layout and builder: `clientmsg::BuildChat` (client_messages_logic.h, unit-tested).
+- The client reads it in `0x12c190` (table `0x22bbc40`, 24-byte entries `{handler, size, 0}`; id 0x26).
+- **Chat types seen on screen** (harness verb `sysmsg <type> <colour> <text>`): 4 = a line in the message log at the bottom left
+  coloured by the colour byte (used for every notice); 1 = the same; 5 = overhead bubble above the player; 0, 2, 3, 6-9 show nothing.
+  Colours (byte +8): 0 white, 1 red, 2 green, 3 blue, 4 tan, 8 orange, 9 yellow. Inline `Ã¿c1` colour codes are not interpreted.
+- Used for: Median's dungeon lockout texts (refusal "(Required Level: N)", "Requires Hell difficulty", "This area is locked / Join
+  another game to enter again", clock "Closing in: mm:ss" and "ONCE YOU EXIT YOU CANNOT GO BACK" to every player of the game),
+  the quest reward notices (Akara's Heart, Jerhyn / Cain crystals, Ormus shrines) and the goblin "sighted" line. All shown in
+  the screenshots of the lane report. The plugin counts messages sent / failed on the `mxl` command.
+- Not used: the client packet table also has 0x5a (34 bytes, builder `0x5282b0(unit,type)`, sender `0x480510`; Median's goblin notice
+  is type 0x15) and unit message `0x491960(player,msg,subject)` (0x14 = D2R's generic "Impossible." line; Median's 0x13 and 0x88
+  have no D2R handler). Several client handlers sit behind protected thunks (`0x3e2b7xx`), so they cannot be read statically.
+- Not done: a real timer widget. D2RLoader's PluginSDK has OverlayService (frame callback, drawText) and NetworkService (plugin
+  channel `sendToClient`, 224-byte payload) for a client-side countdown; the notice is a log line for now (docs/unported.md).
+
 ## Appendix A. Quest descriptor table (D2R, verified)
 
 `0x239c5c0`, 36 entries of 0x20 bytes: `+0` init function VA, `+8` u32 act (0-4), `+0xc` u32 (`0x64` or 0), `+0x10`
@@ -802,7 +824,7 @@ game destroy / create, client menu composition, quest handlers 13 / 14 / 25 / 38
 2. ~~Portal objects~~ lane dungeon-lockout: the portal object operate function is **`0x58f680`** (ctx `{game, portal, player, ?, object class}`; it pairs
    the portal with its twin through `0x490070`, places the player with `0x491ca0`, returns 1 moved / 0 failed with unit message `0x14`). Entry bytes
    `48 89 4c 24 08 55 53 56 57 41 56 41 57 48 8b ec`. Destination level = word from `0x34ad40(portal)`. Hooked by dungeon_lockout.cpp.
-3. A ready-made server -> client **system message** sender was not located; use the raw packet send of section 4 or a D2RLoader client-side message.
+3. ~~System message sender~~ lane client-ui: chat packet 0x26 via `0x48fde0` + `0x477a30`, section 13.
 4. Stat-update packet sender (0x1d-0x1f family) not located; gold sync argued from the game's own gold code (section 10), **untested**.
 5. The game create function `0x4049d0` has no direct callers (called through a job pointer); the destroy hook covers the reset need, so this is
    cosmetic. The monster death drop caller `0x5930b0` (the other caller of `0x4404f0`) was not read.
