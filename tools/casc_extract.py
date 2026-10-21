@@ -22,7 +22,7 @@ SETS = {
     "strings": ["data\\local\\lng\\"],
     "layouts": ["data\\global\\ui\\layouts\\"],
     "dataguide": ["data\\global\\dataguide\\"],
-    "meta": ["data\\global\\dataversionbuild.txt"],
+    "meta": ["data\\global\\dataversionbuild.txt", "data\\hd\\global\\excel\\desecratedzones.json"],
     "legacy-ui": ["data\\global\\ui\\"],
     "legacy-art": ["data\\global\\chars\\", "data\\global\\monsters\\", "data\\global\\missiles\\",
                    "data\\global\\items\\", "data\\global\\objects\\", "data\\global\\overlays\\"],
