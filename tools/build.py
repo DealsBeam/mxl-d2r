@@ -15,6 +15,8 @@
   animdata_merge.py  merge Median animation data into D2R's animdata
   hd_skill_anims.py  HD skill animation data for Median skills
   missile_hd.py      HD models for Median's missiles (by CelFile) -> hd/missiles/missiles.json
+  (missile_art.py    Median's own missile/overlay animations as HD flipbook effects; not a step until confirmed in game,
+                     docs/hd-effects.md; run it by hand)
   item_hd.py         HD inventory pictures for Median's items/uniques/sets -> hd/items/*.json; also converts Median-owned item art via item_art.py (bug #18)
   skill_icons.py     Median's skill icons as D2R icon sheets (classic + HD) and skilldesc IconCel
   ui_panels.py       Median panel art as HD sprites and classic DC6 panels

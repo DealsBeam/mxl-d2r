@@ -99,6 +99,11 @@ Status (2026-10-14):
   by type, damage and speed modifiers, find / absorb values) need either code that fills D2R's Advanced Stats panel
   (advancedstatspanelhd.json, opened by the button on the sheet's right edge; its rows are code-driven) or a plugin
   stat sheet; the page buttons and the text of those pages live in D2Sigma's code. Also missing: the portrait.
+- HD skill effects (2026-10-21, docs/hd-effects.md): D2R HD effects are PopcornFX particles plus JSON, no sprite component; only
+  flipbook sprite effect is the UI campfire. tools/dcc.py + d2r_texture.py + missile_art.py turn Median DCCs into patched
+  flipbook effects (Barbarian first); not in build.py until an effect is confirmed in game (python tools/missile_art.py runs it).
+- Classic mode (G) is deferred (owner, 2026-10-21): no classic-only work until all HD work is done; the classic panels
+  above stay as they are.
 - Next: HD art. items.json / missiles.json / monsters.json use D2R look-alikes today (item_hd.py, missile_hd.py,
   gfx_placeholders.py); converting Median's DC6/DCC to HD .sprite is the way to real HD pictures. Skill tree
   backgrounds and tab titles (bug #3): tools/skill_tree_art.py, to test (titles are drawn into per-class 8-frame sprites). All 8 pages are selectable and show their skills since 2026-10-21 (plugin/src/skill_tree.cpp: D2R's panel only handled 3 pages, in reverse order; tools/skill_icons.py splits skilldesc rows shared by several classes). Deferred checks: Median monster art in classic mode, Median-only
