@@ -6,180 +6,183 @@
 namespace mxl_goblins {
 
 // Treasure goblins (D2Goblins.cpp; docs/subsystems/ubers-events.md section 4).
-// Chance: levels.bin +0x15c (u16, per level, D2R id), rolled against 1024 after a per-player reduction (not decoded).
+// Chance: levels.bin +0x15c (u16, per level, D2R id), rolled against 1024 after a reduction of 10% per player
+// beyond the first (0x66070: chance - chance * (10 * players - 10) / 100, at least 1). monLevel = levels.bin
+// +0x16 + 2 * difficulty (u16 x3, what 0x65de0 compares with the goblin level bounds).
 struct Chance {
 	int32_t level;
 	uint16_t chance;
+	uint16_t monLevel[3];
 };
 inline constexpr int32_t ChanceCount = 161;
 inline constexpr Chance Chances[ChanceCount] = {
-    {2, 4},  // Act 1 - Wilderness 1
-    {3, 6},  // Act 1 - Wilderness 2
-    {4, 7},  // Act 1 - Wilderness 3
-    {5, 8},  // Act 1 - Wilderness 4
-    {6, 9},  // Act 1 - Wilderness 5
-    {7, 10},  // Act 1 - Wilderness 6
-    {9, 10},  // Act 1 - Cave 2
-    {10, 10},  // Act 1 - Cave 3
-    {11, 10},  // Act 1 - Cave 4
-    {12, 10},  // Act 1 - Cave 5
-    {13, 10},  // Act 1 - Cave 2 Treasure
-    {14, 10},  // Act 1 - Cave 3 Treasure
-    {15, 10},  // Act 1 - Cave 4 Treasure
-    {16, 10},  // Act 1 - Cave 5 Treasure
-    {17, 10},  // Act 1 - Graveyard
-    {18, 10},  // Act 1 - Crypt 1 A
-    {19, 10},  // Act 1 - Crypt 2 A
-    {21, 10},  // Act 1 - Crypt 3 A
-    {22, 10},  // Act 1 - Crypt 3 B
-    {23, 10},  // Act 1 - Crypt 3 C
-    {24, 10},  // Act 1 - Crypt 3 D
-    {26, 10},  // Act 1 - Monastery
-    {27, 10},  // Act 1 - Courtyard 1
-    {28, 10},  // Act 1 - Barracks
-    {29, 10},  // Act 1 - Jail 1
-    {30, 10},  // Act 1 - Jail 2
-    {31, 10},  // Act 1 - Jail 3
-    {32, 10},  // Act 1 - Courtyard 2
-    {33, 10},  // Act 1 - Cathedral
-    {34, 10},  // Act 1 - Catacombs 1
-    {35, 10},  // Act 1 - Catacombs 2
-    {36, 10},  // Act 1 - Catacombs 3
-    {38, 12},  // Act 1 - Tristram
-    {39, 12},  // Act 1 - Moo Moo Farm
-    {41, 10},  // Act 2 - Desert 1
-    {42, 10},  // Act 2 - Desert 2
-    {43, 10},  // Act 2 - Desert 3
-    {44, 10},  // Act 2 - Desert 4
-    {46, 10},  // Act 2 - Valley of the Kings
-    {47, 10},  // Act 2 - Sewer 1 A
-    {48, 10},  // Act 2 - Sewer 1 B
-    {49, 10},  // Act 2 - Sewer 1 C
-    {51, 10},  // Act 2 - Corrupt Harem 1
-    {52, 10},  // Act 2 - Basement 1
-    {53, 10},  // Act 2 - Basement 2
-    {54, 10},  // Act 2 - Basement 3
-    {55, 10},  // Act 2 - Tomb 1 A
-    {56, 10},  // Act 2 - Tomb 2 A
-    {57, 10},  // Act 2 - Tomb 2 B
-    {58, 10},  // Act 2 - Tomb 3 A
-    {59, 10},  // Act 2 - Tomb 1 Treasure
-    {60, 10},  // Act 2 - Tomb 2 Treasure
-    {61, 10},  // Act 2 - Tomb 3 Treasure
-    {62, 10},  // Act 2 - Lair 1 A
-    {63, 10},  // Act 2 - Lair 1 B
-    {64, 10},  // Act 2 - Lair 1 Treasure
-    {65, 10},  // Act 2 - Sewer 2 A
-    {66, 10},  // Act 2 - Tomb Tal 1
-    {67, 10},  // Act 2 - Tomb Tal 2
-    {68, 10},  // Act 2 - Tomb Tal 3
-    {69, 10},  // Act 2 - Tomb Tal 4
-    {70, 10},  // Act 2 - Tomb Tal 5
-    {71, 10},  // Act 2 - Tomb Tal 6
-    {72, 10},  // Act 2 - Tomb Tal 7
-    {74, 10},  // Act 2 - Arcane
-    {76, 10},  // Act 3 - Jungle 1
-    {77, 10},  // Act 3 - Jungle 2
-    {78, 10},  // Act 3 - Jungle 3
-    {79, 10},  // Act 3 - Kurast 1
-    {80, 10},  // Act 3 - Kurast 2
-    {81, 10},  // Act 3 - Kurast 3
-    {82, 10},  // Act 3 - Kurast 4
-    {83, 10},  // Act 3 - Travincal
-    {84, 10},  // Act 3 - Spider 1
-    {85, 10},  // Act 3 - Spider 2
-    {86, 10},  // Act 3 - Dungeon 1 A
-    {87, 10},  // Act 3 - Dungeon 1 B
-    {88, 10},  // Act 3 - Dungeon 2 A
-    {89, 10},  // Act 3 - Dungeon 2 B
-    {90, 10},  // Act 3 - Dungeon 1 Treasure
-    {91, 10},  // Act 3 - Dungeon 2 Treasure
-    {92, 10},  // Act 3 - Sewer 1
-    {93, 10},  // Act 3 - Sewer 2
-    {94, 10},  // Act 3 - Temple 1
-    {95, 10},  // Act 3 - Temple 2
-    {96, 10},  // Act 3 - Temple 3
-    {97, 10},  // Act 3 - Temple 4
-    {98, 10},  // Act 3 - Temple 5
-    {99, 10},  // Act 3 - Temple 6
-    {100, 10},  // Act 3 - Mephisto 1
-    {101, 10},  // Act 3 - Mephisto 2
-    {104, 10},  // Act 4 - Mesa 1
-    {105, 10},  // Act 4 - Mesa 2
-    {106, 10},  // Act 4 - Mesa 3
-    {107, 10},  // Act 4 - Lava 1
-    {110, 10},  // Act 5 - Siege 1
-    {111, 10},  // Act 5 - Barricade 1
-    {112, 10},  // Act 5 - Barricade 2
-    {113, 10},  // Act 5 - Ice Cave 1
-    {114, 10},  // Act 5 - Ice Cave 1A
-    {115, 10},  // Act 5 - Ice Cave 2
-    {116, 12},  // Act 5 - Ice Cave 2A
-    {117, 10},  // Act 5 - Barricade Snow
-    {118, 10},  // Act 5 - Ice Cave 3
-    {119, 12},  // Act 5 - Ice Cave 3A
-    {122, 10},  // Act 5 - Temple 1
-    {123, 10},  // Act 5 - Temple 2
-    {124, 10},  // Act 5 - Temple Boss
-    {125, 12},  // Act 5 - Hell 1
-    {126, 12},  // Act 5 - Hell 2
-    {127, 12},  // Act 5 - Hell 3
-    {128, 10},  // Act 5 - Baal Temple 1
-    {129, 10},  // Act 5 - Baal Temple 2
-    {130, 10},  // Act 5 - Baal Temple 3
-    {140, 13},  // island_of_the_sunless_sea
-    {141, 12},  // torajan_jungles
-    {142, 12},  // kurast_3000_ba
-    {143, 13},  // diamond_gates
-    {144, 13},  // library_of_fate
-    {145, 13},  // silver_spire_level_1
-    {146, 13},  // silver_spire_level_2
-    {147, 13},  // tran_athulua
-    {149, 13},  // teganze
-    {151, 12},  // bastion_of_the_triune
-    {152, 11},  // corrupted_abbey
-    {153, 11},  // duncraig
-    {154, 11},  // toraja
-    {155, 11},  // vizjun
-    {156, 12},  // fauztinville
-    {218, 10},  // tran_athulua_2
-    {230, 13},  // dimensional_labyrinth_1
-    {231, 13},  // dimensional_labyrinth_2
-    {232, 13},  // dimensional_labyrinth_3
-    {233, 13},  // dimensional_labyrinth_4
-    {234, 13},  // dimensional_labyrinth_5
-    {235, 14},  // dimensional_labyrinth_6
-    {236, 14},  // dimensional_labyrinth_7
-    {237, 14},  // dimensional_labyrinth_8
-    {238, 14},  // dimensional_labyrinth_9
-    {239, 14},  // dimensional_labyrinth_10
-    {256, 16},  // the_mirror_temple
-    {257, 16},  // the_mirror_temple_2
-    {258, 16},  // the_mirror_temple_3
-    {259, 16},  // the_mirror_temple_4
-    {260, 16},  // the_mirror_temple_5
-    {261, 16},  // the_mirror_temple_6
-    {262, 16},  // the_mirror_temple_7
-    {263, 10},  // heroic_library_of_fate
-    {264, 10},  // heroic_library_of_fate_2
-    {265, 10},  // heroic_library_of_fate_3
-    {266, 10},  // heroic_library_of_fate_4
-    {267, 10},  // heroic_library_of_fate_5
-    {268, 10},  // heroic_library_of_fate_6
-    {271, 12},  // scosglen
-    {274, 11},  // heroic_duncraig
-    {275, 11},  // heroic_duncraig_2
-    {276, 11},  // heroic_duncraig_3
-    {277, 11},  // heroic_duncraig_4
-    {278, 11},  // mindflayer_s_arena
-    {279, 11},  // bonehexer_s_arena
-    {280, 11},  // eyegouger_s_arena
+    {2, 4, {1, 51, 100}},  // Act 1 - Wilderness 1
+    {3, 6, {3, 51, 100}},  // Act 1 - Wilderness 2
+    {4, 7, {6, 52, 100}},  // Act 1 - Wilderness 3
+    {5, 8, {8, 54, 100}},  // Act 1 - Wilderness 4
+    {6, 9, {10, 55, 101}},  // Act 1 - Wilderness 5
+    {7, 10, {11, 56, 101}},  // Act 1 - Wilderness 6
+    {9, 10, {4, 52, 105}},  // Act 1 - Cave 2
+    {10, 10, {7, 53, 100}},  // Act 1 - Cave 3
+    {11, 10, {10, 56, 106}},  // Act 1 - Cave 4
+    {12, 10, {12, 57, 106}},  // Act 1 - Cave 5
+    {13, 10, {5, 53, 105}},  // Act 1 - Cave 2 Treasure
+    {14, 10, {8, 54, 100}},  // Act 1 - Cave 3 Treasure
+    {15, 10, {11, 56, 106}},  // Act 1 - Cave 4 Treasure
+    {16, 10, {13, 58, 106}},  // Act 1 - Cave 5 Treasure
+    {17, 10, {5, 52, 100}},  // Act 1 - Graveyard
+    {18, 10, {6, 53, 101}},  // Act 1 - Crypt 1 A
+    {19, 10, {6, 53, 101}},  // Act 1 - Crypt 2 A
+    {21, 10, {10, 56, 101}},  // Act 1 - Crypt 3 A
+    {22, 10, {10, 56, 101}},  // Act 1 - Crypt 3 B
+    {23, 10, {10, 56, 101}},  // Act 1 - Crypt 3 C
+    {24, 10, {11, 57, 101}},  // Act 1 - Crypt 3 D
+    {26, 10, {12, 57, 101}},  // Act 1 - Monastery
+    {27, 10, {12, 57, 101}},  // Act 1 - Courtyard 1
+    {28, 10, {12, 58, 101}},  // Act 1 - Barracks
+    {29, 10, {13, 58, 101}},  // Act 1 - Jail 1
+    {30, 10, {13, 59, 101}},  // Act 1 - Jail 2
+    {31, 10, {13, 59, 101}},  // Act 1 - Jail 3
+    {32, 10, {13, 60, 102}},  // Act 1 - Courtyard 2
+    {33, 10, {13, 61, 102}},  // Act 1 - Cathedral
+    {34, 10, {14, 62, 102}},  // Act 1 - Catacombs 1
+    {35, 10, {15, 63, 102}},  // Act 1 - Catacombs 2
+    {36, 10, {16, 64, 102}},  // Act 1 - Catacombs 3
+    {38, 12, {9, 55, 101}},  // Act 1 - Tristram
+    {39, 12, {70, 100, 110}},  // Act 1 - Moo Moo Farm
+    {41, 10, {19, 67, 103}},  // Act 2 - Desert 1
+    {42, 10, {20, 68, 103}},  // Act 2 - Desert 2
+    {43, 10, {22, 69, 103}},  // Act 2 - Desert 3
+    {44, 10, {23, 70, 103}},  // Act 2 - Desert 4
+    {46, 10, {26, 75, 104}},  // Act 2 - Valley of the Kings
+    {47, 10, {17, 66, 103}},  // Act 2 - Sewer 1 A
+    {48, 10, {18, 67, 103}},  // Act 2 - Sewer 1 B
+    {49, 10, {19, 67, 103}},  // Act 2 - Sewer 1 C
+    {51, 10, {24, 72, 104}},  // Act 2 - Corrupt Harem 1
+    {52, 10, {25, 73, 104}},  // Act 2 - Basement 1
+    {53, 10, {25, 73, 104}},  // Act 2 - Basement 2
+    {54, 10, {25, 73, 104}},  // Act 2 - Basement 3
+    {55, 10, {20, 68, 108}},  // Act 2 - Tomb 1 A
+    {56, 10, {21, 69, 108}},  // Act 2 - Tomb 2 A
+    {57, 10, {21, 69, 108}},  // Act 2 - Tomb 2 B
+    {58, 10, {24, 71, 103}},  // Act 2 - Tomb 3 A
+    {59, 10, {21, 69, 108}},  // Act 2 - Tomb 1 Treasure
+    {60, 10, {22, 70, 109}},  // Act 2 - Tomb 2 Treasure
+    {61, 10, {24, 72, 104}},  // Act 2 - Tomb 3 Treasure
+    {62, 10, {22, 70, 103}},  // Act 2 - Lair 1 A
+    {63, 10, {22, 70, 103}},  // Act 2 - Lair 1 B
+    {64, 10, {23, 70, 103}},  // Act 2 - Lair 1 Treasure
+    {65, 10, {24, 71, 109}},  // Act 2 - Sewer 2 A
+    {66, 10, {27, 75, 104}},  // Act 2 - Tomb Tal 1
+    {67, 10, {27, 75, 104}},  // Act 2 - Tomb Tal 2
+    {68, 10, {27, 75, 104}},  // Act 2 - Tomb Tal 3
+    {69, 10, {27, 75, 104}},  // Act 2 - Tomb Tal 4
+    {70, 10, {27, 75, 104}},  // Act 2 - Tomb Tal 5
+    {71, 10, {27, 75, 104}},  // Act 2 - Tomb Tal 6
+    {72, 10, {27, 75, 104}},  // Act 2 - Tomb Tal 7
+    {74, 10, {25, 74, 104}},  // Act 2 - Arcane
+    {76, 10, {29, 77, 105}},  // Act 3 - Jungle 1
+    {77, 10, {30, 77, 105}},  // Act 3 - Jungle 2
+    {78, 10, {31, 78, 105}},  // Act 3 - Jungle 3
+    {79, 10, {31, 79, 105}},  // Act 3 - Kurast 1
+    {80, 10, {32, 80, 105}},  // Act 3 - Kurast 2
+    {81, 10, {32, 80, 105}},  // Act 3 - Kurast 3
+    {82, 10, {32, 81, 105}},  // Act 3 - Kurast 4
+    {83, 10, {33, 81, 106}},  // Act 3 - Travincal
+    {84, 10, {30, 77, 105}},  // Act 3 - Spider 1
+    {85, 10, {30, 77, 105}},  // Act 3 - Spider 2
+    {86, 10, {31, 79, 110}},  // Act 3 - Dungeon 1 A
+    {87, 10, {31, 79, 110}},  // Act 3 - Dungeon 1 B
+    {88, 10, {31, 79, 105}},  // Act 3 - Dungeon 2 A
+    {89, 10, {31, 79, 105}},  // Act 3 - Dungeon 2 B
+    {90, 10, {32, 80, 105}},  // Act 3 - Dungeon 1 Treasure
+    {91, 10, {31, 80, 106}},  // Act 3 - Dungeon 2 Treasure
+    {92, 10, {32, 81, 106}},  // Act 3 - Sewer 1
+    {93, 10, {32, 81, 106}},  // Act 3 - Sewer 2
+    {94, 10, {33, 81, 110}},  // Act 3 - Temple 1
+    {95, 10, {33, 81, 110}},  // Act 3 - Temple 2
+    {96, 10, {33, 81, 111}},  // Act 3 - Temple 3
+    {97, 10, {33, 81, 111}},  // Act 3 - Temple 4
+    {98, 10, {33, 81, 111}},  // Act 3 - Temple 5
+    {99, 10, {33, 81, 111}},  // Act 3 - Temple 6
+    {100, 10, {34, 82, 107}},  // Act 3 - Mephisto 1
+    {101, 10, {35, 83, 107}},  // Act 3 - Mephisto 2
+    {104, 10, {37, 85, 107}},  // Act 4 - Mesa 1
+    {105, 10, {37, 86, 107}},  // Act 4 - Mesa 2
+    {106, 10, {38, 87, 107}},  // Act 4 - Mesa 3
+    {107, 10, {38, 88, 108}},  // Act 4 - Lava 1
+    {110, 10, {40, 90, 108}},  // Act 5 - Siege 1
+    {111, 10, {41, 91, 108}},  // Act 5 - Barricade 1
+    {112, 10, {42, 92, 108}},  // Act 5 - Barricade 2
+    {113, 10, {43, 93, 108}},  // Act 5 - Ice Cave 1
+    {114, 10, {44, 93, 108}},  // Act 5 - Ice Cave 1A
+    {115, 10, {44, 94, 108}},  // Act 5 - Ice Cave 2
+    {116, 12, {45, 95, 114}},  // Act 5 - Ice Cave 2A
+    {117, 10, {45, 95, 109}},  // Act 5 - Barricade Snow
+    {118, 10, {46, 96, 109}},  // Act 5 - Ice Cave 3
+    {119, 12, {47, 95, 114}},  // Act 5 - Ice Cave 3A
+    {122, 10, {44, 96, 109}},  // Act 5 - Temple 1
+    {123, 10, {45, 96, 109}},  // Act 5 - Temple 2
+    {124, 10, {45, 96, 109}},  // Act 5 - Temple Boss
+    {125, 12, {42, 93, 114}},  // Act 5 - Hell 1
+    {126, 12, {43, 93, 114}},  // Act 5 - Hell 2
+    {127, 12, {46, 96, 114}},  // Act 5 - Hell 3
+    {128, 10, {47, 96, 110}},  // Act 5 - Baal Temple 1
+    {129, 10, {48, 97, 110}},  // Act 5 - Baal Temple 2
+    {130, 10, {48, 98, 111}},  // Act 5 - Baal Temple 3
+    {140, 13, {0, 0, 105}},  // island_of_the_sunless_sea
+    {141, 12, {0, 0, 112}},  // torajan_jungles
+    {142, 12, {0, 85, 115}},  // kurast_3000_ba
+    {143, 13, {0, 0, 115}},  // diamond_gates
+    {144, 13, {0, 0, 116}},  // library_of_fate
+    {145, 13, {0, 0, 116}},  // silver_spire_level_1
+    {146, 13, {0, 0, 117}},  // silver_spire_level_2
+    {147, 13, {0, 0, 118}},  // tran_athulua
+    {149, 13, {0, 0, 120}},  // teganze
+    {151, 12, {0, 0, 130}},  // bastion_of_the_triune
+    {152, 11, {0, 0, 125}},  // corrupted_abbey
+    {153, 11, {0, 0, 125}},  // duncraig
+    {154, 11, {0, 0, 120}},  // toraja
+    {155, 11, {0, 0, 129}},  // vizjun
+    {156, 12, {0, 0, 130}},  // fauztinville
+    {218, 10, {60, 0, 0}},  // tran_athulua_2
+    {230, 13, {0, 0, 131}},  // dimensional_labyrinth_1
+    {231, 13, {0, 0, 132}},  // dimensional_labyrinth_2
+    {232, 13, {0, 0, 133}},  // dimensional_labyrinth_3
+    {233, 13, {0, 0, 134}},  // dimensional_labyrinth_4
+    {234, 13, {0, 0, 135}},  // dimensional_labyrinth_5
+    {235, 14, {0, 0, 136}},  // dimensional_labyrinth_6
+    {236, 14, {0, 0, 137}},  // dimensional_labyrinth_7
+    {237, 14, {0, 0, 138}},  // dimensional_labyrinth_8
+    {238, 14, {0, 0, 139}},  // dimensional_labyrinth_9
+    {239, 14, {0, 0, 140}},  // dimensional_labyrinth_10
+    {256, 16, {0, 0, 121}},  // the_mirror_temple
+    {257, 16, {0, 0, 121}},  // the_mirror_temple_2
+    {258, 16, {0, 0, 121}},  // the_mirror_temple_3
+    {259, 16, {0, 0, 121}},  // the_mirror_temple_4
+    {260, 16, {0, 0, 121}},  // the_mirror_temple_5
+    {261, 16, {0, 0, 121}},  // the_mirror_temple_6
+    {262, 16, {0, 0, 121}},  // the_mirror_temple_7
+    {263, 10, {0, 0, 125}},  // heroic_library_of_fate
+    {264, 10, {0, 0, 130}},  // heroic_library_of_fate_2
+    {265, 10, {0, 0, 133}},  // heroic_library_of_fate_3
+    {266, 10, {0, 0, 136}},  // heroic_library_of_fate_4
+    {267, 10, {0, 0, 139}},  // heroic_library_of_fate_5
+    {268, 10, {0, 0, 140}},  // heroic_library_of_fate_6
+    {271, 12, {0, 0, 135}},  // scosglen
+    {274, 11, {0, 0, 130}},  // heroic_duncraig
+    {275, 11, {0, 0, 134}},  // heroic_duncraig_2
+    {276, 11, {0, 0, 139}},  // heroic_duncraig_3
+    {277, 11, {0, 0, 140}},  // heroic_duncraig_4
+    {278, 11, {0, 0, 139}},  // mindflayer_s_arena
+    {279, 11, {0, 0, 139}},  // bonehexer_s_arena
+    {280, 11, {0, 0, 139}},  // eyegouger_s_arena
 };
 
 // Candidates: monstats3 rows (D2R monster id) with flag bit 0x400, all fields from the row. Candidate when the
 // area's monster level (levels record, per difficulty; not in this table) is within [minLevel, maxLevel] (0 =
 // no bound) and levelRestrict is -1 or the area (D2R level id); rainbow (flag 0x1000) is Halloween only. Each
-// row is drawn `rarity` times (monstats3 +0x17, u16; 2325 for the common goblin looks high, unconfirmed).
+// row is drawn `rarity` times (monstats3 +0x17, u16; a plain weight, confirmed from 0x65de0).
 // flags is the whole monstats3 +0 word; bits other than 0x400 / 0x1000 are not understood.
 inline constexpr uint32_t FlagGoblin = 0x400;
 inline constexpr uint32_t FlagRainbow = 0x1000;
@@ -215,5 +218,13 @@ inline constexpr Goblin Goblins[GoblinCount] = {
     {2811, 0x4080406, 144, 0, 0, 155},  // rift_inspector_11
     {2812, 0x4080406, 240, 0, 0, 156},  // rift_inspector_12
 };
+
+// Monsters whose kills do not count as "the player just killed something" (monstats3 +0x20, the loader's
+// NoKillTimestampUpdate; D2Achievements.cpp 0x49c40 stores the player's last-kill frame only when it is 0).
+inline constexpr int32_t NoKillCount = 177;
+inline constexpr int32_t TownCount = 9;
+// Levels with the town flag (levels.bin +0x14b, D2R ids): no goblins while a player stands in one.
+inline constexpr int32_t Towns[TownCount] = {1, 40, 75, 103, 109, 138, 139, 242, 243};
+inline constexpr int32_t NoKill[NoKillCount] = {782, 783, 784, 785, 786, 1077, 1127, 1233, 1272, 1585, 1586, 1622, 1623, 1636, 1638, 1711, 1732, 1733, 1734, 1735, 1736, 1738, 1780, 1781, 1782, 1784, 1788, 1802, 1812, 1813, 1814, 1815, 1816, 1817, 1818, 1819, 1820, 1821, 1822, 1823, 1824, 1825, 1826, 1827, 1828, 1829, 1830, 1841, 1842, 1843, 1844, 1845, 1853, 1854, 1916, 1917, 1918, 1919, 1920, 1921, 1948, 1949, 1950, 1951, 1952, 1953, 2105, 2107, 2110, 2117, 2118, 2119, 2126, 2128, 2129, 2130, 2131, 2132, 2133, 2134, 2135, 2136, 2137, 2138, 2139, 2140, 2141, 2143, 2144, 2145, 2146, 2147, 2148, 2149, 2150, 2151, 2152, 2153, 2155, 2156, 2157, 2158, 2159, 2161, 2163, 2168, 2169, 2171, 2172, 2175, 2178, 2180, 2181, 2182, 2189, 2191, 2192, 2193, 2194, 2371, 2372, 2373, 2374, 2375, 2383, 2397, 2456, 2466, 2467, 2468, 2469, 2530, 2531, 2532, 2533, 2534, 2535, 2536, 2537, 2538, 2539, 2540, 2541, 2542, 2543, 2544, 2651, 2716, 2717, 2718, 2719, 2720, 2721, 2722, 2723, 2724, 2725, 2726, 2727, 2728, 2729, 2730, 2731, 2732, 2733, 2734, 2735, 2736, 2737, 2738, 2739, 2740, 2741, 2742, 2743, 2791, 2822};
 
 }  // namespace mxl_goblins

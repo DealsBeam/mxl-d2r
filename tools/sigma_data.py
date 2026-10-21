@@ -102,7 +102,7 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
         class_lock = r[0x15e]
         group = r[0x15f]
         if chance:
-            chances.append((lid, chance, lnames[row]))
+            chances.append((lid, chance, lnames[row], struct.unpack_from("<HHH", r, 0x16)))
         if any((min_diff, unk152, lock, unk155, unk156, *req, unk15b, class_lock, group)):
             dungeon.append((lid, lock, group, min_diff, req, class_lock, unk152, unk155, unk156, unk15b, lnames[row]))
 
@@ -141,22 +141,34 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
 
     g = [HEADER, "#pragma once", "", "#include <cstdint>", "", "namespace mxl_goblins {", "",
          "// Treasure goblins (D2Goblins.cpp; docs/subsystems/ubers-events.md section 4).",
-         "// Chance: levels.bin +0x15c (u16, per level, D2R id), rolled against 1024 after a per-player reduction (not decoded).",
-         "struct Chance {", "\tint32_t level;", "\tuint16_t chance;", "};",
+         "// Chance: levels.bin +0x15c (u16, per level, D2R id), rolled against 1024 after a reduction of 10% per player",
+         "// beyond the first (0x66070: chance - chance * (10 * players - 10) / 100, at least 1). monLevel = levels.bin",
+         "// +0x16 + 2 * difficulty (u16 x3, what 0x65de0 compares with the goblin level bounds).",
+         "struct Chance {", "\tint32_t level;", "\tuint16_t chance;", "\tuint16_t monLevel[3];", "};",
          f"inline constexpr int32_t ChanceCount = {len(chances)};", "inline constexpr Chance Chances[ChanceCount] = {"]
-    g += [f"    {{{lid}, {c}}},  // {n}" for lid, c, n in chances]
+    g += [f"    {{{lid}, {c}, {{{ml[0]}, {ml[1]}, {ml[2]}}}}},  // {n}" for lid, c, n, ml in chances]
     g += ["};", "",
           "// Candidates: monstats3 rows (D2R monster id) with flag bit 0x400, all fields from the row. Candidate when the",
           "// area's monster level (levels record, per difficulty; not in this table) is within [minLevel, maxLevel] (0 =",
           "// no bound) and levelRestrict is -1 or the area (D2R level id); rainbow (flag 0x1000) is Halloween only. Each",
-          "// row is drawn `rarity` times (monstats3 +0x17, u16; 2325 for the common goblin looks high, unconfirmed).",
+          "// row is drawn `rarity` times (monstats3 +0x17, u16; a plain weight, confirmed from 0x65de0).",
           "// flags is the whole monstats3 +0 word; bits other than 0x400 / 0x1000 are not understood.",
           "inline constexpr uint32_t FlagGoblin = 0x400;", "inline constexpr uint32_t FlagRainbow = 0x1000;",
           "struct Goblin {", "\tint32_t monster;       // D2R monstats id", "\tuint32_t flags;", "\tuint16_t rarity;",
           "\tuint16_t minLevel;", "\tuint16_t maxLevel;", "\tint32_t levelRestrict; // D2R level id, -1 = any", "};",
           f"inline constexpr int32_t GoblinCount = {len(gob)};", "inline constexpr Goblin Goblins[GoblinCount] = {"]
     g += [f"    {{{m}, 0x{f:x}, {ra}, {lo}, {hi}, {rl}}},  // {n}" for m, f, ra, lo, hi, rl, n in gob]
-    g += ["};", "", "}  // namespace mxl_goblins", ""]
+    towns = [levels[row] for row, r in enumerate(lrows) if r[0x14b]]
+    nokill = [mons[row] for row, r in enumerate(m3) if r[0x20]] or [-1]
+    g += ["};", "",
+          "// Monsters whose kills do not count as \"the player just killed something\" (monstats3 +0x20, the loader's",
+          "// NoKillTimestampUpdate; D2Achievements.cpp 0x49c40 stores the player's last-kill frame only when it is 0).",
+          f"inline constexpr int32_t NoKillCount = {len(nokill)};",
+          f"inline constexpr int32_t TownCount = {len(towns)};",
+          "// Levels with the town flag (levels.bin +0x14b, D2R ids): no goblins while a player stands in one.",
+          "inline constexpr int32_t Towns[TownCount] = {" + ", ".join(str(t) for t in towns) + "};",
+          "inline constexpr int32_t NoKill[NoKillCount] = {" + ", ".join(str(m) for m in nokill) + "};", "",
+          "}  // namespace mxl_goblins", ""]
     msg = (f"dungeons: {len(dungeon)} levels -> plugin/src/mxl_dungeons.h; goblins: {len(chances)} level chances, "
            f"{len(gob)} monsters -> plugin/src/mxl_goblins.h")
     return "\n".join(out), "\n".join(g), msg
