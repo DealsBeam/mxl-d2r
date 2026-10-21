@@ -16,6 +16,10 @@ Input modes: background (default) posts window messages to the game window, capt
 never moves the real cursor, sends global keys or takes focus. `--foreground` (anywhere on the command line) or
 env MXL_INPUT=sendinput selects the old SendInput + SetCursorPos + SetForegroundWindow path.
 MXL_RUN=<name> pins the run folder (instead of runs\\current.txt, which is shared between lanes).
+Slots: `--slot N` (anywhere on the command line) or env MXL_SLOT=N picks one of up to three game folders
+(tools/game_slots.py; default slot 1; MXL_D2R_GAME overrides the folder). Every function works on that slot's
+process and window only (found by process, never by title alone) and `start` takes the slot's run lock
+(game.lock.N, slot 1 also game.lock) until `stop`.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -26,14 +30,37 @@ import subprocess
 import sys
 import time
 
-# MXL_D2R_GAME points at another install (e.g. a kept copy of build 93847 after Battle.net updated the main one).
-GAME_DIR = os.environ.get("MXL_D2R_GAME", r"C:\Program Files (x86)\Diablo II Resurrected")
-LOADER = os.path.join(GAME_DIR, "D2RLoader.exe")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import game_slots  # noqa: E402
+
+if "--slot" in sys.argv:
+    _i = sys.argv.index("--slot")
+    os.environ["MXL_SLOT"] = sys.argv[_i + 1]
+    del sys.argv[_i:_i + 2]
+SLOT = int(os.environ.get("MXL_SLOT", "1"))
+# MXL_D2R_GAME points at another install (e.g. a kept copy of build 93847 after Battle.net updated the main one);
+# otherwise the folder of the slot (tools/game_slots.py).
+GAME_DIR = os.environ.get("MXL_D2R_GAME") or game_slots.slot_dir(SLOT)
+SLOT = game_slots.slot_of_game_dir(GAME_DIR) or SLOT
+LOADER_NAME = game_slots.loader_name(GAME_DIR)
+LOADER = os.path.join(GAME_DIR, LOADER_NAME)
 LOADER_LOG = os.path.join(GAME_DIR, r"d2rloader\logs\d2rloader.log")
 MXL_LOG = os.path.join(GAME_DIR, r"mods\MedianXL\d2rloader\logs\mxl-core.log")
 CRASH_DIR = os.path.join(GAME_DIR, r"d2rloader\crashes")
 RUNS = r"%USERPROFILE%\mxl-d2r-runs"
-SAVES = os.path.join(os.environ.get("USERPROFILE", ""), r"Saved Games\Diablo II Resurrected\mods\MedianXL")
+
+
+def _savepath():
+    """This game folder's save folder (modinfo.json savepath; the slot 2 and 3 copies use MedianXL-sN)."""
+    try:
+        sp = json.load(open(os.path.join(GAME_DIR, "mods", "MedianXL", "modinfo.json")))["savepath"]
+    except Exception:
+        sp = "MedianXL/"
+    return os.path.join(game_slots.SAVE_ROOT, sp.strip("/\\").replace("/", "\\"))
+
+
+SAVES = _savepath()
+LOCK_OWNER = os.environ.get("MXL_RUN") or f"run-{os.getpid()}"
 TITLE = "Diablo II: Resurrected"
 CLIENT_W, CLIENT_H = 1600, 900
 CHAR_NAME = "MxlBarb"
@@ -95,34 +122,33 @@ def log(msg):
 
 
 def game_pids():
-    out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq D2RLoader.exe", "/FO", "CSV", "/NH"],
-                         capture_output=True, text=True).stdout
-    pids = []
-    for ln in out.splitlines():
-        p = [x.strip('"') for x in ln.split('","')]
-        if len(p) > 1 and p[0].strip('"').lower() == "d2rloader.exe":
-            pids.append(int(p[1]))
-    return pids
+    """PIDs of this slot's loader (image path inside the slot's game folder: other slots' games are not ours)."""
+    return [pid for pid, _ in game_slots.slot_processes(GAME_DIR, (LOADER_NAME.lower(),))]
 
 
 def find_window():
-    """HWND of the game window (title match, owned by a D2R/D2RLoader process)."""
+    """HWND of this slot's game window: a visible top-level window titled TITLE that belongs to one of the slot's
+    processes (matched by PID, so several instances never mix)."""
+    pids = set(game_pids())
     found = []
 
     @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
     def cb(h, _):
         if not user32.IsWindowVisible(h):
             return True
+        pid = wt.DWORD()
+        user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+        if pid.value not in pids:
+            return True
         n = user32.GetWindowTextLengthW(h)
         buf = ctypes.create_unicode_buffer(n + 1)
         user32.GetWindowTextW(h, buf, n + 1)
-        if buf.value == TITLE:
-            pid = wt.DWORD()
-            user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+        if buf.value == TITLE or buf.value.startswith(TITLE + " ["):  # "... [s2]": the harness tags the test slots
             found.append((h, pid.value))
         return True
 
-    user32.EnumWindows(cb, 0)
+    if pids:
+        user32.EnumWindows(cb, 0)
     return found[0][0] if found else None
 
 
@@ -148,8 +174,10 @@ def focus(h):
     time.sleep(0.3)
 
 
-def fit_window(h, x=100, y=60):
-    """Resize so the client area is CLIENT_W x CLIENT_H, placed at (x, y) on the primary monitor."""
+def fit_window(h, x=None, y=None):
+    """Resize so the client area is CLIENT_W x CLIENT_H, placed at (x, y) on the primary monitor (the slots cascade)."""
+    x = 100 + 60 * (SLOT - 1) if x is None else x
+    y = 60 + 40 * (SLOT - 1) if y is None else y
     fl = 0x0004 | (0x0010 if BG else 0)  # SWP_NOZORDER (| SWP_NOACTIVATE in background mode)
     if user32.IsIconic(h):
         user32.ShowWindow(h, 4 if BG else 1)  # SW_SHOWNOACTIVATE / SW_SHOWNORMAL
@@ -167,11 +195,17 @@ def fit_window(h, x=100, y=60):
     return client_rect(h)
 
 
-def need_window():
-    h = find_window()
-    if not h:
-        raise SystemExit("game window not found")
-    return h
+def need_window(wait=20):
+    """The slot's game window; waits up to `wait` seconds while the game is running (the window is briefly gone or
+    hidden when D2R switches between its startup screens)."""
+    t0 = time.time()
+    while True:
+        h = find_window()
+        if h:
+            return h
+        if time.time() - t0 > wait or not game_pids():
+            raise SystemExit(f"game window of slot {SLOT} not found" + (" (game not running)" if not game_pids() else ""))
+        time.sleep(0.5)
 
 
 # ---------------------------------------------------------------- screenshots
@@ -372,24 +406,35 @@ def type_text(s):
 
 
 _VIN = None
+_VIN_PID = None
 
 
 def vinput():
-    """The plugin's virtual input block ('Local\\mxl-testharness-input', plugin/src/testharness.cpp) as an int32[8]:
+    """The plugin's virtual input block ('Local\\mxl-testharness-input-<game PID>', one per game process,
+    plugin/src/testharness.cpp) as an int32[8]:
     [magic, active, x, y, buttons, mods, seq, 0]. D2R reads the mouse position with GetCursorPos and the buttons and
     modifiers with GetKeyState; with the harness on the plugin answers those from this block, so the real cursor
     never has to move. None when the plugin's test harness is off (no mxl-testharness.txt next to mxl-core.dll)."""
-    global _VIN
+    global _VIN, _VIN_PID
+    pids = game_pids()
+    if _VIN is not None and _VIN_PID not in pids:
+        _VIN = None  # the game restarted: a new process with a new block
     if _VIN is None:
+        if not pids:
+            return None
         kernel32.OpenFileMappingW.restype = ctypes.c_void_p
         kernel32.MapViewOfFile.restype = ctypes.c_void_p
         kernel32.MapViewOfFile.argtypes = [ctypes.c_void_p, wt.DWORD, wt.DWORD, wt.DWORD, ctypes.c_size_t]
-        hm = kernel32.OpenFileMappingW(0xF001F, False, "Local\\mxl-testharness-input")
+        hm = kernel32.OpenFileMappingW(0xF001F, False, f"Local\\mxl-testharness-input-{pids[0]}")
+        if not hm:
+            # plugins before the per-process block (0.46.0 as released) use one shared name: fine for a single instance
+            hm = kernel32.OpenFileMappingW(0xF001F, False, "Local\\mxl-testharness-input")
         if not hm:
             return None
         p = kernel32.MapViewOfFile(ctypes.c_void_p(hm), 0xF001F, 0, 0, 576)
         if not p:
             return None
+        _VIN_PID = pids[0]
         _VIN = (ctypes.c_int32 * 144).from_address(p)
         if _VIN[0] != 0x4d58:
             _VIN = None
@@ -547,10 +592,24 @@ def _keep_out_of_front(prev_fg, wait=60):
     return False
 
 
+def take_lock():
+    """Slot run lock (game.lock.N; slot 1 also game.lock). A lock somebody made by hand (mkdir, no owner.txt) is
+    taken to mean the caller holds it (the older lanes do that before running game_ctl); a lock owned by another
+    run stops the launch."""
+    ok, msg = game_slots.acquire(SLOT, LOCK_OWNER)
+    if not ok and msg.endswith("(no owner.txt)"):
+        log(f"slot {SLOT}: {msg}; assuming the caller holds it")
+        return True
+    log(f"slot {SLOT}: {msg}")
+    return ok
+
+
 def start(timeout=120):
     if game_pids():
-        log("game already running")
+        log(f"game already running (slot {SLOT})")
     else:
+        if not take_lock():
+            return False
         snapshot_marks()
         off = _size(LOADER_LOG)
         since = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -587,6 +646,7 @@ def stop(timeout=20):
     if not pids:
         harness_switch(False)  # also when the game already ended: normal play never runs with the harness on
         log("not running")
+        game_slots.release(SLOT, LOCK_OWNER)
         return
     h = find_window()
     if h:
@@ -599,22 +659,28 @@ def stop(timeout=20):
         for p in game_pids():
             subprocess.run(["taskkill", "/F", "/PID", str(p)], capture_output=True)
         time.sleep(2)
-    # D2R may leave a child process named D2R.exe; only ours (spawned by loader) - check
-    out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq D2R.exe", "/FO", "CSV", "/NH"],
-                         capture_output=True, text=True).stdout
-    if "D2R.exe" in out:
-        log("D2R.exe still alive, killing")
-        subprocess.run(["taskkill", "/F", "/IM", "D2R.exe"], capture_output=True)
+    # D2R may leave a child process named D2R.exe; only the ones in this slot's folder (other slots run their own)
+    for pid, nm in game_slots.slot_processes(GAME_DIR):
+        log(f"{nm} {pid} still alive, killing")
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
     harness_switch(False)  # normal play never runs with the harness on
+    game_slots.release(SLOT, LOCK_OWNER)
     log("stopped")
 
 
 def harness_switch(on: bool) -> None:
-    """Create or remove mxl-testharness.txt next to mxl-core.dll (the plugin test harness reads it at load)."""
-    p = os.path.join(GAME_DIR, r"mods\MedianXL\d2rloader\plugins\mxl-testharness.txt")
+    """Create or remove mxl-testharness.txt next to mxl-core.dll (the plugin test harness reads it at load). Its text
+    is a list of words: `volserial` (every slot except slot 1: D2RLoader derives the key of the Battle.net session
+    cookie from the volume serial of the drive it runs from and dies on another drive, see docs/testing.md),
+    `tag=s2` (window title "Diablo II: Resurrected [s2]", so other tools never pick this window), `nocookie` (hide
+    the cookie instead) and `diag` (env MXL_HARNESS_WORDS sets the words by hand, e.g. "volserial tag=s2 diag")."""
+    p = os.path.join(GAME_DIR, "mods", "MedianXL", "d2rloader", "plugins", "mxl-testharness.txt")
     try:
         if on:
-            open(p, "a").close()
+            words = os.environ.get("MXL_HARNESS_WORDS")  # explicit override, e.g. "diag" for investigations
+            if words is None:
+                words = "" if SLOT == 1 else f"volserial tag=s{SLOT}"
+            open(p, "w").write(words)
         elif os.path.exists(p):
             os.remove(p)
     except OSError as e:
