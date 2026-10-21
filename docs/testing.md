@@ -117,3 +117,23 @@ panels, and the save/reload basics. Does not cover combat, vendors, stash, cube 
 Status 2026-10-21: the run stops at D2R's "You have not been online in the last 30 days. Please start the game
 while online to verify the product license." dialog (OK quits the game). One online launch is needed first. Everything
 after the main menu in `run_smoke` (click fractions marked `guess` in `UI`) is untested.
+
+## Scripted checks (tools/game_checks.py, 2026-10-21, foreground input)
+
+Console commands and measured coordinates: [dev-console.md](dev-console.md). Results of the partial run (the run was
+stopped before the full set finished because the foreground input took the user's mouse; the checks are to be re-run
+in background mode once `lane/bg-input` is on main). Evidence is in `%USERPROFILE%\mxl-d2r-runs\checks-20261021-140330`
+(interactive exploration) and `checks-20261021-163305` (scripted run).
+
+| Row | Result 2026-10-21 | Evidence / note |
+|---|---|---|
+| `mxl` command | PASS: prints all 15 feature lines (plugin 0.42.0) | `checks-20261021-161134\mxl_cmd.png` |
+| Goblins (MXL_GOBLINS_FORCE=1) | PASS: after killing a Fallen in the Blood Moor a goblin spawned (log `goblin 2798 spawned in level 2 near player 1 (frame 5250)`, a second run `goblin 2791 ... frame 1500`); drop and name not looked at | `checks-20261021-140330\after18s.png`, `checks-20261021-163305\goblin_scene.png`, `goblin_mxl.png` |
+| Akara respec | PASS by hand: with a level-12 character and the Den of Evil bit set (quest 41 word 2), Akara's menu shows Talk, Trade and two "Reset Stat/Skill Points"; the second one logs `npc actions: done (kind, npc class) (48, 148)` and the character sheet then shows 55 stat points remaining (reset). The scripted version clicked the wrong line (vanilla one) and is fixed but not re-run | `checks-20261021-140330\akara_menu1.png`, `respec_char_after_line2.png`, `checks-20261021-163305\respec_3_menu.png` |
+| Cain crafting materials | FAIL (bug #23): the line does not show, log `menu record is full` | `checks-20261021-140330\cain_menu1.png` |
+| Griswold's Heart | PASS (script): patched save with quest 4 bit 1, talked to Akara twice, one new item in the inventory; the unique's name/stats were not read | `checks-20261021-161134\heart_inventory.png` |
+| Andariel catalyst, Warriv re-issue | BLOCKED: no cheat kills Andariel (`god`'s easykill does not one-shot her; 14 axe hits did not), and the quest state for event 8 was not set up | `checks-20261021-163305\catalyst_after_kill1.png` |
+| Cow portal recipe, town vs field | PASS for Normal town (recipe 3 has min difficulty 2: nothing happens), earlier manual try; Hell town/field BLOCKED: `spawn leg` plus `spawn tbk` could not be picked up by the script in the later run | `checks-20261021-140330\cow_after.png`; script run `cow_hell_*_pickup_failed.png` |
+| Cube gold payment, craft flags (6327-6329, 7100, 6369 -> 6350) | BLOCKED: the recipes need items with Median stats (stat 532, `UpgradedBossKillerRing`, `RathmasSupremacy2`) and no console cheat sets an item's stat or spawns these as upgraded; also `cubeinputs`/`cubestuff` failed for recipes 2, 3 | dev-console.md |
+| Dungeon lockout (refusal, clock, seal) | BLOCKED: `spawn b61X` did not yield a usable scroll/portal in the script; not seen manually. The `mxl` command shows counters `refused N, clocks started N` that the check should read | `checks-20261021-163305\lock_normal_portal.png`, `lock_mxl.png` |
+| Warriv re-issue | BLOCKED with the catalyst check | - |

@@ -39,10 +39,13 @@ SAVES = g.SAVES
 
 
 def new_run():
+    """Own run folder for this process. game_ctl keeps the current run in runs/current.txt, which other lanes also
+    rewrite, so current_run() is pinned to this folder."""
     name = "checks-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    os.makedirs(g.RUNS, exist_ok=True)
-    open(os.path.join(g.RUNS, "current.txt"), "w").write(name)
-    return g.current_run()
+    d = os.path.join(g.RUNS, name)
+    os.makedirs(d, exist_ok=True)
+    g.current_run = lambda create=False: d
+    return d
 
 
 def lock(wait_s=1200):
@@ -527,7 +530,7 @@ def check_cow():
     for diff, town in (("hell", True), ("hell", False), ("normal", True)):
         tag = "cow_%s_%s" % (diff, "town" if town else "field")
         if not (STATE.get("cow_diff") == diff and STATE["in_game"]):
-            if not enter(0, diff):
+            if not enter(1 if diff == "hell" else 0, diff):  # MxlBarb (card 1) has Hell; MxlQ only Normal
                 add("Cow portal recipe (%s, %s)" % (diff, "town" if town else "field"), "BLOCKED", "could not enter the game")
                 continue
             STATE["cow_diff"] = diff
@@ -578,9 +581,11 @@ def check_goblins():
     lines = []
     shots = []
     for i in range(4):
-        x, y = find_spawned("mspawn fallen1")
+        CON.close()
+        cheat("mspawn fallen1")
+        time.sleep(1.0)
         for _ in range(5):
-            attack(x, y)
+            attack(0.535, 0.44)
         lines = [ln for ln in mxl_lines_since(m) if "goblin" in ln and "spawned" in ln]
         if lines:
             break
@@ -619,13 +624,12 @@ def check_respec():
     sB = sh("respec_2_after_spending")
     g.key("esc")
     time.sleep(0.6)
-    g.click(0.5, 0.335)  # the spawned Akara: first click gives her greeting window, Esc then shows the menu
+    g.click(0.5, 0.335)  # the spawned Akara stands just above the player: her menu opens over her head
     time.sleep(3)
-    g.key("esc")
-    time.sleep(1.2)
     sM = sh("respec_3_menu")
     m = mxl_mark()
-    g.click(0.5, 0.2144)  # second 'Reset Stat/Skill Points' line = the plugin's (kind 0x10 + 2*16 + 0 = 48)
+    # menu lines (Akara, Talk, Trade, Reset, Reset, Cancel): the second Reset is the plugin's (kind 48, class 148)
+    g.click(0.5, 0.2144)  # measured 2026-10-21: lines at y .148 Talk, .17 Trade, .192 Reset, .2144 Reset (plugin), .237 Cancel
     time.sleep(2.5)
     lines = [ln for ln in mxl_lines_since(m) if "npc actions" in ln]
     g.key("c")
@@ -650,11 +654,14 @@ def inv_snapshot():
     return im
 
 
-def kill_spawn(cmd, tries=14):
-    x, y = find_spawned(cmd)
+def kill_spawn(cmd, tries=14, at=(0.50, 0.31)):
+    """Spawn a monster next to the player (it appears above the character) and hit it in place."""
+    CON.close()
+    cheat(cmd)
+    time.sleep(1.0)
     for _ in range(tries):
-        attack(x, y)
-    return x, y
+        attack(*at)
+    return at
 
 
 def check_catalyst():
@@ -720,7 +727,8 @@ def portal_use(code, tag):
     open_inventory()
     items = spawn_pickup([code])
     if not items:
-        return None, [sh(tag + "_nopickup")]
+        p = cheat("spawn " + code, tag + "_spawn_console")
+        return None, [sh(tag + "_nopickup"), os.path.basename(p)]
     A = grab()
     g.click(items[0][0], items[0][1], "right")
     time.sleep(0.5)
