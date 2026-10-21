@@ -22,7 +22,8 @@ import subprocess
 import sys
 import time
 
-GAME_DIR = r"C:\Program Files (x86)\Diablo II Resurrected"
+# MXL_D2R_GAME points at another install (e.g. a kept copy of build 93847 after Battle.net updated the main one).
+GAME_DIR = os.environ.get("MXL_D2R_GAME", r"C:\Program Files (x86)\Diablo II Resurrected")
 LOADER = os.path.join(GAME_DIR, "D2RLoader.exe")
 LOADER_LOG = os.path.join(GAME_DIR, r"d2rloader\logs\d2rloader.log")
 MXL_LOG = os.path.join(GAME_DIR, r"mods\MedianXL\d2rloader\logs\mxl-core.log")

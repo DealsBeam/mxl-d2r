@@ -13,13 +13,14 @@ Usage: python tools/install_mod.py [--game "C:\\Program Files (x86)\\Diablo II R
 """
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "work" / "mod" / "data"
-DEFAULT_GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
+DEFAULT_GAME = os.environ.get("MXL_D2R_GAME", r"C:\Program Files (x86)\Diablo II Resurrected")  # see game_ctl.py
 BUILD = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "dataversionbuild.txt"
 MXL_GLOBAL = ROOT / "extract" / "mxl" / "data" / "global"
 MXL_TILES = MXL_GLOBAL / "tiles"
