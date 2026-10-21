@@ -21,7 +21,7 @@ constexpr auto ClassLockAllows(int32_t lockStat, int32_t playerClass) noexcept -
 
 // --- Ethereal (D2Sigma 0x1007e120 + 0x1007fdd0 + 0x1007fd70) -----------------------------------------------------
 
-// qualities.txt column `u8_0x02` (work/sigma/qualities.txt): the chance in 1/1000 that an item of that quality becomes
+// qualities.txt column `EthChance` (work/sigma/qualities.txt): the chance in 1/1000 that an item of that quality becomes
 // ethereal, read by 0x1007e120 as `word [row + 2]` and compared with `rand(1000) <= chance`. 25 for low, normal,
 // superior, magic, rare and unique; 0 for set (5) and the crafted qualities (8, 9).
 constexpr auto EtherealChancePerMille(int32_t quality) noexcept -> int32_t {
