@@ -15,6 +15,9 @@ Commands:
   init      create/refresh the schema skeleton (keeps existing names and notes)
   evidence  write research/sigma_evidence/<table>.md: value statistics + code accesses per field
   decode    write work/sigma/<table>.txt with named columns; parallel tables get the vanilla row's key
+            (--out DIR writes somewhere else, e.g. to compare after a schema change)
+Optional field keys: "ref": "<entity>" (value is a row of that entity, printed by name), "formula": "skills2code"
+(value is a byte offset into that formula table, -1 = none; printed as skills2code#<entry> plus the formula text).
 """
 import argparse
 import json
@@ -72,6 +75,23 @@ def string_key(sid: int) -> str:
     return f"mxl_{sid}" if key in ("x", "") else key
 
 
+_formulas: dict[str, dict[int, str]] = {}
+
+
+def formula_text(table: str, start: int) -> str:
+    """Byte offset into <table>.bin's formula bytecode (tools/formula.py: the u32 a record holds) ->
+    "<table>#<entry>: <first decoder's text>"; "" for none. Entries are listed in mxl_extracted/2_txt/<table>.txt."""
+    if table not in _formulas:
+        lines = (SUGMA / "mxl_extracted" / "2_txt" / f"{table}.txt").read_text("utf-8").splitlines()
+        by_start, pos = {}, 0
+        for k in range(0, len(lines) - 1, 2):
+            idx, _, text = lines[k].partition("	")
+            by_start[pos] = f"{table}#{idx}: {text}"
+            pos += len(lines[k + 1].split())
+        _formulas[table] = by_start
+    return "" if start < 0 else _formulas[table].get(start, f"{table}@{start}?")
+
+
 _ref_names: dict[str, list[str]] = {}
 
 
@@ -96,6 +116,8 @@ def cell(row: bytes, f: dict) -> str:
     v = value(row, f)
     if f["type"] == "strid":
         text = string_key(v)
+    elif f.get("formula") and isinstance(v, int):
+        text = formula_text(f["formula"], v)
     elif f.get("ref") and isinstance(v, int):
         text = "" if v < 0 or v == 0xFFFF else ref_name(f["ref"], v) or f"#{v}"
     else:
@@ -243,7 +265,7 @@ def vanilla_keys(table: str) -> list[str]:
 
 def cmd_decode(args) -> None:
     schema = json.loads(SCHEMA.read_text("utf-8"))
-    out = ROOT / "work" / "sigma"
+    out = Path(args.out) if args.out else ROOT / "work" / "sigma"
     out.mkdir(parents=True, exist_ok=True)
     for t, entry in schema.items():
         rowsize, rows = read_bin(t)
@@ -266,7 +288,8 @@ def main() -> int:
     sub.add_parser("init")
     e = sub.add_parser("evidence")
     e.add_argument("table", nargs="*")
-    sub.add_parser("decode")
+    d = sub.add_parser("decode")
+    d.add_argument("--out", help="directory for the decoded tables (default work/sigma)")
     args = ap.parse_args()
     {"init": cmd_init, "evidence": cmd_evidence, "decode": cmd_decode}[args.cmd](args)
     return 0

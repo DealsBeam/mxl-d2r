@@ -69,5 +69,7 @@ Each needs either a D2RLoader plugin that adds formula functions (native hook on
 like D2Sigma did) or a rewrite of the formula. 4 cells can't be expressed at all (Median's broken bytecode
 passes a computed value where a stat name belongs) and need a manual decision.
 
-Not yet linked: `skills2code` (formulas used by the Sigma table skills2). Its listing is written; the
-skills2 fields that point into it get linked once skills2 is named.
+`skills2code` (formulas used by the Sigma table skills2) is linked: skills2 `Calc32` (+0x32), `ManaCalc` (+0x36),
+`LvlManaCalc` (+0x3a) and `MaxLevelCalc` (+0x3e) hold byte offsets into the formula bytecode (-1 = none), and
+`tools/sigma_tables.py decode` prints them as `skills2code#<entry>: <formula>`. `export_skill_costs` and `export_skill_caps`
+in `tools/formula.py` read the same three offsets.
