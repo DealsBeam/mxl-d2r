@@ -5,7 +5,14 @@
 #include <D2RLPlugin/api.h>
 
 #include <cstddef>
+#include <cstdint>
 
 auto InstallTestHarness(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;
 void StopTestHarness() noexcept;
 void HarnessEcho(const char* line) noexcept;  // appends a console line to mxl-testharness-console.txt while the harness is on
+
+// Gameplay commands (harness_cmds.cpp): "h <verb> ..." lines of the console mailbox. Server-side verbs run on the game
+// thread inside HarnessGameFrame, which goblins.cpp calls after the server frame 0x406550.
+void HarnessCmdsInit(uint64_t exeBase) noexcept;
+auto HarnessCommand(const char* line) noexcept -> int;  // UI thread; 1 ok, 0 failed, -2 crashed, -3 timed out
+void HarnessGameFrame(void* game) noexcept;             // game thread; cheap no-op while the harness is off

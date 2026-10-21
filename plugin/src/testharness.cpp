@@ -232,7 +232,9 @@ void ServiceCommands() noexcept {
 	char command[512];
 	std::memcpy(command, g_shared->cmd, sizeof(command));
 	command[sizeof(command) - 1] = '\0';
-	g_shared->cmdResult = RunCommandSafe(command);
+	// "h <verb> ..." are the harness's own gameplay commands (harness_cmds.cpp), anything else is a console line.
+	g_shared->cmdResult = (command[0] == 'h' && (command[1] == ' ' || command[1] == '\0')) ? HarnessCommand(command)
+	                                                                                       : RunCommandSafe(command);
 	g_shared->cmdDone = seq;
 	g_inCommand = 0;
 }
@@ -471,7 +473,6 @@ auto ReadMode(char* mode, size_t size) noexcept -> bool {
 }  // namespace
 
 auto InstallTestHarness(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
-	(void)context;
 	char mode[128] = "";
 	if (!ReadMode(mode, sizeof(mode))) {
 		std::snprintf(report, reportSize, "off: no mxl-testharness.txt next to the plugin (normal play)");
@@ -516,6 +517,7 @@ auto InstallTestHarness(const D2RL::PluginContext* context, char* report, size_t
 		g_execute = reinterpret_cast<ExecuteConsoleCommandFn>(execute);
 		g_isInGame = reinterpret_cast<IsInGameFn>(GetProcAddress(core, "IsInGame"));
 	}
+	HarnessCmdsInit(context->exeBase);
 	g_running = 1;
 	g_thread = CreateThread(nullptr, 0, TraceThread, nullptr, 0, nullptr);
 	std::snprintf(report, reportSize, "on (mode '%.20s'): %d win32u input calls traced to mxl-testharness-trace.log (%d not present)",

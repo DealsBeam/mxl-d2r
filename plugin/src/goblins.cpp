@@ -20,6 +20,7 @@
 
 #include "d2r.h"
 #include "goblins_logic.h"
+#include "testharness.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -182,6 +183,7 @@ void FrameHook(Game* game) {
 	if (game == nullptr) {
 		return;
 	}
+	HarnessGameFrame(game);  // test harness gameplay commands (off in normal play)
 	const uint32_t frame = d2r::At<uint32_t>(game, GameFrame);
 	g_state.Touch(game, frame);
 	if (goblins::IsTickFrame(frame)) {
