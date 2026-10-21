@@ -56,6 +56,7 @@ D2R addresses: [d2r-addresses.md](d2r-addresses.md).
 First test whether legacy-graphics mode loads modded DCC/DC6. Then decide per asset.
 
 Status (2026-10-14):
+- HD monsters (2026-10-21): tools/hd_monsters.py picks donor, scale and colour per Median-only monster (docs/hd-monsters.md); real models later.
 - Installed for classic mode (install_mod.py, Median-only files; ones D2R has stay D2R's): map tiles/presets
   (`global/tiles`, also needed in HD), missile and overlay animations (265 + 107 .dcc), item pictures (542 .dc6).
   Every item picture name the item tables use exists (D2R's or Median's). 11 missile CelFiles and 15 overlay
