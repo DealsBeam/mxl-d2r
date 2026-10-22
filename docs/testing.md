@@ -324,6 +324,7 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `skills` / `skill [left\|right <id>]` | the player's skill list (id, base level, skill mode, the game's usability code from `0x33f360`: 0 usable, 2 passive or requirements, 5 no weapon), or selects the active left / right skill (packet 0x3c) |
 | `xp <amount>` | D2R's award function `0x44f2e0(game, player, level, amount)`: adds the experience and runs the level-ups (stat / skill points, the class level cap); prints `level`, `experience`, `statpoints`, `skillpoints` |
 | `setskill <id> <level>` | gives a skill levels with the game's own `0x438670` (stat 5 refilled each step, restored after); Median skills with prerequisites work, the prerequisite check is skipped |
+| `skilldmg <skill> [level] [nomastery]` | the skill's damage at that level for the player through the damage hooks and through D2R's own functions (elemental and physical, min and max), with the inputs of Median's formula: flags (1 BaseSynergy, 2 StaticDamage), character level, energy, stat 514, the synergy percent columns, the BaseSynergy percent, the mastery stats (`docs/plugin-spec.md` "Skill damage scaling") |
 | `cast <id> [x y\|unit <id>\|nearest [class]\|self]` | selects the skill as the left skill, then uses it the way the cast packets do (`0x4fdb40` at a position, `0x4f8de0` at a unit: a melee skill walks up to the monster first and the cast starts when it is in reach, so repeat it for a wandering target); prints the usability code, mode and mana at the call |
 | `missiles [reset]` | live missile units (type 3, hash base `0x646`) and the distinct missiles seen by any server frame since `reset` (class ids; short-lived ones are counted); `state` ends with the same line |
 | `dump player` / `dump client` / `dump mon <class>` / `dump ground` | hex dumps for the RE work behind plugin offsets: the player's data block (`0x34b240`: the character name at +0), the client record of the player in the game, a monstats record (`0x976e0`; the treasure class words are u16 at +0xc0 + difficulty * 0x10 + (n - 1) * 2, n = 1..4; the quest class is n = 4), the items on the ground |
@@ -332,6 +333,11 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `stat player\|merc\|mon:<id>\|<item id>\|<code> <stat> [layer] [set <value>]` | reads (or writes the base of) a stat; `merc` and `mon:<id>` are the mercenary and any monster by unit id (the verify checks set resists, avoid stats, life, strength, level on them) |
 | `hit <player\|merc\|mon:id> phys\|fire\|ltng\|magic\|cold\|pois\|life\|mana\|stam\|clen\|flen\|plen <amount> [attacker ref] [stagger]` | one hit through the game's own damage path: a damage block with the elemental field set (result flags bit 0), `0x44ce80` (resist, absorb) then `0x44a9b0` (life); the amount is in 1/256 life points. Prints life before -> after, the absorbed total (block `+0x130`), the result flags and `field=` (the element's field after the step; for `clen` / `flen` / `plen` the cold / freeze / poison length). The player cannot hurt its own mercenary: give an attacker (`mon:<id>` of a spawned monster). `stagger` (last word) sets the result flag 4 (hit recovery) between the two steps: the target enters GetHit even when it has no hit recovery (bosses), and its last-mode field (monster data +0x68) reads 3 when it leaves it, which is the gate of `andariel_ai`'s controlled branch. Nothing happens in town |
 | `avoid <ref> melee\|missile\|evade [n]` | runs the game's avoid check `0x44ef70` n times (default 200, the hooked one with Median's caps; its first argument is the attacker unit, the player here) against the unit and tallies none / avoid (2) / dodge (4) / evade (8) / block (0x10); `evade` puts the unit into walk mode for the loop |
+| `wear <attacker ref> <defender ref> [n]` | n melee wear steps (`0x4526c0`, the function every hit runs; it calls the wear dispatcher `0x441b10`) and the summed durability of the player's worn items before and after |
+| `iflags <item unit id> [unid]` | flag word (0x10 identified), mode, quantity (stat 0x46), durability (0x48) and maximum (0x49) and position of any item unit, on the ground too; `unid` clears the identified flag first |
+| `cursor` | the item on the player's cursor (id, code) or `empty`; a held item makes `0x4249f0` report "busy" and refuses every skill use (drop it with the client packet `17 <id u32>`) |
+| `manamin [reset]` | the lowest and highest mana of the player on any server frame since `manamin reset` (a skill's mana is charged a frame or more after `cast` returns and regenerates within a few frames, so one read afterwards sees nothing) |
+| `manacharge` | what the mana cost hook decided at the last charge site: calls, room, town test, cost, charge, site (1 server, 2 client, 3 the loader's server copy), and the return address of the last other caller |
 | `itemroll <code> <n> [q=] [ilvl=]` | makes n items through the generator the way `item` does (quality default 2, item level default 110), reads sockets, the ethereal flag, defence and maximum durability, frees them; prints the socket histogram, the ethereal count, the defence sums and the durability ranges of normal and ethereal ones |
 | `colour <item id\|code>` | the item colour function `0x3710d0` (hooked for stat 368) on an item of the player: the colour byte, the item's colour kind and whether a palette entry came back |
 | `req <ref> [as <class>]` | the item requirement check `0x36bc50` (class lock stat 492, mercenary weapon / shield lists) of every backpack item against the player or the mercenary; `as` swaps the unit's class for the call (character class 0-6, or a hire monster class 271 / 338 / 359 / 561). Prints id, code, usable, lock, weapon / shield flags and the hireclasses list item types the item belongs to |
@@ -370,6 +376,31 @@ drive the player server side with the game's own functions (no input of any kind
 Notes for whoever extends this: `cast` needs the skill to be the active left skill (the unit cast uses the player's active skill), the
 harness selects it; a melee skill cast at a unit makes the player run to it first and the class 18 monsters wander off, so the check
 repeats the cast; the mana cost cannot be read from `state` after the fact (regeneration refills in a few frames), only at the call.
+
+### Item rules and free mana in town (lane gap-items, 2026-10-22, background mode, slot 1, plugin 0.54.0 + item rules)
+
+`py -3 tools/game_checks.py all nodurability autoid townmana`, the plugin with and without the off words
+`durability quantity autoid townmana` in `mxl-core-off.txt`.
+
+| Check | With the parts | Off words | Evidence |
+|---|---|---|---|
+| `nodurability` (audit IT1, IT2) | PASS | FAIL | hfh weapon 110 -> 110 and fld armour 48 -> 48 after 600 `wear` steps (off: 110 -> 101, 48 -> 16); a tax stack, 4 accepted Throws (`cast 2 nearest`), quantity 58 -> 58 (off: 110 -> 109) |
+| `autoid` (audit IT3) | PASS | FAIL | 14 Andariel kills (`spawn 156`, `kill nearest 156`), `dump ground` (now prints `quality=` and `identified=`, ground items only): 6 magic / set / rare / unique drops, 6 identified (off word: 0 of 6); the low / normal / superior drops are identified either way (D2R sets the flag on non-magic items itself). `itemroll` and `item` cannot show it: `MakeItem` `0x43d530` sets 0x10 at its end |
+| `townmana` (audit SK3) | PASS | FAIL | skill 1558 (`sk1486`, InTown, level 5) cast at the player: Rogue Encampment, lowest mana 5000 of 5000 (cost 16 by the plugin, charged 0, `manacharge` site 3); Blood Moor, lowest 4993 (off: 4993 in town too) |
+
+What the checks needed to learn (so the next check does not lose time on it):
+
+- Mana is charged when the cast's action starts and refills in a few frames, so `cast`'s own "mana A -> B" and a read two
+  seconds later both show nothing; `manamin` samples every server frame. The drop it sees (7) is smaller than the charge the
+  plugin decides (16): regeneration refills in the same frames.
+- `0x4249f0` ("busy") is also true while an item is on the cursor. `unequip` and a pick-up leave the item there, and the next
+  cast is refused with code 1 although the usability code says 0. `cursor` shows it, packet `17 <id>` drops it.
+- D2RLoader runs a re-assembled copy of the server's skill charge function (`0x436830`), so the return address of the mana
+  cost call is a heap address: see docs/plugin-spec.md, Mana costs.
+- A skill must be selectable (left or right skill); `cast` refuses the passives and the ones the game will not select
+  ("would not select"). The check tries the InTown skills of the built `skills.txt` by required level until one is accepted
+  (`usable=0`).
+- Median's Throw (skill 2) needs strength 600 / dexterity 600 / level 60 for tax; the check sets the stats and restores them.
 
 ### Client messages (lane client-ui, 2026-10-22, background mode, slot 2, plugin 0.48.0, window-only screenshots)
 
@@ -465,6 +496,16 @@ How they work and what is not tested: `docs/plugin-spec.md` "Skill restrictions"
 sets stat 378 to the Heart of Sin code (167166) with the harness: nothing in the data names the skill a boss kill casts, so the
 kill itself is not exercised. Findings on the way: `tools/formula.py` turned a missile `stat(x, n)` with a layer into a plain stat
 read (wrong layer), and `txt_migrate.py formula_proxies` read the `ParamN` columns by position; both fixed.
+
+### Skill damage scaling (2026-10-22, lane pa-skills, background mode, slot 1, plugin 0.54.0 + the lane's part)
+
+`py -3 tools/game_checks.py --slot 1 all skillscaling` (evidence `checks-20261022-223626-s1`; data and DLL installed together with `install_mod.py --slot 1`; the plugin reports `skill damage on: elemental + physical min/max, 164 BaseSynergy and 423 StaticDamage skills`). Nothing but the harness: `skilldmg` prints the damage through the hooks and through D2R's own functions, and the inputs the formula needs (character level, energy, stat 514, the synergy percent columns, the mastery stats); the check computes Median's formula in Python from the built `skills.txt` columns and `skills2.bin` flags and compares.
+
+| Check | Result |
+|---|---|
+| `skillscaling` | PASS: 572 samples (7 groups of skills x skill levels 1, 2, 8, 9, 16, 17, 22, 23, 28, 29, 45 x 4 character setups: level 1 / energy 0, level 40 / 150, level 100 / 300 with stat 514 = 600, level 150 / 1000 with stat 514 = 5000, each with 0-60% mastery stats) equal the formula. BaseSynergy is -42% at level 1 and 1626% at level 100 / 300 energy / stat 514 600. Nova and Meteor (BaseSynergy elemental), blast_wave (BaseSynergy physical), Magic Arrow (StaticDamage elemental: mastery 40 changes nothing), immersion (StaticDamage physical), Fire Bolt, Telekinesis, DiabRun, PoisonBallTrap (plain; stat 357 raises the physical ones). 18 samples of skills with no flag and no mastery equal D2R's own functions to the digit (elemental, physical, and skills with a weapon share: Sanctuary, MonLeapAttack). Synergy: raising Fire Arrow 1 -> 12 raises Poison Javelin's percent column 12 -> 144 and its damage (8744-9891 -> 19051-21550) as the formula says; Charged Bolt from Lightning likewise |
+
+Not tested in the game: the weapon share of the four BaseSynergy skills that have one (scorpion_blade, thunder_hammer, thunder_wave, angel_of_death; the unit tests cover the arithmetic, and the weapon share of plain skills equals D2R's), skills whose `passive` flag keeps D2R's physical function. A first run on slot 3 gave the same results but lost two samples to harness time-outs (`no answer in 15 s`); `_sd_query` now retries.
 
 ## Scripted checks (tools/game_checks.py, 2026-10-21, foreground input)
 

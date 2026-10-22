@@ -965,7 +965,7 @@ handlers); `0x2e15a` = the end of the game frame function (the goblin / D2GS tic
 | `0x100bcd10` | 9: 0x4b17e 0x4b1b6 0x5568b 0x55955 0x9dd29 0xe176f 0xe1858 0xed3fe 0xed655 |
 
 
-## 17. Mercenary revive price, Act 5 quest experience, removed quest rewards (lane pa-quests, 2026-10-22)
+## 19. Mercenary revive price, Act 5 quest experience, removed quest rewards (lane pa-quests, 2026-10-22)
 
 Median patches (docs/sigma-patch-audit.md items 8-10) ported in `hirelings.cpp` (`InstallMercRevive`, off word `mercrevive`) and
 `quests_rewards.cpp` (`InstallQuestXp` off word `questxp`, `InstallQuestRewards` off word `questrewards`). Entry bytes are checked before

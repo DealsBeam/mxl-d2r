@@ -101,7 +101,7 @@ The table has 64 rows: 15 S, 8 I, 14 N, 8 U, 9 E, 5 D, 5 X.
 |---|---|---|---|
 | Stat engine (D2RCore thunks) | `0x2f5020`, `0x2f7d10`, `0x2f48c0`, `0x2f5c60`, `0x2f34f0`, `0x2f7c00`, `0x2f5b80`, `0x2f5940` | 25+ | E1: no SDK equivalent |
 | Unit / room / level | `0x34b440`, `0x2efc10`, `0x2f0750` (is town), `0x38dfb0`, `0x34a040`, `0x34a110` | 15 | E2: first two have SDK exports |
-| Skills | `0x97790`, `0x3b5160`, `0x33dcd0`, `0x33f360`, `0x34b6e0`, `0x438670`, `0x4fdb40`, `0x4f8de0`, `0x42d2c0` | sigma_skills, harness_cmds, cube_conditions, state_trace | harness casts use the server's own packet handlers |
+| Skills | `0x97790`, `0x3b5160`, `0x33dcd0`, `0x33f360`, `0x34b6e0`, `0x438670`, `0x4fdb40`, `0x4f8de0`, `0x42d2c0`, damage `0x3387d0` `0x338340` `0x3385b0` `0x338160` (hooked), mastery `0x337f40` | sigma_skills, skill_damage, harness_cmds, cube_conditions, state_trace | harness casts use the server's own packet handlers |
 | Missiles / damage | `0x5371a0`, `0x1b7760`, `0x3bb0f0`, `0x3bc450`, `0x44a9b0`, `0x44ce80`, `0x44b2b0`, `0x433d20` | missile_hits, area_damage, d2r.h | |
 | Items | `0x314110`, `0x373890`, `0x36cf60`, `0x3d4620`, `0x3d5230`, `0x535f60`, `0x472590`, `0x43ec10`, `0x517530`, `0x441980` | item_spells, item_gen, items_ext, harness | E5 |
 | Cube | `0x3e3f60`, `0x5269c0`, `0x529090`, `0x529d50` | cube_conditions, craft_flags | |
