@@ -2103,11 +2103,16 @@ def check_nslong():
     for k in ("Sunstone of the Twin Seas", "MRVasily's Falling Star", "To The Island of the Sunless Sea"):
         full = "medianxl:" + aliases[k]
         ok, lines = H("str key " + full)  # the harness splits a line at spaces: the long keys themselves cannot be asked
-        # colour codes (ÿc + 1 character) are dropped on both sides, as check_strings does
-        text = _COLOUR.sub("", recs[aliases[k]])
-        want = [w for w in text.split(chr(10)) if w][0]
+        # colour codes (ÿc + 1 character) are dropped on both sides, as check_strings does. The console shows the two
+        # characters ÿc as two garbage characters and keeps the colour digit ("<2 junk>0Difficulty: <2 junk>2Very Easy"):
+        # junk plus the character behind it is dropped from the answer.
+        first = [w for w in recs[aliases[k]].split(chr(10)) if w][0]
+        want = _COLOUR.sub("", first)
+        want_console = first.replace(chr(255) + "c", "")
+        got = " ".join(lines)
+        got_plain = re.sub("[^\x00-\x7f]+.", "", _COLOUR.sub("", got))
         log.append("%s -> %s %s (record starts '%s')" % (full, ok, lines[0] if lines else "", want))
-        if not (ok and want in _COLOUR.sub("", " ".join(lines))):
+        if not (ok and (want in got_plain or want_console in got)):
             bad.append("alias %s does not give the record text '%s'" % (full, want))
     goto(1)
     close_menu()
