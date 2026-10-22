@@ -28,6 +28,7 @@
 #include "missile_hits.h"
 #include "mana_costs.h"
 #include "item_rules.h"
+#include "stat_rules.h"
 #include "skill_damage.h"
 #include "heat.h"
 #include "trophy_timer.h"
@@ -82,7 +83,8 @@ char g_manaCostsReport[160] = "off: not the expected game image";
 char g_itemRulesReport[320] = "off: not the expected game image";
 char g_skillDamageReport[160] = "off: not the expected game image";
 char g_skillRestrictReport[160] = "off: not the expected game image";
-char g_heatReport[160] = "off: not the expected game image";
+char g_heatReport[200] = "off: not the expected game image";
+char g_statRulesReport[320] = "off: not the expected game image";
 char g_trophyReport[200] = "off: not the expected game image";
 char g_missileHitsReport[1024] = "";
 char g_cubeReport[192] = "off: not the expected game image";
@@ -142,7 +144,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability quantity autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels gamble hitfloor recast slowfloor
+// items missiles mana townmana durability quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels gamble hitfloor recast slowfloor
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -224,6 +226,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "skill restrict %s", g_skillRestrictReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "heat %s", g_heatReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "stat rules %s", g_statRulesReport);
 	Say(command, line);
 	{
 		char status[96];
@@ -481,10 +485,20 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		if (Off("heat")) {
 			std::snprintf(g_heatReport, sizeof(g_heatReport), "%s", OffNote);
 		} else {
-			InstallHeat(context, g_heatReport, sizeof(g_heatReport));
+			InstallHeat(context, !Off("manaregen"), g_heatReport, sizeof(g_heatReport));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: heat %s", g_heatReport);
 		context->LogInfo(line);
+		{
+			const StatRulesParts parts{!Off("potionamounts"), !Off("stamina")};
+			if (!parts.potionAmounts && !parts.stamina) {
+				std::snprintf(g_statRulesReport, sizeof(g_statRulesReport), "%s", OffNote);
+			} else {
+				InstallStatRules(context, parts, g_statRulesReport, sizeof(g_statRulesReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: stat rules %s", g_statRulesReport);
+			context->LogInfo(line);
+		}
 		if (Off("trophy")) {
 			std::snprintf(g_trophyReport, sizeof(g_trophyReport), "%s", OffNote);
 		} else {
