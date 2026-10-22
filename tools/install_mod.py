@@ -57,6 +57,32 @@ def ensure_toml_key(text: str, section: str, key: str, value: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# D2RLoader stores every registered action's key in <game>/d2rloader/config/input-bindings.toml the first time the plugin registers it,
+# so changing a default in the plugin does not reach a player who already ran an older build: the old key stays. The first port
+# registered Map Reveal on R and the cube transmute on C, which are D2R's run toggle and Character screen (a press did both). Those
+# two stored entries, and only an entry that still holds the old default, are dropped here so the next start registers the new ones
+# (travel_logic.h Hotkeys). A key someone chose by hand is not on the old default and is kept.
+OLD_HOTKEY_DEFAULTS = {"mxl-core/mxl_map_reveal": 0x52, "mxl-core/mxl_transmute": 0x43}  # R, C
+
+
+def migrate_hotkey_bindings(text: str) -> str:
+    """`input-bindings.toml` text without the [bindings."<id>"] tables of OLD_HOTKEY_DEFAULTS whose primary key is still the old one."""
+    blocks, cur = [], []
+    for line in text.split("\n"):
+        if line.startswith("[") and cur:
+            blocks.append(cur)
+            cur = []
+        cur.append(line)
+    blocks.append(cur)
+    kept = []
+    for blk in blocks:
+        stale = any(blk[0].strip() == f'[bindings."{ident}"]' and f"primary_key = {key}" in (l.strip() for l in blk)
+                    for ident, key in OLD_HOTKEY_DEFAULTS.items())
+        if not stale:
+            kept.append("\n".join(blk))
+    return "\n".join(kept)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", default=DEFAULT_GAME)
@@ -160,6 +186,14 @@ def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, d
     if added != text:
         toml.write_text(added, encoding="utf-8")
         print(f"d2rloader.toml: add_shared_tabs = {STASH_PAGES - VANILLA_SHARED_TABS} (Median's {STASH_PAGES} stash pages)")
+
+    bindings = game / "d2rloader" / "config" / "input-bindings.toml"
+    if bindings.exists():
+        old = bindings.read_text(encoding="utf-8")
+        new = migrate_hotkey_bindings(old)
+        if new != old:
+            bindings.write_text(new, encoding="utf-8")
+            print("input-bindings.toml: dropped the first port's stored hotkeys (Map Reveal R, transmute C); the plugin registers L and K")
 
     for rel in ("strings/%s/median.json", "strings/%s/overrides.json", "strings-legacy/%s/median.json"):
         ns_file = data / "local" / "lng" / (rel % NAMESPACE)
