@@ -69,8 +69,19 @@ int RunNpcServicesTests() {
 	Check(Judge(warriv2, {true, 0, 1, 0}, none) == Verdict::Agree, "Warriv act 2 agrees");
 	Check(Judge(meshif2, {true, 0, 75, 15}, {true, 14, 0, 1}) == Verdict::Agree, "Meshif act 2 agrees");
 	Check(Judge(meshif3, {true, 0, 40, 0}, none) == Verdict::Agree, "Meshif act 3 agrees");
-	// D2R gates Tyrael on quest 26 (gate 27); Median's row 13 reads quest 28 (gate 29): reported, not changed
+	// D2R gates Tyrael on quest 26 (gate 27); Median's row 13 reads quest 28 (gate 29): the table byte is moved at load
 	Check(Judge(tyrael, {true, 0, 109, 27}, none) == Verdict::GateDiffers, "Tyrael: D2R's gate is quest 26, Median's is 28");
+	Check(TravelGateFix(tyrael, {true, 0, 109, 27}) == 29, "Tyrael: the gate byte becomes 29 (quest 28)");
+	Check(Judge(tyrael, {true, 0, 109, 29}, none) == Verdict::Agree, "Tyrael agrees once the gate is 29");
+	Check(TravelGateFix(tyrael, {true, 0, 109, 29}) == -1, "Tyrael: nothing to fix at 29");
+	Check(TravelGateFix(warriv1, {true, 0, 40, 7}) == -1 && TravelGateFix(meshif2, {true, 0, 75, 15}) == -1,
+	      "Warriv act 1 and Meshif act 2 already match: no write");
+	Check(TravelGateFix(warriv2, {true, 0, 1, 0}) == -1 && TravelGateFix(meshif3, {true, 0, 40, 0}) == -1,
+	      "ungated west trips are not gated by the fix");
+	Check(TravelGateFix(tyrael, {true, 0, 108, 27}) == -1 && TravelGateFix(tyrael, {true, 0, 109, 0}) == -1 &&
+	          TravelGateFix(tyrael, {false, 0, 0, 0}) == -1,
+	      "a different destination, an ungated line or a missing entry is left alone");
+	Check(TravelGateFix(charsi, {true, 1, 0, 5}) == -1, "services other than travel are never rewritten");
 
 	// drift is noticed
 	Check(Judge(charsi, {false, 0, 0, 0}, {true, 3, 1, 1}) == Verdict::NoNpcEntry, "no NPC table entry");
