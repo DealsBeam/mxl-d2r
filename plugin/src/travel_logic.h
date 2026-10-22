@@ -4,8 +4,8 @@
 //     gold and waypoints the same way: when the distance to the unit is below 0x24 the unit is used. The waypoint branch
 //     (0x4c7e0, second half) tests the unit with 0xbffa0, and if the player does not know that waypoint yet sets it. It is a
 //     proximity rule, not "entering the area". D2R's distance unit is the sub-tile, the same as D2's 1.13c.
-//   * Hotkeys (Median's table at D2Sigma 0x1d9110): X toggles the no-pickup flag (0x68cf0), R reveals the act (0x887c0),
-//     C transmutes while the Horadric Cube panel is open (0x69820).
+//   * Hotkeys (Median's table at D2Sigma 0x1d9110): the no-pickup flag toggle (0x68cf0), the act reveal (0x887c0) and the
+//     transmute while the Horadric Cube panel is open (0x69820). Default keys X, L, K below.
 //   * Stash pages: the page text of Median's stash panel (0x1130a0) counts up to a constant 10 in both modes.
 #pragma once
 
@@ -78,12 +78,17 @@ struct Hotkey {
 	uint32_t key;  // virtual key, D2RL::Input::Key
 };
 
-inline constexpr uint32_t KeyC = 0x43, KeyR = 0x52, KeyX = 0x58;
+// Default keys. Median's table (D2Sigma 0x1d9110) names the actions (hotkey_nopickup, hotkey_revealmap, hotkey_transmute) but keeps the
+// keys in the player's preferences.json; the Median install on the test machine has nopickup 0x58 (X) and revealmap 0x4c (L). Neither is
+// bound by a D2R action, so both stay. Median's transmute key there is V (0x56), which D2R binds to one of its own actions (the character's
+// .key file), and the keys the first port picked, R and C, are D2R's run / walk toggle and Character screen: a press did both. The
+// transmute default is K, which no D2R action uses. Players can rebind all three in the Controls menu.
+inline constexpr uint32_t KeyK = 0x4b, KeyL = 0x4c, KeyX = 0x58;
 
 inline constexpr Hotkey Hotkeys[] = {
     {"mxl_pickup_toggle", "Toggle auto pickup (Median XL)", KeyX},
-    {"mxl_map_reveal", "Reveal the map (Median XL)", KeyR},
-    {"mxl_transmute", "Transmute with the cube open (Median XL)", KeyC},
+    {"mxl_map_reveal", "Reveal the map (Median XL)", KeyL},
+    {"mxl_transmute", "Transmute with the cube open (Median XL)", KeyK},
 };
 inline constexpr int HotkeyCount = static_cast<int>(sizeof(Hotkeys) / sizeof(Hotkeys[0]));
 
