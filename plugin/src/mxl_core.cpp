@@ -40,6 +40,7 @@
 #include "cube_conditions.h"
 #include "quests_act1.h"
 #include "quests_act2_5.h"
+#include "quests_rewards.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
 #include "monster_ai.h"
@@ -98,6 +99,9 @@ char g_monsterLooksReport[256] = "off: not the expected game image";
 char g_npcReport[256] = "off: not the expected game image";
 char g_stringsReport[256] = "off: not the expected game image";
 char g_hirelingsReport[192] = "off: not the expected game image";
+char g_mercReviveReport[192] = "off: not the expected game image";
+char g_questXpReport[192] = "off: not the expected game image";
+char g_questRewardsReport[256] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
 char g_reqGatesReport[256] = "off: not the expected game image";
 char g_combatReport[256] = "off: not the expected game image";
@@ -134,7 +138,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability quantity autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
+// items missiles mana townmana durability quantity autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -298,6 +302,21 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "hirelings %s", g_hirelingsReport);
 	Say(command, line);
+	{
+		int32_t level = 0;
+		const int32_t last = MercReviveLast(&level);
+		std::snprintf(line, sizeof(line), "merc revive price %s (%d priced, last %d gold for level %d)", g_mercReviveReport,
+		              MercRevivePrices(), last, level);
+	}
+	Say(command, line);
+	{
+		const QuestRewardCounts counts = QuestRewardsCounts();
+		std::snprintf(line, sizeof(line), "quest experience %s (%d grants, last %d)", g_questXpReport, counts.xpGrants, counts.lastXp);
+		Say(command, line);
+		std::snprintf(line, sizeof(line), "quest rewards %s (hellforge %d, countess %d, prison of ice %d)", g_questRewardsReport,
+		              counts.hellforge, counts.countess, counts.prisonItems);
+		Say(command, line);
+	}
 	std::snprintf(line, sizeof(line), "waypoints %s", g_waypointsReport);
 	Say(command, line);
 	{
@@ -624,6 +643,33 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallHirelings(context, g_hirelingsReport, sizeof(g_hirelingsReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: hirelings %s", g_hirelingsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("mercrevive")) {
+				std::snprintf(g_mercReviveReport, sizeof(g_mercReviveReport), "%s", OffNote);
+			} else {
+				InstallMercRevive(context, g_mercReviveReport, sizeof(g_mercReviveReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: merc revive price %s", g_mercReviveReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("questxp")) {
+				std::snprintf(g_questXpReport, sizeof(g_questXpReport), "%s", OffNote);
+			} else {
+				InstallQuestXp(context, g_questXpReport, sizeof(g_questXpReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: quest experience %s", g_questXpReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("questrewards")) {
+				std::snprintf(g_questRewardsReport, sizeof(g_questRewardsReport), "%s", OffNote);
+			} else {
+				InstallQuestRewards(context, g_questRewardsReport, sizeof(g_questRewardsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: quest rewards %s", g_questRewardsReport);
 			context->LogInfo(line);
 		}
 		{
