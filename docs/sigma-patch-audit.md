@@ -117,16 +117,16 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 
 | # | Item | Impact | Ids | Overlap |
 |---:|---|---|---|---|
-| 1 | [Magic, rare, unique and set items drop identified](#m1) | high | game1-003, game1-008, game1-013, game1-014 | same gap as the unported.md row Auto-identify (audit IT3) of audit-rules; this audit pins the mechanism: the flag is pushed at generation |
-| 2 | [Sockets and automagic for every quality](#m2) | high | game1-009, game1-010 | overlap audit-rules (drops) |
-| 3 | [Player corpse on death](#m3) | high | game3-041 | row Player corpse (audit DC1) in unported.md; **lane no-corpse** owns it (branches `lane/no-corpse`, `t3/disable-player-corpses`); listed here for completeness. Also uncertain: the death penalty (game4-001) and the client respawn request (client3-035). |
-| 4 | [Cooldown reduction (stat 309) and shared cooldown groups](#m4) | high | client5-011, common2-015, common2-016, game4-039, game4-042 | overlap audit-rules: row "Skill cooldown groups (audit SK6)" (verify) covers the groups only; stat 309 is not in it |
+| 1 | [Magic, rare, unique and set items drop identified](#m1) (**ported**, lane gap-items PR #114) | high | game1-003, game1-008, game1-013, game1-014 | same gap as the unported.md row Auto-identify (audit IT3) of audit-rules; this audit pins the mechanism: the flag is pushed at generation |
+| 2 | [Sockets and automagic for every quality](#m2) (**ported**, lane pa-sockets PR #110) | high | game1-009, game1-010 | overlap audit-rules (drops) |
+| 3 | [Player corpse on death](#m3) (**ported**, lane no-corpse PR #98) | high | game3-041 | row Player corpse (audit DC1) in unported.md; **lane no-corpse** owns it (branches `lane/no-corpse`, `t3/disable-player-corpses`); listed here for completeness. Also uncertain: the death penalty (game4-001) and the client respawn request (client3-035). |
+| 4 | [Cooldown reduction (stat 309) and shared cooldown groups](#m4) (**ported**, lane pa-cooldowns PR #111) | high | client5-011, common2-015, common2-016, game4-039, game4-042 | overlap audit-rules: row "Skill cooldown groups (audit SK6)" (verify) covers the groups only; stat 309 is not in it |
 | 5 | [Damage-reduction stats 184 / 189 / 417 on incoming damage](#m5) (**ported**, lane pa-damagered) | high | game6-009 | overlap audit-rules (stats) |
 | 6 | [Skill damage: level / energy bonus, static damage, mastery](#m6) (**ported**, lane pa-skills) | high | common2-003, common2-004, common2-013, common2-014 | overlap audit-rules (skills) |
 | 7 | [Skill usability: restrict modes 3-7](#m7) (**ported**, PR #108 cast path, lane skill-leftovers item path) | high | common2-016 | overlap audit-rules (skills) |
-| 8 | [Mercenary revive price](#m8) | high | common1-019, game4-024, game4-026, game5-026 | overlap audit-rules (hirelings) |
-| 9 | [Act 5 quest experience](#m9) | high | game3-004, game3-005, game3-009 | overlap audit-rules (XP, rewards) |
-| 10 | [Quest rewards that differ from Median](#m10) | medium | game3-006, game3-010, game3-011, game3-012, game3-014, game2-008 | overlap audit-rules (quest rewards) |
+| 8 | [Mercenary revive price](#m8) (**ported**, lane pa-quests PR #115) | high | common1-019, game4-024, game4-026, game5-026 | overlap audit-rules (hirelings) |
+| 9 | [Act 5 quest experience](#m9) (**ported**, lane pa-quests PR #115) | high | game3-004, game3-005, game3-009 | overlap audit-rules (XP, rewards) |
+| 10 | [Quest rewards that differ from Median](#m10) (**ported**, lane pa-quests PR #115; Hellforge, Countess and Prison of Ice rewards verified only through harness verbs) | medium | game3-006, game3-010, game3-011, game3-012, game3-014, game2-008 | overlap audit-rules (quest rewards) |
 | 11 | [Potion of Life and Lam Esen's Tome amounts](#m11) | medium | game6-003, game6-026 | overlap audit-rules |
 | 12 | [Durability is not lost when the character is hit](#m12) | medium | game6-016 | overlap audit-rules: row "Item durability (audit IT1)" (durability removed in Median); this audit shows the mechanism, the hit-damage call is nopped |
 | 13 | [Activation frequency (stat 427) on periodic skills](#m13) | medium | game2-021 | overlap audit-rules |
@@ -141,7 +141,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 | 22 | [Training dummy readout, Halloween currency, achievements](#m22) | low | client7-042.training, client7-042.currency, game2-012, game2-020, game3-016, game3-017, game3-027, game3-036, game3-037, game4-009 | - |
 
 <a id="m1"></a>
-### 1. Magic, rare, unique and set items drop identified
+### 1. Magic, rare, unique and set items drop identified (**ported**, lane gap-items PR #114)
 
 * **Median** (game1-003, game1-008, game1-013, game1-014): D2Game `0x104c1` (magic), `0x15443` (rare), `0x13daa` (set) and the unique picker push `1` instead of `0` into `SetItemFlag(item, 0x10 identified)`. Every non-normal drop is born identified: no Identify scroll, no Cain trip, names and mods readable on the ground.
 * **Port now:** `item_gen.cpp` has the flag setter (`0x36d8f0`, item / mask / on) but nothing sets the identified bit; items drop unidentified as in D2R.
@@ -150,7 +150,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Impact:** high
 
 <a id="m2"></a>
-### 2. Sockets and automagic for every quality
+### 2. Sockets and automagic for every quality (**ported**, lane pa-sockets PR #110)
 
 * **Median** (game1-009, game1-010): D2Sigma nops the `quality 1..3` guard (D2Game `0x10c95`, 9 bytes) and replaces the socket and automagic dispatch. The socket call is `0x1007e240(game, genRecord, item)` (stub `0x1009bc00`): the base's items record flag (D2R `+0x147`) must be set; then `qualities.MaxSock = 0` (rows 1-4: low / normal / superior / magic) rolls `rand() % 7` (0 = none, otherwise that many, cut to the item's maximum by setter `0x100800b0`; the generator's no-socket flag `+0x80 & 8` is read in this branch only), and `MaxSock = 1` (rows 5-9: set, rare, unique, crafted, tempered) rolls no die, does not read the generator flag and always asks for 6 (cut to the item's maximum); only a unique whose row has the flag `0x10` is skipped. **Correction of the earlier reading:** the `0x10` flag of Sigma's own `uniqueitems.txt` layout (enabled, nolimit, carry1, ladder, nosockets = bits 1, 2, 4, 8, 0x10) is `nosockets`, not `nolimit` (that is `0x2`), and `nosockets` is 0 in all 1834 rows, so every unique, set, rare and crafted item on a socketable base gets its maximum. `qualities.Automagics` (rows 1-9 all 1, stub `0x1009bbc0` -> `0x1007e0f0`) replaces the generator's quality switch for the automagic roll (item level 100+, base with an auto prefix group): D2R applies it to 1, 2, 3, 4, 6, 8, 9 and skips 5 and 7; Median applies it to all nine.
 * **Port (lane pa-sockets, done):** `item_gen.cpp` hook `0x441fc0` rolls Median's rule for qualities 1-9; a two-byte patch at RVA `0x44356a` (the `jne` of the `quality 1..3` guard in `0x442d60`, `75 0e` -> `66 90`) lets qualities 4-9 reach it; the automagic jump table at RVA `0x44364c` (nine 32-bit RVAs, one per quality) is rewritten to the apply case for all nine qualities (Median's `Automagics`). Off word `allquals`; `mxl` line `item generation ... all qualities (...) patched`. D2R's own setter `0x375560` also caps by quality (measured: magic 4, rare 2, unique 1, crafted and tempered 3 sockets), which Median's setter does not, so the hook places the sockets itself (min of the roll and `0x36ead0`, flag `0x800`, stat `0xc2`). Game check `allqualsockets` (slot 3, 2026-10-22): 3000 items per quality at item level 101 on a 6-socket base: qualities 1-4 give 0..6 sockets evenly (1/7 each), 6-9 give 6 on every item, unique items carry an automagic mod (3000 of 3000); with `allquals` in `mxl-core-off.txt` the same check shows magic 0, rare / unique / crafted / tempered 0 sockets and unique automagic 0 of 3000. **Not seen:** a set item (the harness generator never returned quality 5 for any of the seven tried bases, it falls back to magic), so the set rows rest on the shared code path.
@@ -159,7 +159,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Impact:** high
 
 <a id="m3"></a>
-### 3. Player corpse on death
+### 3. Player corpse on death (**ported**, lane no-corpse PR #98)
 
 * **Median** (game3-041): D2Game `0x79790`: the call that creates the corpse is nopped (16 bytes). Dying leaves no corpse to walk back to.
 * **Port now:** D2R creates the corpse; nothing in `plugin/src` at this commit.
@@ -168,7 +168,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Impact:** high
 
 <a id="m4"></a>
-### 4. Cooldown reduction (stat 309) and shared cooldown groups
+### 4. Cooldown reduction (stat 309) and shared cooldown groups (**ported**, lane pa-cooldowns PR #111)
 
 * **Median** (client5-011, common2-015, common2-016, game4-039, game4-042): The skill delay is `delay formula - stat 309` (item mod `ModitemReduceCooldown`; 20 uniques, runewords, a prefix) in three places: client skill use (`0xa2e06`), D2Common ready test (`0x52279`) and the server skill finish (`0xa09d5`, `0xa1aed`). The cooldown start is replaced by `D2SkillValidation_100b1140`: per-skill and per-group timers (unit `+0xf4`) and a client packet `0x2b`; skills in one cooldown group share their wait.
 * **Port now:** done on lane `pa-cooldowns` (game check `cooldowns`: PASS 2026-10-22, Blast Wave (group 4, localdelay 500): 494 frames without and 390 with stat 309 = 100, the six other group skills got the same end frame; server start only, the client twin is not reached by the harness cast). `plugin/src/cooldowns.cpp` (off word `cooldowns`) hooks D2R's two cooldown starts, server `0x439500(game, unit, delay, skill)` and client `0x217b90(unit, delay, skill)`. For a player the delay is `localdelay - stat 309` (layer = skill id; nothing starts at <= 0), and every member of the skill's skills2 cooldown group gets a timer with the same end frame; D2R keeps one timer per skill (state 0xb9, stat 359 at layer = skill id) and its ready test reads it, so equal end frames are Median's single group timer (`cooldowns_logic.h` proves it against a model of Median's tables). The group table is generated from skills2 `CooldownGroup` (`txt_migrate cooldown_tables` -> `mxl_cooldowns.h`). `calc_codes.cpp` `skcd` still gives the tooltip the reduced value.
@@ -206,7 +206,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Impact:** high
 
 <a id="m8"></a>
-### 8. Mercenary revive price
+### 8. Mercenary revive price (**ported**, lane pa-quests PR #115)
 
 * **Median** (common1-019, game4-024, game4-026, game5-026): D2Common export 11097 (`0x2cc60`) and three D2Game sites call `D2Hirelings_10067450`: price = level x 100 up to level 105, 250 x (level - 90)^1.5 above. Vanilla (and D2R) is `(level^2 / 2) x 15`, capped at 50000: level 80 costs 8,000 in Median, 48,000 in D2R.
 * **Port now:** **Ported (lane pa-quests).** `hirelings.cpp` hooks D2R's price function `0x3c1ad0` (the one the mercenary's death `0x4ffb90` stores and sends to the client, and the NPC dialog and the charge ask again) and returns Median's `hire::RevivePrice(level)` (`hirelings_logic.h`, unit-tested). Off word `mercrevive`; `mxl` line `merc revive price`. Game check `mercrevive`.
@@ -215,7 +215,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Impact:** high
 
 <a id="m9"></a>
-### 9. Act 5 quest experience
+### 9. Act 5 quest experience (**ported**, lane pa-quests PR #115)
 
 * **Median** (game3-004, game3-005, game3-009): Three Act 5 reward calls go through `0x1009ff20` to `0x1009fa20`: a flat 50,000 experience at character level 129 or lower, nothing above. Vanilla gives the experience to the next level, capped at 1.4 / 20 / 40 million by difficulty.
 * **Port now:** **Ported (lane pa-quests).** `quests_rewards.cpp` replaces D2R's `0x550c20` (Rite of Passage, the Act 5 quest experience grant): the client update `0x518620` as before, then `AddExperience 0x44f2e0` with a flat 50,000, nothing at level 130 and above (`quests::QuestExperienceFor`, unit-tested). Off word `questxp`; `mxl` line `quest experience`. Game check `questxp`.
@@ -224,7 +224,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Impact:** high
 
 <a id="m10"></a>
-### 10. Quest rewards that differ from Median
+### 10. Quest rewards that differ from Median (**ported**, lane pa-quests PR #115; Hellforge, Countess and Prison of Ice rewards verified only through harness verbs)
 
 * **Median** (game3-006, game3-010, game3-011, game3-012, game3-014, game2-008): D2Sigma removes or replaces the vanilla rewards: Qual-Kehk's vanilla runes (29 bytes nopped at `0x5cb50`), Akara's ring (`0x66e84`), Andariel's gems (`0x67ea0`); the Prison of Ice reward becomes an amulet (`0x5fa18`); the Countess drops treasure class `Quest Countess` once per player (`0x68cdd`); the Hellforge reward is a treasure-class roll `Quest Hellforge` instead of runes r01-r07 (`0x36f1a`).
 * **Port now:** **Ported (lane pa-quests), `quests_rewards.cpp`, off word `questrewards`, `mxl` line `quest rewards`, game check `questrewards`.** Qual-Kehk: the rune loop's item creation `0x54c9ac` becomes `mov eax,1` (byte patch), so only `QualKehkHook`'s Median runes are given. Akara: the ring's creation call `0x5d9a6d` is nopped. Andariel: the two-chipped-gem loop at `0x5e1fc7` is jumped over (D2Sigma nops only that loop: the standard gem drop after it stays, the row game3-012 below says "the vanilla gift disappears" for 100 bytes; corrected). Prison of Ice: the reward task `0x546cc0` gets item code `amu ` (hook). Hellforge: hook on `0x5e4540` rolls the class `Quest Hellforge` (monstats row 257) instead of the runes. Countess: hook on `0x5e3010` rolls `Quest Countess` (row 266) once per player, inside the quest 5 kill (the kill context comes from `TowerKillHook`).
