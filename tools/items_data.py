@@ -42,7 +42,7 @@ def runeword_tables(mig: "tm.Migrator") -> tuple[str, str]:
     nh, nrows = tm.read_tsv(tm.NAMED / "runes.txt")
     orows = [r for r in orows if tm.is_record(r)]
     nrows = [r for r in nrows if tm.is_record(r)]
-    if [r[0] for r in orows] != [r[0] for r in nrows]:
+    if [r[0].removeprefix(tm.strings_ns.PREFIX) for r in orows] != [r[0] for r in nrows]:  # Name is a localization cell
         raise SystemExit("runes.txt: the output rows are not Median's rows in Median's order; row index cannot be used")
     props = mig.row_ids("properties")
     kinds = mig.param_kinds()

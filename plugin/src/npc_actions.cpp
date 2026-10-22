@@ -36,6 +36,7 @@
 #include "mxl_requirements.h"
 #include "npc_actions_logic.h"
 #include "npc_services.h"
+#include "strings.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -248,11 +249,11 @@ constexpr int MaxClientLines = 16;
 
 struct ClientLine {
 	uint16_t npcClass;
-	uint16_t label;
+	mxlstr::Ref label;
 	uint32_t kind;
 	bool page;  // a text-page line: sends the kind and keeps the menu open for the answer
 	bool confirm;  // asks Yes / No first (npcext PromptConfirm)
-	uint16_t prompt;
+	mxlstr::Ref prompt;
 };
 ClientLine g_lines[MaxClientLines];
 int g_lineCount = 0;
@@ -300,7 +301,7 @@ bool OpenConfirm(uint32_t kind, uint16_t text) noexcept {
 auto OnLine(int index) noexcept -> uint8_t {
 	bool page = false;
 	if (index >= 0 && index < g_lineCount) {
-		if (g_lines[index].confirm && OpenConfirm(g_lines[index].kind, g_lines[index].prompt)) {
+		if (g_lines[index].confirm && OpenConfirm(g_lines[index].kind, StringId(g_lines[index].prompt))) {
 			return 1;
 		}
 		const uint32_t npcId = *reinterpret_cast<const uint32_t*>(g_base + MenuNpcIdRva);
@@ -382,8 +383,9 @@ void PatchMenuTable() noexcept {
 		uint64_t fns[npc::RecMaxLines];
 		int n = 0;
 		for (int i = 0; i < g_lineCount && n < npc::RecMaxLines; ++i) {
-			if (g_lines[i].npcClass == cls) {
-				ids[n] = g_lines[i].label;
+			const uint16_t id = g_lines[i].npcClass == cls ? StringId(g_lines[i].label) : 0;
+			if (id != 0) {  // no id (a namespaced string with no service / lookup hook): no line, a 0 would end the record
+				ids[n] = id;
 				fns[n] = reinterpret_cast<uint64_t>(g_handlers[static_cast<size_t>(i)]);
 				++n;
 			}
@@ -461,7 +463,7 @@ void BuildSubmenu(uint16_t npcClass) noexcept {
 	auto* ids = reinterpret_cast<uint16_t*>(record + npc::RecIdsOffset);
 	auto* fns = reinterpret_cast<uint64_t*>(record + npc::RecHandlersOffset);
 	for (int i = 0; i < g_subCount; ++i) {
-		ids[i] = g_sub[i].label;
+		ids[i] = StringId(g_sub[i].label);
 		fns[i] = reinterpret_cast<uint64_t>(g_subHandlers[static_cast<size_t>(i)]);
 	}
 	*reinterpret_cast<uint32_t*>(record + npc::RecCountOffset) = static_cast<uint32_t>(g_subCount + 1);
@@ -495,14 +497,14 @@ void CollectLines() noexcept {
 	g_nativeSlots = 0;
 	for (int i = 0; i < mxl_npc::SlotCount; ++i) {
 		const mxl_npc::Slot& s = mxl_npc::Slots[i];
-		if (s.sub != 0 || s.label == 0) {
+		if (s.sub != 0 || npc::LabelOf(s).IsNone()) {
 			continue;
 		}
 		const npc::Support sup = npc::SlotSupport(i);
 		if (sup == npc::Support::Native) {
 			++g_nativeSlots;
 		} else if (sup == npc::Support::Run && g_lineCount < MaxClientLines) {
-			g_lines[g_lineCount++] = {s.npcClass, s.label, npc::KindOf(s.npcRow, s.slot), npc::IsPage(i), npc::NeedsConfirm(i),
+			g_lines[g_lineCount++] = {s.npcClass, npc::LabelOf(s), npc::KindOf(s.npcRow, s.slot), npc::IsPage(i), npc::NeedsConfirm(i),
 			                          npc::ConfirmText(i)};
 		}
 	}
