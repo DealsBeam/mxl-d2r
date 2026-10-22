@@ -9,7 +9,8 @@ namespace item_events {
 
 // Repoints the handler slots of Median's functions 33 / 34 and gates 15 / 16 (see item_events.cpp). True when all four are in place.
 bool Install(uint64_t exeBase, char* report, size_t reportSize) noexcept;
-// Calls seen by the replaced handlers 33 / 34 and the arguments of the last 33 and both return values (11 qwords; harness verb `evtrace calls`).
+// Calls seen by the replaced handlers 33 / 34, the arguments of the last 33, both return values and the last cast skill, level and
+// whether its record has the warp flag (-1 unknown): 14 qwords; harness verb `evtrace calls`.
 void Counters(long* heal, long* cast, uint64_t* lastArgs9) noexcept;
 
 // Diagnostics for the harness verb `evtrace`: D2RLoader's unit-event entry points are 10-byte `jmp [slot]` thunks into

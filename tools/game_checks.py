@@ -1258,6 +1258,60 @@ def check_item_events():
     cast = ok and (any("class 58" in x for x in l2) or (life0 is not None and life1 is not None and life1 < life0))
     notes.append("cast on kill (Fire Bolt 5): %s; monster life %s -> %s" % (" ".join(x for x in l2 if "missiles live" in x)[:60] or "-", life0, life1))
     H("kill nearest")
+    # cast on kill with the skills Median's monsters cast (monprop: 855 a nova, 861 a missile volley) and the other rows that are
+    # not a plain bolt: the missiles tracker counts every missile that outlives a server frame (`seen=`). Row 47 "Fire Ball" is a
+    # Median stub (srvdofunc 18 self buff, srvmissile fire_ball_missile = missiles row 5540 with no velocity or range, no damage):
+    # its missile dies within the frame it is created in, which a direct `missile 5540` shows as well (`missile 3456` lives).
+    def cast_case(skill, level):
+        # the event needs a live spawned monster and the ring in place; a try that never reached the handler (the last cast on kill
+        # line still names the previous case) is repeated, up to 3 times
+        for _try in range(3):
+            res = cast_case_once(skill, level)
+            if res[2] is not None and res[2][:2] == (skill, level):
+                break
+        return res
+
+    def cast_case_once(skill, level):
+        H("unequip lring")
+        okc, _l = H("equip rin 376:%d=100 lring" % (skill * 64 + level))
+        m = spawn_id()
+        time.sleep(2)
+        H("missiles reset")
+        H("evtrace fire 9 player m%d" % m)
+        okm, lm = H("missiles")
+        okk, lk = H("evtrace calls")
+        log.extend(lm + lk)
+        seen = re.search(r"seen=(\d+)", " ".join(lm))
+        last = re.search(r"last cast on kill: skill (-?\d+) level (-?\d+) warp (-?\d+)", " ".join(lk))
+        H("kill nearest")
+        return okc and okm and okk, int(seen.group(1)) if seen else None, tuple(int(x) for x in last.groups()) if last else None
+
+    def direct_missile(row):
+        H("missiles reset")
+        H("missile %d 12 0" % row)
+        ok1, l1 = H("missiles")
+        log.extend(l1)
+        seen = re.search(r"seen=(\d+)", " ".join(l1))
+        time.sleep(1.5)
+        return int(seen.group(1)) if seen else None
+
+    cases = {}
+    for skill, level in ((861, 50), (855, 2), (47, 10), (54, 1)):
+        cases[skill] = cast_case(skill, level)
+    kill_all_near()
+    direct = {row: direct_missile(row) for row in (5540, 3456)}
+    kill_all_near()
+    c861, c855, c47, c54 = cases[861], cases[855], cases[47], cases[54]
+    missiles_ok = (c861[0] and c861[1] and c861[1] > 0 and c861[2] and c861[2][:2] == (861, 50)
+                   and c855[0] and c855[1] and c855[1] > 0 and c855[2] and c855[2][:2] == (855, 2))
+    fire_ball = (c47[0] and c47[2] is not None and c47[2][:2] == (47, 10) and c47[1] == 0 and direct[5540] == 0
+                 and direct[3456] is not None and direct[3456] > 0)
+    warp = c54[0] and c54[2] is not None and c54[2][:2] == (54, 1) and c54[2][2] == 1 and c861[2] is not None and c861[2][2] == 0
+    notes.append("cast on kill missiles seen: skill 861 L50 %s (class 3456), skill 855 L2 %s (class 3124) (%s)" % (
+        c861[1], c855[1], "missiles" if missiles_ok else "WRONG"))
+    notes.append("Fire Ball 47 L10: handler reached %s, missiles seen %s; direct `missile 5540` %s, `missile 3456` %s (%s: Median's row is a stub whose missile expires within the frame)" % (
+        c47[2], c47[1], direct[5540], direct[3456], "as expected" if fire_ball else "WRONG"))
+    notes.append("warp flag (Median 0x40): Teleport 54 %s, skill 861 %s (%s)" % (c54[2], c861[2], "read" if warp else "WRONG"))
     # open wounds (135) / crushing blow (136): lose life on a hit; a monster with stat 373 (Median 189) skips them
     H("unequip lring")
     ok, l = H("equip rin 135=100 136=100 lring")
@@ -1278,7 +1332,7 @@ def check_item_events():
     txt = mxl_text()
     on = "item events on" in txt
     notes.append("`mxl`: %s" % ("item events on" if on else "item events not on"))
-    add(nm, "PASS" if thorns and heal and cast and wounds and on else "FAIL", "; ".join(notes), [sh("item_events")], log)
+    add(nm, "PASS" if thorns and heal and cast and missiles_ok and fire_ball and warp and wounds and on else "FAIL", "; ".join(notes), [sh("item_events")], log)
 
 
 def god(on):

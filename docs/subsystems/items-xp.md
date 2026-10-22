@@ -283,9 +283,21 @@ How it works (read in the game with the harness verb `evtrace`, and in `D2RCore.
   (12800 raw) on event 3; ring `265=50` -> +50 life points on a kill (event 9); ring `376:2309=100` (Fire Bolt 5 at 100 %) -> a
   class-58 missile appears, **the owner does not need to know the skill**; ring `135=100 136=100` -> a plain monster loses life
   on events 5 / 6, a monster with `stat m<id> 373 0 set 1` loses none.
-- **Not ported / open**, listed in docs/unported.md: function 32 (no stat of the mod's itemstatcost uses it); Median 34's
-  post-handler for skills with flag `0x40`; Fire Ball (47) as the cast skill returned success with the synthetic kill event but no
-  missile was seen (Fire Bolt 36 works; Median 47 may need a level or target the harness lacks).
+- **Median 34's post-handler and Fire Ball 47** (lane castonkill-objtc). Median's 34 (`0x7de90`) calls its function 30 (`0x7da00`), which
+  casts and then, when the skill record has flag `0x40` in the second flag dword (`+8`; skills.txt column `warp`, 51 Median skills:
+  Teleport, pounce, blink, ...) and `0x101df948[srvstfunc]` is set, calls the skill's *start* function. D2R's cast under function 20
+  (`0x583b30` -> `0x5896e0` / `0x589820` -> `0x589930`) already does that for its own warp skills (record `+0x28` bit `0x40`):
+  `0x43b3e0` runs the start function `0x238e710[rec+0x4c]` before the do function `0x43acb0` and the cast fails if it does. So the port
+  needs no code of its own for the post-handler, and no data of the mod casts a warp skill through a cast stat (only the monster
+  props 855 and 861 do, neither is a warp skill). `ItemEventsLogic` has the layer (`(skill << 6) | level`, ids above 1023 do not
+  fit) and warp-flag helpers with unit tests, and the harness reports them.
+  **Fire Ball (47) does not fire because the Median row is a stub**: `srvdofunc` 18 (self buff), `srvmissile` `fire_ball_missile`
+  = missiles row 5540 without velocity or range and without damage, so the missile exists for less than a server frame (a direct
+  `missile 5540` is not seen by the tracker either, `missile 3456` is). The handler is reached (`evtrace calls`: last cast on kill
+  skill 47 level 10); function 20 itself works for real skills (861 -> 64 class-3456 missiles, 855 -> 64 class-3124 missiles,
+  Fire Bolt 36 -> a class-58 missile). Check `itemevents` asserts all of this; a cast-on-kill of Teleport 54 reaches the handler
+  with warp 1 but the player was not seen to move (not investigated).
+- **Not ported / open**, listed in docs/unported.md: function 32 (no stat of the mod's itemstatcost uses it).
 - **Harness.** `evtrace on|off|clear|dump` (thunk-slot logger), `list`, `rec <stat>` (the record's event words), `peek`, `watch`
   (debug-register watch), `fire <event> player|m<id> player|m<id>|none` (calls `0x44d570`; the harness's `kill` does not raise the
   kill event), `calls` (counters of the replaced handlers 33 / 34 and their last results).
