@@ -9,7 +9,8 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy. What a click in the world cannot do in background mode (kill a
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy; the old "fix to test" rows of docs/bugs.md: skilltree (#3, #9) keybinds (#5)
+strings (#7) automap (#15) scrollportals (#17) vendors (#18) monhover (#22). What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -339,7 +340,11 @@ def hstate():
         elif ln.startswith("item "):
             st["items"].append({k: (int(v) if re.fullmatch(r"-?\d+", v) else v) for k, v in kv(ln).items()})
         elif ln.startswith("mon "):
-            st["mons"].append({k: int(v) for k, v in kv(ln).items() if re.fullmatch(r"-?\d+", v)})
+            mon = {k: int(v) for k, v in kv(ln).items() if re.fullmatch(r"-?\d+", v)}
+            lm = re.search(r"life=(\d+)/(\d+)", ln)
+            if lm:
+                mon["life"], mon["maxlife"] = int(lm.group(1)), int(lm.group(2))
+            st["mons"].append(mon)
         elif ln.startswith("obj "):
             st["objs"].append({k: int(v) for k, v in kv(ln).items() if re.fullmatch(r"-?\d+", v)})
         elif ln.startswith("plugin "):
@@ -2090,6 +2095,654 @@ def check_statcols():
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
+# ------------------------------------------------------------------ lane bug-backlog-b: the old "fix to test" rows of docs/bugs.md
+# Each check drives the game the way a player does (bg mouse / keys, panels) and reads the answer from the harness or the
+# files the game writes. Harness verbs added for them: skilltab, str, hover, automap, shop, levelact (docs/testing.md).
+
+MOD_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "mod", "data")
+ACT_TOWNS = {0: 1, 1: 40, 2: 75, 3: 103, 4: 109}  # act index (levels.txt Act column) -> town level
+
+
+def log_mark():
+    return g._size(g.LOADER_LOG)
+
+
+def log_since(off):
+    return g._read_from(g.LOADER_LOG, off)
+
+
+def assertions_since(off):
+    """The messages of the assertion boxes d2rloader.log wrote since `off` (D2R's own asserts continue after logging)."""
+    return re.findall(r"Message : (.*?)\s*\|", log_since(off))
+
+
+def _crop_hash(path, box):
+    from PIL import Image
+    im = Image.open(path).convert("RGB").crop(box)
+    return hashlib.md5(im.tobytes()).hexdigest()[:10]
+
+
+def _shot_path(name):
+    return os.path.join(g.current_run(), name + ".png")
+
+
+def _red_pixels(path, box):
+    """Pixels of the red "None" text of an unbound key in the Options controls list."""
+    from PIL import Image
+    im = Image.open(path).convert("RGB").crop(box)
+    return sum(1 for r, gr, b in im.getdata() if r > 150 and gr < 90 and b < 90)
+
+
+# --- #3 skill tree tabs, #9 skill tooltips -----------------------------------------------------------------------------
+
+TREE_X = (1148, 1258, 1368)  # skill icon columns of the HD tree panel (1600 x 900 client)
+TREE_Y0, TREE_DY, TREE_ROWS = 232, 75, 6
+TREE_CLOSE = (1485 / 1600.0, 103 / 900.0)
+
+
+def open_skill_tree():
+    """T toggles the panel; the tab setter hook (`h skilltab`) counts the clicks the panel takes, so a click on tab 2 tells if the
+    panel is open."""
+    x0, y0 = g.UI["skill_tab0"]
+    for _ in range(2):
+        g.key("t")
+        time.sleep(1.5)
+        ok, lines = g.hcmd("skilltab", 5)
+        calls0 = int(re.search(r"setter_calls=(\d+)", " ".join(lines)).group(1)) if ok else -1
+        g.click(x0 + g.UI["skill_tab_dx"] * 2, y0)
+        time.sleep(1.0)
+        ok, lines = g.hcmd("skilltab", 5)
+        m = re.search(r"current=(\d+) setter_calls=(\d+)", " ".join(lines))
+        if ok and m and int(m.group(2)) > calls0 and int(m.group(1)) == 2:
+            return True
+    return False
+
+
+def check_skilltree():
+    name = "Skill tree: 8 tabs open and show their own pages (#3); hovering every icon raises no skill tooltip assert (#9)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    off = log_mark()
+    if not open_skill_tree():
+        return add(name, "BLOCKED", "the skill tree did not open / take a tab click")
+    x0, y0 = g.UI["skill_tab0"]
+    dx = g.UI["skill_tab_dx"]
+    tabs, hashes, shots, bad = [], [], [], []
+    for i in range(8):
+        g.click(x0 + dx * i, y0)
+        time.sleep(1.2)
+        ok, lines = g.hcmd("skilltab", 5)
+        cur = int(re.search(r"current=(\d+)", " ".join(lines)).group(1)) if ok else -1
+        tabs.append(cur)
+        if cur != i:
+            bad.append("tab %d selected page %d" % (i, cur))
+        shots.append(sh("skilltab%d" % (i + 1)))
+        hashes.append(_crop_hash(_shot_path("skilltab%d" % (i + 1)), (1075, 195, 1445, 650)))  # the icon area of the panel
+    distinct = len(set(hashes))
+    if distinct < 7:
+        bad.append("only %d of 8 tabs look different (%s)" % (distinct, hashes))
+    # #9: the mouse over every icon cell of every tab; D2R builds the tooltip lines (the assert sits in that renderer)
+    hovers = 0
+    for i in range(8):
+        g.click(x0 + dx * i, y0)
+        time.sleep(0.8)
+        for row in range(TREE_ROWS):
+            for fx in TREE_X:
+                fy = TREE_Y0 + TREE_DY * row
+                g.click(fx / 1600.0, fy / 900.0, move_only=True)
+                time.sleep(0.3)
+                g.click((fx + 3) / 1600.0, (fy + 3) / 900.0, move_only=True)  # the tooltip wants a second move over the icon
+                time.sleep(0.4)
+                hovers += 1
+        if i == 0:
+            shots.append(sh("skilltip"))
+    g.click(*TREE_CLOSE)
+    time.sleep(0.8)
+    asserts = assertions_since(off)
+    dummy = [a for a in asserts if "strdummy" in a or "stringIndex1" in a]
+    new_asserts = sorted(set(asserts))
+    if dummy:
+        bad.append("%d skill tooltip assert(s) `stringIndex1 != strdummy`" % len(dummy))
+    status = "PASS" if not bad else "FAIL"
+    add(name, status, "page of each tab click (harness `skilltab`): %s; distinct panel pictures %d / 8; %d icon cells hovered, assert boxes in "
+        "d2rloader.log: %s%s" % (tabs, distinct, hovers, new_asserts or "none", ("; " + "; ".join(bad)) if bad else ""), shots)
+
+
+# --- #5 keybinds survive Save and Exit ---------------------------------------------------------------------------------
+
+OPT_OPTIONS = (0.5, 0.375)
+OPT_CONTROLS = (967 / 1600.0, 141 / 900.0)
+OPT_SKILL9_KEY1 = (705 / 1600.0, 607 / 900.0)
+OPT_APPLY = (591 / 1600.0, 775 / 900.0)
+OPT_DEFAULT = (800 / 1600.0, 775 / 900.0)
+OPT_LEGACY = (800 / 1600.0, 380 / 900.0)
+OPT_CLOSE = (1189 / 1600.0, 69 / 900.0)
+POPUP_SKILL = (910 / 1600.0, 740 / 900.0)  # the second icon of the lower row of the skill speed bar (S)
+
+
+def _key_file():
+    d2s = max((f for f in os.listdir(SAVES) if f.endswith(".d2s")), key=lambda f: os.path.getmtime(os.path.join(SAVES, f)))
+    return os.path.join(SAVES, d2s[:-4] + ".key")
+
+
+def _md5(p):
+    return hashlib.md5(open(p, "rb").read()).hexdigest()[:8] if os.path.exists(p) else "(none)"
+
+
+def open_controls():
+    g.key("esc")
+    time.sleep(1.5)
+    g.click(*OPT_OPTIONS)
+    time.sleep(1.5)
+    g.click(*OPT_CONTROLS)
+    time.sleep(1.5)
+
+
+def close_options():
+    g.click(*OPT_CLOSE)  # Options -> pause menu
+    time.sleep(1.2)
+    g.click(0.5, 0.505)  # Return to Game
+    time.sleep(1.2)
+
+
+def restore_legacy_keys():
+    open_controls()
+    g.click(*OPT_DEFAULT)
+    time.sleep(1.5)
+    g.click(*OPT_LEGACY)
+    time.sleep(1.5)
+    g.click(*OPT_APPLY)
+    time.sleep(2.0)
+    close_options()
+
+
+def bind_skill_hotkey():
+    """S opens the skill speed bar; with the mouse over an icon an F key binds that skill. Returns the (left, right) ids the key
+    selects afterwards, or None."""
+    g.key("s")
+    time.sleep(1.5)
+    g.click(*POPUP_SKILL, move_only=True)
+    time.sleep(0.8)
+    g.click(POPUP_SKILL[0] + 0.002, POPUP_SKILL[1] + 0.002, move_only=True)
+    time.sleep(1.2)
+    g.key("f6")
+    time.sleep(1.0)
+    g.key("s")
+    time.sleep(1.0)
+    return hotkey_skill()
+
+
+def hotkey_skill(tries=3):
+    """The (left, right) skill ids after F6 (retried: right after entering the game a key can arrive before the skill bar is ready)."""
+    ids = None
+    for _ in range(tries):
+        H("skill left 0")
+        H("skill right 0")
+        g.key("f6")
+        time.sleep(1.5)
+        ok, lines = H("skill")
+        m = re.search(r"left=(\d+) right=(\d+)", " ".join(lines))
+        ids = (int(m.group(1)), int(m.group(2))) if ok and m else None
+        if ids and ids != (0, 0):
+            break
+        time.sleep(2)
+    return ids
+
+
+def check_keybinds():
+    name = "Keybinds survive Save and Exit and a restart (#5): a rebound key in Options > Controls and an F6 skill hotkey"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    keyfile = _key_file()
+    shots, bad = [], []
+    restore_legacy_keys()  # a failed earlier run may have left Skill 9 bound: start from the Legacy layout
+    h0 = _md5(keyfile)
+    # 1. Options > Controls: Skill 9 -> F9, Apply (D2R writes the character's .key file)
+    open_controls()
+    g.click(*OPT_SKILL9_KEY1)
+    time.sleep(1.0)
+    g.key("f9")
+    time.sleep(1.0)
+    shots.append(sh("keys_bound"))
+    g.click(*OPT_APPLY)
+    time.sleep(2.0)
+    h1 = _md5(keyfile)
+    if h1 == h0:
+        bad.append("Apply did not change %s (%s)" % (os.path.basename(keyfile), h0))
+    close_options()
+    # 2. skill hotkey F6 through the speed bar
+    ids0 = bind_skill_hotkey()
+    if not ids0 or ids0 == (0, 0):
+        bad.append("F6 bound no skill (the speed bar icon %s)" % (POPUP_SKILL,))
+    # 3. Save and Exit, play again
+    if not leave_and_reenter():
+        return add(name, "BLOCKED", "could not leave and re-enter the game: %s" % "; ".join(bad))
+    time.sleep(6)  # the town is still loading when the harness first answers
+    for _ in range(10):
+        if hstate()["ok"] and hstate()["player"].get("area") == 1:
+            break
+        time.sleep(2)
+    h2 = _md5(keyfile)
+    if h2 != h1:
+        bad.append("the .key file changed on exit / restart (%s -> %s)" % (h1, h2))
+    ids1 = hotkey_skill()
+    if ids0 and ids1 != ids0:
+        bad.append("F6 selected %s after the restart, %s before" % (ids1, ids0))
+    open_controls()
+    shots.append(sh("keys_after_restart"))
+    red = _red_pixels(_shot_path("keys_after_restart"), (680, 598, 730, 616))
+    if red > 5:
+        bad.append("Skill 9 shows None after the restart (%d red pixels)" % red)
+    # 4. put the bindings back: Default > Legacy is the layout the file started with
+    g.click(*OPT_DEFAULT)
+    time.sleep(1.5)
+    g.click(*OPT_LEGACY)
+    time.sleep(1.5)
+    g.click(*OPT_APPLY)
+    time.sleep(2.0)
+    h3 = _md5(keyfile)
+    close_options()
+    if h3 != h0:
+        bad.append("Default > Legacy > Apply did not restore the key file (%s, was %s)" % (h3, h0))
+    add(name, "PASS" if not bad else "FAIL",
+        ".key file md5 %s (before) -> %s (Skill 9 = F9 applied) -> %s (after Save and Exit + restart, Skill 9 still F9 in the list); "
+        "F6 skill hotkey selects (left, right) %s before and %s after the restart; layout restored (%s, was %s)%s" % (
+            h0, h1, h2, ids0, ids1, h3, h0, ("; " + "; ".join(bad)) if bad else ""), shots)
+
+
+# --- #7 NPC / string texts ---------------------------------------------------------------------------------------------
+
+
+def _strings_entries():
+    import glob
+    import json
+    ents = []
+    for f in sorted(glob.glob(os.path.join(MOD_DATA, "local", "lng", "strings", "*.json"))):
+        for e in json.load(open(f, encoding="utf-8-sig")):
+            ents.append((os.path.basename(f), e["id"], e["Key"], e["enUS"]))
+    return ents
+
+
+def _norm(text):
+    """Letters only, lower case, without D2R's colour codes (the verb leaves the code's own character in the text)."""
+    return re.sub(r"[^a-z]", "", re.sub("ÿc.", "", text).lower())[:200]
+
+
+def check_strings():
+    name = "String ids by low 16 bits: no Median key shares a D2R string's id, so NPCs speak their own text (#7)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    ents = _strings_entries()
+    by_low = {}
+    for f, i, k, t in ents:
+        by_low.setdefault(i & 0xFFFF, {}).setdefault((i, k), t)
+    clashes = {low: sorted(v) for low, v in by_low.items() if len({k for _i, k in v}) > 1}  # different keys on one 16-bit value
+    # texts to read back from the running game: every NPC intro / gossip line and a seeded sample of Median's own strings
+    import difflib
+    import random
+    rnd = random.Random(7)
+    npc = [e for e in ents if re.search(r"Intro|Gossip|Greet", e[2]) and e[1] < 0x10000]
+    new = [e for e in ents if 28106 <= e[1] < 0x10000]
+    pick = {}
+    for f, i, k, t in npc + rnd.sample(new, min(250, len(new))):
+        if len(by_low[i & 0xFFFF]) == 1 and not (i & 0xFFFF) in clashes:
+            pick[i & 0xFFFF] = (k, t)
+    ids = sorted(pick)
+    wrong, checked = [], 0
+    for n in range(0, len(ids), 10):
+        batch = ids[n:n + 10]
+        ok, lines = H("str " + " ".join(str(i) for i in batch))
+        got = {}
+        for ln in lines:
+            m = re.match(r"\s*str (\d+) = \[(.*)\]\s*$", ln)
+            if m:
+                got[int(m.group(1))] = m.group(2)
+        for i in batch:
+            checked += 1
+            want = _norm(pick[i][1])
+            have = _norm(got.get(i, "(no answer)"))
+            if (have or want) and difflib.SequenceMatcher(None, have, want).ratio() < 0.9:
+                wrong.append("%d %s: game '%s' data '%s'" % (i, pick[i][0], have[:40], want[:40]))
+    shots = []
+    d2r_own = {27956, 28082}
+    unexpected = {low: v for low, v in clashes.items() if low not in d2r_own}
+    bad = []
+    if unexpected:
+        bad.append("%d 16-bit ids shared by different keys, e.g. %s" % (len(unexpected), list(unexpected.items())[:2]))
+    if wrong:
+        bad.append("%d of %d strings differ from the data: %s" % (len(wrong), checked, wrong[:3]))
+    add(name, "PASS" if not bad else "FAIL",
+        "%d keys in the string tables, %d 16-bit values hold two different keys (D2R ships %s itself: %s); the game's own string lookup (harness `str`) "
+        "answered %d NPC intro / Median strings, %d wrong%s. What an NPC's subtitle looks like on screen stays a manual look" % (
+            len(ents), len(clashes), sorted(d2r_own), sorted(set(clashes) & d2r_own), checked, len(wrong), ("; " + "; ".join(bad)) if bad else ""),
+        shots, wrong[:20])
+
+
+# --- #15 automap in Median-only level types ----------------------------------------------------------------------------
+
+AUTOMAP_AREAS = {36: (138,), 37: (174, 175), 38: (191,), 39: (144,), 40: (247,), 41: (142,), 42: (152,), 43: (250,), 44: (243,),
+                 51: (220,)}  # level type -> areas of it, tried in turn until the game's lookups hit a Median row (type 37 has wall rows only)
+
+
+def check_automap():
+    name = "Automap in Median-only areas: level types 36-51 resolve their Median automap rows (#15)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    ok, lines = H("automap")
+    table = {}
+    for ln in lines:
+        m = re.search(r"automap type=(\d+) rows=(\d+)(?: resolved=(\d+) bad=(\d+))?", ln)
+        if m:
+            table[int(m.group(1))] = (int(m.group(2)), int(m.group(3) or 0), int(m.group(4) or 0))
+    rows, bad, shots = [], [], []
+    god(True)
+    try:
+        for typ, areas in AUTOMAP_AREAS.items():
+            for area in areas:
+                st = goto(area, timeout=50)
+                ok2 = st["player"].get("area") == area
+                _ok, lines = H("automap %d" % typ)
+                m = re.search(r"game_lookups=(\d+) hits=(\d+)", " ".join(lines))
+                lookups, hits = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+                if ok2 and hits > 0:
+                    break
+            n, resolved, badrows = table.get(typ, (0, 0, 0))
+            g.key("tab")
+            time.sleep(1.2)
+            shots.append(sh("automap%d" % typ))
+            g.key("tab")
+            time.sleep(0.4)
+            miss = ""
+            if hits == 0:  # which (tile type, style) pairs the area asked for and the type's rows do not list
+                txt = " ".join(lines)
+                asked = ["%s/%s" % t for t in re.findall(r"miss tile=(\d+) style=(\d+)", txt)][:6]
+                listed = ["%s/%s" % t for t in re.findall(r"row \d+ tile=(\d+) style=(\d+)", txt)]
+                miss = " (it asked for tile/style %s, the rows list %s)" % (", ".join(asked), ", ".join(listed))
+            rows.append("type %d (area %d%s): %d rows, %d resolved to a cel, game made %d lookups, %d found a Median row%s" % (
+                typ, area, "" if ok2 else " NOT REACHED", n, resolved, lookups, hits, miss))
+            if not ok2:
+                bad.append("type %d: area %d not reached" % (typ, area))
+            elif n >= 30 and (hits == 0 or lookups == 0):
+                bad.append("type %d: the game's lookups found no Median row (%d lookups)" % (typ, lookups))
+            if n and resolved < n * 0.99 - 1:
+                bad.append("type %d: only %d of %d rows resolve to a cel the atlas has" % (typ, resolved, n))
+    finally:
+        god(False)
+        goto(1)
+    add(name, "PASS" if not bad else "FAIL",
+        "%s. Types 45-50 (e.g. Heart of Darkness) have no Median rows, so they keep D2R's lookup (docs/plugin-spec.md)%s" % (
+            "; ".join(rows), ("; " + "; ".join(bad)) if bad else ""), shots, rows)
+
+
+# --- #17 levels above 255 through the summoning scrolls ------------------------------------------------------------------
+
+SCROLLS = ["b60X", "b61X", "b62X", "b63X", "b64X", "b65X", "b66X", "b67X", "b68X", "b70X", "b71X", "b72X", "b73X"]
+
+
+def _scroll_targets():
+    """code -> Median level of the scroll's calc1 (misc.txt: `(stat(...)>0)?0:N`) -> D2R level id (mxl_items.h LevelIds: Median level
+    n >= 137 is D2R's n + 1) and the act town the portal can be opened from (the portal links levels of one act)."""
+    import csv
+    rows = list(csv.reader(open(os.path.join(MOD_DATA, "global", "excel", "misc.txt"), encoding="latin-1"), delimiter="\t"))
+    h = rows[0]
+    ci = {n: i for i, n in enumerate(h)}
+    lv = list(csv.reader(open(os.path.join(MOD_DATA, "global", "excel", "levels.txt"), encoding="latin-1"), delimiter="\t"))
+    lci = {n: i for i, n in enumerate(lv[0])}
+    act = {int(r[lci["Id"]]): int(r[lci["Act"]] or 0) for r in lv[1:] if len(r) > lci["Act"] and r[lci["Id"]].isdigit()}
+    out = {}
+    for r in rows[1:]:
+        code = r[ci["code"]] if len(r) > ci["code"] else ""
+        if code in SCROLLS:
+            nums = re.findall(r"\?0:(\d+)$", r[ci["calc1"]].strip())
+            median = int(nums[0]) if nums else 0
+            did = median + 1 if median >= 137 else median
+            out[code] = (median, did, ACT_TOWNS.get(act.get(did, 0), 1) if did else None)
+    return out
+
+
+def check_scrollportals():
+    name = "Summoning scrolls open portals that lead into the levels above 255 (#17)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    targets = _scroll_targets()
+    rows, bad, shots = [], [], []
+    god(True)
+    base = {}
+    try:
+        goto(1)
+        base = {n: stat_of(H("stat player %d" % n)[1]) for n in (12, 6, 7)}  # level, life, max life: the character is saved on exit
+        H("difficulty 2")  # Hell rules and a high level: the dungeon lockout refuses a low character (docs/plugin-spec.md)
+        H("stat player 12 set 150")  # the highest entry requirement is 147 (mxl_dungeons.h)
+        H("stat player 7 set 20000000")
+        H("stat player 6 set 20000000")
+        for code in SCROLLS:
+            median, want, town = targets.get(code, (0, 0, None))
+            if not want:
+                # b73X: calc1 is 0 by Median's formula (no destination yet): the scroll must refuse
+                goto(1)
+                H("packclear")
+                H("item %s inv" % code)
+                ok, _l = H("use " + code)
+                rows.append("%s: no destination in the data, %s" % (code, "refused" if not ok else "OPENED A PORTAL"))
+                if ok:
+                    bad.append("%s opened a portal without a destination" % code)
+                continue
+            st = goto(town, timeout=50)
+            H("packclear")
+            H("item %s inv" % code)
+            before = {o["id"] for o in hstate()["objs"]}
+            ok, lines = H("use " + code)
+            time.sleep(1.5)
+            new = [o for o in hstate()["objs"] if o["id"] not in before and o.get("class") in (59, 60, 600)]
+            if not ok or not new:
+                rows.append("%s -> level %d: the use was refused / no portal (%s)" % (code, want, lines[-1][:60] if lines else ""))
+                bad.append("%s: no portal to level %d from town %d" % (code, want, town))
+                continue
+            moved = False
+            for _ in range(3):  # the portal object needs a frame or two before it works
+                time.sleep(2)
+                ok, ll = H("enter %d" % new[0]["id"])
+                if ll and "moved" in ll[0]:
+                    moved = True
+                    break
+            area = None
+            for _ in range(8):
+                time.sleep(2)
+                area = hstate()["player"].get("area")
+                if area == want:
+                    break
+            if want > 255:
+                shots.append(sh("portal%d" % want))
+            rows.append("%s -> level %d%s: portal class %d, %s, entered area %s" % (code, want, " (>255)" if want > 255 else "", new[0]["class"], "moved" if moved else "REFUSED", area))
+            if area != want:
+                bad.append("%s: entered area %s, wanted %d" % (code, area, want))
+    finally:
+        god(False)
+        H("difficulty 0")
+        goto(1)
+        for n, v in base.items():
+            if v is not None:
+                H("stat player %d set %d" % (n, v))
+    add(name, "PASS" if not bad else "FAIL",
+        "use the scroll in its act's town (Hell rules, level 150), `enter <portal id>`, read the area: %s%s" % ("; ".join(rows), ("; " + "; ".join(bad)) if bad else ""), shots, rows)
+
+
+# --- #18 vendors ---------------------------------------------------------------------------------------------------------
+
+SHOP_TABS = [(185 / 1600.0, 222 / 900.0), (289 / 1600.0, 222 / 900.0), (497 / 1600.0, 222 / 900.0)]  # Armor / Weapons / Misc
+SHOP_GRID = (135, 248, 27.6)  # x0, y0, cell of the vendor panel's item grid (1600 x 900 client)
+TRADE_CLOSE = (564 / 1600.0, 103 / 900.0)
+
+
+def trade_panel_open():
+    """The vendor panel's red close button (X) is on screen."""
+    im = g.grab_client(g.need_window()).convert("RGB").crop((552, 92, 576, 114))
+    return sum(1 for r, gr, b in im.getdata() if r > 140 and gr < 80 and b < 80) > 8
+
+
+def check_vendors():
+    name = "Vendors Charsi, Gheed, Akara: open the trade panel, browse the tabs, buy by right click; no crash, no [default_unit] flood (#18)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    off = log_mark()
+    rows, bad, shots = [], [], []
+    for cls, nm in ((148, "Akara"), (154, "Charsi"), (147, "Gheed")):
+        H("packclear")  # a bought item needs room in the backpack
+        for _ in range(5):  # the NPC's menu opens when the character stands next to it
+            ok, _l = H("moveto nearest %d" % cls)
+            if not ok:
+                break  # not loaded
+            time.sleep(4)
+            near = [m for m in hstate()["mons"] if m.get("class") == cls]
+            if near and near[0].get("dist", 99) <= 6:
+                break
+        near = [m for m in hstate()["mons"] if m.get("class") == cls]
+        if not near or near[0].get("dist", 99) > 6:
+            H("spawn %d" % cls)  # out of reach (behind a wall) or not loaded: a copy next to the character
+            time.sleep(4)  # the client has to learn the new unit before it can talk to it
+        H("interact %d" % cls)
+        menu = wait_menu(60)
+        if menu is None:
+            bad.append("%s: no menu" % nm)
+            continue
+        ok, _l = H("menu 1")  # Trade
+        for _ in range(6):
+            time.sleep(2)
+            if trade_panel_open():
+                break
+        else:
+            bad.append("%s: the trade panel did not open" % nm)
+        g.log("trade panel open before `shop`: %s" % trade_panel_open())
+        ok, lines = H("shop %d" % cls)
+        g.log("trade panel open after `shop`: %s" % trade_panel_open())
+        stock = [kv(l) for l in lines if l.startswith("item ")]
+        n = len(stock)
+        for i, (fx, fy) in enumerate(SHOP_TABS):
+            if cls == 148 and i == 0:
+                continue  # Akara has no Armor tab: a click on its empty place closes the panel
+            g.click(fx, fy)
+            time.sleep(1.0)
+            g.log("trade panel open after tab %d click: %s" % (i + 1, trade_panel_open()))
+            shots.append(sh("shop_%s_tab%d" % (nm.lower(), i + 1)))
+        # buy: an ammo-like stack on the Misc tab (page 3) when the vendor has one, else any Misc item
+        g.click(*SHOP_TABS[2])
+        time.sleep(0.8)
+        misc = [s for s in stock if s.get("page") == "3" and s.get("code") not in ("key",)]
+        misc.sort(key=lambda s: -int(s.get("qty", 0)))
+        bought = "nothing on the Misc tab"
+        tried = []
+        H("gold set 40000 8888")  # inside the level cap on carried gold
+        for s in misc[:3]:  # the first stack that the right click buys (a throwing weapon bought replaces the weapon in hand)
+            st0 = hstate()
+            x, y = int(s["x"]), int(s["y"])
+            fx = (SHOP_GRID[0] + (x + 0.5) * SHOP_GRID[2]) / 1600.0
+            fy = (SHOP_GRID[1] + (y + 0.5) * SHOP_GRID[2]) / 900.0
+            g.click(fx, fy, button="right")
+            time.sleep(2.0)
+            st1 = hstate()
+            gained = len(st1["items"]) - len(st0["items"])
+            gold0, gold1 = st0["player"].get("gold", 0), st1["player"].get("gold", 0)
+            tried.append("%s qty %s: items %+d, gold %d -> %d" % (s["code"], s.get("qty", "0"), gained, gold0, gold1))
+            if gold1 < gold0:
+                break
+        bought = "right click buys: " + "; ".join(tried) if misc else bought
+        if not misc:
+            bad.append("%s: no stock on the Misc tab to buy" % nm)
+        elif hstate()["player"].get("gold", 0) >= 40000:
+            bad.append("%s: the right click bought nothing (%s)" % (nm, "; ".join(tried)))
+        g.click(*TRADE_CLOSE)
+        time.sleep(1.0)
+        close_menu()
+        alive = hstate()["ok"]
+        rows.append("%s: %d stock items, %s, game %s" % (nm, n, bought, "alive" if alive else "GONE"))
+        if not alive:
+            bad.append("%s: the game stopped answering" % nm)
+            break
+    new_log = log_since(off)
+    flood = new_log.count("[default_unit]")
+    notfound = new_log.count("File not found")
+    asserts = sorted(set(assertions_since(off)))
+    if flood or notfound:
+        bad.append("%d `[default_unit]` / %d `File not found` lines in d2rloader.log" % (flood, notfound))
+    H("packclear")
+    add(name, "PASS" if not bad else "FAIL",
+        "%s; log since the first vendor: %d `[default_unit]`, %d `File not found`, assert boxes: %s%s. Whether every vendor picture looks right "
+        "stays a manual look (the screenshots show each tab)" % ("; ".join(rows), flood, notfound, asserts or "none", ("; " + "; ".join(bad)) if bad else ""),
+        shots, rows)
+
+
+# --- #22 monsters can be hovered and attacked --------------------------------------------------------------------------
+
+
+def _mon_screen(player, mon, k=1.3):
+    """The isometric projection of a world offset onto the 1600 x 900 client (the player stands at the centre)."""
+    dx, dy = mon["mx"] - player["x"], mon["my"] - player["y"]
+    return 800 + (dx - dy) * 16 * k, 450 + (dx + dy) * 8 * k - 20
+
+
+def check_monster_hover():
+    name = "Monsters can be hovered and attacked through the player's own click path (#22)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    god(False)
+    goto(2)
+    close_menu()
+    kill_all_near()
+    H("skill left 0")  # the basic attack
+    mid = spawn_id(5)  # a slow melee monster (zombie1)
+    if mid is None:
+        return add(name, "BLOCKED", "could not spawn a monster")
+    time.sleep(1.5)
+    hovered, life0, lives = False, None, []
+    for step in range(24):
+        st = hstate()
+        mons = [m for m in st["mons"] if m["id"] == mid]
+        if not mons:
+            lives.append("gone")
+            break
+        m = mons[0]
+        if life0 is None:
+            life0 = m["life"]
+        lives.append(m["life"])
+        sx, sy = _mon_screen(st["player"], m)
+        g.click(sx / 1600.0, sy / 900.0, move_only=True)
+        time.sleep(0.4)
+        g.click((sx + 2) / 1600.0, (sy + 2) / 900.0, move_only=True)
+        time.sleep(0.5)
+        ok, lines = g.hcmd("hover", 5)
+        hm = re.search(r"hover id=(\d+) type=(\d+) class=(\d+) age_ms=(\d+)", " ".join(lines))
+        if hm and int(hm.group(1)) == mid and int(hm.group(4)) < 1500:
+            hovered = True
+        g.click((sx + 2) / 1600.0, (sy + 2) / 900.0)  # left click = the basic attack on the hovered monster
+        time.sleep(1.5)
+    shot = sh("monster_fight")
+    st = hstate()
+    left = [m for m in st["mons"] if m["id"] == mid]
+    dead = not left or left[0]["life"] == 0
+    bad = []
+    if not hovered:
+        bad.append("the game never reported the spawned monster (id %d) as hovered" % mid)
+    if life0 is None or not (dead or (left and left[0]["life"] < life0)):
+        bad.append("the clicks did not hurt the monster (life %s)" % lives)
+    kill_all_near()
+    add(name, "PASS" if not bad else "FAIL",
+        "spawned zombie1 id %d next to the player; the mouse moved over its projected position (harness `hover` reports the unit under "
+        "the cursor): %s; left clicks on it: life %s, %s%s" % (mid, "hovered" if hovered else "NOT hovered", lives, "killed" if dead else "alive",
+                                                           ("; " + "; ".join(bad)) if bad else ""), [shot], [str(lives)])
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -2099,7 +2752,10 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
-          ("trophy", check_trophy), ("statcols", check_statcols)]
+          ("trophy", check_trophy), ("statcols", check_statcols),
+          # the old "fix to test" rows of docs/bugs.md
+          ("skilltree", check_skilltree), ("keybinds", check_keybinds), ("strings", check_strings), ("automap", check_automap),
+          ("scrollportals", check_scrollportals), ("vendors", check_vendors), ("monhover", check_monster_hover)]
 
 
 def write_report(extra=""):

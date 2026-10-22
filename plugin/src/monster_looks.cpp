@@ -104,7 +104,16 @@ auto TypeFlags(const Unit* unit) noexcept -> uint16_t {
 
 // ---- name colour -------------------------------------------------------------------------------------------------------
 
+std::atomic<uint32_t> g_hoverId{0}, g_hoverType{0xffffffffU}, g_hoverClass{0};
+std::atomic<uint64_t> g_hoverTick{0};
+
 void HoverHook(Unit* unit, void* a2, char a3) {
+	if (reinterpret_cast<uintptr_t>(unit) >= 0x10000) {  // remembered for the harness verb `hover`
+		g_hoverId.store(d2r::At<uint32_t>(unit, 0x08));
+		g_hoverType.store(d2r::At<uint32_t>(unit, d2r::UnitType));
+		g_hoverClass.store(d2r::At<uint32_t>(unit, UnitClass));
+		g_hoverTick.store(GetTickCount64());
+	}
 	Unit* const previous = t_hoverUnit;
 	t_hoverUnit = unit;
 	g_hoverOriginal(unit, a2, a3);
@@ -222,4 +231,12 @@ void MonsterLooksStatus(char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize, "%u names recoloured, %u automap markers, %u automap names, %u spawn overlays (last %d on monster %d)",
 	              g_recoloured.load(), g_marked.load(), g_named.load(), g_overlays.load(), g_lastOverlay.load(),
 	              g_lastOverlayMonster.load());
+}
+
+auto MonsterLooksHovered(uint32_t* id, uint32_t* type, uint32_t* cls) noexcept -> uint64_t {
+	*id = g_hoverId.load();
+	*type = g_hoverType.load();
+	*cls = g_hoverClass.load();
+	const uint64_t at = g_hoverTick.load();
+	return at == 0 ? 0xffffffffffffffffULL : GetTickCount64() - at;
 }

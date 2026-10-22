@@ -18,6 +18,9 @@
 #include "item_events.h"
 #include "npc_actions.h"
 #include "item_gen.h"
+#include "level_types.h"
+#include "monster_looks.h"
+#include "skill_tree.h"
 #include "quests_act1.h"
 #include "stat_columns.h"
 #include "testharness.h"
@@ -420,8 +423,10 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	EachUnit(c->game, HashMonsters, [&](Unit* u) {
 		if (TypeOf(u) == 1 && IsAlive(u) && DistTo(p, u) < 40 && mons < 12) {
 			++mons;
-			Out("mon id=%u class=%d mode=%d dist=%.0f npc=%d life=%d/%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u),
-			    Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(u)) != nullptr ? 1 : 0, Stat(u, StatLife) >> 8, Stat(u, 7) >> 8);
+			int32_t mx = 0, my = 0;
+			d2r::UnitXY(u, &mx, &my);
+			Out("mon id=%u class=%d mode=%d dist=%.0f npc=%d life=%d/%d mx=%d my=%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u),
+			    Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(u)) != nullptr ? 1 : 0, Stat(u, StatLife) >> 8, Stat(u, 7) >> 8, mx, my);
 		}
 	});
 	int objs = 0;
@@ -2101,6 +2106,161 @@ auto CmdPanelRow(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// --- lane bug-backlog-b: verbs for the old "fix to test" rows of docs/bugs.md ----------------------------------------
+
+// Client side (UI thread): `skilltab [n]` the selected tab of the skill tree panel (bug #3), or select tab n through the
+// hooked setter (the panel is the one the setter last saw: click any tab first).
+auto CmdSkillTab(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n > 1) {
+		long long tab = 0;
+		if (!hcmd::ParseInt(t.tok[1], &tab) || tab < 0 || tab > 8) {
+			return Fail(c, "usage: skilltab [0-8]");
+		}
+		if (!SkillTreeSetTab(static_cast<int32_t>(tab))) {
+			return Fail(c, "skilltab: the tab setter has not run yet (open the skill tree and click a tab)");
+		}
+	}
+	Out("skilltab current=%d setter_calls=%u", SkillTreeCurrentTab(), SkillTreeSetterCalls());
+	return true;
+}
+
+// The text without D2R's colour codes (0xff or UTF-8 c3 bf, then 'c' and a digit) and control characters.
+void PlainText(const char* raw, char* out, size_t outSize) noexcept {
+	size_t n = 0;
+	for (size_t i = 0; raw[i] != '\0' && n + 1 < outSize; ++i) {
+		const unsigned char ch = static_cast<unsigned char>(raw[i]);
+		const size_t lead = ch == 0xff ? 1 : (ch == 0xc3 && static_cast<unsigned char>(raw[i + 1]) == 0xbf ? 2 : 0);
+		if (lead != 0 && raw[i + lead] == 'c' && raw[i + lead + 1] != '\0') {
+			i += lead + 1;
+			continue;
+		}
+		out[n++] = ch < 0x20 ? ' ' : static_cast<char>(ch);
+	}
+	out[n] = '\0';
+}
+
+// Client side: `str <id>...` the text the client's string table gives for string ids (bug #7: Median's keys must not answer with
+// another key's text). `str 45` is GheedIntroGossip1.
+auto CmdStr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: str <string id>...");
+	}
+	for (int i = 1; i < t.n; ++i) {
+		long long id = 0;
+		if (!hcmd::ParseInt(t.tok[i], &id) || id < 0 || id > 0xffff) {
+			return Fail(c, "str: %.12s is not a string id (0..65535)", t.tok[i]);
+		}
+		const char* text = Fn<const char* (*)(uint32_t)>(0x3e2b730)(static_cast<uint32_t>(id));
+		char plain[300];
+		PlainText(text != nullptr ? text : "(null)", plain, sizeof(plain));
+		Out("str %lld = [%s]", id, plain);
+	}
+	return true;
+}
+
+// Client side: `hover` the unit the hover name builder last ran for (bug #22: a monster under the cursor).
+auto CmdHover(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	uint32_t id = 0, type = 0, cls = 0;
+	const uint64_t age = MonsterLooksHovered(&id, &type, &cls);
+	if (age == 0xffffffffffffffffULL) {
+		return Fail(c, "hover: nothing was hovered since the game started (or monster looks / name colours are off)");
+	}
+	Out("hover id=%u type=%u class=%u age_ms=%llu", id, type, cls, static_cast<unsigned long long>(age));
+	return true;
+}
+
+// Client side: `automap [type]` Median's automap rows of level types 36-51 (bug #15): the row range, how many of its rows the hooked
+// lookup resolves to a cel the atlas has (< 1499), and how many lookups the game itself made for the type so far.
+auto CmdAutomap(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long only = -1;
+	if (t.n > 1 && !hcmd::ParseInt(t.tok[1], &only)) {
+		return Fail(c, "usage: automap [level type]");
+	}
+	for (int32_t type = 36; type <= 51; ++type) {
+		if (only >= 0 && type != only) {
+			continue;
+		}
+		int32_t first = 0, end = 0;
+		uint32_t calls = 0, hits = 0;
+		LevelTypeCounters(type, &calls, &hits);
+		if (!LevelTypeRows(type, &first, &end)) {
+			Out("automap type=%d rows=0 (no Median AutoMap rows) game_lookups=%u hits=%u", type, calls, hits);
+			continue;
+		}
+		int ok = 0, bad = 0, unreadable = 0;
+		for (int32_t i = first; i < end; ++i) {
+			int32_t tile = 0, startSeq = 0, cels = 0;
+			uint32_t style = 0, cel0 = 0;
+			if (!LevelTypeRowTable(i, &tile, &style, &startSeq, &cels, &cel0)) {
+				++unreadable;
+				continue;
+			}
+			const uint64_t cel = LevelTypeProbe(type, tile, style == 0xff ? 0 : style, startSeq);
+			if (cel < 1499) {
+				++ok;
+			} else {
+				++bad;
+			}
+		}
+		Out("automap type=%d rows=%d resolved=%d bad=%d unreadable=%d game_lookups=%u hits=%u", type, end - first, ok, bad, unreadable, calls, hits);
+		if (only >= 0) {  // one type asked for: the (tile type, style) pairs the game looked for in vain, and the rows' own pairs
+			for (int m = 0;; ++m) {
+				int32_t mt = 0, ms = 0;
+				if (!LevelTypeMiss(type, m, &mt, &ms)) {
+					break;
+				}
+				Out("  miss tile=%d style=%d", mt, ms);
+			}
+			for (int32_t i = first; i < end && i < first + 12; ++i) {
+				int32_t tile = 0, startSeq = 0, cels = 0;
+				uint32_t style = 0, cel0 = 0;
+				if (LevelTypeRowTable(i, &tile, &style, &startSeq, &cels, &cel0)) {
+					Out("  row %d tile=%d style=%u seq=%d", i, tile, style, startSeq);
+				}
+			}
+		}
+	}
+	return true;
+}
+
+// `levelact <level id>...`: the act D2R's level table gives each level (the key / scroll portals link only levels of the same act).
+auto CmdLevelAct(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: levelact <level id>...");
+	}
+	for (int i = 1; i < t.n; ++i) {
+		long long id = 0;
+		if (!hcmd::ParseInt(t.tok[i], &id) || id < 0 || id > 0xffff) {
+			return Fail(c, "levelact: %.12s is not a level id", t.tok[i]);
+		}
+		Out("levelact %lld = %d", id, static_cast<int>(Fn<uint8_t (*)(uint32_t, int32_t)>(0x3e2b5c8)(c->dataFlag, static_cast<int32_t>(id))));
+	}
+	return true;
+}
+
+// `shop [npc class]`: the inventory of the nearest vendor (the server builds it when a player opens the trade panel: `interact <npc>`,
+// then `menu <Trade line>`); bug #18 buys through the panel itself (a right click), see tools/game_checks.py check_vendors.
+auto CmdShop(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long cls = -1;
+	if (t.n > 1 && !hcmd::ParseInt(t.tok[1], &cls)) {
+		return Fail(c, "usage: shop [npc class]");
+	}
+	Unit* npc = NearestMonster(c, cls, true);
+	if (npc == nullptr) {
+		return Fail(c, "shop: no such NPC alive in this area");
+	}
+	Out("shop npc id=%u class=%d", IdOf(npc), ClassOf(npc));
+	int items = 0;
+	EachItemOf(npc, [&](Unit* it) {
+		++items;
+		if (items <= 60) {
+			DescribeItem(c, it);
+		}
+	});
+	Out("shop items %d", items);
+	return true;
+}
+
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
 	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
@@ -2108,6 +2268,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
+	Out("backlog verbs: skilltab [n] (client) | str <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | levelact <id>..");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] | avoid <ref> melee|missile|evade [n] | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | stat merc|mon:<id> <stat>");
 	return true;
@@ -2363,6 +2524,7 @@ const Verb Verbs[] = {
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
+    {"skilltab", CmdSkillTab, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 
