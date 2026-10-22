@@ -10,10 +10,10 @@ aborts the run when the real cursor enters the game window or the game window be
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
 Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
-craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps classlock
-hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols skilltree keybinds npcstrings
-automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills cowportals deathcrash nocorpse
-nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
+craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
+classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
+skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
+cowportals deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
 heat trophytimer mapreveal wpauto hotkeys stashpages.
 """
 import ctypes
@@ -3431,6 +3431,160 @@ def check_monster_hover():
         "the cursor): %s; left clicks on it: life %s, %s%s" % (mid, "hovered" if hovered else "NOT hovered", lives, "killed" if dead else "alive",
                                                            ("; " + "; ".join(bad)) if bad else ""), [shot], [str(lives)])
 
+def _cd_counts():
+    """`h state`'s cooldowns line: (on, starts, reduced, shared, dropped) or None (retried: the answer can be cut short)."""
+    for _ in range(4):
+        for ln in hstate()["lines"]:
+            m = re.match(r"cooldowns (on|off): starts=(-?\d+) reduced=(-?\d+) shared=(-?\d+) dropped=(-?\d+)", ln)
+            if m:
+                return (m.group(1) == "on",) + tuple(int(x) for x in m.groups()[1:])
+        time.sleep(0.5)
+    return None
+
+
+def _cd_frame():
+    return hstate()["player"].get("frame")
+
+
+_CD_LAST = {}
+
+
+def _cd_wait_ready(skill, timeout=40):
+    """Until `h skills` calls the skill usable (0) again: its cooldown (stat 359 at layer = skill id) has run out. The last
+    usability code is kept in _CD_LAST for the failure note (1 mana / cooldown, 2 requirements, 7 no level)."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        _ok, lines = H("skills")
+        u = next((re.search(r"usable=(-?\d+)", ln) for ln in lines if re.match(r"skill id=%d " % skill, ln)), None)
+        _CD_LAST[skill] = int(u.group(1)) if u else None
+        if u and int(u.group(1)) == 0:
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _cd_cast(skill):
+    """Cast the skill at a spawned monster and wait for the cooldown stat (359, layer = skill id) to appear: (end frame, frame
+    when seen) or (None, None). The stat holds the end frame of D2R's per-skill cooldown timer."""
+    H("spawn 18 1")
+    H("stat player 8 set %d" % (3000 << 8))
+    ok, _lines = H("cast %d nearest" % skill)
+    t0 = time.time()
+    while ok and time.time() - t0 < 6:
+        time.sleep(0.15)
+        end = rd("player", 359, skill)
+        if end:
+            return end, _cd_frame()
+        if not ok:
+            break
+    return None, None
+
+
+# Barbarian skills of one skills2 cooldown group with a constant localdelay (built mod, mxl_cooldowns.h): group -> {skill: delay,
+# reduction to test}. The first group whose skills the test character may use is tested.
+_CD_GROUPS = (("99 (Deep Freeze, Thunderstorm, Purifying Flame, Mana Sweep)", {1310: 300, 1275: 300, 1309: 625, 1651: 480}, 200),
+              ("4 (Blast Wave, skills_460, Cold Fear, Thunder Slam, Elvensong, Mind Control)", {554: 500, 532: 625, 1840: 350, 1954: 375, 1386: 500, 1897: 125}, 100),
+              ("1 (Leap, Spirit Walk)", {1323: 75, 1290: None}, 50))
+_CD_CONTROL = 1320  # Spirit Reave: localdelay 200, no group
+
+
+def _cd_usable(skills):
+    _ok, lines = H("skills")
+    out = {}
+    for ln in lines:
+        m = re.match(r"skill id=(\d+) .*usable=(-?\d+)", ln)
+        if m and int(m.group(1)) in skills:
+            out[int(m.group(1))] = int(m.group(2))
+    return out
+
+
+def check_cooldowns():
+    """Median's real cooldown reduction and shared groups (D2Sigma 0x100b0f40 / 0x100b1140 / 0x100b0ab0; audit section 4): the
+    delay of a cooldown is the skill's localdelay minus stat 309 at layer = the skill id, and the skills of one skills2
+    cooldown group share one timer. A skill of a group (the first usable one of _CD_GROUPS) is cast with stat 309 = 0 and with a
+    reduction: the cooldown stat (359, layer = skill id) the game keeps must differ by the reduction (the plugin's `reduced`
+    counter must rise); the group's other skills must then be on cooldown with the same end frame (`shared` counter, `h skills`
+    usable code), and Spirit Reave (no group) must not be touched."""
+    nm = "Cooldowns (Median): stat 309 shortens a skill's cooldown, skills of one group share one timer"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    c0 = _cd_counts()
+    if c0 is None or not c0[0]:
+        return add(nm, "FAIL", "plugin part cooldowns is not on (h state: %s; lines %s)" % (c0, [ln[:60] for ln in hstate()["lines"]][-8:]))
+    goto(2)
+    kill_all_near()
+    god(True)
+    problems, notes = [], []
+    allskills = {sk for _g, d, _r in _CD_GROUPS for sk in d} | {_CD_CONTROL}
+    for sk in sorted(allskills):
+        H("setskill %d 1" % sk)
+    base_level = rd("player", 12)
+    setstat("player", 12, 80)  # the skills need character level 15-30
+    codes = _cd_usable(allskills)
+    notes.append("usable codes at level 80 (0 usable, 1 mana / cooldown, 2 requirements): %s" % codes)
+    pick = None
+    for label, delays, red in _CD_GROUPS:
+        ok_skills = [sk for sk in delays if codes.get(sk) == 0]
+        if len(ok_skills) >= 2:
+            pick = (label, ok_skills, delays, red)
+            break
+    if pick is None:
+        setstat("player", 12, base_level or 21)
+        god(False)
+        return add(nm, "FAIL", "no group with two usable skills for the test character | " + " | ".join(notes), [sh("cooldowns")])
+    label, group, delays, red_amount = pick
+    main, others = group[0], group[1:]
+    base309 = rd("player", 309, main)
+    durs = {}
+    try:
+        for red in (0, red_amount):
+            for sk in group:
+                setstat("player", 309, 0, sk)
+            setstat("player", 309, red, main)
+            if not _cd_wait_ready(main):
+                problems.append("skill %d never became ready again before the cast with reduction %d (usable code %s)" % (main, red, _CD_LAST.get(main)))
+                continue
+            for sk in others:
+                _cd_wait_ready(sk)
+            before = _cd_counts()
+            end, seen = _cd_cast(main)
+            if end is None:
+                problems.append("reduction %d: the cast of skill %d left no cooldown stat 359 at layer %d (cast refused, or the start hook never ran)" % (red, main, main))
+                continue
+            durs[red] = end - seen
+            after = _cd_counts()
+            notes.append("group %s, skill %d, reduction %d: end frame %d seen at %d -> %d frames left; starts %s->%s reduced %s->%s shared %s->%s dropped %s->%s" % (
+                label, main, red, end, seen, end - seen, before[1], after[1], before[2], after[2], before[3], after[3], before[4], after[4]))
+            if red and after[2] <= before[2]:
+                problems.append("stat 309 = %d did not count as reduced (%s -> %s)" % (red, before[2], after[2]))
+            if after[3] - before[3] < 1:
+                problems.append("reduction %d: no shared start counted for the group's other skills" % red)
+            usable = _cd_usable(allskills)
+            ends = {sk: rd("player", 359, sk) for sk in sorted(allskills)}
+            for sk in others:  # the same end frame: they are read one after the other, so a later start of a moving skill can lie between
+                if usable.get(sk) == 0:
+                    problems.append("reduction %d: group skill %d is not on cooldown after skill %d (usable 0)" % (red, sk, main))
+                if ends[sk] != ends[main]:
+                    problems.append("reduction %d: group skill %d ends at %s, skill %d at %s (one shared timer)" % (red, sk, ends[sk], main, ends[main]))
+            if codes.get(_CD_CONTROL) == 0 and ends[_CD_CONTROL]:
+                problems.append("reduction %d: Spirit Reave (no group) got a cooldown (end %s)" % (red, ends[_CD_CONTROL]))
+            notes.append("  stat 359 ends %s usable %s" % (ends, usable))
+    finally:
+        setstat("player", 309, base309 or 0, main)
+        setstat("player", 12, base_level or 21)
+        god(False)
+        kill_all_near()
+    if 0 in durs and red_amount in durs:
+        gain = durs[0] - durs[red_amount]
+        if abs(gain - red_amount) > 20:
+            problems.append("stat 309 = %d shortened the cooldown by %d frames (%d -> %d)" % (red_amount, gain, durs[0], durs[red_amount]))
+        want = delays.get(main)
+        if want and not want - 35 <= durs[0] <= want + 5:
+            problems.append("cooldown without reduction is %d frames, expected about %d (localdelay)" % (durs[0], want))
+    add(nm, "FAIL" if problems else "PASS", "%s | %s" % ("; ".join(problems) if problems else "reduction and sharing as Median", " | ".join(notes)),
+        [sh("cooldowns")])
+
+
 def check_nocorpse():
     """Median's death rules (docs/subsystems/death.md; audit rows DC1-DC4): a dying player leaves no corpse, keeps the equipment
     (ring, amulet, belt), and loses neither gold nor experience, and the respawn request is held back for 5 s (125 frames).
@@ -4891,9 +5045,6 @@ def check_sprint():
 
 
 
-
-# ------------------------------------------------------------------ travel: map reveal, waypoint auto-activation, hotkeys, stash pages
-
 def mapcells():
     """`h mapcells` (client): dict cells / layer / layers / debugflag, or None."""
     ok, lines = H("mapcells")
@@ -5158,7 +5309,7 @@ def check_stashpages():
         % (" ".join(res), ("; wrong: " + "; ".join(wrong)) if wrong else ""), [], log)
 
 
-CHECKS = [("mxl", check_mxl),("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
+CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
@@ -5179,14 +5330,13 @@ CHECKS = [("mxl", check_mxl),("lockclock", check_lockout_clock), ("goblins", che
           ("cowportals", check_cowportals),
           ("deathcrash", check_deathcrash),
           ("nocorpse", check_nocorpse),
+          ("cooldowns", check_cooldowns),
           ("nslong", check_nslong),
           ("strings", check_strings),
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
           ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("heat", check_heat),
           ("trophytimer", check_trophytimer),
-          # travel: map reveal, waypoint auto-activation, hotkeys, stash pages
           ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages)]
-
 
 
 def write_report(extra=""):

@@ -788,6 +788,15 @@ pages of all classes, many item skills): the row is now split per sheet ("row~cl
 tree skill finds its own icon in its class sheet (bug #3b: empty sockets on masteries, wrong icons where a class-less
 skill came first). Classes with more than 62 tree icons get smaller HD frames (Amazon 113 px, Barbarian 116 px).
 
+## Cooldowns (`cooldowns.cpp`, off word `cooldowns`)
+
+Median's skill cooldown: delay = skill delay formula - stat 309 (layer = skill id), started only for a player when the delay is above 0, and skills of one
+skills2 cooldown group share one timer (D2Sigma `0x100b0f40` / `0x100b1140` / `0x100b0ab0`; details in d2r-addresses.md section 17). The plugin hooks D2R's two
+cooldown starts (server `0x439500`, client `0x217b90`; entry bytes are verified before the hook is installed): for a player it subtracts stat 309 and starts the D2R timer
+(state `0xb9`, stat 359 at layer = skill id) of every member of the skill's group with the same delay; other units keep D2R's behaviour. The group table is generated
+(`mxl_cooldowns.h`, `txt_migrate cooldown_tables`); the pure rules and a model of Median's tables are in `cooldowns_logic.h` (`cooldown_tests`). `mxl` prints the line
+`cooldowns` with the counters starts / reduced / shared / dropped (also in `h state`). Median's removal of monster cooldowns and the client packet `0x2b` are not ported.
+
 ## Runewords and kill experience (`items_ext.cpp`, off words `runewords`, `xp`)
 
 Details, addresses and evidence in [subsystems/items-xp.md](subsystems/items-xp.md). Three hooks, each checked against
@@ -834,7 +843,7 @@ handler (`0x12c870`) plays Median's sounds at the player's unit (217 item_gem, 4
 
 ## Travel: waypoint auto-activation, map reveal, hotkeys (`travel.cpp`, off words `wpauto`, `mapreveal`, `hotkeys`)
 
-Pure rules in `travel_logic.h` (unit tests `tests/travel_test.cpp`); evidence and addresses in `docs/d2r-addresses.md` section 17.
+Pure rules in `travel_logic.h` (unit tests `tests/travel_test.cpp`); evidence and addresses in `docs/d2r-addresses.md` section 18.
 No inline hook: the plugin calls D2R functions whose first bytes it checks with `memcmp` (a mismatch switches that part off and
 the `mxl` line says why).
 

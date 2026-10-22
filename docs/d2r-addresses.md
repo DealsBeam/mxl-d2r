@@ -785,7 +785,28 @@ callers and assert strings (`D2Game\src\Player\PlrModes.cpp`, `Player.cpp`, `Plr
 Level / experience stats: 12 / 13; gold 14, bank 15, `0xaf` gold lost (written by the penalty). The mode table entries for the player are
 unchanged by the port.
 
-## 17. Travel: waypoint auto-activation, map reveal, hotkeys, stash pages (lane gap-travel, 2026-10-22; plugin/src/travel.cpp)
+## 17. Skill cooldowns (lane pa-cooldowns, 2026-10-22; plugin/src/cooldowns.cpp)
+
+Median's rules (D2Sigma, read from the disassembly; audit item 4 in sigma-patch-audit.md): delay `0x100b0f40` = the skill's delay formula - stat 309 at layer = skill id
+(unit total, only when not 0); start `0x100b1140` = player units only and delay > 0, end frame (now + delay) stored in the unit's extension
+(`unit + 0xf4`) at `ext[+8][group]` when skills2 byte `+0x2c` (CooldownGroup) is not 0, else `ext[+4][skill]`, and client packet `0x2b`; ready test
+`0x100b0ab0` = `now >= timer`, non-players always ready. Median patch sites: D2Client `0xa2e06`, D2Common `0x52279` and `0x52462` (stub `0x1009b7f0`), D2Game `0xa09d5` /
+`0xa1aed` (stub `0x1009bc90`).
+
+| What | Address | Signature | Entry bytes (build 93847) | Notes |
+|---|---|---|---|---|
+| Server cooldown start | `0x439500` | `void (Game*, Unit*, int delay, int skillId)` | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 40` (20 bytes) | sets state `0xb9` with stat 359 (skill_cooldown) at layer = skill id, value = end frame (`game + 0x170` + delay), via `0x339e60`; D2R's ready test (`0x33f360`, usable code 1) treats stat 359 > 0 at the skill's layer as not ready. Hooked |
+| Client cooldown start | `0x217b90` | `void (Unit*, int delay, int skill)` | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20` (20 bytes) | time in ms = delay * 40; callers `0x2170d4`, `0x21604c`. Hooked |
+| Delay evaluation | `0x3b5160` | `(dataFlag, Unit*, calc, skill, level)` | | skill record `+0x234` = globaldelay calc, `+0x238` = localdelay calc. Not hooked |
+| Unit-wide delay state | `0x439470` | | | state `0x79` (Werewolf / Werebear); untouched, Median has no twin |
+| Stat getter | `0x2f5020` | `int (Unit*, stat, layer)` | | used for stat 309 |
+| Game frame | `game + 0x170` | u32 | | server frame, 25 per second |
+
+Design: D2R has one timer per skill, Median one per group, so a hooked start for a player starts the timer of every member of the group
+(`cooldowns_logic.h` StartList, proved equal to Median's bookkeeping by `cooldown_tests`). The group table comes from skills2 `CooldownGroup` through
+`txt_migrate cooldown_tables`. Skill ids >= 357 are renumbered +72 from Median. Non-player units go straight to D2R's start.
+
+## 18. Travel: waypoint auto-activation, map reveal, hotkeys, stash pages (lane gap-travel, 2026-10-22; plugin/src/travel.cpp)
 
 How Median does it (D2Sigma.dll 1.13c, 32-bit, RVAs of the dump in `ghidra\D2Sigma.dll`):
 
