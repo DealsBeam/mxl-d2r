@@ -23,6 +23,7 @@ Usage: python tools/item_hd.py
 import csv
 import json
 from item_art import median_asset
+from strings_ns import bare, load_aliases
 import re
 import sys
 from collections import Counter, defaultdict
@@ -56,7 +57,9 @@ def load_map(name: str) -> dict:
 
 
 def key(index: str) -> str:
-    return re.sub(r"[ \-]", "_", index.lower()).replace("'", "")
+    # uniqueitems / setitems index cells are localization cells (medianxl:<key> for Median-only names): the asset name
+    # is derived from the plain name
+    return re.sub(r"[ \-]", "_", bare(index).lower()).replace("'", "")
 
 
 def sprites() -> set[str]:
@@ -160,6 +163,8 @@ def main() -> int:
                 out.setdefault((folder, inv), entry["normal"])
         return out
 
+    long_keys = {a: k for k, a in load_aliases().items()}
+
     def specials(txt: str, mapping: dict, code_col: str, label: str) -> list[dict]:
         inv_assets = special_by_inv(txt, mapping, code_col)
         vanilla_folder = {key(r.get("index", "")): folder_of.get(r.get(code_col, ""))
@@ -185,6 +190,10 @@ def main() -> int:
                 entry = {"normal": a, "uber": a, "ultra": a}
                 how[f"{label}: base item"] += 1
             out.append({k: entry})
+            if (long_key := long_keys.get(bare(name))):
+                # the index cell holds the key's short alias (strings_ns "short aliases"): the asset is also listed under
+                # the name of the real key, in case D2R derives the name from the text instead of the cell
+                out.append({key(long_key): entry})
         return out
 
     uniques = specials("uniqueitems", d_uniques, "code", "uniques")

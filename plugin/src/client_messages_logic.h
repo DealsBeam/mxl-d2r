@@ -10,6 +10,8 @@
 // Median's own texts (D2Sigma string table, ids from the client code 0x5d150 / 0xf4bb0): docs/subsystems/ubers-events.md 3a.
 #pragma once
 
+#include "strings_logic.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -144,22 +146,29 @@ inline void FormatClock(uint32_t seconds, char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize, "%02u:%02u", seconds / 60, seconds % 60);
 }
 
-// Median string 11192 ("Join another game to enter again\nThis area is locked") is the sealed level's tooltip.
-inline constexpr const char* SealedLine1 = "This area is locked";
-inline constexpr const char* SealedLine2 = "Join another game to enter again";
+// The Median texts of the lockout. Each has a key in the `medianxl` namespace (strings_logic.h) and the plugin shows the text
+// of the active language (strings.h StringText); the English below stands in when the localization service is not there
+// (and in the unit tests). A `tmpl` of null means the English.
+//
+// Median string 11192 (mxlstr::KeySealed) is the sealed level's tooltip: two lines.
+inline constexpr const char* SealedText = "Join another game to enter again\nThis area is locked";
 // The quest-table condition of the warp test has no text of its own in Median (the unit message alone); this stands in.
 inline constexpr const char* QuestLine = "You have not finished the quest for this area";
-// Median string 11189 "(Required Level: %d)".
-inline void RequiredLevelLine(int level, char* out, size_t outSize) noexcept {
-	std::snprintf(out, outSize, "(Required Level: %d)", level);
+// Median string 11189 (mxlstr::KeyRequiredLevel).
+inline constexpr const char* RequiredLevelText = "(Required Level: %d)";
+inline void RequiredLevelLine(int level, char* out, size_t outSize, const char* tmpl = nullptr) noexcept {
+	char number[16];
+	std::snprintf(number, sizeof(number), "%d", level);
+	mxlstr::Substitute(out, outSize, tmpl != nullptr ? tmpl : RequiredLevelText, number);
 }
-// Median string 11193, shown with the clock while the level is open.
+// Median string 11193 (mxlstr::KeyExitWarning), shown with the clock while the level is open.
 inline constexpr const char* ExitWarning = "ONCE YOU EXIT YOU CANNOT GO BACK";
-// Median string 11191 "Closing in: %s".
-inline void ClosingLine(uint32_t seconds, char* out, size_t outSize) noexcept {
+// Median string 11191 (mxlstr::KeyClosingIn).
+inline constexpr const char* ClosingText = "Closing in: %s";
+inline void ClosingLine(uint32_t seconds, char* out, size_t outSize, const char* tmpl = nullptr) noexcept {
 	char clock[16];
 	FormatClock(seconds, clock, sizeof(clock));
-	std::snprintf(out, outSize, "Closing in: %s", clock);
+	mxlstr::Substitute(out, outSize, tmpl != nullptr ? tmpl : ClosingText, clock);
 }
 
 // Quest reward notice (D2Sigma client messages 0x5f-0x61): the client text is not a string of the D2Sigma tables (searched
@@ -179,21 +188,21 @@ inline void RewardLine(const char* what, int count, char* out, size_t outSize) n
 // " appears!" (patchstring.tbl), so the line is "<monster name> appears!". The server part has no client-side unit name, it
 // writes the generic goblin name (the variants' own names are monstats strings the client resolves).
 inline constexpr const char* GoblinName = "Treasure Goblin";
-inline constexpr const char* GoblinAppearsSuffix = " appears!";
-inline void GoblinAppears(char* out, size_t outSize) noexcept {
-	std::snprintf(out, outSize, "%s%s", GoblinName, GoblinAppearsSuffix);
+inline constexpr const char* GoblinAppearsSuffix = " appears!";  // string 12320 (mxlstr::KeyGoblinAppears)
+inline void GoblinAppears(char* out, size_t outSize, const char* suffix = nullptr) noexcept {
+	std::snprintf(out, outSize, "%s%s", GoblinName, suffix != nullptr ? suffix : GoblinAppearsSuffix);
 }
 
 // The lines of an entry refusal for requirements, in the order Median's popup shows them: the level, the difficulty, the
 // class. Returns the number of lines written (0..3) into `lines` (each `lineSize` bytes). Only the failed requirements
 // are listed. `classLock` is class + 1, 0 = any class.
 inline auto RequirementLines(int levelReq, int minDifficulty, int classLock, int playerLevel, int difficulty, int cls,
-                             char lines[3][64]) noexcept -> int {
+                             char lines[3][64], const char* requiredLevelTmpl = nullptr) noexcept -> int {
 	static constexpr const char* DifficultyNames[] = {"Normal", "Nightmare", "Hell"};
 	static constexpr const char* ClassNames[] = {"Amazon", "Sorceress", "Necromancer", "Paladin", "Barbarian", "Druid", "Assassin"};
 	int n = 0;
 	if (playerLevel < levelReq) {
-		RequiredLevelLine(levelReq, lines[n++], 64);
+		RequiredLevelLine(levelReq, lines[n++], 64, requiredLevelTmpl);
 	}
 	if (difficulty < minDifficulty) {
 		const int d = minDifficulty < 0 ? 0 : (minDifficulty > 2 ? 2 : minDifficulty);
