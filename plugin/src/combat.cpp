@@ -1,6 +1,6 @@
 // Median's limits on avoiding and blocking hits, on D2R's avoid check (docs/subsystems/combat-stats.md, section 2).
 //
-// D2R decides whether a hit is avoided in one function, 0x44ef70 (game, defender, missile flag): evade (stat 340) while
+// D2R decides whether a hit is avoided in one function, 0x44ef70 (attacker, defender, missile flag): evade (stat 340) while
 // walking or running, otherwise block (the block chance 0x450070 while in the block mode), then avoid (339, missiles) or
 // dodge (338, melee); each is a percent roll on the raw stat. It returns 8 / 0x10 / 2 / 4 for the one that succeeded, else 0.
 // D2Sigma's twin (D2Combat.cpp 0x10056e20, same results) caps the three passive stats at min(75, 60 + the item stat
@@ -52,7 +52,7 @@ namespace {
 using d2r::Game;
 using d2r::Unit;
 
-constexpr uint64_t AvoidCheckRva = 0x44ef70;  // (game, defender, missile flag) -> 0 / 2 / 4 / 8 / 0x10
+constexpr uint64_t AvoidCheckRva = 0x44ef70;  // (attacker unit, defender unit, missile flag) -> 0 / 2 / 4 / 8 / 0x10
 constexpr uint64_t BlockChanceRva = 0x450070;  // (unit) -> D2R's block chance in percent (a jmp [rip+x] thunk)
 constexpr uint64_t GetStatRva = 0x2f5020;      // (unit, stat, layer)
 constexpr uint64_t CalcCodeRva = 0x33b3b0;     // (dataFlag, unit, code, skillId, level)
@@ -63,6 +63,7 @@ constexpr uint64_t SetItemFlagRva = 0x36d8f0;  // (item, mask, on)
 constexpr uint64_t IsItemTypeRva = 0x373890;   // (item, type or class id): non-zero when the item is of it
 constexpr int32_t ItemTypeWeaponClass = 0x2d;
 constexpr uint64_t AbsorbRva = 0x450670;       // (ctx, table entry, damage) -> damage left: absorb percent, then flat
+constexpr uint64_t UnitDataFlagRva = 0x34a0e0;  // (unit) -> data bank flag byte
 constexpr uint64_t IsHirelingRva = 0x3af240;   // (monster) -> non-zero for a mercenary
 constexpr int CtxDefender = 0x18;              // damage context: the defending unit
 constexpr int CtxDamage = 0x28;                // damage context: the damage block
@@ -92,7 +93,7 @@ constexpr ResistClamp ResistClamps[] = {
     {0x14f4686, {0xba, 0x5f, 0x00, 0x00, 0x00}, "hireling panel 0x14f3400"},
 };
 
-using AvoidCheckFn = int32_t (*)(Game* game, Unit* defender, int32_t missile);
+using AvoidCheckFn = int32_t (*)(Unit* attacker, Unit* defender, int32_t missile);
 using BlockChanceFn = int32_t (*)(Unit* unit);
 using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
 using CalcCodeFn = uint64_t (*)(uint64_t dataFlag, Unit* unit, uint64_t code, int32_t skillId, uint32_t level);
@@ -101,6 +102,7 @@ using SetItemFlagFn = void (*)(Unit* item, int32_t mask, int32_t on);
 using IsItemTypeFn = int32_t (*)(Unit* item, int32_t type);
 using AbsorbFn = int64_t (*)(void* ctx, const uint8_t* entry, int32_t damage);
 using IsHirelingFn = int32_t (*)(Unit* monster);
+using UnitDataFlagFn = uint8_t (*)(Unit* unit);
 
 const D2RL::PluginContext* g_context = nullptr;
 AvoidCheckFn g_original = nullptr;
@@ -113,6 +115,7 @@ SetItemFlagFn g_setItemFlag = nullptr;
 IsItemTypeFn g_isItemType = nullptr;
 AbsorbFn g_absorbOriginal = nullptr;
 IsHirelingFn g_isHireling = nullptr;
+UnitDataFlagFn g_unitDataFlag = nullptr;
 int g_thinned = 0;
 int g_absorbed = 0;
 int g_logged = 0;
@@ -121,8 +124,9 @@ auto Matches(uint64_t base, uint64_t rva, const uint8_t* bytes, size_t size) noe
 	return std::memcmp(reinterpret_cast<const void*>(base + rva), bytes, size) == 0;
 }
 
-auto HasIndomitable(Game* game, Unit* unit) noexcept -> bool {
-	const uint32_t flag = d2r::DataFlag(game);
+// The data bank flag comes from the unit itself (0x34a0e0): the avoid check has no Game argument.
+auto HasIndomitable(Unit* unit) noexcept -> bool {
+	const uint32_t flag = g_unitDataFlag(unit);
 	if (d2r::api.getSkillRecord(flag, mxl_combat::SkillIndomitable) == nullptr) {
 		return false;
 	}
@@ -135,8 +139,8 @@ auto IsPlayerOrHireling(Unit* unit) noexcept -> bool {
 	return type == 0 || (type == 1 && g_isHireling(unit) != 0);
 }
 
-auto AvoidCheckHook(Game* game, Unit* defender, int32_t missile) -> int32_t {
-	const int32_t result = g_original(game, defender, missile);
+auto AvoidCheckHook(Unit* attacker, Unit* defender, int32_t missile) -> int32_t {
+	const int32_t result = g_original(attacker, defender, missile);
 	if (result == 0 || defender == nullptr || !IsPlayerOrHireling(defender)) {
 		return result;
 	}
@@ -147,8 +151,8 @@ auto AvoidCheckHook(Game* game, Unit* defender, int32_t missile) -> int32_t {
 	int32_t cap = 0;
 	if (result == mxl_combat::ResultBlock) {
 		value = g_blockChance(defender);
-		cap = mxl_combat::BlockCap(g_getStat(defender, mxl_combat::StatMaxBlock, 0),
-		                           value > mxl_combat::IndomitableBlock && HasIndomitable(game, defender));
+		cap = mxl_combat::BlockCapFor(g_getStat(defender, mxl_combat::StatMaxBlock, 0), value,
+		                              [defender] { return HasIndomitable(defender); });
 	} else if (const int32_t stat = mxl_combat::StatOfResult(result); stat != 0) {
 		value = g_getStat(defender, stat, 0);
 		cap = mxl_combat::AvoidCap(g_getStat(defender, mxl_combat::StatMaxAvoid, 0));
@@ -232,6 +236,7 @@ auto InstallCombat(const D2RL::PluginContext* context, char* report, size_t repo
 	g_getStat = reinterpret_cast<GetStatFn>(base + GetStatRva);
 	g_calcCode = reinterpret_cast<CalcCodeFn>(base + CalcCodeRva);
 	g_isHireling = reinterpret_cast<IsHirelingFn>(base + IsHirelingRva);
+	g_unitDataFlag = reinterpret_cast<UnitDataFlagFn>(base + UnitDataFlagRva);
 	const bool hooked = context->InstallInlineHook(AvoidCheckRva, AvoidCheckEntry, sizeof(AvoidCheckEntry),
 	                                               reinterpret_cast<void*>(&AvoidCheckHook),
 	                                               reinterpret_cast<void**>(&g_original));

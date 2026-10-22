@@ -1478,6 +1478,9 @@ def check_hiregates():
         "`req merc as <class>` over the backpack weapons / shields: %s" % ("; ".join(rows) if not bad else "; ".join(bad[:6])), [], rows)
 
 
+ETH_RATE = 0.026  # Median: rand(1000) <= 25
+
+
 def check_itemrolls():
     n1 = "Socket roll (quality 1-3): rand() % 7, clipped to the base"
     n2 = "Ethereal roll: 2.6%, +25% defence, 75% durability"
@@ -1518,8 +1521,9 @@ def check_itemrolls():
     avg_e = se / float(ne) if ne else 0
     ratio = avg_e / avg_n if avg_n else 0
     bad2 = []
-    if not 0.017 <= rate <= 0.036:
-        bad2.append("rate %.2f%% outside 1.7-3.6%% (Median 2.6%%, D2R 5%%)" % (rate * 100))
+    mean, sd = n * ETH_RATE, (n * ETH_RATE * (1 - ETH_RATE)) ** 0.5
+    if abs(eth - mean) > 4 * sd:
+        bad2.append("%d ethereal outside 4 sigma of Median's 2.6%% (%.0f +- %.0f; D2R's own would be 5%%)" % (eth, mean, 4 * sd))
     if ne and not 1.17 <= ratio <= 1.33:
         bad2.append("defence ratio %.2f (want 1.25; D2R 1.5)" % ratio)
     want_dur = dmax * 75 // 100
@@ -1529,6 +1533,25 @@ def check_itemrolls():
         "%d items at item level %s (ethereal count per base tried: %s): %d ethereal (%.2f%%); defence average %.1f -> %.1f (x%.2f); max durability %d -> %d..%d%s"
         % (n, m.group(3), ", ".join(tried), eth, rate * 100, avg_n, avg_e, ratio, dmax, emin, emax, ("; " + "; ".join(bad2)) if bad2 else ""),
         [], [line, d])
+    # quality 1 (low): D2R's own gate never lets it through, Median's roll does (qualities word2 = 25 for quality 1 too)
+    n3 = "Ethereal roll, quality 1 (low): 2.6%, +25%, 75% durability"
+    ok, line, _l = hv("itemroll %s 4000 q=1 ilvl=110" % (tried[-1].split()[0]), "itemroll", 120)
+    m3 = re.search(r"n=(\d+) failed=(\d+) ilvl=(\d+) ethereal=(\d+)", line)
+    d3 = next((l for l in _l if l.startswith("itemroll def")), "")
+    md3 = re.search(r"normal n=(\d+) sum=(\d+), ethereal n=(\d+) sum=(\d+); maxdur normal (\d+)\.\.(\d+), ethereal (\d+)\.\.(-?\d+)", d3)
+    if not (ok and m3 and md3):
+        return add(n3, "BLOCKED", "itemroll answered: %s" % _l[:2])
+    n_, e_ = int(m3.group(1)), int(m3.group(4))
+    mean, sd = n_ * ETH_RATE, (n_ * ETH_RATE * (1 - ETH_RATE)) ** 0.5
+    bad3 = []
+    if abs(e_ - mean) > 4 * sd:
+        bad3.append("%d ethereal outside 4 sigma of 2.6%% (%.0f +- %.0f)" % (e_, mean, 4 * sd))
+    dmax3 = int(md3.group(6))
+    if e_ and (int(md3.group(7)) != dmax3 * 75 // 100 or int(md3.group(8)) != dmax3 * 75 // 100):
+        bad3.append("ethereal max durability %s..%s (want %d)" % (md3.group(7), md3.group(8), dmax3 * 75 // 100))
+    add(n3, "PASS" if not bad3 and e_ >= 40 else "FAIL",
+        "%d items at item level %s: %d ethereal (%.2f%%), max durability %d -> %s..%s%s"
+        % (n_, m3.group(3), e_, 100.0 * e_ / n_, dmax3, md3.group(7), md3.group(8), ("; " + "; ".join(bad3)) if bad3 else ""), [], [line, d3])
 
 
 def check_dye():

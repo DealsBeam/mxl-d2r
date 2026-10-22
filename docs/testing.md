@@ -410,7 +410,7 @@ Twelve new checks in `tools/game_checks.py` (`py -3 tools/game_checks.py --slot 
 | Class-locked items (stat 492), players and mercenaries | `classlock` | PASS: locks 1-8 against 7 player classes and 3 merc types |
 | Hireling equip gates by class | `hiregates` | PASS: 4 hire classes, allowed / refused weapon and shield types as the lists |
 | Socket roll | `itemrolls` | PASS: 4000 items, 1/7 per socket count below the base maximum |
-| Ethereal roll + 25% | `itemrolls` | **FAIL / open**: 0 ethereal of 4000 (tower shield) and of 4000 (broad sword); hook B never reached. docs/bugs.md #25 |
+| Ethereal roll + 25% | `itemrolls` | PASS (0.51.0, lane ethereal-avoid): the harness had passed generator bit 2 (no ethereal); fixed. 4000 tower shields at item level 101: 102 ethereal (2.55%, Median 2.6%), defence x1.24, maximum durability 60 -> 45; quality 1 (low): 94 ethereal, 19 -> 14. Rate required within 4 sigma. docs/bugs.md #25 |
 | Dye colour (stat 368) | `dye` | PASS: bytes 0x00..0x14 for stat 1..21, undyed for 0 and negative |
 | Craft player flags by name | `craftflags` | PASS |
 | Craft per-game flags reset on game end | `gameend` | PASS: flag 50 set by recipe 7102, 0 in the next game, `games ended` 0 -> 1 |
