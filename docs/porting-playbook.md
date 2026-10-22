@@ -96,8 +96,9 @@ name list), the rule tables inside `txt_migrate.py`.
 ## 4. Strings, saves, test characters
 
 - Strings: **start with a D2RLoader string namespace** for the mod (`docs/strings.md`, `docs/strings-namespace.md`). Split
-  the mod's keys into those D2R's own files already have (group 1: keep native, the mod's text goes into complete copies
-  of D2R's string files, plain keys in table cells) and the rest (group 2: `<mod>:<key>` entries in
+  the mod's keys into those D2R's own files already have (group 1: the mod's text goes into `d2r:<key>` records without id in one override file, e.g. `lng/strings/<mod>/overrides.json`, one
+  record per key and only for keys D2R's `strings/` files have; never copies of D2R's files, an unqualified record of a namespaced
+  mod belongs to the mod's namespace; plain keys in table cells) and the rest (group 2: `<mod>:<key>` entries in
   `lng/strings/<mod>/*.json` without ids, `<mod>:<key>` in table cells, `@<mod>:<key>` in layouts). Never append the mod's
   own strings to D2R's files with new numeric ids: D2R has its own ids in the same range and they collide silently
   (bug #7). Fixed-size fields (`LevelWarp` 39, item index 31 characters) must hold the whole `namespace:key`: keep the

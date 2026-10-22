@@ -199,16 +199,24 @@ def rows_by(path: Path) -> tuple[list[str], dict[str, dict]]:
 
 
 def read_names(root: Path) -> dict[str, str]:
+    """Monster / NPC names by key. D2R's text comes from D2R's own monsters.json / npcs.json; the mod ships none, only
+    `d2r:<key>` overrides (medianxl/overrides.json, applied to the keys D2R has) and Median-only names in
+    medianxl/median.json (NameStr cells say `medianxl:<key>`, strings_ns.py)."""
     names: dict[str, str] = {}
     for f in ("monsters", "npcs"):
-        p = root / "data" / "local" / "lng" / "strings" / f"{f}.json"
-        if p.exists():
-            for e in load_json(p):
-                names[e["Key"]] = e["enUS"]
-    # Median-only names live in the `medianxl` namespace file; NameStr cells say `medianxl:<key>` (strings_ns.py)
-    ns = root / "data" / "local" / "lng" / "strings" / "medianxl" / "median.json"
-    if ns.exists():
-        for e in load_json(ns):
+        for base in (D2R, root):
+            p = base / "data" / "local" / "lng" / "strings" / f"{f}.json"
+            if p.exists():
+                for e in load_json(p):
+                    names[e["Key"]] = e["enUS"]
+    folder = root / "data" / "local" / "lng" / "strings" / "medianxl"
+    if (folder / "overrides.json").exists():
+        for e in load_json(folder / "overrides.json"):
+            key = e["Key"].removeprefix("d2r:")
+            if key in names:
+                names[key] = e["enUS"]
+    if (folder / "median.json").exists():
+        for e in load_json(folder / "median.json"):
             names.setdefault(e["Key"], e["enUS"])
     return names
 
