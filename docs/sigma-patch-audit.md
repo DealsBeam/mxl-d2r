@@ -77,10 +77,10 @@ All 767 functions and 2,027 patch sites of the patch tables are classified, in 3
 
 | Status | Rows | Functions | Patch sites |
 |---|---:|---:|---:|
-| ported | 57 | 99 | 183 |
+| ported | 58 | 100 | 187 |
 | data-equivalent | 24 | 168 | 259 |
 | D2R / D2RLoader does it | 39 | 71 | 163 |
-| **missing** | 54 | 96 | 158 |
+| **missing** | 53 | 95 | 154 |
 | not applicable | 108 | 300 | 1210 |
 | uncertain | 25 | 33 | 54 |
 | **total** | 307 | 767 | 2027 |
@@ -88,7 +88,7 @@ All 767 functions and 2,027 patch sites of the patch tables are classified, in 3
 | Module | ported | data-equivalent | D2R / D2RLoader does it | **missing** | not applicable | uncertain | total |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | D2Client | 56 | 193 | 29 | 31 | 477 | 4 | 790 |
-| D2Game | 101 | 31 | 106 | 113 | 146 | 45 | 542 |
+| D2Game | 105 | 31 | 106 | 109 | 146 | 45 | 542 |
 | D2Launch | 0 | 0 | 0 | 0 | 243 | 0 | 243 |
 | D2Multi | 0 | 0 | 0 | 0 | 196 | 0 | 196 |
 | D2Common | 26 | 33 | 19 | 14 | 36 | 5 | 133 |
@@ -119,7 +119,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 | 2 | [Sockets and automagic for every quality](#m2) | high | game1-009, game1-010 | overlap audit-rules (drops) |
 | 3 | [Player corpse on death](#m3) | high | game3-041 | row Player corpse (audit DC1) in unported.md; **lane no-corpse** owns it (branches `lane/no-corpse`, `t3/disable-player-corpses`); listed here for completeness. Also uncertain: the death penalty (game4-001) and the client respawn request (client3-035). |
 | 4 | [Cooldown reduction (stat 309) and shared cooldown groups](#m4) | high | client5-011, common2-015, common2-016, game4-039, game4-042 | overlap audit-rules: row "Skill cooldown groups (audit SK6)" (verify) covers the groups only; stat 309 is not in it |
-| 5 | [Damage-reduction stats 184 / 189 / 417 on incoming damage](#m5) | high | game6-009 | overlap audit-rules (stats) |
+| 5 | [Damage-reduction stats 184 / 189 / 417 on incoming damage](#m5) (**ported**, lane pa-damagered) | high | game6-009 | overlap audit-rules (stats) |
 | 6 | [Skill damage: level / energy bonus, static damage, mastery](#m6) | high | common2-003, common2-004, common2-013, common2-014 | overlap audit-rules (skills) |
 | 7 | [Skill usability: restrict modes 3-7](#m7) | high | common2-016 | overlap audit-rules (skills) |
 | 8 | [Mercenary revive price](#m8) | high | common1-019, game4-024, game4-026, game5-026 | overlap audit-rules (hirelings) |
@@ -178,8 +178,8 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 ### 5. Damage-reduction stats 184 / 189 / 417 on incoming damage
 
 * **Median** (game6-009): D2Game `0xdc4ea`: the call to the per-type mitigation step `6fcfbd00` goes through stub `0x1009b7e0` to `D2Combat_10057c10`. Stats 189 (divide), 184 (percent) and 417 (percent per damage type) cut the damage fields of every hit, and the lengths of freeze / stun / poison. `docs/subsystems/combat-stats.md` and `combat.cpp` called this function dead code.
-* **Port now:** Only the absorb step (`0x450670`) is hooked (verified); the damage fields are not reduced.
-* **To do:** Hook D2R's per-type damage application (next to the absorb hook) and apply the three stats to damage and durations. Check first what the replaced `6fcfbd00` did besides the stats.
+* **Port now (lane pa-damagered, off word `damagered`, verified in game by check `damagered`):** `combat.cpp` hooks D2R's per-type step `0x4523e0` (the twin of `6fcfbd00`). Nothing of the replaced step is lost: `0x10057c10` begins with the adapter `0x10041e00`, which calls the original `6fcfbd00` (import `0x101f1d44`), so flat reduction, resistance and absorb still run first; the stats then apply to the field that is left. Per defender stat, in this order, each on the updated field: **189** divisor: a damage field becomes `field / divisor` (truncating, no floor), a cold / freeze / poison length becomes `max(field >> 1, 5)`; **184** percent and **417** percent (layer = type: physical 0, fire 1, lightning 2, magic 3, cold 4, poison 5, leeches 6-8): damage fields only, `field - field * stat / 100`. A step needs its stat non-zero and the field above 0. The absorb credit is computed before them. Details: `subsystems/combat-stats.md` section 2.4.
+* **To do:** Nothing for the rule. Not run in game: monsters as defenders (the hook reads the defender whatever its type) and poison / leech entries (harness `hit` has them; the check covers fire, lightning, cold, magic, physical and the cold / freeze lengths).
 * **Overlap:** overlap audit-rules (stats)
 * **Impact:** high
 
@@ -338,7 +338,7 @@ Found while auditing; the first five are fixed in this change.
 
 | Doc | Said | Actually |
 |---|---|---|
-| `subsystems/combat-stats.md` 1.2 and section 2, `unported.md` "Absorb stats", `plugin/src/combat.cpp:33` (comment, left as is) | `D2Combat_10057c10` has no caller and is dead code | Live: stub `0x1009b7e0` calls it; D2Sigma patches D2Game rva `0xdc4ea` so it replaces the call to `6fcfbd00` in `SUnitDmg`. It applies stats 189 / 184 / 417 to the damage fields. Missing item 5. |
+| `subsystems/combat-stats.md` 1.2 and section 2, `unported.md` "Absorb stats", `plugin/src/combat.cpp:33` (comment, rewritten by lane pa-damagered) | `D2Combat_10057c10` has no caller and is dead code | Live: stub `0x1009b7e0` calls it; D2Sigma patches D2Game rva `0xdc4ea` so it replaces the call to `6fcfbd00` in `SUnitDmg`. It applies stats 189 / 184 / 417 to the damage fields. Ported as item 5 (lane pa-damagered). |
 | `subsystems/npc-hirelings.md` 2.4 row 8 and 11 | Mercenary revive cost is the same as D2R, nothing to do | D2Sigma replaces it (level x 100 up to 105, 250 x (level - 90)^1.5 above). Missing item 8. |
 | `subsystems/quests-requirements.md` 5c (quest 36) | Both reward sets are paid "exactly like D2Sigma on top of 1.13c's vanilla table" | D2Sigma nops the vanilla rune gift (29 bytes at D2Game `0x5cb50`); only Median's runes are paid. Missing item 10. |
 | `subsystems/areas-drlg.md` D2Landscape.cpp | The function plays a level's sound environment | It draws level backdrops (BlankScreen void, summit clouds). Missing item 21. |
@@ -513,7 +513,7 @@ Grouped by module, in address order. Long cells are cut; the complete text (what
 | game6-004, game6-008, game6-015 | `0xdafcb, 0xdc076, 0xde8f0 …` | SUnitDmg 6fcfaed0 / 6fcfc030 / 6fcfe8f0 (kill experience: range check, level-gap penalty,… | const 0x1900 -> 0x7d00 (party range); callfix thunk 0x1005e900 -> D2Experience_1005e830+0xd0 (penalty 0x1005e7b0); 6fcfe8f0 overwritten with E9 to th… | high: no party XP split, larger sharing range, Median's level-gap penalty | ported | plugin/src/items_ext.cpp + items_ext_logic.h (XpSharePercent); off words xp and partyxp; docs/subsystems/item… — Party half is multiplayer only and not run in game with two players (items-xp.md); listed in unported.md as v… |
 | game6-005 | `0xdb468, 0xdb46c` | SUnitDmg 6fcfb3c0 (resistance clamp for damage) | both immediates -> 0x5a = 90 | high: maximum effective resistance in damage calculation is 90 instead of 95 | ported | docs/unported.md 'Max resist cap' (verified); plugin/src/combat.cpp, combat_logic.h |
 | game6-006, game6-007 | `0xdb7a0, 0xdb7b4, 0xdb7c2 …` | SUnitDmg 6fcfb790 / 6fcfbd00 caller chain (avoid / dodge / evade checks, block chance, ab… | callfixes to D2Combat_10057f50 (-> 0x10056e20 avoid check with caps), 0x100573a0 (block chance), 0x10057f70 (-> 0x10057a20 absorb step with stats 189… | high: capped avoid / dodge / evade for players and mercs, Median block rules, absorb redu… | ported | plugin/src/combat.cpp + combat_logic.h (D2R 0x44ef70 avoid hook, 0x450070 block, 0x450670 absorb); docs/subsy… |
-| game6-009 | `0xdc180, 0xdc190, 0xdc4cd …` | SUnitDmg 6fcfc0b0 (apply a hit's damage per damage type to the defender) | callfix 0x10057f90 (-> 0x100577c0 damage percent, data driven); two pointers to D2Sigma table 0x101d8ea0; the 6fcfbd00 call is replaced by stub 0x100… | high: Median's damage reduction stats (184/189/417) also cut incoming damage and effect d… | **missing** | docs/subsystems/combat-stats.md 1.2 says 0x10057c10 'no caller ... dead code, not ported' and plugin/src/comb… — Documentation error: 0x10057c10 is live. Hint: hook D2R's per-type damage application (same place as the abso… |
+| game6-009 | `0xdc180, 0xdc190, 0xdc4cd …` | SUnitDmg 6fcfc0b0 (apply a hit's damage per damage type to the defender) | callfix 0x10057f90 (-> 0x100577c0 damage percent, data driven); two pointers to D2Sigma table 0x101d8ea0; the 6fcfbd00 call is replaced by stub 0x100… | high: Median's damage reduction stats (184/189/417) also cut incoming damage and effect d… | **ported** | plugin/src/combat.cpp `HitStepHook` on D2R 0x4523e0 (off word damagered), combat_logic.h `ReduceField`, check `damagered`; the replaced 6fcfbd00 still runs first (adapter 0x10041e00), the stats come on top. Earlier: docs/subsystems/combat-stats.md 1.2 said 'no caller ... dead code' — Documentation error: 0x10057c10 is live. Hint: hook D2R's per-type damage application (same place as the abso… |
 | game6-010, game6-012 | `0xdc7cd, 0xddb74` | SUnitDmg 6fcfc780 / 6fcfdac0 (monster/player defence value for hit chance) | callfix 0x10057f80 -> D2Combat_10057300 (difficulty dependent defence: monster row + difficulty, players -12/-25/-50) | medium: defence per difficulty | data-equivalent | difficultylevels.txt columns (docs/subsystems/combat-stats.md 1.2, row 0x10057300: done) |
 | game6-011, game6-024 | `0xdd054, 0xe22d2, 0xe22c3` | SUnitDmg 6fcfcf20 / 6fcfeee0 and caller 6fd02240 (monster killed / death handler) | callfix 0x10057930 (D2Combat) = kill hook (RecordDamage / goblin kill stamp etc.); 0xe22c3 callfix 0x1005c780 = result flags (D2Damage_1005c720) | high: Median's kill-time effects (goblin stamp, RecordDamage monsters, kill events) | ported | plugin/src/goblins.cpp (pre-hook on kill wrapper 0x515640); docs/subsystems/ubers-events.md; docs/subsystems/… — RecordDamage flag handling not separately verified in the plugin (grep found it only in docs/sigma-tables.md)… |
 | game6-013, game6-035, game6-036 | `0xddd74, 0xdddb0, 0xdddb9 …` | SUnitDmg 6fcfdcb0 and PlrSave2 hireling code 6fd0d960 / 6fd0db50 (mercenary hit / hirelin… | callfix D2Hirelings_10066c10 and 0x10067910 (Median's hireling class / level rules); packet callfix 0x100988c0 (Median client packet, classic format) | high: hireling stats and class bonuses | ported | plugin/src/hirelings.cpp (hook D2R 0x544f60); docs/subsystems/npc-hirelings.md 2.4; docs/subsystems/combat-st… — The classic packet part of 013 (0x100988c0) is n/a. Hireling rows in docs/unported.md still list some open it… |
