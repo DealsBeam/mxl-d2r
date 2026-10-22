@@ -7,11 +7,23 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
 
 - **Namespace name:** `medianxl`. `install_mod.py` writes `"namespace": "medianxl"` next to `schemaVersion` in
   `d2rloader/metadata.json`.
-- **Group 1, overrides (native, unchanged):** every key that exists in D2R's own string files
-  (`extract/d2r/93847/data/local/lng/{strings,strings-legacy}/*.json`). tbl2json keeps writing Median's text into
-  the complete copies of D2R's files, with D2R's numeric IDs. Table cells referencing them stay unqualified.
-- **Group 2, Median-only (namespaced):** every key that is not in D2R's files (today the 12,516 keys appended to
-  `item-modifiers.json` with IDs 28106..). They are written instead to
+- **Group 1, overrides (`d2r:` records):** every key that exists in D2R's own string files
+  (`extract/d2r/93847/data/local/lng/{strings,strings-legacy}/*.json`). **Once the mod has a namespace an unqualified
+  record in the mod's `strings/*.json` belongs to `medianxl`, not to `d2r`** (found in game by ns-verify: Median's "Sprint"
+  sat at `medianxl:CfgRun` while `d2r:CfgRun` still read "Run"). Median's text for a D2R key is therefore a record
+  `{"Key": "d2r:<key>", <13 languages>}` with no `id`, in one dedicated file,
+  `work/mod/data/local/lng/strings/medianxl/overrides.json` (lane ns-fix-overrides). The mod ships **no copy of D2R's string
+  files**: they load from the game as usual. Rules (tbl2json, enforced by validate.py):
+  - one record per key; the loader refuses to start when a key is defined twice in the package (both string folders
+    are one package);
+  - only keys whose text changes (Median's text equals D2R's: no record);
+  - only keys of D2R's `strings/` files, the set the loader knows as `d2r:<key>`. The loader rejects an override of
+    an unknown key. A key that exists only in `strings-legacy/` (14 keys, e.g. `strBnetCDKeyInUse`) is skipped and
+    listed in `strings_report.md`;
+  - keys whose printf placeholders differ from D2R's keep D2R's text (bug #12), listed in `strings_report.md`.
+  Table cells referencing them stay unqualified (= `d2r:`).
+- **Group 2, Median-only (namespaced):** every key that is not in D2R's files (12,516 keys; they used to be appended to
+  `item-modifiers.json` with IDs 28106..). They are written to
   `work/mod/data/local/lng/strings/medianxl/median.json` as `{"Key": "<key>", "enUS": ..., <all 13 languages>}`,
   **no `id`**. Their full key is `medianxl:<key>`; the key text itself does not change.
 - **Key list:** tbl2json writes `work/mod/strings_namespace.json`: `{"namespace": "medianxl", "keys": [<group 2 keys>]}`.
@@ -19,18 +31,28 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
   way: key not in D2R's files).
 - **Table cells:** every localization cell (namestr, NameStr, LevelName, LevelWarp, EntryFile, str name / short /
   long / alt, descstrpos / descstrneg / descstr2, dgrpstr*, and any other string-key column) that names a group 2
-  key is written as `medianxl:<key>` by txt_migrate, in both banks. Unqualified cells always mean `d2r:`.
+  key is written as `medianxl:<key>` by txt_migrate, in both banks. Unqualified cells always mean `d2r:`. This includes
+  numeric cells: Median's item names are keys such as `704` (group 2); an unqualified `704` names `d2r:704`, which does
+  not exist (the item showed "an evil force"). validate.py fails on an unqualified numeric group-2 cell.
+- **Item references:** cubemain `input N` / `output [b c]` and treasureclassex `Item N` name a unique / set item by its
+  index. The index cell reads `medianxl:<key>`, so the reference is written the same way (`medianxl:HotTJ`,
+  `"medianxl:HotTJ,qty=2"`; `strings_ns.qualify_reference`). An unqualified name matches no item: the recipe's input
+  matched anything and the wrong recipe fired (goldcraft ran recipe 4555 instead of 6327), and a treasure class entry
+  dropped nothing (the Summoner / Izual catalysts). validate.py fails on an unqualified reference to a Median-only
+  index, and on a `medianxl:` reference that no index cell reads like.
 - **Layouts (HD JSON):** a reference to a group 2 key is written `@medianxl:<key>`.
 - **Plugin / ID map:** `strings_idkeys.json` maps each Median string ID to its full key (`medianxl:<key>` for group 2).
   Code that hands D2R a numeric string ID for a group 2 string must get that number from the loader at run time
-  (research lane `ns-research`); if the loader gives no stable number, the string stays native (group 1 style, fixed
-  ID) and is listed in "Exceptions" below.
+  (research lane `ns-research`). A string cannot stay native with a fixed ID any more: an unqualified record of the
+  namespaced mod is a `medianxl:` record and its `id` is ignored (see "Exceptions" below).
 - **Validator:** validate.py fails on any unqualified cell or layout reference to a group 2 key, and on a
   `medianxl:` reference to a key that is not in the namespace file.
 
 ## Exceptions (strings that must stay native with a fixed ID)
 
-(filled in by ns-research / ns-plugin; the list itself is `tools/strings_native.json`, read by tbl2json, txt_migrate and validate)
+None, and none possible: with the namespace on, an unqualified record is a `medianxl:` record and its `id` is ignored, so
+there is no native record with a fixed ID. `tools/strings_native.json` stays empty; tbl2json and validate.py fail on a
+key in it. (The text below is the history of the exceptions that existed before the short aliases.)
 
 - **Cells that cannot hold `medianxl:<key>`: short aliases (ns-longnames).** Fixed-size text fields must hold the whole
   `namespace:key` (`LOCALIZATION.md`): `levels.LevelWarp` 39 characters, `uniqueitems.index` and `setitems.index` 31.
@@ -43,8 +65,8 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
     and `strings_ns.write_aliases` adds an alias record with the same 13 texts to both `median.json` files and to
     `strings_namespace.json`. The long key stays defined (idkeys, the plugin's key lookups).
   - Every localization cell that names the key becomes `medianxl:<alias>` (uniqueitems / setitems `index`, levels
-    `LevelWarp`, misc `spelldescstr`); every plain reference to the key (cubemain input / output, treasureclassex
-    `ItemN`) becomes the bare alias, which is what a unique / set item's `index` now reads as. The pictures
+    `LevelWarp`, misc `spelldescstr`); every reference to the key (cubemain input / output, treasureclassex
+    `ItemN`) becomes `medianxl:<alias>` too, exactly what the unique / set item's `index` reads. The pictures
     (`item_hd.py`: `uniques.json` / `sets.json` keyed on the plain index) therefore use `mxlname_<n>` too. Median's
     text is not touched: the displayed name is the alias record's text.
   - In game (slot 3, background mode, `py -3 tools/game_checks.py --slot 3 all nslong`, run
@@ -53,13 +75,31 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
     (index cell `medianxl:mxlname_16`) shows **"SUNSTONE OF THE TWIN SEAS"** as its ground label (Alt held through the
     plugin's virtual modifier block). Not read in game: the set item (the harness cannot create a set quality item, `uniq=`
     forces unique) and the level warp text on screen; no tooltip is drawn in background mode.
-  - validate.py fails when any cell is longer than its field (with the prefix), when a plain reference still names a
-    long key that has an alias, and when an alias is missing from the namespace list. `tools/strings_native.json` is
+  - validate.py fails when any cell is longer than its field (with the prefix), when a reference still names a
+    long key that has an alias (unqualified), and when an alias is missing from the namespace list. `tools/strings_native.json` is
     empty again; add a key there only for a string the plugin must give D2R as a fixed numeric ID.
 - Range columns (`hireling.NameFirst` / `NameLast`: every string ID from the first to the last is a name) cannot name a
   namespaced key; they hold D2R keys only, validate.py fails otherwise.
 - **Plugin:** none from the plugin. The plugin does not need a loader-assigned number: it gives D2R ids of its own (below), so every
 Median-only string can stay namespaced. (`tools/strings_native.json` stays empty on the plugin's account.)
+
+## strings-legacy/ (decision of lane ns-fix-overrides)
+
+- The `d2r:` overrides are **not** written to `strings-legacy/`. Only `strings/medianxl/overrides.json` has them. The
+  loader refuses to start on a key defined twice in a package, and ns-verify found that it reads the legacy folder
+  together with the other one; a second copy of the overrides there would be the very duplicate to avoid.
+- `strings-legacy/medianxl/median.json` stays, a mirror of the namespace file as before (tbl2json, `strings_ns.write_aliases`
+  keep the alias records in step), in case classic graphics mode reads text from there.
+- Measured in game (slot 1, HD mode, run `checks-20261022-173158-s1`, probe script): with the same `d2r:CfgRun` record in both
+  folders the game starts and shows `strings/`'s text ("Sprint", not the legacy marker); a `d2r:` record only in
+  `strings-legacy/` for a key `strings/` lacks (`strBnetCDKeyInUse`) is ignored (lookup result 3, no text, no error). So in HD
+  mode the legacy folder is not read and a duplicate across the folders is harmless there.
+- **Untested:** classic graphics mode. A game started in classic mode was not available through the harness (the string tables are
+  read at start, the `G` toggle does not reload them), so what classic mode reads from `strings-legacy/` is unknown: if it reads
+  only that folder, D2R keys show D2R's own text there (not Median's) and the `medianxl:` strings come from the mirror. If that
+  turns out to be wrong, the fix is a `d2r:` copy of the overrides in `strings-legacy/medianxl/` and a loader check of
+  whether it counts as a duplicate. validate.py fails on a `d2r:` record in `strings-legacy/` until then.
+- 14 D2R keys exist only in `strings-legacy/` (e.g. `strBnetCDKeyInUse`); none is a key Median overrides.
 
 ## Generated plugin headers and layouts (ns-ui)
 

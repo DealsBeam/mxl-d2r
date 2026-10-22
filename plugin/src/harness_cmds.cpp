@@ -422,7 +422,7 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	PrintMissiles(c);
 	int mons = 0;
 	EachUnit(c->game, HashMonsters, [&](Unit* u) {
-		if (TypeOf(u) == 1 && IsAlive(u) && DistTo(p, u) < 40 && mons < 12) {
+		if (TypeOf(u) == 1 && IsAlive(u) && DistTo(p, u) < 40 && mons < 60) {
 			++mons;
 			Out("mon id=%u class=%d mode=%d dist=%.0f npc=%d life=%d/%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u),
 			    Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(u)) != nullptr ? 1 : 0, Stat(u, StatLife) >> 8, Stat(u, 7) >> 8);
@@ -1812,10 +1812,11 @@ auto FlagsOf(Unit* item) noexcept -> uint32_t {
 	return data != nullptr ? d2r::At<uint32_t>(data, ItemFlagsOffset) : 0;
 }
 
-// `hit <target ref> phys|fire|ltng|magic|cold <amount> [attacker ref]`: one hit of that damage through D2R's hit and apply
+// `hit <target ref> phys|fire|ltng|magic|cold <amount> [attacker ref] [stagger]`: one hit of that damage through D2R's hit and apply
 // steps (0x44ce80, 0x44a9b0; the same pair the area damage hook uses), so the resist step 0x4523e0 and the absorb step
 // 0x450670 run. The amount goes into the damage block's field as is. Attacker: the player; for the player as target the
-// nearest live monster (else the player itself).
+// nearest live monster (else the player itself). `stagger` sets the result flag 4 (hit recovery) between the two steps, so the
+// target enters its GetHit mode even when its hit recovery would not (bosses): the monster's last-mode field then reads 3 after it.
 auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	struct Elem {
 		const char* name;
@@ -1825,7 +1826,7 @@ auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	static const Elem elems[] = {{"phys", 0x18, 0}, {"fire", 0x20, 0x20}, {"ltng", 0x2c, 0x40}, {"magic", 0x30, 0}, {"cold", 0x34, 0x30}};
 	long long amount = 0;
 	if (t.n < 4 || !hcmd::ParseInt(t.tok[3], &amount) || amount < 0) {
-		return Fail(c, "usage: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker ref]");
+		return Fail(c, "usage: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker ref] [stagger]");
 	}
 	const Elem* elem = nullptr;
 	for (const Elem& e : elems) {
@@ -1837,8 +1838,14 @@ auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (elem == nullptr || target == nullptr) {
 		return Fail(c, "hit: unknown element or target (%s)", t.tok[1]);
 	}
+	bool stagger = false;
+	int n = t.n;
+	if (n > 4 && hcmd::LowerEq(t.tok[n - 1], "stagger")) {
+		stagger = true;
+		--n;
+	}
 	Unit* attacker = nullptr;
-	if (t.n > 4) {
+	if (n > 4) {
 		attacker = ResolveRef(c, t.tok[4]);
 	} else if (target == c->player) {
 		attacker = NearestMonster(c, -1, false);
@@ -1861,6 +1868,9 @@ auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	}
 	const int32_t before = Stat(target, StatLife);
 	Fn<HitUnitFn>(RvaHitUnit)(c->game, attacker, target, 1, d.b);
+	if (stagger) {
+		DmgField<uint16_t>(d, 0x04) |= 4;
+	}
 	Fn<ApplyDamageFn>(RvaApplyDamage)(c->game, attacker, target, d.b);
 	const int32_t after = Stat(target, StatLife);
 	Out("hit target=%s elem=%s amount=%lld life=%d->%d lost=%d absorbed=%d result=0x%x", t.tok[1], elem->name, amount, before, after,
@@ -2129,7 +2139,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
-	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] | avoid <ref> melee|missile|evade [n] | "
+	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | stat merc|mon:<id> <stat>");
 	return true;
 }

@@ -234,6 +234,9 @@ class Validator:
     def check_localization(self, table: str, col: str, row: str, v: str, typ) -> None:
         """A localization cell: unqualified = D2R's `d2r:` string, `medianxl:<key>` = Median-only string."""
         if strings_ns.NUMERIC.fullmatch(v):
+            if v in self.group2 and not strings_ns.is_range_column(table, col):
+                self.add("error", table, col, "unqualified numeric cell names a Median-only (group 2) string; it must be "
+                         f"{strings_ns.PREFIX}{v}", row, v)
             return
         limit = typ.get("dataLength") if isinstance(typ, dict) else None
         ns, key = strings_ns.split_key(v)
@@ -343,37 +346,78 @@ class Validator:
             self.check_table(t)
         self.engine_rules()
         self.native_exceptions()
+        self.string_package()
         self.alias_refs(names)
 
     def alias_refs(self, names: set[str]) -> None:
-        """A key with a short alias (its medianxl:<key> did not fit a fixed-size field) is named by the alias everywhere:
-        a plain reference (cubemain input / output, treasure class item) to the long key would match no unique / set
-        item, since their index cell holds the alias. Aliases must also be defined in the namespace list."""
+        """Aliases must be defined in the namespace list; every cubemain input / output and treasureclassex item that
+        names a unique / set item by its index reads exactly as that index cell does (`medianxl:<key>` or
+        `medianxl:<alias>` for a Median-only name): the engine matches the text, an unqualified `HotTJ` names no item
+        (the recipe's input matches anything, the wrong recipe fires) and a name with a short alias must use the alias."""
         for k, a in self.aliases.items():
             if a not in self.group2:
                 self.add("error", "strings", "Key", f"alias of '{k}' is not in the namespace list", "-", a)
-        if not self.aliases:
-            return
+        indexes = set()
+        for t in ("uniqueitems", "setitems"):
+            indexes |= self.data.values(t, "index") or set()
+        bare = {x.removeprefix(strings_ns.PREFIX) for x in indexes if x.startswith(strings_ns.PREFIX)}
         for t in sorted(names):
             tab = self.data.table(t)
-            if not tab:
+            if not tab or t not in strings_ns.REFERENCE_COLUMNS:
                 continue
             header, rows = tab
+            cols = [ci for ci, c in enumerate(header) if strings_ns.is_reference(t, c)]
             for r in rows:
-                for ci, v in enumerate(r):
-                    if v and strings_ns.retarget(v, self.aliases) != v:
-                        self.add("error", t, header[ci] if ci < len(header) else str(ci),
-                                 "names the long key of a string that has a short alias; it must name the alias",
+                for ci in cols:
+                    v = r[ci].strip() if ci < len(r) else ""
+                    if not v:
+                        continue
+                    name = strings_ns.reference_name(v)
+                    if name.startswith(strings_ns.PREFIX):
+                        if name not in indexes:
+                            self.add("error", t, header[ci], "names no unique / set item (no index cell reads like this)",
+                                     r[0] if r else "-", v)
+                    elif name in bare or name in self.aliases:
+                        self.add("error", t, header[ci], "names a Median-only unique / set item without the namespace; "
+                                 f"it must be {strings_ns.PREFIX}<key> (or the alias for a key with a short alias)",
                                  r[0] if r else "-", v)
 
     def native_exceptions(self) -> None:
-        """Keys kept native because their cell cannot hold medianxl:<key> must exist in the native string files."""
-        native = set()
-        for p in (MOD / "local" / "lng" / "strings").glob("*.json"):  # not the namespace folder
-            native |= {e["Key"] for e in json.loads(p.read_text("utf-8-sig")) if isinstance(e, dict) and "Key" in e}
-        for k in sorted(self.native - native):
-            self.add("error", "strings", "Key", "native exception (tools/strings_native.json) is not in the native "
-                     "string files", "-", k)
+        """No key can stay native with a fixed id any more: in a namespaced mod an unqualified record is a `medianxl:`
+        record and its id is ignored (docs/strings-namespace.md), so tools/strings_native.json must be empty."""
+        for k in sorted(self.native):
+            self.add("error", "strings", "Key", "native exception (tools/strings_native.json): an unqualified record of a "
+                     "namespaced mod is a medianxl: record, its id is ignored", "-", k)
+
+    def string_package(self) -> None:
+        """The mod's string files as the loader reads them: a full key defined twice in the package refuses the start
+        (checked per folder: strings-legacy/ only mirrors median.json and HD mode does not read it, docs/strings.md);
+        a `d2r:<key>` override needs a key D2R's strings/ files have (the loader rejects others, e.g. keys that exist
+        only in strings-legacy/); an unqualified record belongs to the mod's namespace, not to `d2r:`. A `d2r:` record in
+        strings-legacy/ is an error: it would repeat a key of strings/medianxl/overrides.json."""
+        known = set(strings_ns.d2r_loaded())
+        for folder in ("strings", "strings-legacy"):
+            seen: dict[str, str] = {}
+            for p in sorted((MOD / "local" / "lng" / folder).rglob("*.json")):
+                where = p.relative_to(MOD / "local" / "lng").as_posix()
+                for e in json.loads(p.read_text("utf-8-sig")):
+                    if not isinstance(e, dict) or "Key" not in e:
+                        continue
+                    key = e["Key"]
+                    ns, bare = strings_ns.split_key(key)
+                    full = key if ns else strings_ns.PREFIX + key
+                    if full in seen:
+                        self.add("error", "strings", "Key", f"defined twice in the package ({seen[full]} and {where})", "-", full)
+                    seen[full] = where
+                    if ns == "d2r" and folder == "strings-legacy":
+                        self.add("error", "strings", "Key", f"`d2r:` record in strings-legacy/ ({where}): it repeats a key "
+                                 "of strings/ (docs/strings.md)", "-", key)
+                    if ns == "d2r" and bare not in known:
+                        self.add("error", "strings", "Key", f"`d2r:` override of a key D2R's strings/ files do not have ({where})",
+                                 "-", key)
+                    if not ns and "id" in e:
+                        self.add("error", "strings", "Key", f"unqualified record with an id ({where}): it defines "
+                                 f"medianxl:{key}, not D2R's {key}; an override is `d2r:{key}` without id", "-", key)
 
     def engine_rules(self) -> None:
         """Rules D2R asserts on at load time that the field schema does not express."""
@@ -393,7 +437,7 @@ class Validator:
                     continue
                 for i, r in enumerate(rows):
                     v = r[ci].strip() if ci < len(r) else ""
-                    name = v.strip('"').split(",", 1)[0]
+                    name = v.strip('"').split(",", 1)[0].removeprefix(strings_ns.PREFIX)  # a unique / set item: medianxl:<key>
                     if name and name not in known and not AUTO_TC.match(name):
                         self.add("error", "treasureclassex", c, "not an item, item type, treasure class, unique or set item", r[0], v)
                     elif pos.get(name, -1) > i:
@@ -509,11 +553,8 @@ class Validator:
     _string_ids: dict | None = None
 
     def string_ids(self) -> dict[str, int]:
-        if self._string_ids is None:
-            self._string_ids = {}
-            for p in (MOD / "local" / "lng" / "strings").glob("*.json"):
-                for e in json.loads(p.read_text("utf-8-sig")):
-                    self._string_ids.setdefault(e["Key"], e["id"])
+        if self._string_ids is None:  # D2R's ids (the mod ships no native string file)
+            self._string_ids = {k: recs[0]["id"] for k, recs in strings_ns.d2r_loaded().items()}
         return self._string_ids
 
 

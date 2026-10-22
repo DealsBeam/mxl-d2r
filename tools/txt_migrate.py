@@ -647,10 +647,7 @@ class Migrator:
         import stat_screen
         wanted = set(stat_screen.advanced_stat_rows())
         always = set(stat_screen.ALWAYS_LISTED)
-        texts: dict[str, str] = {}  # string key -> enUS, from the files tbl2json.py wrote
-        for f in (OUT / "data" / "local" / "lng" / "strings").rglob("*.json"):  # incl. medianxl/median.json
-            for e in json.loads(f.read_text("utf-8-sig")):
-                texts[e.get("Key", "")] = e.get("enUS", "")
+        texts = strings_ns.effective_texts()  # key -> enUS: D2R's text with Median's overrides, and Median's own keys
         found: set[str] = set()
         fixed = 0
         for bank in ("base", ""):
@@ -949,15 +946,15 @@ class Migrator:
         """D2Sigma's item spells 13 and 21 (arcane shards, catalysts, oils, ...) only show a help panel on right-click
         (packet 0x27 with the item's spelldescstr; D2R has no such packet). item_spells sets spelldesc 1 so D2R shows
         the text in the tooltip instead; here the panel's leading layout number line ("90\\n") is dropped from those
-        strings (both string folders, every language)."""
+        strings (every language; a D2R key through its `d2r:<key>` override record)."""
         lead = re.compile(r"^\s*\d+\s*\n")
         n = 0
         for folder in ("strings", "strings-legacy"):
-            for p in sorted((OUT / "data" / "local" / "lng" / folder).rglob("*.json")):  # incl. medianxl/median.json
+            for p in sorted((OUT / "data" / "local" / "lng" / folder).rglob("*.json")):  # medianxl/{median,overrides}.json
                 recs = json.loads(p.read_text("utf-8-sig"))
                 changed = False
                 for e in recs:
-                    if e.get("Key") in self.help_keys:
+                    if e.get("Key", "").removeprefix(strings_ns.D2R_PREFIX) in self.help_keys:
                         for lang, text in e.items():
                             if lang not in ("id", "Key") and isinstance(text, str) and lead.match(text):
                                 e[lang] = lead.sub("", text, count=1)
@@ -1851,7 +1848,11 @@ class Migrator:
 
         A key whose `medianxl:<key>` does not fit the field of one of its cells (uniqueitems / setitems index, levels
         LevelWarp: strings_ns "short aliases") gets an alias `mxlname_<n>`; the alias replaces the key in every cell
-        that names it, localization cells and plain references (cubemain, treasureclassex) alike."""
+        that names it, localization cells and references alike.
+
+        A unique / set item is named by its index in cubemain inputs / outputs and treasureclassex items. The index
+        cell reads `medianxl:<key>` now, so those references are qualified the same way (strings_ns.qualify_reference):
+        an unqualified name matches no item."""
         group2 = strings_ns.load_group2()
         self.prefixed: Counter = Counter()
         self.retargeted: Counter = Counter()
@@ -1870,6 +1871,7 @@ class Migrator:
 
         # which keys do not fit
         long_keys = set()
+        item_names = set()  # Median-only indexes of uniqueitems / setitems
         for _bank, path in files:
             if path.stem not in strings_ns.LOCALIZATION:
                 continue
@@ -1879,6 +1881,8 @@ class Migrator:
                 lim = limit(path.stem, header[i])
                 for line in lines[1:]:
                     cells = line.split("\t")
+                    if i < len(cells) and cells[i] in group2 and path.stem in ("uniqueitems", "setitems"):
+                        item_names.add(cells[i])
                     if lim and i < len(cells) and cells[i] in group2 and len(strings_ns.PREFIX + cells[i]) > lim:
                         long_keys.add(cells[i])
         self.aliases = strings_ns.plan_aliases(long_keys)
@@ -1893,18 +1897,19 @@ class Migrator:
             lines = path.read_bytes().decode("utf-8").split("\r\n")
             header = lines[0].split("\t")
             cols = loc_columns(table, header) if table in strings_ns.LOCALIZATION else []
+            refs = {i for i, c in enumerate(header) if strings_ns.is_reference(table, c)}
             changed = False
             for n in range(1, len(lines)):
-                if not cols and not any(k in lines[n] for k in self.aliases):
-                    continue
+                if not cols and not refs:
+                    break
                 cells = lines[n].split("\t")
                 if cells[0] == "Expansion":
                     continue
                 for i, cell in enumerate(cells):
                     if i in cols:
                         new = strings_ns.qualify(cell, group2, self.aliases)
-                    elif cell and any(cell.lstrip('"').startswith(k) for k in self.aliases):
-                        new = strings_ns.retarget(cell, self.aliases)
+                    elif i in refs and cell:
+                        new = strings_ns.qualify_reference(cell, item_names, self.aliases)
                     else:
                         continue
                     if new != cell:
@@ -2128,10 +2133,10 @@ def main() -> int:
         m.report += ["", "## Short aliases (the key does not fit its fixed-size field, tools/strings_ns.py)", "",
                      "| Key | Alias |", "|---|---|"]
         m.report += [f"| {k} | `{strings_ns.PREFIX}{a}` |" for k, a in m.aliases.items()]
-        m.report += ["", "Reference cells rewritten to the bare alias:", "", "| Table | Column | rotw bank | base bank |",
-                     "|---|---|---|---|"]
-        for t, c in sorted({(t, c) for (_b, t, c) in m.retargeted}):
-            m.report.append(f"| {t} | {c} | {m.retargeted[('rotw', t, c)]} | {m.retargeted[('base', t, c)]} |")
+    m.report += ["", "Reference cells (unique / set item names) written as `medianxl:<key>`:", "",
+                 "| Table | Column | rotw bank | base bank |", "|---|---|---|---|"]
+    for t, c in sorted({(t, c) for (_b, t, c) in m.retargeted}):
+        m.report.append(f"| {t} | {c} | {m.retargeted[('rotw', t, c)]} | {m.retargeted[('base', t, c)]} |")
     m.report += ["", "## Overflow: Median values with no D2R column (kept in work/mod/overflow/<table>.txt)", ""]
     for t, (cols, n) in sorted(m.overflow.items()):
         m.report.append(f"- **{t}** ({n} rows): " + ", ".join(f"{c} ({m.dropped[t][c]})" for c in cols))

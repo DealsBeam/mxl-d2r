@@ -2,10 +2,10 @@
 
 Input:  extract/mxl/data/local/lng/eng/{string,expansionstring,patchstring}.tbl (tools/mpq_extract.py)
         extract/d2r/<build>/data/local/lng/{strings,strings-legacy}/*.json (tools/casc_extract.py)
-Output: work/mod/data/local/lng/strings/*.json and strings-legacy/*.json (complete copies of D2R's native
-        files: a mod's string file replaces the game's file), plus strings/medianxl/median.json and
-        strings-legacy/medianxl/median.json (Median-only keys, namespace "medianxl", no ids),
-        work/mod/strings_namespace.json, work/mod/strings_idkeys.json, strings_report.md
+Output: work/mod/data/local/lng/strings/medianxl/overrides.json (Median's text for D2R's own keys, records
+        {"Key": "d2r:<key>", 13 languages}, no id, one per key) and strings/medianxl/median.json (Median-only keys,
+        namespace "medianxl", no ids; mirrored to strings-legacy/medianxl/median.json), work/mod/strings_namespace.json, work/mod/strings_idkeys.json, strings_report.md.
+        D2R's own string files are not copied: they load from the game.
 
 String IDs: string.tbl index, patchstring 10000 + index, expansionstring 20000 + index (what D2Sigma's tables
 and code use). Rules:
@@ -13,15 +13,17 @@ and code use). Rules:
     "mxl_<id>". Numeric keys ("115" = "Axe (1)") are unique and used by item namestr cells, so they stay.
     strings_idkeys.json maps every Median ID to its final key.
   * A key in several tables: patchstring wins over expansionstring over string (1.13c lookup order).
-  * Group 1: keys D2R already has are overridden (every occurrence, every file) unless the two texts' printf
-    placeholders differ: D2R formats some strings itself (e.g. sysmsg7-9, the "was slain by" fragments it
-    joins to names and then passes through sprintf), so a Median "%s" there reads a missing argument and
-    crashes the game. Those keys keep D2R's text (listed in strings_report.md). Table cells keep plain keys (= d2r:).
+  * Group 1: keys D2R already has are overridden by `d2r:<key>` records in medianxl/overrides.json (once the mod has
+    a namespace an unqualified record would define `medianxl:<key>` instead). Only keys of D2R's strings/ files (the set
+    the loader knows) whose text changes are written, unless the two texts' printf placeholders differ: D2R formats some
+    strings itself (e.g. sysmsg7-9, the "was slain by" fragments it joins to names and then passes through sprintf), so
+    a Median "%s" there reads a missing argument and crashes the game. Those keys keep D2R's text. Skipped keys are
+    listed in strings_report.md. Table cells keep plain keys (= d2r:).
   * Group 2: every other key goes to the D2RLoader namespace "medianxl" (docs/strings-namespace.md): median.json,
     {"Key", 13 languages}, no id, so no numeric ID can collide with D2R's again (bug #7). The full key is
     "medianxl:<key>"; strings_namespace.json lists them, strings_idkeys.json maps IDs to the full key.
-  * Exceptions: group 2 keys listed in tools/strings_native.json (or NATIVE_EXCEPTIONS) stay native instead: appended
-    to item-modifiers.json with a fixed ID below 65536 (free 16-bit value after D2R's highest), plain key in the idkeys.
+  * No native exceptions: tools/strings_native.json must stay empty (an unqualified record of a namespaced mod is a
+    medianxl: record and its id is ignored); keys too long for a cell get short aliases in txt_migrate.
   * Median ships English only. By default its text fills every language (otherwise other clients would show
     vanilla wording that contradicts Median); --english-only changes enUS alone.
 
@@ -41,12 +43,11 @@ D2R_LNG = ROOT / "extract" / "d2r" / "93847" / "data" / "local" / "lng"
 OUT = ROOT / "work" / "mod"
 TABLES = (("string", 0), ("patchstring", 10000), ("expansionstring", 20000))
 PRECEDENCE = ("patchstring", "expansionstring", "string")  # first wins for duplicate keys
-NEW_KEYS_FILE = "item-modifiers.json"  # native home of the exceptions (group 2 keys that keep a fixed numeric ID)
 NAMESPACE = "medianxl"  # install_mod.py writes the same name to d2rloader/metadata.json
 NAMESPACE_FILE = "median.json"
-# Keys that must stay native with a fixed ID: the plugin hands D2R a numeric string ID for them. Add them to
-# tools/strings_native.json ({"keys": [...]}, docs/strings-namespace.md "Exceptions") or to this set.
-NATIVE_EXCEPTIONS: set[str] = set()
+OVERRIDE_FILE = "overrides.json"  # `d2r:<key>` records: Median's text for D2R's own keys
+D2R_PREFIX = "d2r:"
+NATIVE_EXCEPTIONS: set[str] = set()  # see load_exceptions()
 EXCEPTIONS_FILE = ROOT / "tools" / "strings_native.json"
 LANGS = ["enUS", "zhTW", "deDE", "esES", "frFR", "itIT", "koKR", "plPL", "esMX", "jaJP", "ptBR", "ruRU", "zhCN"]
 
@@ -148,67 +149,67 @@ def main() -> int:
     folders = {f: {p.name: json.loads(p.read_text("utf-8-sig")) for p in sorted((D2R_LNG / f).glob("*.json"))}
                for f in ("strings", "strings-legacy") if (D2R_LNG / f).exists()}
     d2r_keys = {e["Key"] for files in folders.values() for recs in files.values() for e in recs}
+    # What the loader knows as `d2r:<key>`: the records of D2R's strings/ files (a few keys exist in strings-legacy/ only).
+    # A key may repeat in D2R's own files (126 do); an override has to agree with every record.
+    loaded: dict[str, list[dict]] = {}
+    for recs in folders["strings"].values():
+        for e in recs:
+            loaded.setdefault(e["Key"], []).append(e)
 
-    # Group 2 = Median-only keys (not in D2R's files): namespaced, no numeric IDs (docs/strings-namespace.md). The
-    # exceptions are group 2 keys the plugin needs as a fixed native ID; they stay appended to NEW_KEYS_FILE with an
-    # ID below 65536 (D2R matches string IDs by their low 16 bits, bug #7: Median's 262189 "ArcaneApe" answered for
-    # 45), after D2R's own and skipping every 16-bit value in use.
-    wanted = load_exceptions()
-    exceptions = sorted(k for k in wanted if k in texts and k not in d2r_keys)
-    for k in sorted(wanted - set(exceptions)):
-        print(f"tbl2json: exception {k!r} is not a Median-only key, ignored")
-    group2 = [k for k in texts if k not in d2r_keys and k not in exceptions]
-    all_ids = [e["id"] for files in folders.values() for recs in files.values() for e in recs]
-    used16 = {i & 0xffff for i in all_ids}
-    next_id = max(i for i in all_ids if i < 0x10000) + 1
-    exc_ids: dict[str, int] = {}
-    for k in exceptions:
-        while next_id in used16:
-            next_id += 1
-        if next_id > 0xffff:
-            raise SystemExit("tbl2json: more native exceptions than free 16-bit string IDs")
-        exc_ids[k] = next_id
-        used16.add(next_id)
+    # Group 2 = Median-only keys (not in D2R's files): namespaced, no numeric IDs (docs/strings-namespace.md). A native
+    # exception (fixed numeric ID) cannot exist any more: with the mod's namespace on, an unqualified record defines
+    # `medianxl:<key>` and its id is ignored. A key that does not fit a fixed-size cell gets a short alias (txt_migrate).
+    exceptions = sorted(load_exceptions())
+    if exceptions:
+        raise SystemExit(f"tbl2json: native exceptions are not possible with a mod namespace (an unqualified record "
+                         f"is a medianxl: record, its id is ignored): {exceptions}")
+    group2 = [k for k in texts if k not in d2r_keys]
 
     def lang_rec(k: str) -> dict:
         return {lang: texts[k] if (lang == "enUS" or not args.english_only) else "" for lang in LANGS}
 
+    # Group 1 = Median's text for keys D2R has: one `d2r:<key>` record per key in OVERRIDE_FILE (loader contract:
+    # LOCALIZATION.md "Replace existing text"). Not written: keys whose text does not change, keys whose printf
+    # placeholders differ from D2R's (bug #12), keys the loader does not know (only in strings-legacy/).
+    langs = ["enUS"] if args.english_only else LANGS
+    overrides, kept, same, legacy_only = [], {}, 0, []
+    for k in texts:
+        if k not in d2r_keys:
+            continue
+        recs = loaded.get(k)
+        if recs is None:
+            legacy_only.append(k)
+            continue
+        t = texts[k]
+        if any(placeholders(t) != placeholders(e.get("enUS", "")) for e in recs):
+            kept[k] = (recs[0].get("enUS", ""), t)
+            continue
+        if all(e.get(lang, t) == t for e in recs for lang in langs):
+            same += 1
+            continue
+        overrides.append({"Key": f"{D2R_PREFIX}{k}", **{lang: t for lang in langs}})
     group1 = len({k for k in texts if k in d2r_keys})
-    report.insert(2, f"- Groups: {group1} group 1 (D2R keys, native overrides), {len(group2)} group 2 "
-                     f"(`{NAMESPACE}:` namespace), {len(exceptions)} exceptions (native, fixed ID)")
-    for folder, files in folders.items():
-        overridden, kept = set(), {}
-        for recs in files.values():
-            for e in recs:
-                if e["Key"] in texts:
-                    t = texts[e["Key"]]
-                    if placeholders(t) != placeholders(e.get("enUS", "")):
-                        kept[e["Key"]] = (e.get("enUS", ""), t)
-                        continue
-                    for lang in (["enUS"] if args.english_only else LANGS):
-                        if lang in e:
-                            e[lang] = t
-                    overridden.add(e["Key"])
-        if exceptions:
-            files.setdefault(NEW_KEYS_FILE, []).extend({"id": exc_ids[k], "Key": k, **lang_rec(k)} for k in exceptions)
-        dest = OUT / "data" / "local" / "lng" / folder
-        shutil.rmtree(dest / NAMESPACE, ignore_errors=True)
-        for name, recs in files.items():
-            write_json(dest / name, recs)
-        # D2RLoader's docs name only strings/ for namespaced files; strings-legacy/ gets the same file in case the
-        # loader reads it for classic-mode text too (unverified, docs/strings.md).
-        write_json(dest / NAMESPACE / NAMESPACE_FILE, [{"Key": k, **lang_rec(k)} for k in group2])
-        report.append(f"- {folder}: {len(files)} files, {len(overridden)} D2R keys overridden (group 1), "
-                      f"{len(group2)} Median-only keys in {NAMESPACE}/{NAMESPACE_FILE} (group 2), "
-                      f"{len(exceptions)} native exceptions (in {NEW_KEYS_FILE}), "
-                      f"{len(kept)} kept D2R's text (placeholders differ)")
-        if folder == "strings":
-            report += [f"  - `{k}`: D2R {d!r} / Median {m!r}" for k, (d, m) in sorted(kept.items())]
-    if exc_ids:
-        report.append(f"- Exception IDs (below 65536, free in 16 bits, shared by both folders): "
-                      + ", ".join(f"`{k}`={i}" for k, i in exc_ids.items()))
+    report.insert(2, f"- Groups: {group1} group 1 (D2R keys), {len(group2)} group 2 (`{NAMESPACE}:` namespace)")
+    base = OUT / "data" / "local" / "lng"
+    shutil.rmtree(base / "strings", ignore_errors=True)
+    shutil.rmtree(base / "strings-legacy", ignore_errors=True)
+    # D2R's own files are not shipped: they load from the game. The mod's folder holds only the override file and the
+    # namespace file. strings-legacy/ gets a mirror of the namespace file only, as before (docs/strings.md
+    # "strings-legacy"): the overrides are not mirrored, a `d2r:` record there would repeat a key of the other folder.
+    write_json(base / "strings" / NAMESPACE / OVERRIDE_FILE, overrides)
+    median = [{"Key": k, **lang_rec(k)} for k in group2]
+    write_json(base / "strings" / NAMESPACE / NAMESPACE_FILE, median)
+    write_json(base / "strings-legacy" / NAMESPACE / NAMESPACE_FILE, median)
+    report += [f"- {len(overrides)} D2R keys overridden (`{D2R_PREFIX}<key>` records in {NAMESPACE}/{OVERRIDE_FILE}, one per key, "
+               f"{'enUS only' if args.english_only else '13 languages'})",
+               f"- {same} D2R keys skipped: Median's text equals D2R's",
+               f"- {len(kept)} D2R keys skipped, kept D2R's text (printf placeholders differ, bug #12)",
+               f"- {len(legacy_only)} D2R keys skipped: only in strings-legacy/, the loader does not know `d2r:<key>` for them",
+               f"- {len(group2)} Median-only keys in {NAMESPACE}/{NAMESPACE_FILE} (group 2)"]
+    report += [f"  - kept `{k}`: D2R {d!r} / Median {m!r}" for k, (d, m) in sorted(kept.items())]
+    report += [f"  - not loaded `{k}`: {texts[k]!r}" for k in sorted(legacy_only)]
 
-    # strings_idkeys.json: Median ID -> full key. Group 2 gets the namespace prefix; group 1 and exceptions stay plain.
+    # strings_idkeys.json: Median ID -> full key. Group 2 gets the namespace prefix; group 1 stays plain.
     g2 = set(group2)
     idkeys = {sid: (f"{NAMESPACE}:{k}" if k in g2 else k) for sid, k in idkeys.items()}
     (OUT / "strings_namespace.json").write_text(
