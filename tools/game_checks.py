@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy. What a click in the world cannot do in background mode (kill a
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy strings. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -2090,6 +2090,306 @@ def check_statcols():
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
+# ------------------------------------------------------------------ strings: what the player reads (lane ns-verify)
+# docs/strings-namespace.md moves Median-only strings into the `medianxl` loader namespace and keeps D2R's own keys native.
+# The proof that the switch changes nothing the player sees: a fixed sample of strings is read back through the plugin
+# harness `text` verb (plugin/src/harness_cmds.cpp) and compared with Median's own text from its .tbl files
+# (tools/tbl2json.py parse), the same text before and after the switch.
+#   text id <n>                  the client's string lookup (what an NPC menu line shows: the u16 id a menu record holds)
+#   text row <table> <row> <off> the u16 string reference at a byte offset of the compiled table row the game loaded
+#                                (the display name of an item, unique, set, monster, level, skill, stat line), resolved
+#                                by the same lookup. Offsets are the name columns of the compiled rows; ROW_FIELDS below
+#                                holds them, a table that is not listed is calibrated from the sample (`text scan`).
+#   text key <full key>          D2RLoader's localization service: `d2r:Key` (D2R's own) or `medianxl:Key` (namespaced)
+# Every sample prints one `SAMPLE` line (category, label, PASS / FAIL, expected, got) into the log and strings.tsv.
+
+STR_NS = "medianxl"
+STR_BANK = int(os.environ.get("MXL_STRINGS_BANK", "3"))  # data table bank: 1 classic, 2 lod, 3 rotw
+ROW_FIELDS = {}  # table -> byte offset of the name reference in the compiled row (filled from the calibration run)
+_COLOUR = re.compile("ÿc.")
+
+# (category, table, column of the name key, keys). `items` rows are found by item code, `levels` by id, the rest by row index.
+STR_ROWS = [
+    ("item names", "items", {"misc": "namestr", "armor": "namestr", "weapons": "namestr"},
+     [("misc", "cotw"), ("misc", "yq2"), ("misc", "cyc3"), ("misc", "en09"), ("armor", "w23"), ("armor", "704"),
+      ("weapons", "4@A"), ("weapons", "123")]),
+    ("uniques", "uniqueitems", "index", ["CycleOfGold", "Wolfpack", "Bonechewer", "Vilehand", "FrozenHeart", "ShardRefraction"]),
+    ("sets", "setitems", "index", ["MRCelestia's Charge", "MRSerpent's Coil", "MRAvalanche", "M_WisdomEye3"]),
+    ("sets", "sets", "name", ["MSPantheon", "Set_Lazbro"]),
+    ("monsters", "monstats", "NameStr", ["ReanimatedWarrior", "BloodBengal", "SapphireLord", "Sewer Rat", "DiscipleofHatred", "WycBoss3"]),
+    ("superuniques", "superuniques", "Name", ["Snotspill", "NewFleshdoom", "Maghda", "JurisKhan"]),
+    ("levels", "levels", "LevelName", ["Caldeum", "Butcher's Lair", "Kingdom of Shadow", "The Void", "Dimensional Labyrinth 5", "Heroic Duncraig"]),
+    ("skills", "skilldesc", "str name", ["MasteryNameMeditation", "SkillnameSnakeStance", "SkillnameBlight", "SkillnameDeathCoil",
+                                         "SkillnameIceBoltNova", "SkillnameFortress"]),
+    ("stat lines", "itemstatcost", "descstrpos", ["ModTotPhysDmg", "ModitemBlessed", "ModitemHealAttack", "ModItemNoUnsocket", "ModitemCorrupted"]),
+]
+# Rare item affixes: no data table of the SDK exposes them, so the loader's key lookup is the only path.
+STR_KEYS = ["TerrQ", "Leviath", "halo", "spines"]
+# D2R keys Median overrides: (key, whether `text key` can take it: no spaces) - resolved by D2R's own numeric id and by key.
+STR_D2R = ["CfgRun", "Zakarumite", "Maggot Lair", "gcy", "r27", "Baal Subject 3", "StrSklTabItem1", "skillld49", "Skillld253", "CharsiGossip7"]
+# Bug #7: the first-talk line of the town NPCs is the NPC's own, not another string's (Median's "ArcaneApe" shared Gheed's id)
+STR_INTRO = ["GheedIntroGossip1", "AkaraIntroGossip1", "KashyaIntroGossip1", "CharsiIntroGossip1", "WarrivAct1IntroGossip1",
+             "WarrivAct1IntroPalGossip1"]
+# NPC menus (npc class, [(top-level plugin line key) ...], the native lines D2R itself shows)
+STR_MENUS = [(265, "Deckard Cain", ["strCainMenuCraftMaterials"], ["TalkMenu", "NPCIdentify1"]),
+             (148, "Akara", ["AkaraMenu1b"], ["TalkMenu"]),
+             (175, "Warriv", ["WarrivMenu1b", "WarrivMenu1c"], ["TalkMenu"])]
+STR_CAIN_SUB = ["strCainMenuCMHoradricCube", "strCainMenuCMCatalyst1", "strCainMenuCMCatalyst2", "strCainMenuCMCatalyst3"]
+
+
+class _StrSrc:
+    """Median's strings from the .tbl files and D2R's own string files: key -> expected text, D2R key -> numeric id."""
+
+    def __init__(self):
+        import json
+        import glob
+        import tbl2json as T
+        by_id, winner = T.load_median()
+        self.texts = {}
+        for sid, (key, text) in by_id.items():
+            fk = T.final_key(sid, key)
+            if fk.startswith("mxl_") or winner[key] == sid:
+                self.texts[fk] = text
+        self.d2r = {}
+        for p in glob.glob(str(T.D2R_LNG / "strings" / "*.json")):
+            for e in json.load(open(p, encoding="utf-8-sig")):
+                self.d2r[e["Key"]] = e
+        # keys tbl2json leaves with D2R's text (placeholders differ): not Median's text, not part of the sample
+        self.kept = {k for k, e in self.d2r.items() if k in self.texts and T.placeholders(self.texts[k]) != T.placeholders(e.get("enUS", ""))}
+        ns = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "mod", "strings_namespace.json")
+        self.ns_keys = set(json.load(open(ns, encoding="utf-8"))["keys"]) if os.path.exists(ns) else None
+
+    def expected(self, key):
+        t = self.texts.get(key)
+        return None if t is None else _str_norm(t)
+
+    def full_key(self, key):
+        """`medianxl:Key` for a Median-only key once the namespace exists, else D2R's own `d2r:Key` (native loading)."""
+        g2 = key not in self.d2r
+        if self.ns_keys is not None:
+            g2 = key in self.ns_keys
+        return (STR_NS if g2 and self.ns_keys is not None else "d2r") + ":" + key
+
+
+def _str_norm(text):
+    """The verb's form of a string: colour codes removed, newlines written as the two characters \\n."""
+    return _COLOUR.sub("", text).replace("\r", "").replace("\n", "\\n")
+
+
+def _txt_rows(name, bank):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "mod", "data", "global", "excel",
+                        "" if bank == 3 else "base", name + ".txt")
+    with open(path, encoding="utf-8-sig") as f:
+        rows = [ln.rstrip("\n").split("\t") for ln in f]
+    return rows[0], rows[1:]
+
+
+def _cell_key(cell):
+    """A localization cell is `Key`, `d2r:Key` or `medianxl:Key`: the plain key."""
+    return cell.split(":", 1)[1] if cell.startswith((STR_NS + ":", "d2r:")) else cell
+
+
+_HID = re.compile(r"id=(\d+) = \[(.*)\]$")
+_HSCAN = re.compile(r"\+0x([0-9a-f]+) id=(\d+) \[(.*)\]$")
+
+
+def _text_id(sid):
+    ok, lines = H("text id %d" % sid)
+    m = re.search(r"= \[(.*)\]$", lines[0]) if ok and lines else None
+    return m.group(1) if m else None
+
+
+def _text_key(full):
+    """(result code, text) of the loader's lookup; a key with a space cannot be passed on the harness line."""
+    if " " in full:
+        return None, None
+    ok, lines = H("text key " + full)
+    m = re.search(r"result=(\d+) = \[(.*)\]$", lines[0]) if lines else None
+    return (int(m.group(1)), m.group(2)) if m else (None, None)
+
+
+def _row_ref(table, key, col, sub=None):
+    """(row reference for the verb, plain keys of the row) of the first row of the built table whose cell is `key`."""
+    name = sub or table
+    head, rows = _txt_rows(name, STR_BANK)
+    ci = head.index(col if isinstance(col, str) else col[name])
+    for i, r in enumerate(rows):
+        if ci < len(r) and _cell_key(r[ci]) == key:
+            if table == "items":
+                return "code:" + r[head.index("code")].ljust(4)[:4].replace(" ", ""), i
+            if table == "levels":
+                return "id:" + r[head.index("Id")], i
+            return str(i), i
+    return None, None
+
+
+def check_strings():
+    name = "Strings the player reads: items, monsters, levels, skills, NPC menus, stat lines, D2R overrides (namespace contract)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    src = _StrSrc()
+    rows_out = []  # (category, label, status, expected, got, note)
+
+    def record(cat, label, ok, expected, got, note=""):
+        rows_out.append((cat, label, "PASS" if ok else "FAIL", expected, got, note))
+        g.log("SAMPLE %s | %s | %s | expected [%s] got [%s] %s" % (cat, label, "PASS" if ok else "FAIL", expected, got, note))
+
+    # ---- table rows: the display name field of the compiled row, resolved by the client's string lookup
+    calibrate = {}
+    pending = []  # (cat, table, label, key, ref, expected)
+    for cat, table, col, keys in STR_ROWS:
+        for item in keys:
+            sub, key = item if table == "items" else (None, item)
+            ref, _i = _row_ref(table, key, col, sub)
+            exp = src.expected(key)
+            if ref is None or exp is None:
+                record(cat, "%s:%s" % (table, key), False, exp, None, "no row in the built table" if ref is None else "no text in Median's .tbl")
+                continue
+            pending.append((cat, table, "%s:%s %s" % (table, key, ref), key, ref, exp))
+    for cat, table, label, key, ref, exp in pending:
+        if ROW_FIELDS.get(table) is None or os.environ.get("MXL_STRINGS_CALIBRATE"):
+            hits = {}
+            ok, lines = H("text scan %s %s %d" % (table, ref, STR_BANK))
+            want = exp.encode("utf-8")[:90].decode("utf-8", "ignore")  # the scan prints at most 90 bytes
+            for ln in lines:
+                m = _HSCAN.search(ln)
+                if m and m.group(3) == want:
+                    hits[int(m.group(1), 16)] = m.group(3)
+            calibrate.setdefault(table, []).append(set(hits))
+    for table, sets in calibrate.items():
+        votes = {}
+        for s in sets:
+            for o in s:
+                votes[o] = votes.get(o, 0) + 1
+        best = max(votes, key=lambda o: votes[o]) if votes else None
+        g.log("CALIBRATE %s: offset %s matches %d of %d sample rows (votes %s)" % (
+            table, hex(best) if best is not None else None, votes.get(best, 0) if best is not None else 0, len(sets),
+            {hex(o): n for o, n in sorted(votes.items())}))
+        if best is not None and votes[best] * 2 > len(sets) and (ROW_FIELDS.get(table) is None):
+            ROW_FIELDS[table] = best
+    for cat, table, label, key, ref, exp in pending:
+        off = ROW_FIELDS.get(table)
+        if off is None:
+            record(cat, label, False, exp, None, "no field of the compiled row resolves to the expected text")
+            continue
+        ok, lines = H("text row %s %s %x %d" % (table, ref, off, STR_BANK))
+        m = _HID.search(lines[0]) if ok and lines else None
+        got = m.group(2) if m else None
+        full = src.full_key(key)
+        kres, ktext = _text_key(full)
+        note = "row offset 0x%x id=%s; key %s -> %s" % (off, m.group(1) if m else "?", full, "n/a (space)" if kres is None else
+                                                      ("ok" if kres == 0 and ktext == exp[:len(ktext)] else "result %s [%s]" % (kres, ktext)))
+        record(cat, label, got == exp, exp, got, note)
+
+    # ---- rare affixes: the loader's key lookup only
+    for key in STR_KEYS:
+        full = src.full_key(key)
+        kres, ktext = _text_key(full)
+        exp = src.expected(key)
+        record("rare affixes", full, kres == 0 and ktext == exp, exp, ktext, "result %s" % kres)
+
+    # ---- D2R keys Median overrides: D2R's numeric id (native, fixed) and the key
+    for key in STR_D2R:
+        e = src.d2r.get(key)
+        exp = src.expected(key)
+        if e is None or exp is None or key in src.kept:
+            record("D2R overrides", key, False, exp, None, "not a D2R key Median overrides")
+            continue
+        got_id = _text_id(e["id"])
+        kres, ktext = _text_key("d2r:" + key)
+        ok = got_id == exp and (kres is None or (kres == 0 and ktext == exp))
+        record("D2R overrides", "%s (id %d)" % (key, e["id"]), ok, exp, got_id, "key d2r:%s -> %s" % (key, "n/a (space)" if kres is None else ktext))
+
+    # ---- bug #7: the first-talk line of each town NPC is its own string, by D2R's numeric id
+    other = {_str_norm(t): k for k, t in src.texts.items() if k not in src.d2r}
+    for key in STR_INTRO:
+        e = src.d2r.get(key)
+        exp = src.expected(key)
+        got = _text_id(e["id"]) if e else None
+        stray = other.get(got) if got is not None else None
+        record("first talk (bug #7)", "%s (id %s)" % (key, e["id"] if e else "?"), got is not None and got == exp and stray is None,
+               exp[:60], (got or "")[:60], "shows another Median string: %s" % stray if stray else "")
+
+    # ---- NPC menu lines: the strings the menu record points at, resolved by the client
+    goto(1)
+    close_menu()
+    H("stat player 7 set 20000000")
+    H("stat player 6 set 20000000")
+    H("quest 1 0 set")   # Den of Evil done: Akara's respec line is open
+    H("quest 41 1 set")
+    H("quest 4 0 set")   # Search for Cain done: Cain's page has an open entry
+    H("remove box 10")   # the cube entry shows only while the player lacks the cube
+    for npc_class, who, plugin_keys, native_keys in STR_MENUS:
+        menu = npc_menu(npc_class)
+        if not menu:
+            record("NPC menus", who, False, None, None, "the menu did not open")
+            continue
+        t0 = time.time()
+        while time.time() - t0 < 120 and not any("handler=plugin" in x for x in menu):  # the plugin line is added when the speech ends
+            time.sleep(1)
+            ok0, again = g.hcmd("menu list", 5)
+            menu = again if ok0 else menu
+        lines = []
+        for x in menu:
+            m = re.search(r"line (\d+) string=0x([0-9a-f]+) handler=(\w+)", x)
+            if m:
+                lines.append((int(m.group(1)), int(m.group(2), 16), m.group(3) == "plugin"))
+        plug = [ln for ln in lines if ln[2]]
+        nat = [ln for ln in lines if not ln[2]]
+        for (idx, sid, _p), pk in zip(plug, plugin_keys + [None] * len(plug)):
+            exp = src.expected(pk) if pk else None
+            got = _text_id(sid)
+            record("NPC menus", "%s line %d (%s)" % (who, idx, pk), pk is not None and got == exp, exp, got, "string id 0x%x" % sid)
+        if len(plug) < len(plugin_keys):
+            record("NPC menus", "%s plugin lines" % who, False, plugin_keys, [ln[1] for ln in plug], "fewer plugin lines than expected")
+        for (idx, sid, _p), nk in zip(nat, native_keys):
+            exp = src.expected(nk)
+            if exp is None:
+                exp = _str_norm(src.d2r[nk].get("enUS", ""))
+            got = _text_id(sid)
+            record("NPC menus", "%s line %d (%s)" % (who, idx, nk), got == exp, exp, got, "string id 0x%x" % sid)
+        if npc_class == 265 and plug:  # Cain's submenu: the click rebuilds the list with the open crafting materials
+            before = menu
+            ok, _l = H("menu %d" % plug[0][0])
+            time.sleep(2.5)
+            ok2, after = g.hcmd("menu list", 5)
+            sub = []
+            for x in (after or []):
+                m = re.search(r"line (\d+) string=0x([0-9a-f]+)", x)
+                if m:
+                    sub.append((int(m.group(1)), int(m.group(2), 16)))
+            allowed = {src.expected(k): k for k in STR_CAIN_SUB}
+            if not (ok and ok2 and sub and after != before):
+                record("NPC menus", "Cain submenu", False, sorted(allowed), None, "the click did not open a submenu: %s" % (after,))
+            for idx, sid in sub:
+                got = _text_id(sid)
+                record("NPC menus", "Cain submenu line %d" % idx, got in allowed, sorted(allowed), got, "string id 0x%x" % sid)
+        close_menu()
+
+    # ---- report
+    p = os.path.join(g.current_run(), "strings.tsv")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("category\tsample\tresult\texpected\tgot\tnote\n")
+        for r in rows_out:
+            f.write("\t".join(str(x).replace("\t", " ").replace("\n", "\\n") for x in r) + "\n")
+    cats = []
+    for r in rows_out:
+        if r[0] not in cats:
+            cats.append(r[0])
+    bad = [r for r in rows_out if r[2] == "FAIL"]
+    for c in cats:
+        mine = [r for r in rows_out if r[0] == c]
+        fails = [r for r in mine if r[2] == "FAIL"]
+        add("Strings: " + c, "PASS" if not fails else "FAIL",
+            "%d of %d samples read back as Median's text%s" % (len(mine) - len(fails), len(mine),
+                                                              "; FAIL: " + "; ".join("%s got [%s]" % (r[1], str(r[4])[:50]) for r in fails[:6]) if fails else ""),
+            log=["%s | %s | expected [%s] got [%s] %s" % (r[2], r[1], r[3], r[4], r[5]) for r in mine])
+    add(name, "PASS" if rows_out and not bad else "FAIL",
+        "%d samples, %d FAIL; namespace file %s; offsets %s; full list in %s" % (
+            len(rows_out), len(bad), "present" if src.ns_keys is not None else "absent (native strings)",
+            {k: hex(v) for k, v in ROW_FIELDS.items()}, os.path.basename(p)))
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -2099,7 +2399,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
-          ("trophy", check_trophy), ("statcols", check_statcols)]
+          ("trophy", check_trophy), ("statcols", check_statcols),
+          ("strings", check_strings)]
 
 
 def write_report(extra=""):

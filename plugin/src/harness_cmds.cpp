@@ -24,6 +24,8 @@
 #include "waypoints.h"
 #include "waypoints_logic.h"
 
+#include <D2RLPlugin/api.h>
+
 #define NOMINMAX
 #include <windows.h>
 
@@ -2105,7 +2107,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
 	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
-	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
+	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] | avoid <ref> melee|missile|evade [n] | "
@@ -2169,6 +2171,166 @@ auto CmdMenu(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	const uint8_t res = reinterpret_cast<MenuHandlerFn>(handler)(static_cast<uint8_t>(c->dataFlag));
 	Out("menu line %s handler 0x%llx returned %u", t.tok[1], static_cast<unsigned long long>(handler), static_cast<unsigned>(res));
 	return true;
+}
+
+// --- `text`: the display string the game resolves (lane ns-verify, game_checks.py "strings") ---------------------------------
+// The string lookup the NPC menu uses (npc_actions.cpp): D2RCore's thunk, u16 string id -> UTF-8 text. Table rows hold the same
+// u16 references, so reading a row's name field and resolving it here is what the player sees, whatever the loader assigned.
+constexpr uint64_t RvaStringThunk = 0x3e2b730;  // (u32 id) -> const char*
+using StringFn = const char* (*)(uint32_t);
+const D2RL::PluginContext* g_textContext = nullptr;
+
+// D2R colour codes (0xff 'c' <digit>, in UTF-8 c3 bf) removed, newlines written as the two characters \n.
+void CleanText(const char* raw, char* text, size_t cap) noexcept {
+	size_t n = 0;
+	for (size_t i = 0; raw != nullptr && raw[i] != '\0' && n + 2 < cap; ++i) {
+		const size_t lead = static_cast<unsigned char>(raw[i]) == 0xff ? 1 : (static_cast<unsigned char>(raw[i]) == 0xc3 && static_cast<unsigned char>(raw[i + 1]) == 0xbf ? 2 : 0);
+		if (lead != 0 && raw[i + lead] == 'c' && raw[i + lead + 1] != '\0') {
+			i += lead + 1;
+			continue;
+		}
+		if (raw[i] == '\n') {
+			text[n++] = '\\';
+			text[n++] = 'n';
+			continue;
+		}
+		if (raw[i] == '\r') {
+			continue;
+		}
+		text[n++] = raw[i];
+	}
+	text[n] = '\0';
+}
+
+auto TableByName(const char* name, D2RL::DataTables::TableId* id) noexcept -> bool {
+	using T = D2RL::DataTables::TableId;
+	static const struct {
+		const char* name;
+		T id;
+	} tables[] = {{"itemstatcost", T::ItemStatCost}, {"skilldesc", T::SkillDesc}, {"skills", T::Skills}, {"levels", T::Levels},
+	              {"monstats", T::MonStats}, {"superuniques", T::SuperUniques}, {"uniqueitems", T::UniqueItems},
+	              {"setitems", T::SetItems}, {"sets", T::Sets}, {"magicaffixes", T::MagicAffixes}, {"items", T::Items},
+	              {"itemtypes", T::ItemTypes}, {"runes", T::Runes}, {"shrines", T::Shrines}, {"objects", T::Objects},
+	              {"states", T::States}, {"npc", T::Npc}, {"uniqueprefix", T::UniquePrefix}, {"uniquesuffix", T::UniqueSuffix},
+	              {"uniqueappellation", T::UniqueAppellation}};
+	for (const auto& e : tables) {
+		if (hcmd::LowerEq(name, e.name)) {
+			*id = e.id;
+			return true;
+		}
+	}
+	return false;
+}
+
+// A compiled row by `<index>`, `code:<abcd>` (Items, ItemTypes) or `id:<n>` (Skills, Levels, ...) on the data table service;
+// the bank is the token at bankTok (1 classic, 2 lod, 3 rotw; default 3).
+auto FindTextRow(Ctx* c, const hcmd::Tokens& t, int tableTok, int bankTok, D2RL::DataTables::RowView* row) noexcept -> bool {
+	const D2RL::DataTableService* svc = nullptr;
+	if (g_textContext == nullptr || g_textContext->QueryService(&svc) != D2RL::ServiceQueryResult::Success || svc == nullptr ||
+	    !D2RL::HasDataTableServiceField(svc, D2RL::DataTableServiceRequiredSize)) {
+		return Fail(c, "text: no data table service");
+	}
+	D2RL::DataTables::TableId table = D2RL::DataTables::TableId::Unknown;
+	if (t.n <= tableTok + 1 || !TableByName(t.tok[tableTok], &table)) {
+		return Fail(c, "text: unknown table %.30s", t.n > tableTok ? t.tok[tableTok] : "?");
+	}
+	long long bank = 3;
+	if (bankTok < t.n && (!hcmd::ParseInt(t.tok[bankTok], &bank) || bank < 1 || bank > 3)) {
+		return Fail(c, "text: bank is 1, 2 or 3");
+	}
+	const auto b = static_cast<D2RL::DataTables::Bank>(bank);
+	const char* ref = t.tok[tableTok + 1];
+	*row = {};
+	row->structSize = D2RL::DataTables::RowViewSize;
+	D2RL::DataTables::Result r = D2RL::DataTables::Result::NotFound;
+	long long n = 0;
+	if (std::strncmp(ref, "code:", 5) == 0) {
+		char cc[4] = {' ', ' ', ' ', ' '};  // codes are padded with spaces
+		for (int i = 0; i < 4 && ref[5 + i] != '\0'; ++i) {
+			cc[i] = ref[5 + i];
+		}
+		r = svc->findRowByCode(g_textContext, b, table, D2RL::DataTables::MakeFourCC(cc[0], cc[1], cc[2], cc[3]), row);
+	} else if (std::strncmp(ref, "id:", 3) == 0 && hcmd::ParseInt(ref + 3, &n)) {
+		r = svc->findRowById(g_textContext, b, table, static_cast<uint32_t>(n), row);
+	} else if (hcmd::ParseInt(ref, &n) && n >= 0) {
+		r = svc->getRow(g_textContext, b, table, static_cast<uint32_t>(n), row);
+	} else {
+		return Fail(c, "text: row is <index>, code:<abcd> or id:<n>");
+	}
+	if (r != D2RL::DataTables::Result::Success || row->row == nullptr) {
+		return Fail(c, "text: %.20s %.20s bank %lld: row lookup result %u", t.tok[tableTok], ref, bank, static_cast<unsigned>(r));
+	}
+	return true;
+}
+
+// `text id <n>` | `text key <full key>` | `text row <table> <index|code:abcd|id:n> <offset hex> [bank 1-3]` |
+// `text scan <table> <row> [bank]`: the resolved text of a string id (the client's own lookup), of a loader key (`d2r:Key`,
+// `medianxl:Key`: the Localization service), of the u16 string reference at a byte offset of a compiled table row, or every
+// row field that resolves (to find the offset of a name field).
+auto CmdText(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	const auto lookup = Fn<StringFn>(RvaStringThunk);
+	char text[256];
+	if (t.n >= 3 && hcmd::LowerEq(t.tok[1], "id")) {
+		long long id = 0;
+		if (!hcmd::ParseInt(t.tok[2], &id) || id < 0 || id > 0xffff) {
+			return Fail(c, "text id: a string id 0..65535");
+		}
+		CleanText(lookup(static_cast<uint32_t>(id)), text, sizeof(text));
+		Out("text id %lld = [%s]", id, text);
+		return true;
+	}
+	if (t.n >= 3 && hcmd::LowerEq(t.tok[1], "key")) {
+		const D2RL::LocalizationService* svc = nullptr;
+		if (g_textContext == nullptr || g_textContext->QueryService(&svc) != D2RL::ServiceQueryResult::Success || svc == nullptr ||
+		    !D2RL::HasLocalizationServiceField(svc, sizeof(D2RL::LocalizationService))) {
+			return Fail(c, "text key: no localization service");
+		}
+		char raw[512] = "";
+		uint32_t need = 0;
+		const auto r = svc->getStringByKey(g_textContext, t.tok[2], raw, sizeof(raw), &need);
+		CleanText(raw, text, sizeof(text));
+		Out("text key %.60s result=%u = [%s]", t.tok[2], static_cast<unsigned>(r), text);
+		return r == D2RL::Localization::Result::Success;
+	}
+	if (t.n >= 5 && hcmd::LowerEq(t.tok[1], "row")) {
+		char* end = nullptr;
+		const unsigned long long off = std::strtoull(t.tok[4], &end, 16);
+		if (end == t.tok[4] || *end != '\0') {
+			return Fail(c, "text row: offset in hex");
+		}
+		D2RL::DataTables::RowView row;
+		if (!FindTextRow(c, t, 2, 5, &row)) {
+			return false;
+		}
+		if (off + 2 > row.rowSize || (off & 1) != 0) {
+			return Fail(c, "text row: offset 0x%llx outside the %u byte row", off, row.rowSize);
+		}
+		const uint16_t id = d2r::At<uint16_t>(row.row, static_cast<int>(off));
+		CleanText(lookup(id), text, sizeof(text));
+		Out("text row %s %s +0x%llx id=%u = [%s]", t.tok[2], t.tok[3], off, static_cast<unsigned>(id), text);
+		return true;
+	}
+	if (t.n >= 4 && hcmd::LowerEq(t.tok[1], "scan")) {
+		D2RL::DataTables::RowView row;
+		if (!FindTextRow(c, t, 2, 4, &row)) {
+			return false;
+		}
+		Out("text scan %s %s size 0x%x index %u", t.tok[2], t.tok[3], row.rowSize, row.rowIndex);
+		int shown = 0;
+		for (uint32_t o = 0; o + 2 <= row.rowSize && shown < 200; o += 2) {
+			const uint16_t id = d2r::At<uint16_t>(row.row, static_cast<int>(o));
+			if (id < 256 || id == 0xffff) {
+				continue;
+			}
+			CleanText(lookup(id), text, sizeof(text));
+			if (text[0] != '\0') {
+				Out("  +0x%x id=%u [%.90s]", o, static_cast<unsigned>(id), text);
+				++shown;
+			}
+		}
+		return true;
+	}
+	return Fail(c, "usage: text id <n> | key <full key> | row <table> <index|code:abcd|id:n> <offset hex> [bank] | scan <table> <row> [bank]");
 }
 
 // `evtrace on|off|clear|dump [slot name] [n]`: logs D2RLoader's unit-event entry points (register / unregister / has / clear /
@@ -2362,7 +2524,7 @@ const Verb Verbs[] = {
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
-    {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
+    {"cstat", CmdClientStat, true}, {"text", CmdText, true}, {"panelrow", CmdPanelRow, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 
@@ -2405,6 +2567,10 @@ struct Job {
 Job g_job;
 
 }  // namespace
+
+void HarnessCmdsContext(const D2RL::PluginContext* context) noexcept {
+	g_textContext = context;
+}
 
 void HarnessCmdsInit(uint64_t exeBase) noexcept {
 	g_base = exeBase;

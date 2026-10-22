@@ -900,6 +900,7 @@ auto InstallTestHarness(const D2RL::PluginContext* context, char* report, size_t
 		g_isInGame = reinterpret_cast<IsInGameFn>(GetProcAddress(core, "IsInGame"));
 	}
 	HarnessCmdsInit(context->exeBase);
+	HarnessCmdsContext(context);
 	g_running = 1;
 	g_thread = CreateThread(nullptr, 0, TraceThread, nullptr, 0, nullptr);
 	if (g_titleText[0] != L'\0') {
