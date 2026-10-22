@@ -15,7 +15,7 @@ classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner 
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling nodurability autoid townmana mercrevive questxp
-questrewards.
+questrewards gamble enginegaps.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -5992,6 +5992,109 @@ def revive_price_expected(level):
     return level * 100 if level <= 105 else int(((level - 90) ** 1.5) * 250)
 
 
+def check_gamble():
+    name = "Gamble window (audit item 16, IT10): Gheed offers 32 items, ring and amulet among them, rare / set / unique chances from the data, a new draw on every request"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    txt = mxl_text()
+    gamble_line = [ln for ln in txt.splitlines() if "gamble" in ln.lower()]
+    bad, rows, log = [], [], list(gamble_line)
+    if not any("gamble on" in ln for ln in gamble_line):
+        bad.append("the `mxl` line does not say `gamble on`: %s" % (gamble_line or "no gamble line"))
+    # open Gheed's gamble window the player's way: talk, then the Gamble line of the menu (its handler is 0x112c80)
+    menu = npc_menu(147)
+    if menu is None:
+        return add(name, "BLOCKED", "Gheed's menu did not open", log=log)
+    line = None
+    for ln in menu:
+        m = re.search(r"line (\d+) .*handler=image\+0x112c80", ln)
+        if m:
+            line = int(m.group(1))
+    log += menu
+    if line is None:
+        close_menu()
+        return add(name, "FAIL", "Gheed's menu has no Gamble line (handler 0x112c80): %s" % menu[:6], log=log)
+    H("menu %d" % line)
+    time.sleep(2.5)
+    ok, shop = H("shop 147")
+    npc = next((kv(l) for l in shop if l.startswith("shop npc")), {})
+    npc_id = int(npc.get("id", "0"))
+    rounds, counts, firsts, same = [], {}, [], 0
+    prev = None
+    for i in range(13):
+        if i > 0:  # the same request as the Gamble line sends: packet 0x38, kind 2, the NPC's id (little endian)
+            b = [(npc_id >> (8 * k)) & 0xff for k in range(4)]
+            H("pkt 38 02 00 00 00 %02x %02x %02x %02x" % tuple(b))
+            time.sleep(0.6)
+        ok, lines = H("gamble")
+        items = [kv(l) for l in lines if l.startswith("item ")]
+        n = len(items)
+        codes = [it.get("code", "") for it in items]
+        ids = sorted(int(it.get("id", "0")) for it in items)
+        rounds.append(n)
+        if i == 0:
+            log += lines[:40]
+        if n != 32:
+            bad.append("round %d: %d offers instead of 32" % (i, n))
+        if not any(c.startswith("rin") for c in codes) or not any(c.startswith("amu") for c in codes):
+            bad.append("round %d: no ring or no amulet among %s" % (i, codes))
+        for it in items:
+            q = int(it.get("quality", "0"))
+            counts[q] = counts.get(q, 0) + 1
+        if len({(it.get("page"), it.get("x"), it.get("y")) for it in items}) != n:
+            bad.append("round %d: two offers share a grid cell" % i)
+        if prev is not None and ids == prev:
+            same += 1
+        prev = ids
+    total = sum(counts.values())
+    rare = counts.get(6, 0) * 1000 // max(total, 1)
+    rows.append("offers per window %s" % sorted(set(rounds)))
+    rows.append("%d offers sampled: magic %d, rare %d (%d per mille; Median's chance 250), set %d, unique %d, other %s" % (
+        total, counts.get(4, 0), counts.get(6, 0), rare, counts.get(5, 0), counts.get(7, 0),
+        {k: v for k, v in counts.items() if k not in (4, 5, 6, 7)}))
+    if not 150 <= rare <= 350:
+        bad.append("rare share %d per mille is far from Median's 250" % rare)
+    if same == len(rounds) - 1:
+        bad.append("the offers never changed between requests")
+    rows.append("windows identical to the previous one: %d of %d" % (same, len(rounds) - 1))
+    close_menu()
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:900], [], log)
+
+
+def check_engine_gaps():
+    name = "Small engine rules (audit item 21): hit 20 floor 0, recast guard of srvdofunc 47 removed, player slow floor -12 / -25 / -50 by difficulty"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    txt = mxl_text()
+    line = [ln for ln in txt.splitlines() if "engine gaps" in ln]
+    bad, rows = [], []
+    if not any("hit 20 floor 0x45edce on" in ln and "recast guard 0x56f859 on" in ln and "0x449f40 on" in ln for ln in line):
+        bad.append("the `mxl` engine gaps line is not all `on`: %s" % (line or "missing"))
+    first = None
+    for diff, want in ((0, -12), (1, -25), (2, -50)):
+        H("difficulty %d" % diff)
+        ok, lines = H("gaps")
+        d = kv(lines[0]) if lines else {}
+        if first is None:
+            first = d
+        got = d.get("slowfloor")
+        rows.append("difficulty %d: slow floor %s (want %d)" % (diff, got, want))
+        if got != str(want):
+            bad.append("difficulty %d: slow floor %s, expected %d" % (diff, got, want))
+    H("difficulty 0")
+    if first:
+        rows.append("hit20 bytes %s patched=%s, recast bytes %s patched=%s" % (first.get("hit20"), first.get("hit20_patched"), first.get("recast"), first.get("recast_patched")))
+        if first.get("hit20_patched") != "1" or first.get("recast_patched") != "1":
+            bad.append("a byte patch is not in memory: %s" % first)
+    else:
+        bad.append("`h gaps` gave no answer")
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], line + [rows[-1]] if rows else line)
+
+
 def check_mercrevive():
     name = "Mercenary revive price (Median: level x 100 to 105, 250 x (level - 90)^1.5 above)"
     if not need_game():
@@ -6261,7 +6364,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages),
           ("skillscaling", check_skillscaling),
           ("nodurability", check_nodurability), ("autoid", check_autoid), ("townmana", check_townmana),
-          ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards)]
+          ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards),
+          ("gamble", check_gamble), ("enginegaps", check_engine_gaps)]
 
 
 def write_report(extra=""):

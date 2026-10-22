@@ -13,6 +13,9 @@
 #include "craft_flags.h"
 #include "d2r.h"
 #include "dungeon_lockout.h"
+#include "engine_gaps.h"
+#include "engine_gaps_logic.h"
+#include "gamble_logic.h"
 #include "goblins.h"
 #include "hirelings.h"
 #include "hirelings_logic.h"
@@ -2872,6 +2875,52 @@ auto CmdShop(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `gamble`: the player's gamble offers (the server builds the list on every gamble request: `interact <Gheed>`, then `menu <Gamble
+// line>`), read from the player data (+0x108); same item lines as `shop`, then `gamble offers N`. tools/game_checks.py check_gamble.
+auto CmdGamble(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const uint8_t* data = Fn<PlayerDataFn>(RvaPlayerData)(c->player);
+	void* list = data != nullptr ? d2r::At<void*>(data, 0x108) : nullptr;
+	int offers = 0;
+	if (list != nullptr) {
+		int guard = 0;
+		Unit* item = Fn<InvFirstFn>(RvaInvFirst)(list);
+		while (item != nullptr && guard++ < 200) {
+			Unit* next = Fn<InvNextFn>(RvaInvNext)(item);
+			if (TypeOf(item) == 4) {
+				++offers;
+				if (offers <= 60) {
+					DescribeItem(c, item);
+				}
+			}
+			item = next;
+		}
+	}
+	Out("gamble offers %d (expected %d, list %s) difficulty=%d", offers, gamble::MedianOffers, list != nullptr ? "present" : "none",
+	    static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)));
+	return list != nullptr;
+}
+
+// `gaps`: the small engine rules (engine_gaps_logic.h): the bytes at the three patched places and the player's slow floor as the
+// hooked function 0x449f40 returns it. tools/game_checks.py check_engine_gaps.
+auto CmdGaps(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	auto hex = [](uint64_t rva, size_t n, char* out) {
+		const uint8_t* p = reinterpret_cast<const uint8_t*>(g_base + rva);
+		for (size_t i = 0; i < n; ++i) {
+			std::snprintf(out + i * 2, 3, "%02x", p[i]);
+		}
+	};
+	char hit[32] = "", recast[40] = "";
+	hex(gaps::Hit20FloorRva, sizeof(gaps::Hit20FloorPatched), hit);
+	hex(gaps::RecastGuardRva, sizeof(gaps::RecastGuardPatched), recast);
+	const bool hitOn = gaps::SameBytes(reinterpret_cast<const uint8_t*>(g_base + gaps::Hit20FloorRva), gaps::Hit20FloorPatched, sizeof(gaps::Hit20FloorPatched));
+	const bool recastOn =
+	    gaps::SameBytes(reinterpret_cast<const uint8_t*>(g_base + gaps::RecastGuardRva), gaps::RecastGuardPatched, sizeof(gaps::RecastGuardPatched));
+	const int difficulty = static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty));
+	Out("gaps hit20=%s hit20_patched=%d recast=%s recast_patched=%d slowfloor=%d expected_slowfloor=%d difficulty=%d", hit, hitOn ? 1 : 0, recast,
+	    recastOn ? 1 : 0, EngineGapsSlowFloor(c->game, c->player), gaps::PlayerSlowFloor(difficulty), difficulty);
+	return true;
+}
+
 // Client side: the plugin's own string ids (strings.h). `mstr <full key>` reads the key through the localization service,
 // takes (or finds) the plugin id for it and reads the text back through D2R's numeric lookup, the way the NPC menu does.
 auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
@@ -2896,7 +2945,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
-	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | levelact <id>..");
+	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | gamble | gaps | levelact <id>..");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
 	Out("backlog verbs: stat <ref> <stat> scan [max layer] | cubeslots <first> <count> | cubeout <recipe> [slot] (portal outputs) | state (portal dest=)");
@@ -3511,7 +3560,7 @@ const Verb Verbs[] = {
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
-    {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
+    {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
 };
