@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst lockout cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
+catalyst cainsub lockout cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -562,6 +562,50 @@ def check_cain():
     close_menu()
 
 
+def check_cain_submenu():
+    """Median's Cain page: a click on 'crafting materials' opens the submenu of the materials whose requirement holds
+    (the server's plugin message 'N' makes the client rebuild the list; plugin/src/npc_actions.cpp)."""
+    name = "Cain crafting materials: the click opens a submenu with the open entries"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    H("stat player 7 set 20000000")
+    H("stat player 6 set 20000000")
+    H("quest 4 0 set")  # Search for Cain done: the cube entry's requirement (the page needs one open entry)
+    H("remove box 10")  # the entry shows only while the player lacks the cube
+    menu = npc_menu(265)
+    if not menu:
+        return add(name, "FAIL", "Cain's menu did not open")
+    # the menu flag is set when the talk starts; the client builds the list (and the plugin adds its line) when the speech ends (a first talk takes up to ~30 s)
+    t0 = time.time()
+    while time.time() - t0 < 240 and not any("handler=plugin" in x for x in menu):
+        time.sleep(1)
+        ok0, again = g.hcmd("menu list", 5)
+        menu = again if ok0 else menu
+    plugin_idx = [int(re.search(r"line (\d+)", x).group(1)) for x in menu if "handler=plugin" in x]
+    if not plugin_idx:
+        return add(name, "FAIL", "no plugin line in Cain's menu after the speech: %s" % menu, [sh("cain_submenu")], menu)
+    before = len([l for l in menu if "line " in l])
+    shot0 = sh("cain_menu_page")
+    ok, l = H("menu %d" % plugin_idx[0])
+    time.sleep(2.5)
+    ok2, after = g.hcmd("menu list", 5)
+    s = sh("cain_submenu")
+    n_after = len([x for x in (after or []) if "line " in x])
+    same = after == menu
+    if ok2 and n_after >= 1 and not same:
+        ok3, l3 = H("menu 0")  # the first entry: the Horadric Cube
+        time.sleep(2)
+        got = len(items(hstate(), "box"))
+        add(name + " (entry gives the item)", "PASS" if got >= 1 else "FAIL",
+            "`menu 0` in the submenu: %s; Horadric Cube (box) items now: %d" % (ok3, got), [sh("cain_entry")], l3 or [])
+    add(name, "PASS" if (ok and ok2 and n_after >= 1 and not same) else "FAIL",
+        "menu lines before %d; click on the plugin line: %s; menu open after: %s with %d lines (the list changed: %s). Entry texts must be "
+        "read from the screenshots (cain_menu_page.png: Talk / crafting materials, cain_submenu.png: the entries)" % (before, ok, ok2, n_after, not same),
+        [shot0, s], (menu or []) + (l or []) + (after or []))
+    close_menu()
+
+
 def check_heart():
     name = "Griswold's Heart from Akara after Cain (quest 4 bit 1)"
     if not need_game():
@@ -1064,7 +1108,7 @@ def check_median_ai():
 
 
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
-          ("cain", check_cain), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
+          ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
           ("areacycle", check_areacycle), ("casts", check_casts), ("equipevents", check_equip_events), ("medianai", check_median_ai)]

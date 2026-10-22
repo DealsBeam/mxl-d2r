@@ -6,6 +6,7 @@
 #include "mxl_npc_actions.h"
 #include "requirements.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace npc {
@@ -29,7 +30,7 @@ enum Type : int32_t {
 // and NPC travel with its waypoint grant; npc_services_logic.h checks that against the game's tables), so no line is
 // drawn and nothing is run.
 enum class Support : uint8_t { None, Run, Native };
-enum class Result : uint8_t { NotFound, Denied, Done, Nothing, Native };
+enum class Result : uint8_t { NotFound, Denied, Done, Nothing, Native, Page };
 
 constexpr auto Merge(Support a, Support b) noexcept -> Support {
 	return a == Support::Run || b == Support::Run ? Support::Run : (a == Support::Native || b == Support::Native ? Support::Native : Support::None);
@@ -74,6 +75,25 @@ constexpr auto FindSlot(uint32_t kind, int npcClass) noexcept -> int {
 	return -1;
 }
 
+constexpr auto IsPage(int slotIndex) noexcept -> bool {
+	const mxl_npc::Slot& s = mxl_npc::Slots[slotIndex];
+	return s.action > 0 && s.action < mxl_npc::ActionCount && mxl_npc::Actions[s.action].type == Page;
+}
+
+// The sub-entries of the text-page slot `pageIndex`: the slots right behind it that belong to its submenu (sub != 0).
+// Writes their slot indices to `out` (at most `cap`) and returns how many there are.
+constexpr auto SubSlots(int pageIndex, int* out, int cap) noexcept -> int {
+	int n = 0;
+	const int npcRow = mxl_npc::Slots[pageIndex].npcRow;
+	for (int j = pageIndex + 1; j < mxl_npc::SlotCount && mxl_npc::Slots[j].npcRow == npcRow && mxl_npc::Slots[j].sub != 0; ++j) {
+		if (n < cap) {
+			out[n] = j;
+		}
+		++n;
+	}
+	return n;
+}
+
 // What a slot does: a text-page slot (Cain's "crafting materials") stands for the sub-entries that follow it.
 constexpr auto SlotSupport(int i) noexcept -> Support {
 	const mxl_npc::Slot& s = mxl_npc::Slots[i];
@@ -100,6 +120,9 @@ struct Host {
 	mxl_requirements::Queries queries;
 	bool (*createItem)(void* user, uint32_t code, int itemLevel, int quality) = nullptr;
 	bool (*respec)(void* user) = nullptr;
+	// A text-page slot was clicked: `mask` has bit j set for the j-th sub-entry whose requirement holds. The client opens
+	// the submenu with those entries (Median's page shows the entries whose requirement holds).
+	void (*page)(void* user, int npcClass, uint32_t pageKind, uint32_t mask) = nullptr;
 	void (*note)(void* user, const char* what, int a, int b) = nullptr;  // refusals and stubs, for the log
 };
 
@@ -154,8 +177,22 @@ inline auto RunAction(int row, const Host& h, int depth = 0) noexcept -> Result 
 	}
 }
 
-// A click on slot `kind` of an NPC of class `npcClass`: the slot's requirement, then its action; a text-page slot
-// runs the sub-entries that follow it, each under its own requirement.
+// Bit j: the j-th sub-entry of the page slot `pageIndex` is open (its requirement holds).
+inline auto PageMask(int pageIndex, const Host& h) noexcept -> uint32_t {
+	int subs[32];
+	const int n = SubSlots(pageIndex, subs, 32);
+	uint32_t mask = 0;
+	for (int j = 0; j < n && j < 32; ++j) {
+		if (mxl_requirements::Evaluate(mxl_npc::Slots[subs[j]].requirement, h.queries)) {
+			mask |= 1u << j;
+		}
+	}
+	return mask;
+}
+
+// A click on slot `kind` of an NPC of class `npcClass`: the slot's requirement, then its action. A text-page slot only
+// reports which of its sub-entries are open (the client then shows them); each entry is clicked on its own and runs its
+// action under its own requirement.
 inline auto RunSlot(uint32_t kind, int npcClass, const Host& h) noexcept -> Result {
 	const int i = FindSlot(kind, npcClass);
 	if (i < 0) {
@@ -165,17 +202,58 @@ inline auto RunSlot(uint32_t kind, int npcClass, const Host& h) noexcept -> Resu
 	if (!mxl_requirements::Evaluate(s.requirement, h.queries)) {
 		return Result::Denied;
 	}
-	if (s.action > 0 && s.action < mxl_npc::ActionCount && mxl_npc::Actions[s.action].type == Page) {
-		Result r = Result::Nothing;
-		for (int j = i + 1; j < mxl_npc::SlotCount && mxl_npc::Slots[j].npcRow == s.npcRow && mxl_npc::Slots[j].sub != 0; ++j) {
-			const mxl_npc::Slot& c = mxl_npc::Slots[j];
-			if (mxl_requirements::Evaluate(c.requirement, h.queries)) {
-				r = Join(r, RunAction(c.action, h));
-			}
+	if (IsPage(i)) {
+		if (h.page != nullptr) {
+			h.page(h.user, npcClass, kind, PageMask(i, h));
 		}
-		return r;
+		return Result::Page;
 	}
 	return RunAction(s.action, h);
+}
+
+// --- Page answer: the 'N' plugin message (client_messages_logic.h) -----------------------------------------------
+// 8 bytes: u32 page kind, u16 NPC class, u16 mask of the open sub-entries.
+inline constexpr size_t PagePayloadSize = 8;
+inline void BuildPagePayload(uint8_t* p, uint32_t pageKind, uint16_t npcClass, uint16_t mask) noexcept {
+	for (int i = 0; i < 4; ++i) {
+		p[i] = static_cast<uint8_t>(pageKind >> (8 * i));
+	}
+	p[4] = static_cast<uint8_t>(npcClass);
+	p[5] = static_cast<uint8_t>(npcClass >> 8);
+	p[6] = static_cast<uint8_t>(mask);
+	p[7] = static_cast<uint8_t>(mask >> 8);
+}
+inline auto ParsePagePayload(const uint8_t* p, size_t n, uint32_t* pageKind, uint16_t* npcClass, uint16_t* mask) noexcept -> bool {
+	if (n != PagePayloadSize) {
+		return false;
+	}
+	*pageKind = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) | (static_cast<uint32_t>(p[2]) << 16) |
+	            (static_cast<uint32_t>(p[3]) << 24);
+	*npcClass = static_cast<uint16_t>(p[4] | (p[5] << 8));
+	*mask = static_cast<uint16_t>(p[6] | (p[7] << 8));
+	return true;
+}
+
+// The submenu the client shows for a page answer: the sub-entries whose mask bit is set, in order. Returns the count.
+struct PageEntry {
+	uint16_t label;  // D2R string id
+	uint32_t kind;   // packet 0x38 kind of the entry's own slot
+};
+inline auto PageEntries(int npcClass, uint32_t pageKind, uint32_t mask, PageEntry* out, int cap) noexcept -> int {
+	const int page = FindSlot(pageKind, npcClass);
+	if (page < 0 || !IsPage(page)) {
+		return 0;
+	}
+	int subs[32];
+	const int n = SubSlots(page, subs, 32);
+	int count = 0;
+	for (int j = 0; j < n && j < 32 && count < cap; ++j) {
+		if ((mask >> j) & 1u) {
+			const mxl_npc::Slot& s = mxl_npc::Slots[subs[j]];
+			out[count++] = {s.label, KindOf(s.npcRow, s.slot)};
+		}
+	}
+	return count;
 }
 
 // --- Client menu table (48 records of 0x48 bytes; docs/d2r-addresses.md section 9) ------------------------------

@@ -150,7 +150,9 @@ void PlayerTick(Game* game, Unit* player, uint32_t frame, int32_t players) noexc
 		return;
 	}
 	const uint32_t n = g_spawned.fetch_add(1) + 1;
-	SendClientMessage(player, clientmsg::GoblinSighted, clientmsg::Yellow);
+	char notice[64];
+	clientmsg::GoblinAppears(notice, sizeof(notice));
+	SendClientMessage(player, notice, clientmsg::Yellow);
 	g_lastMonster = monster;
 	g_lastLevel = level;
 	if (n <= 20 && g_context != nullptr) {

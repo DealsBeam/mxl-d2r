@@ -23,7 +23,7 @@ count helpers; the item modules are D2Game's code compiled into Sigma with a han
   slots instead of 7, **Jewel padding** of the rune list), the **kill-experience penalty**, the **party split of kill
   experience**, a handful of **item event functions** (ids 11, 12, 32, 33, 34 and the monster immunity checks of 15/16)
   and the **item generation** details (ethereal roll, socket roll, item level 100+).
-- **Shipped here** (plugin `items_ext.cpp`, `tools/items_data.py`, off words `runewords` and `xp`, no version bump):
+- **Shipped here** (plugin `items_ext.cpp`, `tools/items_data.py`, off words `runewords`, `xp` and `partyxp`, no version bump):
   runeword properties 8-13 (197 of 237 runewords had lost properties), Jewel padding in the runeword matcher, and the
   kill-experience penalty. Everything else is classified in the tables and left for the next lane with a spec.
 - **Nothing in these modules gates the ubers or the endgame areas** (that was ubers-events.md). The generator keeps
@@ -255,8 +255,22 @@ Off words `classlock`, `ethereal`, `sockets`, `dyes`. All four were read in the 
     watch on the stat-list event array) rather than by scanning.
   Monster stat 373 (Median `0xbd`, immune to open wounds and crushing blow) is a data stat on the monster; it is the same
   stat as Median 189 of the absorb credit (combat-stats.md section 2.4).
-- **Party experience (0x5e830): not done, multiplayer only.** Solo play is identical; Median pays every member in range the
-  full award, 1.13c splits by weights. The share loop in the kill function `0x44ece0` was not read.
+- **Party experience (0x5e830): shipped (off word `partyxp`), multiplayer only, not run in game with two players.** Solo
+  play is identical. Median overwrites the 1.13c share function `0xde8f0` (patch table `0xde8f0` = `E9` to thunk `0x5e910`)
+  and pays every collected member the monster's full experience through the per-member award (`0xdc030`: cap, level gap
+  penalty, ExpRatio, stat 0x55; hirelings capped) and the add (`0xde6d0`), with no division and no weighting; it also
+  widens the collect range from `0x1900` to `0x7d00` squared units (80 to about 179; patch table `0xdafcb`).
+  D2R's version: the kill function is `0x44a3b0` (not `0x44ece0`, which is the per-member award `(game, unit, level,
+  monster level, xp)`); it collects with the party iterator `0x506f90(game, killer, callback, ctx)` and callback `0x44fd50`
+  into a 0x70-byte stack context (monster `+0`, units[8] `+8`, levels[8] `+0x48`, count `+0x68`, level sum `+0x6c`) and
+  splits inline at `0x44a62e..0x44a6d7`: pool `xp + (n-1) * xp * 0x59 / 256`, member share `level * pool / sum`
+  (n = 1: the killer gets the full xp). `0x44a3b0` tests `count <= 0` after the iterator (`0x44a5e2`) and then skips the
+  split. The port hooks `0x506f90` (15 stolen bytes, whole instructions): after the original it checks the callback is
+  `0x44fd50`, pays each collected unit `0x44ece0(game, unit, level, monster level, base stat 13 of the monster)` then
+  `0x44f2e0(game, unit, level, amount)`, and sets the count to 0. The range immediate at `0x44fe7b` (`cmp ebx,0x1900`) is
+  patched to `0x7d00` (expected bytes checked). The collect callback also skips members with flag `+0x124 & 0x10000`
+  where 1.13c tested `+0xc6 & 1`; not compared. D2R's table of the vanilla numbers (xp 1000, two level-80 players: pool
+  1347, 673 each; three: 565 each; levels 60 and 90: 538 / 808) is in `items_ext_test.cpp`.
 
 ## 6. D2R addresses found here
 
@@ -294,7 +308,7 @@ references by raw bytes, which finds callers in code Ghidra did not disassemble)
 | Runeword properties 8-13 | c + data | shipped: `items_data.py`, `items_ext.cpp` |
 | Runeword Jewel padding | c | shipped |
 | Kill experience penalty | c | shipped |
-| Party experience split | c | open (multiplayer) |
+| Party experience split | c | shipped (`partyxp`, hook `0x506f90` + range `0x44fe7b`); two-player run open |
 | Item events 11/12/32/33/34, immunity of 15/16 | c | open (dispatcher not found, section 5) |
 | Class lock stat 463 | c | shipped (`classlock`, hook `0x36bc50`) |
 | Ethereal / socket generation | c | shipped (`ethereal`, `sockets`; hooks `0x442d60`, `0x3d3510`, `0x441fc0`) |

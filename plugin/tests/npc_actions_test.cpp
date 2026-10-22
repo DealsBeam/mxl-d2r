@@ -26,6 +26,10 @@ struct Fixture {
 	std::vector<int> createdQuality;
 	int respecs = 0;
 	int notes = 0;
+	int pages = 0;
+	std::uint32_t pageKind = 0;
+	int pageClass = 0;
+	std::uint32_t pageMask = 0;
 };
 
 bool QBit(void* user, int quest, int bit, int) { return static_cast<Fixture*>(user)->bits.count({quest, bit}) != 0; }
@@ -48,6 +52,13 @@ bool DoRespec(void* user) {
 	return true;
 }
 void Note(void* user, const char*, int, int) { ++static_cast<Fixture*>(user)->notes; }
+void Page(void* user, int npcClass, std::uint32_t kind, std::uint32_t mask) {
+	auto* f = static_cast<Fixture*>(user);
+	++f->pages;
+	f->pageClass = npcClass;
+	f->pageKind = kind;
+	f->pageMask = mask;
+}
 
 npc::Host MakeHost(Fixture& f) {
 	npc::Host h;
@@ -55,6 +66,7 @@ npc::Host MakeHost(Fixture& f) {
 	h.queries = {&f, QBit, QClass, QHolds};
 	h.createItem = MakeItem;
 	h.respec = DoRespec;
+	h.page = Page;
 	h.note = Note;
 	return h;
 }
@@ -130,27 +142,53 @@ int RunNpcActionsTests() {
 		Check(RunSlot(kind, 148, h) == Result::Done && f.respecs == 1, "respec runs once the requirement holds");
 	}
 
-	// Cain: the page gives every material whose requirement holds and that is not held yet
+	// Cain: a click on the page gives nothing, it reports which entries are open; each entry runs on its own click
 	{
 		Fixture f;
 		const npc::Host h = MakeHost(f);
 		for (const int cls : {244, 245, 246, 265, 520}) {
 			Check(RunSlot(KindFor(cls, 0), cls, h) == Result::Denied, "Cain denied before the search for Cain is done");
 		}
+		Check(f.pages == 0 && f.created.empty(), "a denied page tells the client nothing and gives nothing");
 		f.bits.insert({4, 0});  // Cain rescued: the cube
-		Check(RunSlot(KindFor(244, 0), 244, h) == Result::Done, "Cain gives the cube");
+		Check(RunSlot(KindFor(244, 0), 244, h) == Result::Page, "Cain's page opens");
+		Check(f.pages == 1 && f.pageClass == 244 && f.pageKind == KindFor(244, 0) && f.pageMask == 1, "only the cube entry is open");
+		Check(f.created.empty(), "the page itself gives nothing");
+		Check(RunSlot(KindFor(244, 1), 244, h) == Result::Done, "the cube entry gives the cube");
 		Check(f.created.size() == 1 && f.created[0] == C("box ") && f.createdLevel[0] == 1 && f.createdQuality[0] == 2,
 		      "only the cube, normal quality");
-		Check(RunSlot(KindFor(244, 0), 244, h) == Result::Denied, "the cube is held: page denied (row 31)");
+		Check(RunSlot(KindFor(244, 0), 244, h) == Result::Denied, "the cube is held and nothing else is open: page denied (row 31)");
+		Check(RunSlot(KindFor(244, 1), 244, h) == Result::Denied && f.created.size() == 1, "the cube is not given twice");
 		f.bits.insert({6, 0});  // Andariel (Normal): catalyst of disenchantment
-		Check(RunSlot(KindFor(245, 0), 245, h) == Result::Done && f.created.size() == 2 && f.created[1] == C("3o[ "),
-		      "Andariel done: the first catalyst");
-		Check(RunSlot(KindFor(245, 0), 245, h) == Result::Denied && f.created.size() == 2, "nothing twice");
-		// a sub-entry on its own, with its own requirement (3o[ is held, so row 28 fails)
-		Check(RunSlot(KindFor(246, 2), 246, h) == Result::Denied, "catalyst entry denied while held");
-		Check(RunSlot(KindFor(246, 3), 246, h) == Result::Denied, "second catalyst needs its quest");
 		f.bits.insert({13, 0});  // row 20 reads quest 13 bit 0 (Nightmare in the table; the fixture ignores the difficulty)
+		f.bits.insert({25, 0});
+		Check(RunSlot(KindFor(245, 0), 245, h) == Result::Page && f.pageClass == 245 && f.pageMask == 0xe,
+		      "the catalysts are open, the held cube is not");
+		Check(RunSlot(KindFor(245, 2), 245, h) == Result::Done && f.created.back() == C("3o[ "), "the first catalyst");
+		Check(RunSlot(KindFor(245, 2), 245, h) == Result::Denied && f.created.size() == 2, "nothing twice");
 		Check(RunSlot(KindFor(246, 3), 246, h) == Result::Done && f.created.back() == C("0o[ "), "second catalyst");
+		Check(RunSlot(KindFor(246, 4), 246, h) == Result::Done && f.created.back() == C("jcat"), "third catalyst");
+		Check(RunSlot(KindFor(246, 0), 246, h) == Result::Denied, "everything held: the page is closed");
+
+		// the client's side: the mask picks the entries and their kinds
+		npc::PageEntry e[8];
+		Check(PageEntries(244, KindFor(244, 0), 0, e, 8) == 0, "empty mask: no entries");
+		Check(PageEntries(244, KindFor(244, 0), 0xf, e, 8) == 4, "full mask: four entries");
+		Check(e[0].kind == KindFor(244, 1) && e[3].kind == KindFor(244, 4), "entries keep the slot order");
+		Check(e[0].label == mxl_npc::Slots[SlotOf(244, 1)].label && e[2].label == mxl_npc::Slots[SlotOf(244, 3)].label,
+		      "entry labels are the slots'");
+		Check(PageEntries(244, KindFor(244, 0), 0xa, e, 8) == 2 && e[0].kind == KindFor(244, 2) && e[1].kind == KindFor(244, 4),
+		      "mask 0xa picks entries 2 and 4");
+		Check(PageEntries(244, KindFor(244, 0), 0xf, e, 2) == 2, "capacity limits the list");
+		Check(PageEntries(148, KindFor(148, 0), 0xf, e, 8) == 0, "Akara's line is not a page");
+		Check(PageEntries(245, KindFor(244, 0), 0xf, e, 8) == 0, "a page kind of another NPC is not found");
+		std::uint8_t payload[PagePayloadSize];
+		BuildPagePayload(payload, 0x12345678u, 520, 0x0a05);
+		std::uint32_t pk = 0;
+		std::uint16_t pc = 0, pm = 0;
+		Check(ParsePagePayload(payload, sizeof(payload), &pk, &pc, &pm) && pk == 0x12345678u && pc == 520 && pm == 0x0a05,
+		      "page payload round trip");
+		Check(!ParsePagePayload(payload, 7, &pk, &pc, &pm), "short payload rejected");
 	}
 
 	// D2R-native services: logged, no effect
