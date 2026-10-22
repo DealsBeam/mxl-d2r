@@ -56,6 +56,40 @@ int RunCombatTests() {
 	          AbsorbLayer(0x2d) == 5 && AbsorbLayer(0x24) == 0,
 	      "absorb layers by resistance stat");
 
+	// damage reduction on the incoming damage (D2Sigma 0x10057c10): divisor, percent, per-type percent on the field D2R's step left
+	const DamageType fire = DamageTypeOfName(NameWord('F', 'i', 'r', 'e'));
+	const DamageType phys = DamageTypeOfName(NameWord('P', 'h', 'y', 's'));
+	const DamageType cold = DamageTypeOfName(NameWord('C', 'o', 'l', 'd'));
+	const DamageType freeze = DamageTypeOfName(NameWord('F', 'L', 'e', 'n'));
+	Check(fire.kind == FieldKind::Damage && fire.layer == 1 && phys.kind == FieldKind::Damage && phys.layer == 0 && cold.layer == 4,
+	      "damage types by name: fire layer 1, physical layer 0, cold layer 4");
+	Check(DamageTypeOfName(NameWord('L', 'i', 'g', 't')).layer == 2 && DamageTypeOfName(NameWord('M', 'a', 'g', 'c')).layer == 3 &&
+	          DamageTypeOfName(NameWord('P', 'o', 'i', 's')).layer == 5 && DamageTypeOfName(NameWord('L', 'i', 'f', 'e')).layer == 6 &&
+	          DamageTypeOfName(NameWord('M', 'a', 'n', 'a')).layer == 7 && DamageTypeOfName(NameWord('S', 't', 'a', 'm')).layer == 8,
+	      "damage layers: lightning 2, magic 3, poison 5, life / mana / stamina leech 6 / 7 / 8");
+	Check(freeze.kind == FieldKind::Duration && DamageTypeOfName(NameWord('C', 'L', 'e', 'n')).kind == FieldKind::Duration &&
+	          DamageTypeOfName(NameWord('P', 'L', 'e', 'n')).kind == FieldKind::Duration,
+	      "cold, freeze and poison lengths are durations");
+	Check(DamageTypeOfName(NameWord('X', 'x', 'x', 'x')).kind == FieldKind::None, "an unknown name is left alone");
+	Check(ReduceField(100000, fire, 0, 0, 0) == 100000, "no stats leave the damage alone");
+	Check(ReduceField(100000, fire, 4, 0, 0) == 25000 && ReduceField(100000, fire, 0, 50, 0) == 50000 &&
+	          ReduceField(100000, fire, 0, 0, 25) == 75000,
+	      "each damage reduction stat on its own");
+	Check(ReduceField(100000, fire, 2, 50, 50) == 12500, "divisor, then 184, then 417");
+	Check(ReduceField(100001, fire, 3, 33, 17) == 18538, "the three stats compose with truncation at every step");
+	Check(ReduceField(7, fire, 2, 0, 0) == 3 && ReduceField(1, fire, 4, 0, 0) == 0, "the divisor truncates and has no floor of one point");
+	Check(ReduceField(99, fire, 0, 33, 0) == 99 - 99 * 33 / 100 && ReduceField(1, fire, 0, 50, 0) == 1, "percent truncates the cut");
+	Check(ReduceField(1000, fire, 0, 150, 0) == 0, "a percent above 100 cannot turn damage into healing");
+	Check(ReduceField(100000, phys, 0, 0, 30) == 70000, "physical damage takes stat 417 with layer 0 (the caller reads that layer)");
+	Check(ReduceField(0, fire, 3, 50, 50) == 0, "an empty field stays empty");
+	Check(ReduceField(-40, fire, 3, 50, 50) == -40, "a negative field is left alone");
+	Check(ReduceField(100, freeze, 4, 0, 0) == 50 && ReduceField(101, freeze, 99, 0, 0) == 50 && ReduceField(8, freeze, 2, 0, 0) == 5 &&
+	          ReduceField(3, freeze, 2, 0, 0) == 5,
+	      "a duration is halved, at least 5, whatever the divisor");
+	Check(ReduceField(100, freeze, 0, 50, 50) == 100, "percent stats do not shorten a duration");
+	Check(ReduceField(100000, DamageTypeOfName(NameWord('X', 'x', 'x', 'x')), 4, 50, 50) == 100000, "unknown entries are not touched");
+	Check(ReduceField(2000000000, fire, 0, 50, 0) == 1000000000, "no 32-bit overflow in the product");
+
 	// ethereal: +25% (D2R's 3/2 is replaced), truncated toward zero
 	Check(EtherealBonus(100) == 125 && EtherealBonus(7) == 8 && EtherealBonus(3) == 3 && EtherealBonus(0) == 0,
 	      "ethereal bonus is 25%");
