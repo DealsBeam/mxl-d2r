@@ -11,7 +11,7 @@ size. Buckets from docs/PLAN.md: **(a)** data-only, **(b)** D2RLoader service, *
 | Module | Functions | What it is | Bucket | Status | Notes |
 |---|---|---|---|---|---|
 | D2SkillDo.cpp | 45 | added/replaced skill server functions (srvdofunc 153-171 and replaced vanilla ones) | c | done | plugin-spec.md "Skill server functions": all used ones but 156 (skills_374) and 162 (skills_667, random Param skill) |
-| D2SkillStart.cpp | 9 | skill start functions | c | partial | the vanilla starts Median uses run as D2R's; D2Sigma's own starts not reviewed |
+| D2SkillStart.cpp | 9 | skill start functions | c | ported | slots 6, 10, 28, 39, 56 are D2R's own function; 30 and 66 run from the free slots 71 / 72 (`skill_starts.cpp`); 58 and 67 have no Median skill |
 | D2SkillCltDo.cpp, D2SkillCltStart.cpp | 13, 1 | client skill functions | c | done | cltdofunc 97-99/11/15/22/95 mapped (txt_migrate skill_rules) |
 | D2SkillCalc.cpp | 11 | skill calc codes 73-110 | c | done | calc_codes.cpp; still 0: mode, pdmn, pdmx (3 skills) |
 | D2Skills.cpp | 14 | tabpoints, base levels | c | done | calc_codes.cpp |

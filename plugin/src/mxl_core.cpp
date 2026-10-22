@@ -49,6 +49,7 @@
 #include "monster_ai.h"
 #include "monster_looks.h"
 #include "hirelings.h"
+#include "monster_rules.h"
 #include "items_ext.h"
 #include "item_gen.h"
 #include "npc_actions.h"
@@ -58,6 +59,8 @@
 #include "testharness.h"
 #include "travel.h"
 #include "waypoints.h"
+#include "collide_types.h"
+#include "skill_starts.h"
 #include "whirlwind.h"
 
 #include <windows.h>
@@ -104,6 +107,11 @@ char g_npcReport[256] = "off: not the expected game image";
 char g_stringsReport[256] = "off: not the expected game image";
 char g_hirelingsReport[192] = "off: not the expected game image";
 char g_mercReviveReport[192] = "off: not the expected game image";
+char g_monLevelReport[192] = "off: not the expected game image";
+char g_playersXReport[192] = "off: not the expected game image";
+char g_normalTcReport[192] = "off: not the expected game image";
+char g_leashReport[192] = "off: not the expected game image";
+char g_throneReport[192] = "off: not the expected game image";
 char g_questXpReport[192] = "off: not the expected game image";
 char g_questRewardsReport[256] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
@@ -118,6 +126,8 @@ char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
 char g_itemGenReport[320] = "off: not the expected game image";
 char g_waypointsReport[256] = "off: not the expected game image";
+char g_collideReport[256] = "off: not the expected game image";
+char g_skillStartsReport[256] = "off: not the expected game image";
 char g_clientMsgReport[192] = "off: not the expected game image";
 char g_travelReport[448] = "off: not the expected game image";
 int g_missileHitsInstalled = 0;
@@ -144,7 +154,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels gamble hitfloor recast slowfloor
+// items missiles mana townmana durability quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels gamble hitfloor recast slowfloor
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -318,6 +328,22 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		              MercRevivePrices(), last, level);
 	}
 	Say(command, line);
+	std::snprintf(line, sizeof(line), "monster level %s", g_monLevelReport);
+	Say(command, line);
+	{
+		const PlayersTrace pt = PlayersTraceLast();
+		std::snprintf(line, sizeof(line), "players scaling %s (%d records, last players %d, life %d%% -> %d%%, exp %d%% -> %d%%)",
+		              g_playersXReport, pt.records, pt.players, pt.hpIn, pt.hpOut, pt.expIn, pt.expOut);
+		Say(command, line);
+		const TcTrace tc = NormalTcTrace(false);
+		std::snprintf(line, sizeof(line), "normal-difficulty treasure class %s (%d class lookups, %d with a level, last class %d level %d)",
+		              g_normalTcReport, tc.calls, tc.leveled, tc.lastClass, tc.lastLevel);
+		Say(command, line);
+	}
+	std::snprintf(line, sizeof(line), "summon leash %s", g_leashReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "Baal throne delay %s", g_throneReport);
+	Say(command, line);
 	{
 		const QuestRewardCounts counts = QuestRewardsCounts();
 		std::snprintf(line, sizeof(line), "quest experience %s (%d grants, last %d)", g_questXpReport, counts.xpGrants, counts.lastXp);
@@ -327,6 +353,10 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "waypoints %s", g_waypointsReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "collide types %s", g_collideReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "skill starts %s", g_skillStartsReport);
 	Say(command, line);
 	{
 		char status[448];
@@ -678,6 +708,51 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 		{
+			if (Off("monlevel")) {
+				std::snprintf(g_monLevelReport, sizeof(g_monLevelReport), "%s", OffNote);
+			} else {
+				InstallMonsterLevel(context, g_monLevelReport, sizeof(g_monLevelReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: monster level %s", g_monLevelReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("playersx")) {
+				std::snprintf(g_playersXReport, sizeof(g_playersXReport), "%s", OffNote);
+			} else {
+				InstallPlayersTable(context, g_playersXReport, sizeof(g_playersXReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: players scaling %s", g_playersXReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("normaltc")) {
+				std::snprintf(g_normalTcReport, sizeof(g_normalTcReport), "%s", OffNote);
+			} else {
+				InstallNormalTc(context, g_normalTcReport, sizeof(g_normalTcReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: normal-difficulty treasure class %s", g_normalTcReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("leash")) {
+				std::snprintf(g_leashReport, sizeof(g_leashReport), "%s", OffNote);
+			} else {
+				InstallLeash(context, g_leashReport, sizeof(g_leashReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: summon leash %s", g_leashReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("throne")) {
+				std::snprintf(g_throneReport, sizeof(g_throneReport), "%s", OffNote);
+			} else {
+				InstallThrone(context, g_throneReport, sizeof(g_throneReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: Baal throne delay %s", g_throneReport);
+			context->LogInfo(line);
+		}
+		{
 			if (Off("questxp")) {
 				std::snprintf(g_questXpReport, sizeof(g_questXpReport), "%s", OffNote);
 			} else {
@@ -706,6 +781,26 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				std::snprintf(g_waypointsReport + used, sizeof(g_waypointsReport) - used, "; %s", panel);
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: waypoints %s", g_waypointsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("skillstarts")) {
+				std::snprintf(g_skillStartsReport, sizeof(g_skillStartsReport), "%s", OffNote);
+			} else {
+				const int started = InstallSkillStarts(context, g_skillStartsReport, sizeof(g_skillStartsReport));
+				std::snprintf(g_skillStartsReport + std::strlen(g_skillStartsReport), sizeof(g_skillStartsReport) - std::strlen(g_skillStartsReport),
+				              " (%d/2)", started);
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: skill starts %s", g_skillStartsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("collidetypes")) {
+				std::snprintf(g_collideReport, sizeof(g_collideReport), "%s", OffNote);
+			} else {
+				InstallCollideTypes(context, g_collideReport, sizeof(g_collideReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: collide types %s", g_collideReport);
 			context->LogInfo(line);
 		}
 		{

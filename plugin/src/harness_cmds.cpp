@@ -10,6 +10,7 @@
 #include "harness_cmds_logic.h"
 
 #include "client_messages.h"
+#include "collide_types.h"
 #include "craft_flags.h"
 #include "d2r.h"
 #include "dungeon_lockout.h"
@@ -30,7 +31,9 @@
 #include "map_memory.h"
 #include "level_types.h"
 #include "monster_looks.h"
+#include "monster_rules.h"
 #include "skill_damage.h"
+#include "skill_starts.h"
 #include "skill_tree.h"
 #include "mxl_skill_flags.h"
 #include "quests_act1.h"
@@ -1915,12 +1918,41 @@ auto CmdMonsterCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 hcmd::SeenUnits g_missileSeen;
 volatile LONG g_trackMissiles = 0;
 
+// The missile `collide` fired: followed every server frame until it is gone (check collidetypes).
+struct CollideRun {
+	volatile LONG active = 0;
+	volatile LONG started = 0;
+	uint32_t id = 0;
+	int32_t row = 0, type = 0, modeAtStart = 0;
+	int32_t sx = 0, sy = 0;
+	volatile int32_t lx = 0, ly = 0;
+	volatile LONG frames = 0;
+};
+CollideRun g_run;
+
 void TrackMissiles(Game* game) noexcept {
+	const bool following = g_run.active != 0;
+	bool found = false;
 	EachUnit(game, HashMissiles, [&](Unit* u) {
 		if (TypeOf(u) == 3) {
 			g_missileSeen.Add(IdOf(u), ClassOf(u));
+			if (following && IdOf(u) == g_run.id) {
+				found = true;
+				int32_t x = 0, y = 0;
+				if (d2r::UnitXY(u, &x, &y)) {
+					g_run.lx = x;
+					g_run.ly = y;
+				}
+			}
 		}
 	});
+	if (following) {
+		if (found && g_run.frames < 4000) {
+			InterlockedIncrement(&g_run.frames);
+		} else {
+			InterlockedExchange(&g_run.active, 0);
+		}
+	}
 }
 
 void PrintMissiles(Ctx* c) noexcept {
@@ -1952,6 +1984,217 @@ auto CmdMissiles(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		InterlockedExchange(&g_trackMissiles, 1);
 	}
 	PrintMissiles(c);
+	return true;
+}
+
+// `collide <row> <dx> <dy> [type]`: a missile of missiles.txt row <row> from the player towards (player + dx, dy) like `missile`,
+// then followed every server frame (`collide result`): frames alive and where it was last seen. [type] overwrites the missile's
+// collision type (the unit's mode, which the server tick 0x463100 reads to pick a row of the collide table, collide_types.cpp)
+// right after the creation, so one plain projectile (row 0, the arrow: type 3) can be fired as every type.
+// `collide result`: the last run: id, row, type, mode when created, still flying, frames, start and last position, distance.
+auto PrintCollideRun() noexcept -> void {
+	const double dx = static_cast<double>(g_run.lx) - g_run.sx, dy = static_cast<double>(g_run.ly) - g_run.sy;
+	Out("collide result: started=%ld id=%u row=%d type=%d mode0=%d flying=%d frames=%ld start=%d,%d last=%d,%d dist=%.0f", g_run.started, g_run.id,
+	    g_run.row, g_run.type, g_run.modeAtStart, g_run.active != 0 ? 1 : 0, g_run.frames, g_run.sx, g_run.sy, static_cast<int>(g_run.lx),
+	    static_cast<int>(g_run.ly), std::sqrt(dx * dx + dy * dy));
+}
+
+auto CmdCollide(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "result")) {
+		PrintCollideRun();
+		return true;
+	}
+	long long row = 0, dx = 0, dy = 0, type = -1;
+	if (t.n < 4 || !hcmd::ParseInt(t.tok[1], &row) || !hcmd::ParseInt(t.tok[2], &dx) || !hcmd::ParseInt(t.tok[3], &dy) || row < 0 ||
+	    row > 0x7fff || (t.n >= 5 && (!hcmd::ParseInt(t.tok[4], &type) || type < 0 || type > 255))) {
+		return Fail(c, "usage: collide <missiles.txt row> <dx> <dy> [collision type 0-255] | collide result");
+	}
+	int32_t px = 0, py = 0;
+	if (!d2r::UnitXY(c->player, &px, &py)) {
+		return Fail(c, "collide: player has no position");
+	}
+	d2r::MissileParams params;
+	std::memset(&params, 0, sizeof(params));
+	params.flags = 0x820;
+	params.owner = c->player;
+	params.origin = c->player;
+	params.missile = static_cast<int32_t>(row);
+	params.targetX = px + static_cast<int32_t>(dx);
+	params.targetY = py + static_cast<int32_t>(dy);
+	Unit* m = d2r::api.createMissile(c->game, &params);
+	if (m == nullptr) {
+		return Fail(c, "collide: createMissile returned no unit");
+	}
+	InterlockedExchange(&g_run.active, 0);
+	g_run.id = IdOf(m);
+	g_run.row = static_cast<int32_t>(row);
+	g_run.modeAtStart = ModeOf(m);
+	if (type >= 0) {
+		*reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(m) + UnitMode) = static_cast<int32_t>(type);
+	}
+	g_run.type = ModeOf(m);
+	g_run.sx = g_run.lx = px;
+	g_run.sy = g_run.ly = py;
+	InterlockedExchange(&g_run.frames, 0);
+	InterlockedIncrement(&g_run.started);
+	InterlockedExchange(&g_trackMissiles, 1);
+	InterlockedExchange(&g_run.active, 1);
+	const uint8_t* record = Fn<const uint8_t* (*)(uint32_t, int32_t)>(0x166040)(c->dataFlag, static_cast<int32_t>(row));
+	Out("collide: missile row %lld id=%u created at %d,%d aimed %d,%d; record CollideType %d, mode on creation %d, type now %d", row, g_run.id, px, py,
+	    params.targetX, params.targetY, record != nullptr ? d2r::At<uint8_t>(record, 0x1ab) : -1, g_run.modeAtStart, g_run.type);
+	return true;
+}
+
+// `collidetable`: the rows of the collide tables the server and client read now (types 0-10 and 255): check function RVA and
+// mask (collide_types.cpp: 9 and 10 are Median's). `collidetable rows`: how many missiles.txt rows have each CollideType;
+// `collidetable row <n>`: the CollideType of one row.
+auto CmdCollideTable(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "rows")) {
+		const auto record = Fn<const uint8_t* (*)(uint32_t, int32_t)>(0x166040);
+		const int32_t rows = Fn<int32_t (*)(uint32_t)>(0x1b89a0)(c->dataFlag);
+		int count[256] = {};
+		int first[256];
+		for (int& f : first) {
+			f = -1;
+		}
+		for (int32_t row = 0; row < rows; ++row) {
+			const uint8_t* r = record(c->dataFlag, row);
+			if (r != nullptr) {
+				const uint8_t type = d2r::At<uint8_t>(r, 0x1ab);
+				if (count[type]++ == 0) {
+					first[type] = row;
+				}
+			}
+		}
+		char line[320] = "";
+		for (int type = 0; type < 256; ++type) {
+			if (count[type] > 0 && std::strlen(line) < sizeof(line) - 24) {
+				std::snprintf(line + std::strlen(line), sizeof(line) - std::strlen(line), " %d:%d(first row %d)", type, count[type], first[type]);
+			}
+		}
+		Out("collidetable rows: %d rows, by CollideType:%s", rows, line);
+		return true;
+	}
+	if (t.n >= 3 && hcmd::LowerEq(t.tok[1], "row")) {
+		long long row = 0;
+		if (!hcmd::ParseInt(t.tok[2], &row) || row < 0 || row > 0x7fff) {
+			return Fail(c, "usage: collidetable row <missiles.txt row>");
+		}
+		const uint8_t* r = Fn<const uint8_t* (*)(uint32_t, int32_t)>(0x166040)(c->dataFlag, static_cast<int32_t>(row));
+		long loads = 0, restored = 0;
+		CollideRecordStats(&loads, &restored);
+		Out("collidetable row %lld: CollideType %d (table loads seen %ld, records restored %ld)", row, r != nullptr ? d2r::At<uint8_t>(r, 0x1ab) : -1, loads,
+		    restored);
+		return true;
+	}
+	for (const bool server : {true, false}) {
+		char line[400] = "";
+		bool installed = true;
+		for (const int type : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 255}) {
+			uint64_t fn = 0;
+			uint32_t mask = 0;
+			if (!CollideTypeRow(server, type, &fn, &mask)) {
+				installed = false;
+				break;
+			}
+			std::snprintf(line + std::strlen(line), sizeof(line) - std::strlen(line), " %d:%llx/%x", type, static_cast<unsigned long long>(fn), mask);
+		}
+		Out("collidetable %s: %s%s", server ? "server" : "client", installed ? "tables moved" : "tables NOT moved (engine's nine rows)", installed ? line : "");
+	}
+	return true;
+}
+
+// `wallscan [max]`: for the eight directions from the player, the distance in sub-tiles to the first cell the missile tick treats as
+// a wall (collision flag 4 of 0x364d50, the bit that ends a missile of CollideType 1-3, 5, 8) within max (default 24). The
+// last line names the best direction (a wall at 6-20 sub-tiles): `wallscan best dx dy wall=<k>`.
+auto CmdWallScan(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long maxDist = 24;
+	if (t.n >= 2 && (!hcmd::ParseInt(t.tok[1], &maxDist) || maxDist < 4 || maxDist > 60)) {
+		return Fail(c, "usage: wallscan [max sub-tiles 4-60]");
+	}
+	void* room0 = Fn<UnitRoomFn>(RvaUnitRoom)(c->player);
+	int32_t px = 0, py = 0;
+	if (room0 == nullptr || !d2r::UnitXY(c->player, &px, &py)) {
+		return Fail(c, "wallscan: the player has no room");
+	}
+	const auto roomAt = Fn<void* (*)(void*, int32_t, int32_t)>(0x38dfb0);
+	const auto collide = Fn<uint32_t (*)(void*, int32_t, int32_t, int32_t, uint32_t)>(0x364d50);
+	static const int Dirs[8][2] = {{1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1}};
+	int bestDir = -1, bestWall = 0;
+	for (int d = 0; d < 8; ++d) {
+		int wall = 0, seen = 0;
+		for (int k = 1; k <= maxDist; ++k) {
+			const int32_t x = px + Dirs[d][0] * k, y = py + Dirs[d][1] * k;
+			void* room = roomAt(room0, x, y);
+			if (room == nullptr) {
+				break;
+			}
+			++seen;
+			if ((collide(room, x, y, 1, 4) & 4) != 0) {
+				wall = k;
+				break;
+			}
+		}
+		// room cells past the wall: a wall at the edge of the map (no room beyond) ends any missile, so it proves nothing
+		int beyond = 0;
+		for (int k = wall + 1; wall > 0 && k <= wall + 10; ++k) {
+			if (roomAt(room0, px + Dirs[d][0] * k, py + Dirs[d][1] * k) == nullptr) {
+				break;
+			}
+			++beyond;
+		}
+		Out("wallscan dir=%d,%d wall=%d cells=%d beyond=%d", Dirs[d][0], Dirs[d][1], wall, seen, beyond);
+		if (wall >= 6 && wall <= 20 && beyond >= 10 && (bestDir < 0 || wall > bestWall)) {
+			bestDir = d;
+			bestWall = wall;
+		}
+	}
+	if (bestDir < 0) {
+		Out("wallscan best none at %d,%d", px, py);
+	} else {
+		Out("wallscan best %d %d wall=%d at %d,%d", Dirs[bestDir][0], Dirs[bestDir][1], bestWall, px, py);
+	}
+	return true;
+}
+
+// `hasstate <state>`: the player's state bit, the state's stat list and the end frame it carries (the float at list +0x24), and
+// the game frame now (check skillstarts).
+auto CmdHasState(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long state = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &state) || state < 0 || state > 4000) {
+		return Fail(c, "usage: hasstate <state id>");
+	}
+	const uint64_t on = Fn<UnitHasStateFn>(RvaUnitHasState)(c->player, static_cast<int32_t>(state));
+	void* list = Fn<void* (*)(Unit*, int32_t)>(0x2f5940)(c->player, static_cast<int32_t>(state));
+	Out("hasstate %lld: %d list=%s expiry=%.0f frame=%u", state, on != 0 ? 1 : 0, list != nullptr ? "yes" : "no",
+	    list != nullptr ? static_cast<double>(d2r::At<float>(list, 0x24)) : 0.0, d2r::At<uint32_t>(c->game, GameFrame));
+	return true;
+}
+
+// `startfn <slot> <skill id> [level]`: the server start function table (0x238e710) entry the way the cast path calls it
+// (game, player, skill, level); prints its answer (0 = the cast would stop). `startstats`: the plugin's counters for slots 71 / 72.
+auto CmdStartFn(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long slot = 0, skill = 0, level = 1;
+	if (t.n < 3 || !hcmd::ParseInt(t.tok[1], &slot) || !hcmd::ParseInt(t.tok[2], &skill) || slot < 0 || slot > 90 || skill < 0 || skill > 0xffff ||
+	    (t.n >= 4 && (!hcmd::ParseInt(t.tok[3], &level) || level < 1 || level > 255))) {
+		return Fail(c, "usage: startfn <slot 0-90> <skill id> [level]");
+	}
+	const uint64_t fn = *reinterpret_cast<const uint64_t*>(g_base + 0x238e710 + static_cast<uint64_t>(slot) * 8);
+	if (fn == 0) {
+		Out("startfn slot %lld: empty (the cast goes on)", slot);
+		return true;
+	}
+	const int64_t r = reinterpret_cast<int64_t (*)(Game*, Unit*, int32_t, int32_t)>(fn)(c->game, c->player, static_cast<int32_t>(skill),
+	                                                                                    static_cast<int32_t>(level));
+	Out("startfn slot %lld skill %lld level %lld: returned %lld frame=%u", slot, skill, level, static_cast<long long>(r),
+	    d2r::At<uint32_t>(c->game, GameFrame));
+	return true;
+}
+
+auto CmdStartStats(Ctx* /*c*/, const hcmd::Tokens& /*t*/) noexcept -> bool {
+	char text[240];
+	SkillStartStats(text, sizeof(text));
+	Out("startstats: %s", text);
 	return true;
 }
 
@@ -2060,6 +2303,84 @@ auto CmdMercPrice(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	const int32_t expected = hire::RevivePrice(static_cast<int32_t>(level));
 	Out("mercprice level=%lld price=%d median=%d", level, price, expected);
 	return price == expected;
+}
+
+// `players [n]`: D2R's "Offline Difficulty Scaling" setting, the number the /players chat command sets (1-8): what the monster
+// setup 0x543e90 reads as the players count of a monster spawned from now on. The chat command also saves the setting
+// (0xa07670); this verb does not. Prints the value now.
+constexpr uint64_t RvaPlayersSetting = 0xe19e0;     // () -> the setting object; the value at +0xc
+constexpr uint64_t RvaPlayersSettingSet = 0xd2f020; // (setting, value)
+
+auto CmdPlayers(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	void* setting = Fn<void* (*)()>(RvaPlayersSetting)();
+	if (setting == nullptr) {
+		return Fail(c, "players: no setting object");
+	}
+	if (t.n >= 2) {
+		long long n = 0;
+		if (!hcmd::ParseInt(t.tok[1], &n) || n < 1 || n > 8) {
+			return Fail(c, "usage: players [1-8]");
+		}
+		Fn<void (*)(void*, int32_t)>(RvaPlayersSettingSet)(setting, static_cast<int32_t>(n));
+	}
+	Out("players setting=%d", d2r::At<int32_t>(setting, 0xc));
+	return true;
+}
+
+// `tctrace [reset]`: the class lookups of the treasure-class executor since start (or the last reset): the level it handed
+// the class getter 0x397290 is above 0 only when the monster's level steps the class up (Median: in Normal too).
+auto CmdTcTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	(void)c;
+	const TcTrace tc = NormalTcTrace(t.n >= 2 && hcmd::LowerEq(t.tok[1], "reset"));
+	Out("tctrace calls=%d leveled=%d lastclass=%d lastlevel=%d", tc.calls, tc.leveled, tc.lastClass, tc.lastLevel);
+	return true;
+}
+
+// `leash [distance]`: the player's mercenary against its owner. With a distance, moves the MERCENARY (the unit move 0x491ca0,
+// as `interact` does for the player) to a free spot that far from the player, along an axis or a diagonal: moving the player
+// pulls the mercenary along at once, whatever the leash. Prints both positions, the distance D2R's own owner-distance function
+// 0x596720 gives, the Euclidean one, and the mercenary's mode.
+constexpr uint64_t RvaOwnerDistance = 0x596720;  // (unit, owner) -> sub-tile distance
+using OwnerDistanceFn = int32_t (*)(Unit*, Unit*);
+
+auto CmdLeash(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+	if (merc == nullptr) {
+		return Fail(c, "leash: the player has no mercenary");
+	}
+	long long want = -1;
+	if (t.n >= 2 && (!hcmd::ParseInt(t.tok[1], &want) || want < 0 || want > 200)) {
+		return Fail(c, "usage: leash [distance 0-200]");
+	}
+	int32_t px = 0, py = 0;
+	d2r::UnitXY(c->player, &px, &py);
+	if (want >= 0) {
+		static const double dir[][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {0.7071, 0.7071}, {-0.7071, 0.7071}, {0.7071, -0.7071}, {-0.7071, -0.7071}};
+		bool moved = false;
+		for (const auto& d : dir) {
+			const int32_t x = px + static_cast<int32_t>(std::lround(d[0] * static_cast<double>(want)));
+			const int32_t y = py + static_cast<int32_t>(std::lround(d[1] * static_cast<double>(want)));
+			if (x < 0 || y < 0 || Fn<BlockedFn>(RvaMoveBlocked)(merc, x, y, 0x804) != 0) {
+				continue;
+			}
+			Fn<MoveFn>(RvaMove)(c->game, merc, 0, x, y, 0, 0);
+			int32_t mx = 0, my = 0;
+			d2r::UnitXY(merc, &mx, &my);
+			if (mx == x && my == y) {
+				moved = true;
+				break;
+			}
+		}
+		if (!moved) {
+			return Fail(c, "leash: no free spot %lld sub-tiles from the player", want);
+		}
+	}
+	int32_t mx = 0, my = 0;
+	d2r::UnitXY(merc, &mx, &my);
+	Out("leash merc id=%u at %d,%d player at %d,%d distance=%d euclid=%.1f mode=%d", IdOf(merc), mx, my, px, py,
+	    Fn<OwnerDistanceFn>(RvaOwnerDistance)(merc, c->player),
+	    std::sqrt(static_cast<double>((mx - px) * (mx - px) + (my - py) * (my - py))), ModeOf(merc));
+	return true;
 }
 
 auto CmdMerc(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
@@ -3012,7 +3333,7 @@ auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
-	Out("verbs: state | merc | mercreq | mercprice [level] | a5done | countessreward | hellforgereward [class] | prisonreward | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
+	Out("verbs: state | merc | mercreq | mercprice [level] | players [1-8] | tctrace [reset] | leash [distance] | a5done | countessreward | hellforgereward [class] | prisonreward | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
@@ -3629,11 +3950,11 @@ const Verb Verbs[] = {
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
-    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false},
+    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
 };
 

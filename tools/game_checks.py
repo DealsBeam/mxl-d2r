@@ -13,9 +13,9 @@ Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout l
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
 classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
-cowportals cubeoutputs deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
+cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling nodurability autoid townmana mercrevive questxp
-questrewards gamble enginegaps.
+questrewards gamble enginegaps monlevel normaltc leash.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -4384,6 +4384,99 @@ def check_townportal():
     goto(2)
 
 
+def _portal_ids():
+    return {o["id"] for o in hstate()["objs"] if o.get("class") in (59, 60, 600)}
+
+
+def check_funcslots():
+    """Bug #31: Median rows on 1.13c's srvdofunc 109 (MonFrenzy, flash, feral_strike, bloodlord1_skill) ran D2R's itemless Town
+    Portal (docs/function-slots.md); txt_migrate remaps them to D2R's own frenzy functions (srvdofunc 9, srvstfunc 67). The
+    player casts feral_strike and flash at a monster, monsters cast MonFrenzy, flash and bloodlord1_skill (`mcast`, mode as
+    monstats Sk<n>mode). PASS: no portal object ever appears (`h state`), the cast starts, and it does something (the target
+    loses life, a missile is seen, or the monster changes mode); the game keeps running."""
+    nm = "Function slots (bug #31): feral_strike, flash, MonFrenzy, bloodlord1_skill do not open a town portal"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    by_name, t, h = _skill_ids_by_name()
+    row = {r[0]: r for r in t[1:] if r}
+    sid = {n: by_name.get(n) for n in ("feral_strike", "flash", "MonFrenzy", "bloodlord1_skill", "town_portal")}
+    if None in sid.values():
+        return add(nm, "BLOCKED", "skills missing from the built skills.txt: %s" % [n for n, v in sid.items() if v is None])
+    fn = {n: (row[n][h.index("srvstfunc")], row[n][h.index("srvdofunc")]) for n in sid}
+    bad_data = [n for n in sid if n != "town_portal" and fn[n][1] == "109"]
+    fight_ready()
+    god(True)
+    base_portals = _portal_ids()
+    notes, log, problems, shots = [], [], [], []
+    if bad_data:
+        problems.append("built skills.txt still has srvdofunc 109 on %s" % bad_data)
+    # the player casts (setskill gives the skill; a monster skill has no class, the game does not check it)
+    for name in ("feral_strike", "flash"):
+        skill = sid[name]
+        kill_all_near()
+        H("spawn 18 1")
+        H("moveto nearest")
+        H("setskill %d 5" % skill)
+        H("missiles reset")
+        life0 = next((m["life"] for m in hstate()["mons"] if m.get("life")), None)
+        ok, cl, seen, dropped, mode_seen = False, [], 0, False, False
+        for _ in range(5):
+            H("moveto nearest")
+            time.sleep(0.3)
+            H("stat player 8 set %d" % (rd("player", 9) or 0))
+            ok, cl = H("cast %d nearest" % skill)
+            log += cl[:2]
+            t0 = time.time()
+            while time.time() - t0 < 1.8:
+                time.sleep(0.4)
+                st = hstate()
+                m = [re.search(r"seen=(\d+)", ln) for ln in H("missiles")[1] if ln.startswith("missiles ")]
+                seen = max(seen, int(m[0].group(1)) if m and m[0] else 0)
+                mode_seen = mode_seen or st["player"].get("mode") in (7, 8, 10)
+                dropped = dropped or any(x.get("life") is not None and life0 is not None and x["life"] < life0 for x in st["mons"])
+            if ok and (seen or dropped):
+                break
+        portals = _portal_ids() - base_portals
+        did = seen > 0 or dropped or mode_seen
+        notes.append("%s (srvstfunc %s, srvdofunc %s): cast %s, missiles seen %d, target life dropped %s, attack mode %s, new portals %s" % (
+            name, fn[name][0], fn[name][1], "OK" if ok else "FAIL", seen, dropped, mode_seen, sorted(portals)))
+        shots.append(sh("funcslots_%s" % name))
+        if portals:
+            problems.append("%s opened a portal object %s" % (name, sorted(portals)))
+        if not (ok and did):
+            problems.append("%s: cast %s, no attack or missile seen" % (name, "OK" if ok else "refused"))
+        kill_all_near()
+    # monsters cast through the AI's skill use
+    for cls, name, mode in ((127, "MonFrenzy", 7), (506, "bloodlord1_skill", 7), (1250, "flash", 10)):
+        clear_mons()
+        mid = spawn_id(cls)
+        if mid is None:
+            notes.append("%s: monster class %d could not be spawned (skipped)" % (name, cls))
+            continue
+        time.sleep(2)
+        ok, lines = H("mcast %d %d unit %d" % (sid[name], mode, mid))
+        text = " ".join(lines)
+        log += lines[:1]
+        m = re.search(r"unit mode (\d+) -> (\d+)", text)
+        time.sleep(1.2)
+        modes = [x.get("mode") for x in hstate()["mons"] if x.get("id") == mid]
+        portals = _portal_ids() - base_portals
+        notes.append("%s on class %d: mcast %s (%s), monster mode after %s, new portals %s" % (
+            name, cls, "OK" if ok else "FAIL", m.group(0) if m else text[:80], modes, sorted(portals)))
+        shots.append(sh("funcslots_mon_%s" % name))
+        if portals:
+            problems.append("monster %s opened a portal object %s" % (name, sorted(portals)))
+        if not ok:
+            problems.append("monster %s: mcast refused (%s)" % (name, text[:100]))
+        H("kill %d" % mid)
+    alive = hstate()["ok"]
+    god(False)
+    kill_all_near()
+    if not alive:
+        problems.append("the game is gone")
+    add(nm, "PASS" if not problems else "FAIL", ("%s | " % "; ".join(problems) if problems else "") + " | ".join(notes), shots, log)
+
+
 def check_potions():
     """Bug #10: Median's healing / mana / rejuvenation potions (item spell 22 -> D2R's timed potion). Two results: the life
     part (hp1, hp5, rvs, rvl: stat hpregen 74, life rises over a control wait) and the mana part (mp1, mp5: manarecoverybonus
@@ -6807,6 +6900,560 @@ def check_questrewards():
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]) + " | " + "; ".join(rows), [sh("questrewards")], log)
 
 
+def _collide_table():
+    """`collidetable` parsed: {"server": {type: (fn, mask)}, "client": {...}} (hex), or None when the tables are not moved."""
+    ok, lines = H("collidetable")
+    out = {}
+    for ln in lines:
+        m = re.match(r"collidetable (server|client):\s+tables moved(.*)", ln)
+        if m:
+            out[m.group(1)] = {int(t): (int(fn, 16), int(mask, 16)) for t, fn, mask in re.findall(r"(\d+):([0-9a-f]+)/([0-9a-f]+)", m.group(2))}
+    return out if "server" in out and "client" in out else None
+
+
+# D2R's own nine rows (type: fn RVA, mask) of the server and client tables (collide_types_logic.h)
+_COLLIDE_D2R = {
+    "server": {0: (0, 0), 1: (0x457c70, 0x84), 2: (0x457be0, 0x104), 3: (0x457d10, 0x184), 4: (0, 0), 5: (0x457be0, 0x104), 6: (0, 4),
+               7: (0x457da0, 0x40), 8: (0x457d10, 0x185)},
+    "client": {0: (0, 0), 1: (0x1b0080, 0x84), 2: (0x1b0020, 0x104), 3: (0x1b00f0, 0x184), 4: (0, 0), 5: (0x1b0020, 0x104), 6: (0, 4),
+               7: (0x1b0150, 0x40), 8: (0x1b00f0, 0x185)},
+}
+
+
+def _collide_fire(row, dx, dy, ctype, wait=14):
+    """`collide`: one missile of `row` towards (+dx, +dy) of the player with collision type `ctype`; waits until it is gone.
+    Returns the `collide result` dict (frames, dist, ...) or None, and the log lines."""
+    ok, lines = H("collide %d %d %d %d" % (row, dx, dy, ctype))
+    if not ok:
+        return None, lines
+    res, t0 = None, time.time()
+    while time.time() - t0 < wait:
+        time.sleep(0.5)
+        _ok, rl = H("collide result")
+        lines += rl
+        for ln in rl:
+            if ln.startswith("collide result:"):
+                res = {k: int(float(v)) for k, v in re.findall(r"(\w+)=(-?[\d.]+)", ln)}
+        if res and res.get("flying") == 0 and res.get("frames", 0) > 0:
+            return res, lines
+    return res, lines
+
+
+def _collide9_rows():
+    """missiles.txt rows (0-based data rows = *ID) of the built mod with CollideType 9."""
+    t = _tsv(os.path.join(BUILT_EXCEL, "missiles.txt"))
+    h = t[0]
+    i = h.index("CollideType")
+    return [n for n, r in enumerate(t[1:]) if len(r) > i and r[i] == "9"]
+
+
+def check_collidetypes():
+    """Median's missile collide types 9 and 10 (D2Sigma D2Missile collide table, 11 types; audit item 14): D2R's tables hold nine
+    rows, so the plugin moves them to 256-row copies (collide_types.cpp) with Median's rows added: type 9 = mask 0x180 and the
+    check function of type 3 (no wall bit 4: the missile flies through walls and stops at monsters), type 10 = mask 0x2080 and the
+    function of type 1. Checks: (1) both tables moved, rows 0-8 the engine's own, 9 and 10 as above, 255 empty; (2) the 15
+    missiles.txt rows with CollideType 9 still have 9 in D2R's loaded records; (3) a plain arrow (row 0, type 3) is fired with its
+    type set to 3, 8 and 9 at a monster: all stop at it (type 6, which the tick skips, flies on); (4) the same towards a wall (the
+    tick's own wall test, bit 4 of the mask): D2R's movement ends every type at the wall (a plain arrow cannot show the missing
+    wall bit of 9 / 10), so 1, 8, 9 and 10 must end where type 3 does."""
+    nm = "Missile collide types 9 / 10 (Median): table rows, stop at monsters, pass walls"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    problems, notes, log = [], [], []
+    tab = _collide_table()
+    if tab is None:
+        return add(nm, "FAIL", "plugin part collidetypes is not on (`collidetable` says the tables are not moved; mxl: %s)" % [
+            ln[:80] for ln in H("mxl")[1] if "collide" in ln])
+    for side in ("server", "client"):
+        t = tab[side]
+        for ty, want in _COLLIDE_D2R[side].items():
+            if t.get(ty) != want:
+                problems.append("%s table row %d is %s, the engine has %s" % (side, ty, t.get(ty), want))
+        if t.get(9, (None, None))[1] != 0x180 or t.get(9, (None,))[0] != t.get(3, (0,))[0]:
+            problems.append("%s row 9 is %s, want mask 0x180 and the function of row 3 %s" % (side, t.get(9), t.get(3)))
+        if t.get(10, (None, None))[1] != 0x2080 or t.get(10, (None,))[0] != t.get(1, (0,))[0]:
+            problems.append("%s row 10 is %s, want mask 0x2080 and the function of row 1 %s" % (side, t.get(10), t.get(1)))
+        if t.get(255) != (0, 0):
+            problems.append("%s row 255 is %s, want an empty row" % (side, t.get(255)))
+    notes.append("tables: server %s client %s" % ({k: (hex(v[0]), hex(v[1])) for k, v in tab["server"].items() if k in (3, 9, 1, 10)},
+                                                   {k: (hex(v[0]), hex(v[1])) for k, v in tab["client"].items() if k in (3, 9)}))
+    _ok, rl = H("collidetable rows")
+    notes.append("loaded records by CollideType: %s" % " ".join(rl)[:200])
+    rows9 = _collide9_rows()
+    got = {}
+    for r in rows9:
+        _ok, ql = H("collidetable row %d" % r)
+        m = re.search(r"CollideType (-?\d+)", " ".join(ql))
+        got[r] = int(m.group(1)) if m else None
+    bad = {r: v for r, v in got.items() if v != 9}
+    notes.append("built missiles.txt has %d rows with CollideType 9; loaded records say %s" % (len(rows9), sorted(set(got.values()), key=str)))
+    if not rows9:
+        problems.append("no built missiles.txt row has CollideType 9")
+    elif bad:
+        problems.append("%d of %d rows with CollideType 9 in missiles.txt load as another type: %s" % (len(bad), len(rows9), dict(list(bad.items())[:8])))
+    goto(2)
+    kill_all_near()
+    god(True)
+    try:
+        # --- monsters: the monster stands between the player and the target
+        want_stop = {3: True, 8: True, 9: True, 6: False}
+        mon_notes = []
+        for ty, stops in want_stop.items():
+            verdict = None
+            for attempt in range(6):
+                kill_all_near()
+                if spawn_id(18) is None:
+                    continue
+                time.sleep(0.5)
+                st = hstate()
+                p = st["player"]
+                mons = [m for m in st["mons"] if "mx" in m and "my" in m]
+                if not mons:
+                    continue
+                mo = min(mons, key=lambda m: (m["mx"] - p["x"]) ** 2 + (m["my"] - p["y"]) ** 2)
+                vx, vy = mo["mx"] - p["x"], mo["my"] - p["y"]
+                d0 = (vx * vx + vy * vy) ** 0.5
+                if d0 < 7 or d0 > 18:  # the missile starts a few sub-tiles ahead of the player
+                    continue
+                k = 40.0 / d0
+                res, ml = _collide_fire(0, int(vx * k), int(vy * k), ty)
+                log += ml
+                if not res:
+                    continue
+                dist = res.get("dist", 0)
+                mon_notes.append("type %d: monster at %.0f, missile ended after %d frames at %d" % (ty, d0, res.get("frames", 0), dist))
+                if stops and dist <= d0 + 8:
+                    verdict = True
+                    break
+                if not stops and dist >= d0 + 12:
+                    verdict = True
+                    break
+                verdict = False
+            if not verdict:
+                problems.append("type %d %s the monster (%s)" % (ty, "did not stop at" if stops else "did not pass", mon_notes[-1] if mon_notes else "no shot"))
+        notes.append("monsters: " + "; ".join(mon_notes))
+        kill_all_near()
+        # --- walls: first area with a wall 6-20 sub-tiles away in one of the eight directions
+        wall = None
+        for area in (2, 3, 8, 9, 4):
+            if hstate()["player"].get("area") != area:
+                goto(area)
+                kill_all_near()
+                god(True)
+            ok, wl = H("wallscan")
+            log += wl
+            mb = [re.match(r"wallscan best (-?\d+) (-?\d+) wall=(\d+)", ln) for ln in wl]
+            mb = [m for m in mb if m]
+            if mb:
+                wall = (int(mb[0].group(1)), int(mb[0].group(2)), int(mb[0].group(3)), area)
+                break
+        if wall is None:
+            problems.append("no wall 6-20 sub-tiles from the player found in areas 2 3 8 9 4 (wallscan)")
+        else:
+            wx, wy, wk, area = wall
+            wall_dist = wk * (1.41 if wx and wy else 1)
+            notes.append("wall: area %d direction %d,%d at %d sub-tiles (%.0f away), room cells beyond it" % (area, wx, wy, wk, wall_dist))
+            ends = {}
+            for ty in (3, 1, 8, 9, 10, 6, 4):
+                res, wl2 = _collide_fire(0, wx * 40, wy * 40, ty)
+                log += wl2
+                ends[ty] = res.get("dist", -1) if res else -1
+                notes.append("type %d: ended at %d after %s frames" % (ty, ends[ty], res.get("frames") if res else "?"))
+                if res is None:
+                    problems.append("type %d towards the wall: no result" % ty)
+            # D2R's missile movement ends every type at a wall (types 4 and 6 have no wall test in the tick and end there too),
+            # so Median's missing wall bit in type 9 / 10 shows as no difference for a plain arrow: they must end where type 3
+            # does, neither earlier nor beyond the wall
+            for ty in (1, 8, 9, 10):
+                if ends[ty] >= 0 and ends[3] >= 0 and abs(ends[ty] - ends[3]) > 3:
+                    problems.append("type %d ended at %d towards the wall, type 3 at %d" % (ty, ends[ty], ends[3]))
+            if ends[3] > wall_dist + 4:
+                problems.append("type 3 flew through the wall (wall %.0f, ended %d)" % (wall_dist, ends[3]))
+    finally:
+        god(False)
+        kill_all_near()
+    add(nm, "FAIL" if problems else "PASS", "%s | %s" % ("; ".join(problems) if problems else "rows, monster stops and wall passes as Median", " | ".join(notes)),
+        [sh("collidetypes")], log)
+
+
+def _state_id(name):
+    """Row of a state in the built states.txt (skills.txt names its aurastate)."""
+    if name.isdigit():
+        return int(name)
+    t = _tsv(os.path.join(BUILT_EXCEL, "states.txt"))
+    for i, r in enumerate(t[1:]):
+        if r and r[0] == name:
+            return i
+    return None
+
+
+def _has_state(state):
+    """`hasstate`: (on, list present, expiry frame, current frame)."""
+    _ok, lines = H("hasstate %d" % state)
+    m = re.search(r"hasstate \d+: (\d) list=(yes|no) expiry=(-?\d+) frame=(\d+)", " ".join(lines))
+    return (int(m.group(1)), m.group(2) == "yes", int(m.group(3)), int(m.group(4))) if m else None
+
+
+def _startfn(slot, skill, level):
+    ok, lines = H("startfn %d %d %d" % (slot, skill, level))
+    m = re.search(r"returned (-?\d+) frame=(\d+)", " ".join(lines))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _start_count(slot):
+    """Starts the plugin counted for a slot (`startstats`)."""
+    _ok, lines = H("startstats")
+    m = re.search(r"slot %d (\d+) starts" % slot, " ".join(lines))
+    return int(m.group(1)) if m else None
+
+
+def check_skillstarts():
+    """D2Sigma's own skill start functions D2R lacks (srvstfunc 30 and 66; audit item 20): txt_migrate moves Median's skills with 30
+    (Flash, Move Only) to the free slot 71 and with 66 (sk851) to 72; the plugin fills those slots (skill_starts.cpp). Slot 71:
+    the caster gets the skill's aurastate until frame + auralencalc (a skill without a state does not start); slot 72 the same
+    but refuses while the state is on. Checks the built data, the mxl line, then calls both slots the way the cast path does
+    (`startfn`) and reads the state back (`hasstate`): Flash's state is on for its length and clears; Move Only is refused; sk851
+    (25*lvl frames) is refused while on and starts again after it ended; a real cast of sk851 runs the slot."""
+    nm = "Skill start functions (Median srvstfunc 30 / 66 -> slots 71 / 72): timed state on the caster"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    problems, notes, log = [], [], []
+    by_name, t, h = _skill_ids_by_name()
+    col = {n: h.index(n) for n in ("srvstfunc", "aurastate", "auralencalc")}
+    want = {"flash": ("71", "19"), "skills_851": ("72", "25*lvl"), "move_only": ("71", "")}
+    ids = {}
+    for name, (slot, _len) in want.items():
+        row = next((r for r in t[1:] if r and r[0].lower() == name), None)
+        if row is None:
+            problems.append("no %s row in the built skills.txt" % name)
+            continue
+        ids[name] = int(row[h.index("*Id")])
+        if row[col["srvstfunc"]] != slot:
+            problems.append("%s has srvstfunc %s in the built skills.txt, want %s" % (name, row[col["srvstfunc"]], slot))
+    oath = next((r for r in t[1:] if r and r[0].lower() == "blood oath"), None)
+    if oath is not None and oath[col["srvstfunc"]] != "66":
+        problems.append("Blood Oath (D2R's own 66) has srvstfunc %s, want it to keep 66" % oath[col["srvstfunc"]])
+    xl = [ln for ln in mxl_text().splitlines() if "skill starts" in ln]
+    notes.append("mxl: %s" % (xl[0][:110] if xl else "no 'skill starts' line"))
+    if not xl or "(2/2)" not in xl[0]:
+        problems.append("mxl line 'skill starts ... (2/2)' missing: %s" % xl)
+    if len(ids) < 3:
+        return add(nm, "FAIL", "; ".join(problems))
+    fl = next(r for r in t[1:] if r and r[0].lower() == "flash")
+    sk = next(r for r in t[1:] if r and r[0].lower() == "skills_851")
+    st_flash, st_851 = _state_id(fl[col["aurastate"]]), _state_id(sk[col["aurastate"]])
+    notes.append("Flash state %s (%s), sk851 state %s (%s)" % (st_flash, fl[col["aurastate"]], st_851, sk[col["aurastate"]]))
+    if st_flash is None or st_851 is None:
+        return add(nm, "FAIL", "aurastate not found in states.txt: " + "; ".join(problems + notes))
+    goto(2)
+    kill_all_near()
+    god(True)
+    try:
+        for s in (st_flash, st_851):  # nothing on from an earlier run (the states end by themselves within seconds)
+            for _ in range(10):
+                if not (_has_state(s) or (0,))[0]:
+                    break
+                time.sleep(1)
+        # slot 71 / Flash: level 1, length 19 frames
+        r = _startfn(71, ids["flash"], 1)
+        s1 = _has_state(st_flash)
+        notes.append("slot 71 flash: %s, state %s" % (r, s1))
+        if r is None or r[0] != 1 or not s1 or not s1[0] or not s1[1]:
+            problems.append("slot 71 Flash: start %s, state %s (want 1, on, with a stat list)" % (r, s1))
+        elif not 15 <= s1[2] - r[1] <= 22:
+            problems.append("Flash's state ends %d frames after the call, want 19 (auralencalc)" % (s1[2] - r[1]))
+        r2 = _startfn(71, ids["flash"], 1)
+        s2 = _has_state(st_flash)
+        if r2 is None or r2[0] != 1 or not s2 or s2[2] < s1[2]:
+            problems.append("slot 71 again: %s, expiry %s -> %s (a second start prolongs the state)" % (r2, s1 and s1[2], s2 and s2[2]))
+        time.sleep(2.5)  # 19 frames = 0.8 s
+        s3 = _has_state(st_flash)
+        notes.append("2.5 s later: %s" % (s3,))
+        if not s3 or s3[0]:
+            problems.append("Flash's state still on 2.5 s after a 19-frame start: %s" % (s3,))
+        # slot 71 / Move Only: no aurastate, the cast does not start
+        r = _startfn(71, ids["move_only"], 1)
+        notes.append("slot 71 move_only: %s" % (r,))
+        if r is None or r[0] != 0:
+            problems.append("Move Only start returned %s, want 0 (no state)" % (r,))
+        # slot 72 / sk851 level 3: 75 frames, refused while on
+        r = _startfn(72, ids["skills_851"], 3)
+        s1 = _has_state(st_851)
+        notes.append("slot 72 sk851 level 3: %s, state %s" % (r, s1))
+        if r is None or r[0] != 1 or not s1 or not s1[0]:
+            problems.append("slot 72 sk851: start %s, state %s (want 1, on)" % (r, s1))
+        elif not 70 <= s1[2] - r[1] <= 77:
+            problems.append("sk851's state ends %d frames after the call, want 75 (25*lvl)" % (s1[2] - r[1]))
+        r2 = _startfn(72, ids["skills_851"], 3)
+        s2 = _has_state(st_851)
+        notes.append("second call while on: %s, expiry %s -> %s" % (r2, s1 and s1[2], s2 and s2[2]))
+        if r2 is None or r2[0] != 0 or (s1 and s2 and s2[2] != s1[2]):
+            problems.append("sk851 while the state is on: %s, expiry %s -> %s (want refused, expiry unchanged)" % (r2, s1 and s1[2], s2 and s2[2]))
+        time.sleep(4.5)  # 75 frames = 3 s
+        s3 = _has_state(st_851)
+        r3 = _startfn(72, ids["skills_851"], 1)
+        s4 = _has_state(st_851)
+        notes.append("4.5 s later: %s; start again: %s state %s" % (s3, r3, s4))
+        if not s3 or s3[0]:
+            problems.append("sk851's state still on 4.5 s after a 75-frame start: %s" % (s3,))
+        if r3 is None or r3[0] != 1 or not s4 or not s4[0]:
+            problems.append("sk851 after the state ended: %s, state %s (want a new start)" % (r3, s4))
+        # a real cast of Flash (leftskill / rightskill): the cast path runs slot 71 (D2R's own start sequence)
+        n0 = _start_count(71)
+        H("setskill %d 5" % ids["flash"])
+        H("stat player 8 set %d" % (rd("player", 9) or 0))
+        ok, cl = H("cast %d self" % ids["flash"])
+        time.sleep(1)
+        n1 = _start_count(71)
+        log += cl
+        notes.append("real cast of Flash: ok=%s slot 71 starts %s -> %s; %s" % (ok, n0, n1, cl[-1][:100] if cl else ""))
+        if n0 is None or n1 is None or n1 <= n0:
+            problems.append("a real cast of Flash did not reach slot 71 (starts %s -> %s; cast lines %s)" % (n0, n1, [ln[:110] for ln in cl[-3:]]))
+    finally:
+        god(False)
+    add(nm, "FAIL" if problems else "PASS", "%s | %s" % ("; ".join(problems) if problems else "start functions as D2Sigma", " | ".join(notes)),
+        [sh("skillstarts")], log)
+
+
+def _storm_count(skill, seconds):
+    """Missile units the server frames saw in `seconds` after one cast of `skill` at the player."""
+    H("missiles reset")
+    ok, lines = H("cast %d self" % skill)
+    time.sleep(seconds)
+    _ok, ml = H("missiles")
+    m = [re.search(r"seen=(\d+)", ln) for ln in ml if ln.startswith("missiles ")]
+    return (int(m[0].group(1)) if m and m[0] else 0), ok, lines
+
+
+def check_activationfreq():
+    """Activation frequency (stat 427) on periodic skills (audit item 13): D2Sigma's formula (perdelay shortened by stat 427) sits in
+    a patched path the game never reaches and no code reads stat 427 on the periodic events, so Median's real rate does NOT depend
+    on the stat; the tooltip line is its only effect. Parity check: a periodic storm skill (Sentence, dofunc 29, perdelay 5) cast
+    at the player with stat 427 = 0 and = 200: the missile counts over the same window must stay within 40 % of each other (a
+    working +200 % rate would double them)."""
+    nm = "Activation frequency (stat 427): periodic skill rate unchanged, as Median"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    by_name, t, h = _skill_ids_by_name()
+    sk = by_name.get("sentence")
+    if sk is None:
+        return add(nm, "BLOCKED", "no sentence row in skills.txt")
+    goto(2)
+    kill_all_near()
+    god(True)
+    notes, counts, log = [], {}, []
+    try:
+        H("setskill %d 10" % sk)
+        base427 = rd("player", 427)
+        for val in (0, 200, 0, 200):
+            setstat("player", 427, val)
+            H("stat player 8 set %d" % (rd("player", 9) or 0))
+            time.sleep(6)  # the earlier storm ends
+            for _m in range(3):
+                spawn_id(18)
+            n, ok, cl = _storm_count(sk, 6)
+            kill_all_near()
+            log += cl
+            counts.setdefault(val, []).append(n)
+        setstat("player", 427, base427 or 0)
+    finally:
+        god(False)
+    a, b = sum(counts[0]), sum(counts[200])
+    notes.append("missiles in 6 s after a cast of Sentence (%d): stat 427 = 0: %s, = 200: %s" % (sk, counts[0], counts[200]))
+    if a < 4:
+        return add(nm, "FAIL", "the control produced only %d missiles: no measurement | %s" % (a, notes[0]), [sh("activationfreq")], log)
+    ratio = b / float(a)
+    ok = 0.6 <= ratio <= 1.4
+    add(nm, "PASS" if ok else "FAIL", "stat 427 = 200 gave %.2f x the missiles of stat 427 = 0 (want about 1: no code reads the stat; Median's tooltip line only) | %s" % (ratio, notes[0]),
+        [sh("activationfreq")], log)
+
+
+def _spawn_ids(cls, count):
+    """Spawns `count` monsters of a class; returns their unit ids (the `spawned class N id=M` lines)."""
+    ok, lines = H("spawn %d %d" % (cls, count))
+    return [int(m) for m in re.findall(r"spawned class \d+ id=(\d+)", " ".join(lines))]
+
+
+def _monlevel_tables():
+    """(area id -> [MonLvlEx per difficulty], monstats class -> {"level": [Level, Level(N), Level(H)], "lundead": bool, "npc": bool})
+    from the built mod (the expansion's area levels: D2R's area-level function reads the Ex columns)."""
+    lv = _tsv(_main_checkout(os.path.join(BUILT_EXCEL, "levels.txt")))
+    h = lv[0]
+    ci = {n: i for i, n in enumerate(h)}
+    areas = {}
+    for r in lv[1:]:
+        if len(r) > ci["MonLvlEx(H)"] and r[ci["Id"]].isdigit():
+            areas[int(r[ci["Id"]])] = [int(r[ci[c]] or 0) for c in ("MonLvlEx", "MonLvlEx(N)", "MonLvlEx(H)")]
+    ms = _tsv(_main_checkout(os.path.join(BUILT_EXCEL, "monstats.txt")))
+    mh = ms[0]
+    mi = {n: i for i, n in enumerate(mh)}
+    mons = {}
+    for cls, r in enumerate(ms[1:]):
+        if len(r) > mi["Level(H)"]:
+            mons[cls] = {"level": [int(r[mi[c]] or 0) for c in ("Level", "Level(N)", "Level(H)")],
+                         "lundead": (r[mi["lUndead"]] or "0") == "1", "npc": (r[mi["npc"]] or "0") == "1"}
+    return areas, mons
+
+
+def check_monlevel():
+    name = "Monster level and players count (Median: the area level in every difficulty, life +(n-1)*50 %, no experience bonus)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    txt = mxl_text()
+    bad, rows, log = [], [], []
+    for word in ("monster level on", "players scaling on"):
+        if word not in txt:
+            bad.append("`mxl` does not say `%s`: %s" % (word, next((l for l in txt.splitlines() if word.split()[0] in l and word.split()[1] in l), "-")))
+    areas, mons = _monlevel_tables()
+    classes = (18, 0)  # a living class and a low-undead one (monstats flag 0x40: opted out of the area level before)
+    god(True)
+    try:
+        H("players 1")
+        for area in (2, 76, 111):
+            goto(area)
+            for diff in (0, 1, 2):
+                H("difficulty %d" % diff)
+                for cls in classes:
+                    ids = _spawn_ids(cls, 1)
+                    if not ids:
+                        bad.append("area %d diff %d class %d: nothing spawned" % (area, diff, cls))
+                        continue
+                    got = rd("m%d" % ids[0], 12)
+                    want = areas[area][diff]
+                    if mons[cls]["npc"]:
+                        want = mons[cls]["level"][diff]
+                    rows.append("area %d %s class %d: level %s (area level %d, own row %d)" % (area, ("Normal", "Nightmare", "Hell")[diff], cls, got, areas[area][diff], mons[cls]["level"][diff]))
+                    log.append(rows[-1])
+                    if got != want:
+                        bad.append(rows[-1] + ", want %d" % want)
+                    H("kill %d" % ids[0])
+        # players-count scaling: eight monsters at each setting, in Hell (the levels stay the same)
+        goto(2)
+        H("difficulty 2")
+        stats = {}
+        for players in (1, 8):
+            ok, line, _l = hv("players %d" % players, "players")
+            log.append(line)
+            ids = _spawn_ids(18, 8)
+            life = [rd("m%d" % i, 7) for i in ids]
+            life = [v >> 8 for v in life if v]
+            exp = {rd("m%d" % i, 13) for i in ids}
+            lvl = {rd("m%d" % i, 12) for i in ids}
+            n = {rd("m%d" % i, 100) for i in ids}
+            stats[players] = (sum(life) / len(life) if life else 0, exp, lvl, n)
+            log.append("players %d: %d monsters, mean max life %.0f, experience %s, level %s, players stat %s" % (players, len(ids), stats[players][0], sorted(exp), sorted(lvl), sorted(n)))
+            kill_all_near()
+        (l1, e1, v1, n1), (l8, e8, v8, n8) = stats[1], stats[8]
+        ratio = l8 / l1 if l1 else 0
+        rows.append("players 1 -> 8: life x%.2f (Median 4.50), experience %s -> %s, level %s -> %s, players stat %s -> %s" % (ratio, sorted(e1), sorted(e8), sorted(v1), sorted(v8), sorted(n1), sorted(n8)))
+        if not (4.0 <= ratio <= 5.0):
+            bad.append("life ratio 8 players / 1 player is %.2f, Median's is 4.50" % ratio)
+        if e1 != e8 or len(e1) != 1:
+            bad.append("experience differs with the players count: %s -> %s" % (sorted(e1), sorted(e8)))
+        if v1 != v8:
+            bad.append("level differs with the players count: %s -> %s" % (sorted(v1), sorted(v8)))
+        if n1 != {1} or n8 != {8}:
+            bad.append("the players stat is %s / %s, want 1 / 8 (the players setting did not reach the monsters)" % (sorted(n1), sorted(n8)))
+        txt = mxl_text()
+        log += [l for l in txt.splitlines() if "players scaling" in l or "monster level" in l]
+    finally:
+        H("players 1")
+        H("difficulty 0")
+        kill_all_near()
+        god(False)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows[-4:]) if not bad else "; ".join(bad[:6]), [sh("monlevel")], log + rows)
+
+
+def check_normaltc():
+    name = "Normal-difficulty drops use the level-upgraded treasure class (Median 0x12d6a)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    txt = mxl_text()
+    bad, rows, log = [], [], []
+    if "normal-difficulty treasure class on" not in txt:
+        bad.append("`mxl` does not say `normal-difficulty treasure class on`: %s" % next((l for l in txt.splitlines() if "treasure class" in l), "-"))
+    god(True)
+    try:
+        goto(4)  # Wilderness 3: Normal monsters of level 6 (Median's area table)
+        for diff in (0, 1):  # Normal, then Nightmare (the executor's own behaviour: the control)
+            H("difficulty %d" % diff)
+            H("tctrace reset")
+            ids = _spawn_ids(18, 1)
+            if not ids:
+                bad.append("difficulty %d: nothing spawned" % diff)
+                continue
+            level = rd("m%d" % ids[0], 12)
+            H("kill %d" % ids[0])
+            time.sleep(1)
+            ok, line, _l = hv("tctrace", "tctrace")
+            m = re.search(r"calls=(\d+) leveled=(\d+) lastclass=(-?\d+) lastlevel=(-?\d+)", line)
+            log.append("%s: killed a level %s monster; %s" % (("Normal", "Nightmare")[diff], level, line))
+            if not m:
+                bad.append("difficulty %d: no tctrace line (%s)" % (diff, line[:80]))
+                continue
+            calls, leveled, tc, lvl = (int(x) for x in m.groups())
+            rows.append("%s kill of a level %s monster: %d class lookups, %d with a level, last class %d level %d" % (("Normal", "Nightmare")[diff], level, calls, leveled, tc, lvl))
+            if calls < 1 or leveled < 1 or lvl != level:
+                bad.append(rows[-1] + " (want the monster's level handed to the class getter)")
+    finally:
+        H("difficulty 0")
+        kill_all_near()
+        god(False)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]), [sh("normaltc")], log)
+
+
+def _leash_probe(dist, seconds=2.5):
+    """Moves the player `dist` sub-tiles from the mercenary, then samples the Euclidean distance every harness round trip.
+    Returns (placed distance, samples [(t, euclid)], largest single drop between two samples, the log lines)."""
+    ok, line, _l = hv("leash %d" % dist, "leash")
+    m = re.search(r"euclid=([\d.]+)", line)
+    if not ok or not m:
+        return None, [], 0, [line]
+    start = float(m.group(1))
+    t0 = time.time()
+    samples, log = [(0.0, start)], [line]
+    while time.time() - t0 < seconds:
+        ok, line, _l = hv("leash", "leash")
+        m = re.search(r"euclid=([\d.]+)", line)
+        if m:
+            samples.append((round(time.time() - t0, 2), float(m.group(1))))
+            log.append(line)
+    drop = max([a[1] - b[1] for a, b in zip(samples, samples[1:])] or [0])
+    return start, samples, drop, log
+
+
+def check_leash():
+    name = "Summon / hireling leash (Median: warp to the owner past 40 sub-tiles)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    txt = mxl_text()
+    bad, rows, log = [], [], []
+    if "summon leash on" not in txt:
+        bad.append("`mxl` does not say `summon leash on`: %s" % next((l for l in txt.splitlines() if "leash" in l), "-"))
+    fight_ready()
+    if not ensure_merc():
+        return add(name, "BLOCKED", "no mercenary could be hired")
+    god(True)
+    try:
+        # one probe per distance: the mercenary is placed that far from the player (moving the player would pull the mercenary
+        # along at once); a warp is a jump of the distance, a walk a few sub-tiles per sample
+        for dist, warps in ((20, False), (30, False), (36, False), (44, True), (47, True), (60, True)):
+            start, samples, drop, lines = _leash_probe(dist)
+            log += lines
+            if start is None:
+                bad.append("distance %d: the player could not be placed (%s)" % (dist, lines[0][:100]))
+                continue
+            warped = drop >= 15
+            rows.append("mercenary %d sub-tiles from the player: %s (largest drop between two samples %.0f, %.1f after %.1f s)" % (
+                dist, "warped to the owner" if warped else "walked back", drop, samples[-1][1], samples[-1][0]))
+            if warped != warps:
+                bad.append(rows[-1] + ", want %s" % ("a warp" if warps else "a walk"))
+    finally:
+        kill_all_near()
+        god(False)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]), [sh("leash")], log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -6823,6 +7470,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("levelcap", check_levelcap),
           ("skillcaps", check_skillcaps),
           ("townportal", check_townportal),
+          ("funcslots", check_funcslots),
           ("potions", check_potions),
           ("itemskills", check_itemskills),
           ("cowportals", check_cowportals),
@@ -6830,6 +7478,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("deathcrash", check_deathcrash),
           ("nocorpse", check_nocorpse),
           ("cooldowns", check_cooldowns),
+          ("collidetypes", check_collidetypes), ("skillstarts", check_skillstarts), ("activationfreq", check_activationfreq),
           ("nslong", check_nslong),
           ("strings", check_strings),
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
@@ -6840,6 +7489,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("nodurability", check_nodurability), ("autoid", check_autoid), ("townmana", check_townmana),
           ("potionamounts", check_potionamounts), ("manarules", check_manarules),
           ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards),
+          ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash),
           ("gamble", check_gamble), ("enginegaps", check_engine_gaps)]
 
 

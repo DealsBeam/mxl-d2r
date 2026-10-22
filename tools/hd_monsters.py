@@ -773,6 +773,12 @@ def choose(s: Subject, donors: dict[str, Donor]) -> tuple[Donor, float, float, l
     return d, sc, ratio, why, margin
 
 
+# Median Id -> (D2R donor unit, size factor), chosen by hand (owner's pick) instead of the scoring above. Colour, scale
+# and the state machine are still worked out the usual way for the pinned donor; the factor multiplies the scale. The OW (Wereowl) rows: goatman1 is the
+# closest build; it has no attack2 / cast clip, so those modes reuse attack1 / skill1.
+PINNED_DONORS = {"wereowl": ("goatman1", 1.0), "corrupted_wereowl": ("goatman1", 1.25)}
+
+
 def confidence(s: Subject, d: Donor, sc: float, ratio: float, margin: float) -> str:
     fam = s.keyword_family and bool(s.fam & d.fam)
     size_ok = 0.6 <= ratio <= 1.7
@@ -970,6 +976,12 @@ def main() -> int:
             kept["vanilla art"] += 1
             continue
         d, sc, ratio, why, margin = choose(s, donors)
+        if mid in PINNED_DONORS and PINNED_DONORS[mid][0] in donors:
+            d = donors[PINNED_DONORS[mid][0]]
+            sc, ratio, why = score(s, d)
+            ratio *= PINNED_DONORS[mid][1]
+            margin = 0.0
+            why = [f"pinned donor {d.unit}"] + [w for w in why if w.startswith("missing")]
         conf = confidence(s, d, sc, ratio, margin) if col else "low"
         vmap, pvtext = None, ""
         pv = prov_donor(s, prov, by_code, donors) if prov else None
