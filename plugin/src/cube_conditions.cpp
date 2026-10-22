@@ -13,6 +13,8 @@
 #include "craft_flags.h"
 #include "d2r.h"
 #include "mxl_cube.h"
+#include "trophy_timer.h"
+#include "trophy_timer_logic.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -130,7 +132,9 @@ auto Check(const mxl_cube::Cond& c, Unit* player) noexcept -> bool {
 	case 3: return g_getStat(player, c.param, c.layer) >= c.value;
 	case 4: return g_getStat(player, c.param, c.layer) <= c.value;
 	case 5: return g_getStat(player, c.param, c.layer) != c.value;
-	case 6: return g_getStat(player, c.param, c.layer) == c.value;
+	case 6:  // the trophy challenge codes (stat 378) also need an open window: in time, same area, alive
+		return g_getStat(player, c.param, c.layer) == c.value &&
+		       (c.param != trophy::StatChallenge || TrophyWindowOpen(g_search.game, player, c.value));
 	case 7: return g_baseStat(player, c.param, c.layer) >= c.value;
 	case 8: return g_baseStat(player, c.param, c.layer) <= c.value;
 	case 9: return g_baseStat(player, c.param, c.layer) != c.value;

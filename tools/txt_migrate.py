@@ -496,14 +496,16 @@ class Migrator:
             p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
             h, rows = read_tsv(p)
             rows = [r for r in rows if not (r and r[0].startswith("mxf_"))]
-            ci, p1 = h.index("*Id"), h.index("Param1")
+            ci = h.index("*Id")
+            # D2R's skills.txt has a "*ParamN Description" column after every ParamN: look the columns up by name
+            pcol = [h.index(f"Param{n}") for n in (1, 2, 3, 4)]
             first = len(rows)
             for k, (name, _fn, kind, *args) in enumerate(calls):
                 row = [""] * len(h)
-                row[0], row[ci], row[p1] = name, str(first + k), kind
+                row[0], row[ci], row[pcol[0]] = name, str(first + k), kind
                 for j, v in enumerate(args[:3]):
                     if v != "":
-                        row[p1 + 1 + j] = arg(kind, j, v)
+                        row[pcol[1 + j]] = arg(kind, j, v)
                 rows.append(row)
             write_tsv(p, h, rows)
             sc = OUT / "data" / "global" / "excel" / bank / "skillcalc.txt"
@@ -873,6 +875,11 @@ class Migrator:
         miss = [r[0].strip() for r in read_tsv(OUT / "data" / "global" / "excel" / "base" / "misscalc.txt")[1] if r]
         lines += ["", "// misscalc.txt rows of D2Sigma's missile calc codes (the same in both banks)."]
         lines += [f"inline constexpr int32_t MissCalc_{c} = {miss.index(c)};" for c in ("msyn", "blvl")]
+        # the two states D2Sigma's skill restriction 7 hard-codes (0x270, 0x7e); work/named/states.txt gives the D2R ids
+        state_id = {r[0]: int(r[1]) for r in read_tsv(ROOT / "work" / "named" / "states.txt")[1] if len(r) > 1 and r[1].isdigit()}
+        lines += ["", "// States Median's skill restriction 7 (plugin/src/skill_restrict.cpp) rules out (D2R state ids).",
+                  f"inline constexpr int32_t StateMeleeDevotion = {state_id['melee_devotion_state']};  // Median 624",
+                  f"inline constexpr int32_t StateProgressiveCold = {state_id['progressive_cold']};  // Median 126"]
         lines += ["", "// Stats those codes read (Median itemstatcost row -> migrated id).",
                   f"inline constexpr int32_t StatSyn1 = {stat(383)};  // Median 383",
                   f"inline constexpr int32_t StatSyn2 = {stat(393)};  // Median 393",
