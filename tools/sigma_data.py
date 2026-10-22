@@ -6,6 +6,7 @@
                                  class lock), the quest each level needs (leveldefs.bin QuestFlagEx) and the fields
                                  whose meaning is not established (kept raw)
   plugin/src/mxl_goblins.h       GoblinChance per level (levels +0x15c) and the monstats3 treasure goblin rows
+  plugin/src/mxl_monster_looks.h monstats3 rank bits, NameColor, automap fields and spawn overlays per monster
 
 Sources are the compiled tables in extract/mxl (raw bytes: the sigma decode has no names for these fields); ids go
 through work/named/idmap.json: levels and monsters are Median row numbers in the sources and D2R ids in the output.
@@ -186,10 +187,61 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
     return "\n".join(out), "\n".join(g), msg
 
 
+LOOK_RANK = 0xf8     # monstats3 Flags: Elite 0x08, Veteran 0x10, Uber 0x20, Heroic 0x40, Boss 0x80 (name colour ranks)
+LOOK_AUTOMAP = 0x06  # Automap 0x02, AutomapShowName 0x04
+
+
+def monster_looks(idmap: dict) -> tuple[str, str]:
+    """monstats3 name colour, automap and spawn overlay fields of every monster that sets one of them."""
+    mons = ids(idmap, "monstats")
+    mnames = {e["row"]: e["name"] for e in idmap["monstats"]}
+    ovl = ids(idmap, "overlay")
+    rows = []
+    for row, r in enumerate(table("monstats3", MONSTATS3_ROW)):
+        flags = struct.unpack_from("<H", r)[0]
+        name_color, auto_name, auto_vec = r[2], r[3], r[4]
+        overlays = list(struct.unpack_from("<4h", r, 6))  # Overlay1/2, BossOverlay1/2; -1 = none
+        for i, o in enumerate(overlays):
+            if o >= 0:
+                if o not in ovl:
+                    raise SystemExit(f"monstats3 row {row}: overlay {o} is not an overlay row")
+                overlays[i] = ovl[o]
+        otype = r[0x1f]
+        if not (flags & (LOOK_RANK | LOOK_AUTOMAP) or name_color or any(o >= 0 for o in overlays)):
+            continue
+        rows.append((mons[row], flags & (LOOK_RANK | LOOK_AUTOMAP), name_color, auto_name, auto_vec, otype, overlays,
+                     mnames[row]))
+    rows.sort()
+    out = [HEADER, "#pragma once", "", "#include <cstdint>", "", "namespace mxl_looks {", "",
+           "// monstats3 fields that change how a monster looks (FUN_1008b570 name colour, FUN_1004b620 automap marker,",
+           "// FUN_1008c3f0 spawn overlay), one row per monster (D2R id, ascending) that sets any of them.",
+           "// flags: 0x02 Automap, 0x04 AutomapShowName, rank bits 0x08 Elite / 0x10 Veteran / 0x20 Uber / 0x40 Heroic /",
+           "// 0x80 Boss. nameColor / automapNameColor are colour indexes (D2 text colours), automapVectorColor a palette",
+           "// index. overlay[0..1] = Overlay1/2, [2..3] = BossOverlay1/2 (D2R overlay ids, -1 none): a unique or super",
+           "// unique plays the boss pair, any other monster the first pair (FUN_1008c3f0). overlayType is the byte at",
+           "// +0x1f, Median's last argument of its overlay call (2 with Overlay1 only, 3 with front and back); D2R's",
+           "// overlay call has no such argument.",
+           "inline constexpr uint16_t FlagAutomap = 0x02, FlagAutomapName = 0x04;",
+           "inline constexpr uint16_t RankElite = 0x08, RankVeteran = 0x10, RankUber = 0x20, RankHeroic = 0x40, RankBoss = 0x80;",
+           "struct Look {", "\tint32_t monster;", "\tuint16_t flags;", "\tuint8_t nameColor;", "\tuint8_t automapNameColor;",
+           "\tuint8_t automapVectorColor;", "\tuint8_t overlayType;", "\tint16_t overlay[4];", "};",
+           f"inline constexpr int32_t LookCount = {len(rows)};", "inline constexpr Look Looks[LookCount] = {"]
+    for m, f, nc, an, av, ot, ov, n in rows:
+        out.append(f"    {{{m}, 0x{f:x}, {nc}, {an}, {av}, {ot}, {{{ov[0]}, {ov[1]}, {ov[2]}, {ov[3]}}}}},  // {n}")
+    out += ["};", "", "}  // namespace mxl_looks", ""]
+    nover = sum(1 for r in rows if any(o >= 0 for o in r[6]))
+    return "\n".join(out), (f"monster looks: {len(rows)} monsters ({sum(1 for r in rows if r[1] & LOOK_RANK)} ranked, "
+                            f"{sum(1 for r in rows if r[1] & LOOK_AUTOMAP)} automap, {nover} spawn overlays) -> "
+                            f"plugin/src/mxl_monster_looks.h")
+
+
 def main() -> int:
     idmap = json.loads(IDMAP.read_text("utf-8"))
     req, msg = requirements()
     (SRC / "mxl_requirements.h").write_text(req, encoding="utf-8")
+    print(msg)
+    looks, msg = monster_looks(idmap)
+    (SRC / "mxl_monster_looks.h").write_text(looks, encoding="utf-8")
     print(msg)
     dng, gob, msg = levels_and_goblins(idmap)
     (SRC / "mxl_dungeons.h").write_text(dng, encoding="utf-8")

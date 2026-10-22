@@ -746,6 +746,27 @@ Server side, called from the game-frame hook (verified in the game):
 | missiles | unit type 3 in the game's hash table base `0x646` | counted per server frame |
 | player busy | `0x4249f0(unit)` | nonzero blocks skill use (item on the cursor, trade) |
 
+## 15. Monster looks (lane sigma-behaviours-b, 2026-10-22; plugin/src/monster_looks.cpp)
+
+Data: monstats3 (`mxl_monster_looks.h`, 1803 rows by D2R monster id). All entry bytes verified against the 93847 dump; whole
+instructions, no rip-relative.
+
+| What | RVA | Signature | Entry bytes | Use |
+|---|---|---|---|---|
+| hover name builder | `0xcea50` | (unit, a2, a3) | `48 89 5c 24 18 55 56 57` | stash the unit; 0x1634 bytes long |
+| colour index -> rgba | `0x908690` | (&rgba, index, mode) | `40 53 57 48 83 ec 38` | mode 5 from inside 0xcea50: swap the index (0 white, 3 champion, 4 unique, 1 corpse, 0x1d possessed) |
+| automap unit classifier | `0xd78f0` | (unit, &marker, &nameType) -> drawn | `40 53 56 57 48 83 ec 60` | flagged monsters: marker 6 (NPC), name type 4 / -1, return 1 |
+| automap unit drawing | `0xd76e0` | (unit, ctx) | `48 89 6c 24 10 57 48 83 ec 40` | stash the unit |
+| automap name drawing | `0xd6b20` | (text, pos, scale, colour index) | `4c 8b dc 55 53` | index 4 -> `AutomapNameColor` |
+| automap marker sprite | `0xd6db0` | | | draws a sprite frame, no tint: `AutomapVectorColor` cannot be applied |
+| monster creation | `0x493cc0` | (params) -> unit, 0 or not a unit | `48 89 5c 24 10 48 89 74 24 18 48 89 7c 24 20` | after it returns, `SetUnitOverlay` for the row's pair |
+| `SetUnitOverlay` | `0x349020` | (unit, overlay row, 0) | not hooked | sets stat 0xb2; the client plays it at the next unit refresh (packet 0x11) |
+
+Monster data (`unit+0x10`) u16 at `+0x1a`: 0x2 super unique, 0x4 champion, 0x8 unique. Unit mode `+0xc`: 0 death, 12 dead.
+The creation function's callers do not all get a unit back (a value of 1 was seen), so the result is only read when it is a
+pointer; reading it unguarded killed the game on the first area change. The skill monster spawn `0x556560` is not the
+generic spawn (it is the do-function of a skill).
+
 ## Appendix A. Quest descriptor table (D2R, verified)
 
 `0x239c5c0`, 36 entries of 0x20 bytes: `+0` init function VA, `+8` u32 act (0-4), `+0xc` u32 (`0x64` or 0), `+0x10`
