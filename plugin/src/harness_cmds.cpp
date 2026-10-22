@@ -16,6 +16,7 @@
 #include "goblins.h"
 #include "mxl_hirelings.h"
 #include "item_events.h"
+#include "item_gen.h"
 #include "quests_act1.h"
 #include "testharness.h"
 #include "waypoints.h"
@@ -1745,7 +1746,7 @@ auto ResolveRef(Ctx* c, const char* text) noexcept -> Unit* {
 
 constexpr uint64_t RvaHitUnit = 0x44ce80;      // (game, attacker, target, 1, &damage)
 constexpr uint64_t RvaApplyDamage = 0x44a9b0;  // (game, attacker, target, &damage)
-constexpr uint64_t RvaAvoidCheck = 0x44ef70;   // (game, defender, missile flag) -> 0 / 2 / 4 / 8 / 0x10
+constexpr uint64_t RvaAvoidCheck = 0x44ef70;   // (attacker unit, defender unit, missile flag) -> 0 / 2 / 4 / 8 / 0x10
 constexpr uint64_t RvaAllocator = 0x12063c0;   // -> allocator object; vtable +0x20 frees
 constexpr uint64_t RvaItemColour = 0x3710d0;   // (player, item, &colour byte, mode) -> palette entry
 constexpr uint64_t RvaIsItemType = 0x373890;   // (item, type id) -> nonzero when the item is of that type
@@ -1754,7 +1755,9 @@ constexpr uint32_t ItemFlagEthereal = 0x400000;
 constexpr int StatSockets = 194, StatDefence = 31, StatMaxDurabilityItem = 0x49, StatDye = 368, StatClassLock = 492;
 using HitUnitFn = void (*)(Game*, Unit*, Unit*, int32_t, void*);
 using ApplyDamageFn = void (*)(Game*, Unit*, Unit*, void*);
-using AvoidCheckFn = int32_t (*)(Game*, Unit*, int32_t);
+using AvoidCheckFn = int32_t (*)(Unit* attacker, Unit* defender, int32_t missile);
+constexpr uint64_t RvaUnitDataFlag = 0x34a0e0;  // (unit) -> data bank flag byte
+using UnitDataFlagFn = uint8_t (*)(Unit* unit);
 using AllocatorFn = void** (*)();
 using AllocFreeFn = void (*)(void*, void*);
 using DamageDestroyFn = void (*)(void*, int32_t);
@@ -1884,11 +1887,12 @@ auto CmdAvoid(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	}
 	hcmd::AvoidTally tally;
 	for (long long i = 0; i < n; ++i) {
-		tally.Add(Fn<AvoidCheckFn>(RvaAvoidCheck)(reinterpret_cast<Game*>(c->player), unit, missile ? 1 : 0));
+		tally.Add(Fn<AvoidCheckFn>(RvaAvoidCheck)(c->player, unit, missile ? 1 : 0));
 	}
 	*modeField = savedMode;
-	Out("avoid ref=%s kind=%s n=%d none=%d avoid=%d dodge=%d evade=%d block=%d other=%d success=%d mode=%d", t.tok[1], t.tok[2], tally.n,
-	    tally.none, tally.avoid, tally.dodge, tally.evade, tally.block, tally.other, tally.Successes(), static_cast<int>(savedMode));
+	Out("avoid ref=%s kind=%s n=%d none=%d avoid=%d dodge=%d evade=%d block=%d other=%d success=%d mode=%d dataflag=%d gameflag=%d asgame=%d", t.tok[1], t.tok[2], tally.n,
+	    tally.none, tally.avoid, tally.dodge, tally.evade, tally.block, tally.other, tally.Successes(), static_cast<int>(savedMode), static_cast<int>(Fn<UnitDataFlagFn>(RvaUnitDataFlag)(unit)),
+	    static_cast<int>(c->dataFlag), static_cast<int>(d2r::DataFlag(reinterpret_cast<Game*>(c->player))));
 	return true;
 }
 
@@ -1919,7 +1923,7 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long sumNormal = 0, sumEth = 0;
 	int32_t durNormalMin = 1 << 30, durNormalMax = -1, durEthMin = 1 << 30, durEthMax = -1;
 	for (long long i = 0; i < n; ++i) {
-		Unit* item = Fn<MakeItemFn>(RvaMakeItem)(c->player, classId, c->game, 4, static_cast<int64_t>(quality), 0, 1, static_cast<int32_t>(ilvl), 0, 0, 0);
+		Unit* item = Fn<MakeItemFn>(RvaMakeItem)(c->player, classId, c->game, 4, static_cast<int64_t>(quality), 0, 0, static_cast<int32_t>(ilvl), 0, 0, 0);  // bit B (the 2 in the generator flags) would skip the ethereal gate
 		if (item == nullptr) {
 			++failed;
 			continue;
@@ -1948,6 +1952,9 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d sockets=[%s]", t.tok[1], tally.n, failed, firstLevel, tally.ethereal, sockets);
 	Out("itemroll def normal n=%d sum=%lld, ethereal n=%d sum=%lld; maxdur normal %d..%d, ethereal %d..%d", nNormal, sumNormal, nEth, sumEth,
 	    durNormalMax < 0 ? 0 : durNormalMin, durNormalMax, durEthMax < 0 ? 0 : durEthMin, durEthMax);
+	char gate[256];
+	ItemGenGateText(gate, sizeof(gate));
+	Out("itemroll %s", gate);
 	return true;
 }
 
