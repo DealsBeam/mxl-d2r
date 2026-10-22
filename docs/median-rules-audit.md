@@ -51,12 +51,12 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 
 1. **XP1, level cap 150**: the built `experience` table probably caps the engine at 99, so the whole Median endgame (levels 100-150, area levels up to 150) is out of reach. A data merge fix, `tools/txt_migrate.py` line 173.
 2. **DC1, no player corpse**: D2R still makes a corpse that must be retrieved; Median re-equips gear in town and keeps the belt. Lane `no-corpse`.
-3. **SK10 and SK11, Hunter steady aim and Fire Sorceress Heat**: class-defining resources that the docs and plugin never mention. Unknown whether the tables alone carry them; if not, those builds do not work.
+3. **SK10 and SK11, Hunter steady aim and Fire Sorceress Heat** (lane gap-classres, done): both are table driven and worked in the port except for two engine rules, now in the plugin. Steady Aim is a layered stat on a state (Steady Shot builds, Heartseeker and Cascade spend); the missing part was the "requires Steady Aim" gate (skill `restrict` modes 3-7, `skill_restrict.cpp`). Heat is the mana bar, drained by stat 297 through D2Sigma's regeneration; D2R's regeneration was missing that (`heat.cpp`). `docs/plugin-spec.md` "Skill restrictions", "Steady Aim", "Heat".
 4. **IT1 and IT2, durability and quantity**: Median removed durability and stack depletion; the port still wears items down and uses up throwing stacks.
 5. **IT3, auto-identify on pickup**: every unidentified drop needs a scroll in the port.
 6. **DC4 and DC3, death rules**: no 5 second respawn wait, and gold on death is untested.
 7. **SK7, sprint and no stamina**: Median replaces running with a 5 second sprint; the port keeps D2R's run and stamina.
-8. **CR4 and DC6, trophy challenge timers**: no timer op in the cube, no void on death or zone change, so the cube cannot enforce the time limit.
+8. **CR4 and DC6, trophy challenge timers** (lane gap-classres, done): Median's timer is the duration of the states that carry the challenge stat (data, native in D2R); the plugin adds the void on death or zone change and a per-trophy cube window (`trophy_timer.cpp`). Open: nothing in the data says which skill is cast on a boss kill (see CR4).
 9. **MU2, WP2, UI4, Map Reveal, waypoint auto-activation, X/R/C hotkeys**: daily quality-of-life rules that every Median player expects.
 10. **GS5 and SK3, stash pages and free mana in town**: D2R's tab count applies (no Median multi-page stash), and skills still cost mana in town.
 
@@ -71,7 +71,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | DC3 | No gold loss on death. | P1.0.0 | unknown | no gold-on-death code or table value; whether D2R 3.3 takes gold at all was not checked. Check: `gold set 100000 0`, kill the player, `gold get` |
 | DC4 | Respawning after death has a 5 second cooldown (replaces the loss penalties; discourages suicide-rushing). | P1.0.0 | missing | no respawn delay in plugin or data; D2R revives at once. Check: time the revive after a kill |
 | DC5 | Soulstealer bosses heal (10% of max life) only when they kill a player, not minions; fire teleport and Chaos Orb heal the boss only if they kill a player (40%). | P1.1.0, P2.1.0, P2.8.0, P2.13.0 | unknown | boss kill hooks are D2Sigma monster code the monsters-ai triage never listed; nothing in `plugin/src` besides the goblin kill hook. Check: let a spawned Soulstealer boss kill the harness player and read its life before and after |
-| DC6 | Dying, or entering another zone, voids an active trophy challenge. | P2.10.0 ("Dying or entering another zone with a trophy challenge will void the one you've already started") | unknown | the dungeon lockout clock is ported (`lockout`, `lockclock`, `reenter`) but nothing ties death or zone change to a challenge. See CR4 |
+| DC6 | Dying, or entering another zone, voids an active trophy challenge. | P2.10.0 ("Dying or entering another zone with a trophy challenge will void the one you've already started") | ported | `trophy_timer.cpp`: the stat 202 (D2R 378) window is voided on death (mode 0 / 17) or an area change, with a chat line, and the cube refuses the recipe. `game_checks trophytimer` (zone change, death). See CR4 |
 | DC7 | Resetting skills and stats removes every active buff. | P1.6.0 | unknown | check `respec` covers stats and skills only. Check: buff, respec at Akara, `state` states |
 | DC8 | Monsters flagged "no monster corpses" (labyrinth modifier, Twisted Clawstorms, Corrupted Barbarians) leave none; others do. | P1.0.0, P1.6.0, P2.11.0 | ported | monstats corpse data migrates unchanged |
 | DC9 | A Hardcore character that dies converts to Softcore on Single Player. | P1.6.0 ("Fixed bugs with the Hardcore to Softcore conversion on Single Player") | missing | no hardcore code; D2R deletes or locks the character. See HC1 |
@@ -133,7 +133,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | CR1 | About 7500 recipes: item designs, upgrades, runeword and honorific rerolls, shrinecrafting. | P1.0.0, P2.0.0 | ported | D:cubemain from `txt_migrate`; check `cubemain` |
 | CR2 | Median cube conditions (ops 29-42: gold payment, craft guards, class conditions). | D2Sigma | ported | `cube_conditions.cpp`; `docs/plugin-spec.md` |
 | CR3 | Craft guard flags: once per game or per character. | D2Sigma | ported | ops 38, 39, 41 |
-| CR4 | Trophy challenge charms: kill the boss and cube the charm within the limit (10 seconds unless stated, e.g. 25 s); death or zone change voids it. | P2.10.0 | missing | no timer op in the cube conditions (`docs/plugin-spec.md` "Cube conditions"). Check: kill the trophy boss, wait 15 s, cube |
+| CR4 | Trophy challenge charms: kill the boss and cube the charm within the limit (10 seconds unless stated, e.g. 25 s); death or zone change voids it. | P2.10.0 | ported (kill trigger open) | Median has no cube timer op: the recipes (op 6, param 202) compare the stat that 15 timed aura states put on the player (`auralencalc` 250 frames = 10 s), so the timer is the state duration. Ported: the cube condition on stat 378 also needs the plugin's window (in time per trophy, same area, alive; `docs/plugin-spec.md` "Trophy timer"), `game_checks trophytimer` (in time passes, 12 s later refused). Open: which skill a boss kill casts is in no table, so the real kill path is untested (the check sets the stat) |
 | CR5 | Cube transmute hotkey 'C'. | P1.0.0 | unknown | D2R transmute button only; no hotkey code. Check: press C with the cube open |
 | CR6 | The "Cow Level" portal can be made in any Act town. | P1.0.0 | unknown | recipe is in D:cubemain; the town restriction check was not looked at. Check: make the portal in Act 5 |
 | CR7 | Imbue, socket and personalize rewards highlight the eligible items. | P2.0.0 | missing | Median UI |
@@ -192,8 +192,8 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | SK7 | Run/walk toggle disabled; Sprint replaces running (about 5 seconds, much faster); stamina removed. | P1.0.0 | missing | no sprint code; `stamina` data is carried. Check: hold the run key, measure speed and duration |
 | SK8 | Most melee skills can be used with Shift without a target. | P2.3.0 | missing | no code. Check: shift-click a Great Hunt with no target |
 | SK9 | Skill tree UI: base/max levels, Alt shows soft level, prerequisite arrows, Shift+Click maxes a skill. | P2.0.0 | missing | Median UI, no panel code |
-| SK10 | Druid bow "steady aim" pseudo-resource. | P1.7.0 | unknown | not mentioned in docs; may be table driven. Check: `cast` a Hunter skill, read the stat |
-| SK11 | Fire Sorceress "Heat" replaces mana (degenerates outside town). | P2.13.0 | unknown | not mentioned in docs. Check: cast a Fire skill, read mana and the heat stat |
+| SK10 | Druid bow "steady aim" pseudo-resource. | P1.7.0 | ported | stat 220 layer 5 on state `sk1296_state`: Steady Shot +1 (cap 6), Heartseeker -1 per hit, Cascade all; the "requires" gate is the new restrict mode 5 (`skill_restrict.cpp`). `game_checks steadyaim` (4 shots read 1-2-3-4, Heartseeker usable only with charges, spends to 0) |
+| SK11 | Fire Sorceress "Heat" replaces mana (degenerates outside town). | P2.13.0 | ported (no UI relabel) | stat 297 (Molten Core's loss rate) turns D2R's mana regeneration into a drain, negative 297 from fire skills builds it, none in town (`heat.cpp`). `game_checks heat`. The bar is still labelled mana; Emberstep was not cast in the test |
 | SK12 | Skill synergies, attack rating, block and speed formulas. | W:Skills | ported | `docs/formulas.md`, D:skills calcs |
 | SK13 | Frame rate caps (FCR/IAS/FRW values that crashed fixed). | P1.0.0 | ported (unverified) | `docs/subsystems/stat-screen.md` |
 

@@ -23,6 +23,7 @@
 #include "d2r.h"
 #include "goblins_logic.h"
 #include "testharness.h"
+#include "trophy_timer.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -190,6 +191,7 @@ void FrameHook(Game* game) {
 	}
 	HarnessGameFrame(game);  // test harness gameplay commands (off in normal play)
 	FlushClientMessages(game);  // quest notices held until the NPC menu is up
+	TrophyTimerFrame(game);  // trophy challenge windows (trophy_timer.cpp)
 	const uint32_t frame = d2r::At<uint32_t>(game, GameFrame);
 	g_state.Touch(game, frame);
 	if (goblins::IsTickFrame(frame)) {
