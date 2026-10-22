@@ -8,7 +8,7 @@ Sources (extract/mxl, the compiled tables; layout in docs/subsystems/npc-hirelin
   npcactions.bin  31 rows x 52 bytes: i32 type, i32 requirement row, i32 flags, 10 x i32 values
 
 Median string ids become D2R ids through work/mod/strings_idkeys.json (Median id -> key) and the string JSONs in
-work/mod/data/local/lng/strings (key -> D2R id): the client menu looks lines up by D2R id. Strings in the
+extract/d2r/93847/data/local/lng/strings (key -> D2R id): the client menu looks lines up by D2R id. Strings in the
 `medianxl` namespace (docs/strings-namespace.md; idkeys value `medianxl:<key>`) have no numeric id: the id is 0 and
 the full key goes into labelKey / promptKey, which the plugin resolves at run time. Re-run this after
 tools/tbl2json.py changes the ids (build.py runs it after sigma_data.py). NPC class ids are the Median monstats
@@ -45,7 +45,8 @@ def table(bins: Path, name: str, row: int) -> list[bytes]:
 def d2r_string_ids(root: Path) -> tuple[dict[str, str], dict[str, int]]:
     idkeys = json.loads((root / "work" / "mod" / "strings_idkeys.json").read_text("utf-8"))
     by_key: dict[str, int] = {}
-    for f in glob.glob(str(root / "work" / "mod" / "data" / "local" / "lng" / "strings" / "*.json")):
+    # D2R's own strings/ files (the mod ships none, its overrides keep D2R's ids)
+    for f in glob.glob(str(root / "extract" / "d2r" / "93847" / "data" / "local" / "lng" / "strings" / "*.json")):
         for e in json.loads(Path(f).read_text("utf-8-sig")):
             by_key.setdefault(e["Key"], e["id"])
     return idkeys, by_key

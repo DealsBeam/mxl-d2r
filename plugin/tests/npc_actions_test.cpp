@@ -1,6 +1,7 @@
 // Tests of the pure NPC action rules (npc_actions_logic.h) over the generated tables. Run through mxl_tests
 // (requirements_test.cpp main).
 #include "../src/npc_actions_logic.h"
+#include "../src/strings_logic.h"
 
 #include <cstdio>
 #include <cstring>
@@ -290,6 +291,68 @@ int RunNpcActionsTests() {
 		const std::uint16_t more[1] = {5555};
 		const std::uint64_t moreFn[1] = {0x5555};
 		Check(AddMenuLines(rec, more, moreFn, 1) == -1, "a record with five lines refuses a sixth");
+	}
+	// Akara's menu, then Cain's (cainsub after respec): the plugin's ids come from the registry (Akara's key first, as the
+	// first menu build registers every record in table order), the patch runs on every build, and D2R re-initialises
+	// Cain's record between builds (Identify over line 1, count 3, the old Identify stays one line behind). Cain's line must
+	// survive that and the record must not fill up with Identify lines.
+	{
+		mxlstr::IdRegistry reg;
+		auto free = [](std::uint16_t) { return true; };
+		const std::uint16_t akaraId = reg.Add("medianxl:AkaraMenu1b", free);
+		const std::uint16_t cainId = reg.Add("medianxl:strCainMenuCraftMaterials", free);
+		Check(akaraId == 0xfe00 && cainId == 0xfdff && reg.Add("medianxl:AkaraMenu1b", free) == akaraId,
+		      "Akara's prompt and label share one id, Cain's key gets the next one");
+		alignas(8) std::uint8_t akara[RecordSize] = {};
+		alignas(8) std::uint8_t cain[RecordSize] = {};
+		auto* aids = reinterpret_cast<std::uint16_t*>(akara + RecIdsOffset);
+		auto* cids = reinterpret_cast<std::uint16_t*>(cain + RecIdsOffset);
+		auto* cfns = reinterpret_cast<std::uint64_t*>(cain + RecHandlersOffset);
+		auto* ccount = reinterpret_cast<std::uint32_t*>(cain + RecCountOffset);
+		*reinterpret_cast<std::uint16_t*>(akara) = 148;
+		*reinterpret_cast<std::uint32_t*>(akara + RecCountOffset) = 4;
+		aids[0] = 0xd35;
+		aids[1] = 0xd44;
+		aids[2] = 0x2ba0;
+		*reinterpret_cast<std::uint16_t*>(cain) = 265;
+		auto resetCain = [&] {  // 0x115d00: what D2R writes to a Cain record
+			*ccount = 3;
+			cids[0] = 0xd35;
+			cids[1] = IdentifyLine;
+			cfns[0] = 0x140112eb0;
+			cfns[1] = 0x140114000;
+		};
+		resetCain();
+		const std::uint64_t akaraFn = 0x7ffa00000001;
+		const std::uint64_t cainFn = 0x7ffa00000002;
+		bool ok = true;
+		for (int open = 0; open < 8; ++open) {
+			ok = ok && AddMenuLines(akara, &akaraId, &akaraFn, 1) == 4 && aids[3] == akaraId;
+			ok = ok && AddMenuLines(cain, &cainId, &cainFn, 1) == 3 && *ccount == 4;
+			ok = ok && cids[0] == 0xd35 && cids[1] == cainId && cids[2] == IdentifyLine && cids[3] == 0 && cfns[1] == cainFn &&
+			     cfns[2] == 0x140114000;
+			*reinterpret_cast<std::uint32_t*>(akara + RecCountOffset) = 4;  // the Akara menu closes: Cain's record is reset behind
+			if (open % 3 != 2) {                                              // (every second or third close here; not on all)
+				resetCain();
+				cids[2] = IdentifyLine;  // the old Identify line, one behind
+				cfns[2] = 0x140114000;
+			}
+		}
+		Check(ok, "Akara then Cain, with D2R's resets between the builds: Cain keeps [Talk, crafting, Identify]");
+		// the record as the failing run left it: Talk and four Identify lines
+		for (int i = 1; i < RecMaxLines; ++i) {
+			cids[i] = IdentifyLine;
+			cfns[i] = 0x140114000;
+		}
+		*ccount = 6;
+		Check(AddMenuLines(cain, &cainId, &cainFn, 1) == 3 && cids[1] == cainId && cids[2] == IdentifyLine && cids[3] == 0 && cids[4] == 0 &&
+		          cfns[3] == 0 && cfns[4] == 0 && *ccount == 4,
+		      "a record full of Identify lines takes the line again");
+		// a record that only has one Identify line is left as it is
+		resetCain();
+		cids[2] = 0;
+		cfns[2] = 0;
+		Check(AddMenuLines(cain, &cainId, &cainFn, 1) == 3 && cids[2] == IdentifyLine, "one Identify line stays");
 	}
 	return failures;
 }

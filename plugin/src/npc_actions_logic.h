@@ -309,10 +309,40 @@ inline constexpr int RecHandlersOffset = 0x18; // u64[5]: click handlers per lin
 inline constexpr int RecMaxLines = 5;
 inline constexpr uint16_t IdentifyLine = 0xfb4;  // the builder (0x1147a0) rewrites the count at this line; keep it last
 
+// D2R re-initialises the Cain records now and then (the function behind 0x115d00, run when a menu closes): it writes
+// Identify (0xfb4, handler 0x114000) over line 1 and sets the count to 3, whatever the record holds. A plugin line that
+// sat in front of Identify is overwritten and the old Identify stays one line behind, so the record reads
+// [Talk, Identify, Identify]; every such reset adds one more copy, until the record is full and takes no line any more
+// (cainsub after respec: "Talk + four Identify lines"). Drops the repeats of the Identify line (the first one stays).
+inline void DropRepeatedIdentify(uint8_t* record) noexcept {
+	auto id = [&](int i) -> uint16_t& { return *reinterpret_cast<uint16_t*>(record + RecIdsOffset + i * 2); };
+	auto fn = [&](int i) -> uint64_t& { return *reinterpret_cast<uint64_t*>(record + RecHandlersOffset + i * 8); };
+	bool seen = false;
+	int out = 0;
+	for (int i = 0; i < RecMaxLines && id(i) != 0; ++i) {
+		if (id(i) == IdentifyLine) {
+			if (seen) {
+				continue;
+			}
+			seen = true;
+		}
+		if (out != i) {
+			id(out) = id(i);
+			fn(out) = fn(i);
+		}
+		++out;
+	}
+	for (int i = out; i < RecMaxLines && id(i) != 0; ++i) {
+		id(i) = 0;
+		fn(i) = 0;
+	}
+}
+
 // Adds the lines (string id + handler) that are not in the record yet: before Identify when the record has it, else at
 // the end, and sets the count to lines + 1 every call (the builder lowers it when it skips Identify). Returns the
 // number of lines the record has afterwards, or -1 when it would not fit.
 inline auto AddMenuLines(uint8_t* record, const uint16_t* ids, const uint64_t* handlers, int n) noexcept -> int {
+	DropRepeatedIdentify(record);
 	auto id = [&](int i) -> uint16_t& { return *reinterpret_cast<uint16_t*>(record + RecIdsOffset + i * 2); };
 	auto fn = [&](int i) -> uint64_t& { return *reinterpret_cast<uint64_t*>(record + RecHandlersOffset + i * 8); };
 	int lines = 0;
