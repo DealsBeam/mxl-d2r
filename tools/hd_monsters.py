@@ -17,6 +17,11 @@ so this step builds one UnitDefinition per Median monster look:
              drawn
   state machine  the donor's, with each state bound for Median's weapon class too
 
+  provenance tools/art_provenance.py matches Median's monster parts against D2R's by image: a Median monster whose parts
+             are D2R parts (the same sprites, recoloured, rescaled) gets the unit of that D2R monster with the matching
+             (part, variant) pairs, the measured scale and the colour difference as tint, ahead of the scoring above,
+             which stays the fallback (no match, no D2R unit for the source code, or a unit that lacks Median's modes)
+
 Writes into <out>/hd/character (units mxl_*.json in enemy/, their variant tables and state machines in enemy/mxl/,
 monsters.json updated) and <out>/../hd_monsters.md (every Median monster -> donor + scale + tint + confidence).
 Run after gfx_placeholders.py. Usage: python tools/hd_monsters.py [--out DIR] [--work DIR] [--only ID,ID]
@@ -406,7 +411,7 @@ def remap_parts(dparts: dict[str, list[str]], slots: dict[str, list[str]]) -> tu
 
 
 def build_unit(donor: str, name: str, slots: dict, scale: float | None, adjust, tint, weapon: str,
-               sm_name: str | None, var_name: str) -> tuple[dict, list[str]]:
+               sm_name: str | None, var_name: str, vmap: dict | None = None) -> tuple[dict, list[str]]:
     """UnitDefinition json (dict) for a Median monster look; (unit, notes)."""
     d = copy.deepcopy(load_json(unit_path(donor)))
     d["name"] = name
@@ -421,6 +426,9 @@ def build_unit(donor: str, name: str, slots: dict, scale: float | None, adjust, 
         dparts[pc["part"]].append(pc["variant"])
         ents_by_key[(pc["part"], pc["variant"])] = e
     rows, notes = remap_parts(dict(dparts), slots)
+    if vmap:  # provenance: the (part, variant) the art was made from is drawn at that Median slot
+        done = {(tp, tv) for tp, tv in vmap}
+        rows = [r for r in rows if (r[2], r[3]) not in done] + [(sp, sv, tp, tv) for (tp, tv), (sp, sv) in vmap.items()]
     for dp, dv, tp, tv in rows:
         e = copy.deepcopy(ents_by_key[(dp, dv)])
         nm = f"entity_{tp}_{tv}_{dp}_{dv}"
@@ -799,6 +807,66 @@ def q(x: float, step: float) -> float:
     return round(round(x / step) * step, 4)
 
 
+# ------------------------------------------------------------------ provenance (tools/art_provenance.py)
+PROV_COVER = 0.6
+
+
+def load_provenance(path: Path) -> dict:
+    """Median monster code (lowercase) -> part (tr, rh ...) -> variant -> best vanilla source of that part."""
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text("utf-8")).get("monsters", {}).get("parts", {})
+
+
+def prov_donor(s: Subject, parts: dict, by_code: dict[str, dict[str, str]], donors: dict[str, "Donor"]):
+    """(donor, vmap, scale, kind, coverage, text) when the monster's parts are D2R parts, else None.
+
+    vmap: (Median part name, Median variant) -> (D2R part name, D2R variant) of the unit's entities to draw there."""
+    mine = parts.get(s.code.lower())
+    if not mine:
+        return None
+    weight: Counter = Counter()
+    entries: dict[tuple, dict] = {}
+    for pc, vs in s.slots.items():
+        for v in vs:
+            e = mine.get(pc.lower(), {}).get(v)
+            if e and e["coverage"] >= PROV_COVER and e["q"] >= 0.8:
+                entries[(pc, v)] = e
+                weight[e["source"].split("/")[0]] += e["frames"] * (0.3 if pc in ("RH", "LH", "SH") else 1.0)
+    if not entries:
+        return None
+    vcode, w = weight.most_common(1)[0]
+    total_w = sum(w for w in weight.values())
+    body = [(k, e) for k, e in entries.items() if k[0] not in ("RH", "LH", "SH") and e["source"].split("/")[0] == vcode]
+    if w < 0.5 * total_w or not body:
+        return None
+    cands = [u for u in by_code.get(vcode, {}) if u in donors]
+    if not cands:
+        return None
+    vmap = {}
+    for (pc, v), e in entries.items():
+        sc_, sp, sv = e["source"].split("/")
+        if sc_ == vcode and sp.upper() in PARTS:
+            vmap[(PARTS[pc], v)] = (PARTS[sp.upper()], sv)
+    def fit(u: str) -> tuple:
+        have = donors[u].info["parts"]
+        n = sum(1 for sp, sv in vmap.values() if sv in have.get(sp, []))
+        return (n, score(s, donors[u])[0])
+    unit = max(cands, key=fit)
+    if fit(unit)[0] == 0:
+        return None
+    have = donors[unit].info["parts"]
+    vmap = {k: v for k, v in vmap.items() if v[1] in have.get(v[0], [])}
+    scales = [e["scale"] for _k, e in body if e["scale"] != 1.0]
+    scale = sorted(scales)[len(scales) // 2] if scales else 1.0
+    kinds = Counter(e["kind"] for _k, e in body)
+    kind = "rescale+recolour" if scale != 1.0 and "recolour" in "".join(kinds) else         "rescale" if scale != 1.0 else "recolour" if any("recolour" in k for k in kinds) else "exact"
+    cover = sum(e["coverage"] for _k, e in body) / len(body)
+    text = (f"provenance: {', '.join(sorted({f'{pc} {v}' for (pc, v) in entries if (pc, v) in dict(body)}))} = {kind} "
+            f"D2R {vcode}/{unit} ({len(vmap)} of {len(entries)} parts mapped)")
+    return donors[unit], vmap, scale, kind, cover, text
+
+
 # ------------------------------------------------------------------ vanilla art
 def vanilla_unit(s: Subject, ms: dict, mj: dict, ms2: dict, by_code: dict[str, dict[str, str]]) -> tuple[str | None, str]:
     """Unit for a Median monster that uses a D2R code (D2R's own art): D2R's unit of the same Id and code, else the
@@ -836,6 +904,7 @@ def main() -> int:
     ap.add_argument("--only", help="comma separated Median Ids")
     ap.add_argument("--no-tint", action="store_true")
     ap.add_argument("--no-scale", action="store_true")
+    ap.add_argument("--no-provenance", action="store_true", help="skip tools/art_provenance.py matches")
     args = ap.parse_args()
     work = Path(args.work)
     out = Path(args.out) if args.out else work / "mod" / "data"
@@ -861,6 +930,10 @@ def main() -> int:
     variants: dict[str, tuple] = {}
     rows = []  # report rows
     kept = Counter()
+    prov = {} if args.no_provenance else load_provenance(out.parent / "art_provenance.json")
+    if not args.no_provenance and not prov:
+        print("no work/mod/art_provenance.json: run tools/art_provenance.py for exact-art matches")
+    prov_n: Counter = Counter()
     for mid, r in mms.items():
         if only and mid not in only:
             continue
@@ -890,6 +963,22 @@ def main() -> int:
             continue
         d, sc, ratio, why, margin = choose(s, donors)
         conf = confidence(s, d, sc, ratio, margin) if col else "low"
+        vmap, pvtext = None, ""
+        pv = prov_donor(s, prov, by_code, donors) if prov else None
+        if pv:
+            pd, pmap, pscale, pkind, pcover, pvtext = pv
+            need = {MODE_ID[m] for m in s.modes if m not in ("SQ", "KB")}
+            def missing(x):
+                return [m for m in need if m not in x.modes and not (m in (0, 12) and (0 in x.modes or 12 in x.modes))]
+            if len(missing(pd)) <= max(1, len(missing(d))):
+                d, vmap, ratio = pd, pmap, pscale
+                sc, _r, why = score(s, d)
+                margin = 0.0
+                conf = "high" if pcover >= 0.9 and pkind in ("exact", "recolour") else "medium"
+                prov_n[pkind] += 1
+                why = [pvtext] + [w for w in why if w.startswith("missing")]
+            else:
+                prov_n["unit lacks Median's modes"] += 1
         scale = None
         if col and not args.no_scale:
             sq = q(max(0.5, min(2.5, ratio)), 0.05)
@@ -903,9 +992,9 @@ def main() -> int:
         vname = "v_" + hashlib.sha1(vkey.encode()).hexdigest()[:8]
         variants[vname] = (adj, tint)
         wk = s.basew if s.basew not in d.keys else None
-        key = json.dumps([d.unit, scale, sorted(s.slots.items()), vname, wk])
+        key = json.dumps([d.unit, scale, sorted(s.slots.items()), vname, wk, sorted(vmap.items()) if vmap else None])
         uname = f"mxl_{d.unit}_" + hashlib.sha1(key.encode()).hexdigest()[:7]
-        units[uname] = dict(donor=d.unit, scale=scale, slots=s.slots, vname=vname, weapon=wk, basew=s.basew)
+        units[uname] = dict(donor=d.unit, scale=scale, slots=s.slots, vname=vname, weapon=wk, basew=s.basew, vmap=vmap)
         hd[mid] = uname
         rows.append((mid, name, code, d.unit, f"{scale or 1.0:g}", label, conf,
                      ("; ".join(why) or "default") + f"; score {sc:.1f}, margin {margin:.1f}, size x{ratio:.2f}"
@@ -928,7 +1017,7 @@ def main() -> int:
                 write_json(out / sm_name.replace("data/", "", 1), sm)
         dv = load_json(D2R / info["var"]) if info["var"] else {"dependencies": {}}
         vp = f"data/hd/character/enemy/mxl/{u['vname']}.json"
-        d, notes = build_unit(u["donor"], uname, u["slots"], u["scale"], None, None, u["basew"], sm_name, vp)
+        d, notes = build_unit(u["donor"], uname, u["slots"], u["scale"], None, None, u["basew"], sm_name, vp, u["vmap"])
         for n in notes:
             n_notes[n] += 1
         write_json(hdc / "enemy" / f"{uname}.json", d)
@@ -941,13 +1030,14 @@ def main() -> int:
     conf_n = Counter(r[6] for r in rows)
     rep += [f"| {k} | {v} |" for k, v in sorted(conf_n.items())]
     rep += [f"| {k} | {v} |" for k, v in kept.items()]
+    rep += [f"| provenance ({k}) | {v} |" for k, v in prov_n.items()]
     rep += ["", "| Median Id | Name | Code | Donor | Scale | Colour | Confidence | Why |", "|---|---|---|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: (r[6], r[0])):
         rep.append("| " + " | ".join(str(x).replace("|", "/") for x in r) + " |")
     (out.parent / "hd_monsters.md").write_text("\n".join(rep) + "\n", encoding="utf-8")
     cache.save()
     print(f"{len(rows)} monsters, {len(units)} units, {len(variants)} colour tables; {dict(conf_n)}; "
-          f"part notes {dict(n_notes)}; report -> {out.parent / 'hd_monsters.md'}")
+          f"provenance {dict(prov_n)}; part notes {dict(n_notes)}; report -> {out.parent / 'hd_monsters.md'}")
     return 0
 
 
