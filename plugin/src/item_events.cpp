@@ -270,8 +270,10 @@ using d2r::Unit;
 using Handler = uint64_t (*)(void* game, int32_t event, Unit* unit, Unit* other, void* arg5, uint64_t code, uint64_t a7, uint64_t a8,
                              uint64_t a9);
 using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
+using GetRecordFn = const uint8_t* (*)(uint32_t dataFlag, int32_t skillId);
 
 constexpr uint64_t GetStatRva = 0x2f5020;        // (unit, stat, layer)
+constexpr uint64_t RvaSkillRecord = 0x97790;     // (game + 0x106, skill id) -> skills record
 constexpr uint64_t RegisterSlotRva = 0x3e2a400;  // the `register` thunk's slot; its target is inside D2RCore.dll
 // D2RCore.dll as shipped with D2RLoader 1.3.1: the handlers its table holds for the functions this file replaces or wraps.
 struct CoreHandler {
@@ -289,6 +291,8 @@ constexpr CoreHandler CoreHandlers[] = {
 // D2R's functions 20 (chance to cast a skill) and 28 (flat life) are the bodies Median's 34 and 33 are.
 constexpr uint64_t MainFunc20 = 0x583b30, MainFunc28 = 0x583a70;
 
+bool Readable(const void* p, size_t n) noexcept { return !IsBadReadPtr(p, n); }
+
 GetStatFn g_getStat = nullptr;
 Handler g_original15 = nullptr;
 Handler g_original16 = nullptr;
@@ -297,6 +301,8 @@ Handler g_main28 = nullptr;
 volatile LONG g_calls33 = 0, g_calls34 = 0;
 uint64_t g_last33[9] = {};
 uint64_t g_ret33 = 0, g_ret34 = 0;
+int64_t g_lastCastSkill = -1, g_lastCastLevel = -1, g_lastCastWarp = -1;
+uint64_t g_exeBaseForRecords = 0;
 
 bool UnitBlocksWoundsOrCrush(Unit* attacker, Unit* victim) noexcept {
 	const int aType = attacker != nullptr ? d2r::At<int32_t>(attacker, d2r::UnitType) : -1;
@@ -337,7 +343,17 @@ uint64_t HealOnKill(void* game, int32_t event, Unit* unit, Unit* other, void* ar
 
 uint64_t CastOnKill(void* game, int32_t event, Unit* unit, Unit* other, void* arg5, uint64_t code, uint64_t a7, uint64_t a8, uint64_t a9) {
 	InterlockedIncrement(&g_calls34);
-	g_ret34 = g_main20(game, event, unit, other, arg5, mxl_itemevents::ToD2rCode(code), a7, a8, a9);
+	const uint32_t d2rCode = mxl_itemevents::ToD2rCode(code);
+	g_lastCastSkill = mxl_itemevents::CastSkill(d2rCode);
+	g_lastCastLevel = mxl_itemevents::CastLevel(d2rCode);
+	g_lastCastWarp = -1;
+	if (game != nullptr && Readable(static_cast<uint8_t*>(game) + 0x106, 1)) {
+		const uint8_t* rec = reinterpret_cast<GetRecordFn>(g_exeBaseForRecords + RvaSkillRecord)(*(static_cast<uint8_t*>(game) + 0x106), static_cast<int32_t>(g_lastCastSkill));
+		if (rec != nullptr && Readable(rec + mxl_itemevents::RecordWarpOffset, 1)) {
+			g_lastCastWarp = mxl_itemevents::IsWarpSkill(rec[mxl_itemevents::RecordWarpOffset]) ? 1 : 0;
+		}
+	}
+	g_ret34 = g_main20(game, event, unit, other, arg5, d2rCode, a7, a8, a9);
 	return g_ret34;
 }
 
@@ -353,11 +369,12 @@ bool WriteSlot(uint64_t* slot, uint64_t value) noexcept {
 	return true;
 }
 
-bool Readable(const void* p, size_t n) noexcept { return !IsBadReadPtr(p, n); }
-
 }  // namespace
 
 void Counters(long* heal, long* cast, uint64_t* lastArgs9) noexcept {
+	lastArgs9[11] = static_cast<uint64_t>(g_lastCastSkill);
+	lastArgs9[12] = static_cast<uint64_t>(g_lastCastLevel);
+	lastArgs9[13] = static_cast<uint64_t>(g_lastCastWarp);
 	*heal = g_calls33;
 	*cast = g_calls34;
 	for (int i = 0; i < 9; ++i) {
@@ -369,6 +386,7 @@ void Counters(long* heal, long* cast, uint64_t* lastArgs9) noexcept {
 
 bool Install(uint64_t exeBase, char* report, size_t reportSize) noexcept {
 	using namespace mxl_itemevents;
+	g_exeBaseForRecords = exeBase;
 	g_getStat = reinterpret_cast<GetStatFn>(exeBase + GetStatRva);
 	g_main20 = reinterpret_cast<Handler>(exeBase + MainFunc20);
 	g_main28 = reinterpret_cast<Handler>(exeBase + MainFunc28);

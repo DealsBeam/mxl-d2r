@@ -2292,9 +2292,10 @@ auto CmdEvTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	} else if (hcmd::LowerEq(t.tok[1], "calls")) {
 		// calls seen by the replaced D2RCore handlers 33 / 34 and the arguments of the last 33
 		long heal = 0, cast = 0;
-		uint64_t a[11] = {};
+		uint64_t a[14] = {};
 		item_events::Counters(&heal, &cast, a);
 		Out("handler 33 calls %ld (returned %llx), handler 34 calls %ld (returned %llx)", heal, static_cast<unsigned long long>(a[9]), cast, static_cast<unsigned long long>(a[10]));
+		Out("last cast on kill: skill %lld level %lld warp %lld", static_cast<long long>(a[11]), static_cast<long long>(a[12]), static_cast<long long>(a[13]));
 		Out("last 33: game %llx event %lld unit %llx other %llx arg5 %llx code %llx a7 %llx a8 %llx a9 %llx", static_cast<unsigned long long>(a[0]),
 		    static_cast<long long>(a[1]), static_cast<unsigned long long>(a[2]), static_cast<unsigned long long>(a[3]), static_cast<unsigned long long>(a[4]),
 		    static_cast<unsigned long long>(a[5]), static_cast<unsigned long long>(a[6]), static_cast<unsigned long long>(a[7]), static_cast<unsigned long long>(a[8]));
