@@ -27,6 +27,7 @@
 #include "item_spells.h"
 #include "missile_hits.h"
 #include "mana_costs.h"
+#include "skill_damage.h"
 #include "heat.h"
 #include "trophy_timer.h"
 #include "skill_restrict.h"
@@ -74,6 +75,7 @@ char g_levelTypesReport[160] = "off: not the expected game image";
 char g_calcReport[160] = "off: not the expected game image";
 char g_itemSpellsReport[160] = "off: not the expected game image";
 char g_manaCostsReport[160] = "off: not the expected game image";
+char g_skillDamageReport[160] = "off: not the expected game image";
 char g_skillRestrictReport[160] = "off: not the expected game image";
 char g_heatReport[160] = "off: not the expected game image";
 char g_trophyReport[200] = "off: not the expected game image";
@@ -130,7 +132,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
+// items missiles mana skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -204,6 +206,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	              g_missileHitsReport[0] ? g_missileHitsReport : " none");
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "mana costs %s", g_manaCostsReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "skill damage %s", g_skillDamageReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "skill restrict %s", g_skillRestrictReport);
 	Say(command, line);
@@ -427,6 +431,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			InstallManaCosts(context, g_manaCostsReport, sizeof(g_manaCostsReport));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: mana costs %s", g_manaCostsReport);
+		context->LogInfo(line);
+		if (Off("skilldmg")) {
+			std::snprintf(g_skillDamageReport, sizeof(g_skillDamageReport), "%s", OffNote);
+		} else {
+			InstallSkillDamage(context, g_skillDamageReport, sizeof(g_skillDamageReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: skill damage %s", g_skillDamageReport);
 		context->LogInfo(line);
 		if (Off("restrict")) {
 			std::snprintf(g_skillRestrictReport, sizeof(g_skillRestrictReport), "%s", OffNote);

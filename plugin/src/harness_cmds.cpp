@@ -24,7 +24,9 @@
 #include "map_memory.h"
 #include "level_types.h"
 #include "monster_looks.h"
+#include "skill_damage.h"
 #include "skill_tree.h"
+#include "mxl_skill_flags.h"
 #include "quests_act1.h"
 #include "stat_columns.h"
 #include "strings.h"
@@ -1718,6 +1720,29 @@ auto CmdSkills(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
+// `skilldmg <skill id> [level] [nomastery]`: the skill's damage at that level for the player, through the damage hooks
+// and through D2R's own functions (elemental and physical, min and max), with the inputs of Median's formula
+// (docs/plugin-spec.md, "Skill damage scaling"): flags (1 BaseSynergy, 2 StaticDamage), the player's level, energy and
+// stat 514 (Median 485), the synergy percent columns evaluated for the player, the BaseSynergy percent, the mastery stats.
+auto CmdSkillDmg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0, level = 1;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id) || id < 0 || id > 0xffff || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &level)) ||
+	    level < 1 || level > 255) {
+		return Fail(c, "usage: skilldmg <skill id> [level 1-255] [nomastery]");
+	}
+	const bool mastery = !(t.n > 3 && hcmd::LowerEq(t.tok[3], "nomastery"));
+	SkillDamageSample s;
+	if (!SampleSkillDamage(c->player, c->dataFlag, static_cast<int32_t>(id), static_cast<int32_t>(level), mastery ? 1 : 0, &s)) {
+		return Fail(c, "skilldmg: no skill record %lld (or the skill damage hooks are off)", id);
+	}
+	Out("skilldmg skill=%lld level=%lld mastery=%d flags=%d clvl=%d energy=%d stat%d=%d calcElem=%d calcPhys=%d baseSyn=%d masteryElem=%d "
+	    "masteryMagic=%d ele=%d-%d phys=%d-%d orig_ele=%d-%d orig_phys=%d-%d",
+	    id, level, mastery ? 1 : 0, s.flags, Stat(c->player, StatLevel), Stat(c->player, 1), mxl_skill_flags::StatBaseSynergy,
+	    Stat(c->player, mxl_skill_flags::StatBaseSynergy), s.calcElem, s.calcPhys, s.baseSynergy, s.masteryElem, s.masteryMagic, s.eleMin,
+	    s.eleMax, s.physMin, s.physMax, s.origEleMin, s.origEleMax, s.origPhysMin, s.origPhysMax);
+	return true;
+}
+
 // `cast <skill id> [x y | unit <id> | nearest [class] | self]`: uses the skill the way the cast packets do (location: 0x4fdb40,
 // unit: 0x4f8de0), from the player's own skill list. No target = the player's own position. The action runs over the
 // next frames: poll `state` (mode, mana) and `missiles`.
@@ -3207,7 +3232,7 @@ const Verb Verbs[] = {
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
-    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
+    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},

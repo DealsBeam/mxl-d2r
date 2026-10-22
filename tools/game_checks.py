@@ -14,7 +14,7 @@ craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resist
 classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
-heat trophytimer mapreveal wpauto hotkeys stashpages.
+heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -5309,6 +5309,265 @@ def check_stashpages():
         % (" ".join(res), ("; wrong: " + "; ".join(wrong)) if wrong else ""), [], log)
 
 
+
+def _sd_steps(st, lvl):
+    """Per-level bonus: the five steps cover the levels 2-8, 9-16, 17-22, 23-28 and 29+."""
+    if lvl <= 1:
+        return 0
+    total, prev = 0, 1
+    for i, top in enumerate((8, 16, 22, 28, None)):
+        top = lvl if top is None else min(top, lvl)
+        if top <= prev:
+            break
+        total += (top - prev) * st[i]
+        prev = top
+    return total
+
+
+def _sd_i32(v):
+    v &= 0xffffffff
+    return v - (1 << 32) if v & 0x80000000 else v
+
+
+def _sd_tdiv(a, b):
+    """Integer division truncated toward zero (C)."""
+    q = abs(a) // abs(b)
+    return q if (a < 0) == (b < 0) else -q
+
+
+def _sd_pct(value, percent):
+    """value * percent / 100 truncated toward zero (D2Sigma 0x10088e50); 0 when either factor is 0."""
+    if value == 0 or percent == 0:
+        return 0
+    return _sd_i32(_sd_tdiv(value * percent, 100))
+
+
+def _sd_base_synergy(clvl, energy, stat514):
+    """((energy+20)*130/(energy+500) + 50 + min(stat/10, 100)) * (min(clvl, 120)+5) * 10 / 100 - 75 (0x100a6c70)."""
+    extra = min(_sd_tdiv(stat514, 10), 100)
+    spread = _sd_tdiv((energy + 20) * 130, energy + 500) if energy + 500 else 0
+    return _sd_tdiv((spread + 50 + extra) * (min(clvl, 120) + 5) * 10, 100) - 75
+
+
+def _sd_elemental(base, st, shift, lvl, percent, mastery):
+    v = _sd_i32((_sd_steps(st, lvl) + base) << shift)
+    if percent:
+        v = _sd_i32(v + _sd_pct(v, percent))
+    if mastery:
+        v = _sd_i32(v + _sd_pct(v, mastery))
+    return v
+
+
+def _sd_physical(base, st, lvl, shift, percent, mastery):
+    """Skills without a weapon share (SrcDam 0): the weapon part is 0."""
+    own = _sd_steps(st, lvl) + base
+    if percent:
+        own = _sd_i32(own + _sd_pct(own, percent))
+    if mastery:
+        own = _sd_i32(own + _sd_pct(own, mastery))
+    return _sd_i32(own << shift)
+
+
+# damage type names of skills.txt EType that the mastery helper (0x337f40) maps to a mastery stat
+_SD_MASTERY_TYPES = ("fire", "ltng", "mag", "cold", "pois")
+
+
+_SD_MASTERY_STATS = (329, 330, 331, 332, 357)  # fire, lightning, cold, poison, magic mastery
+
+
+def _sd_load():
+    """D2R skill id -> the damage columns of the built skills.txt plus the skills2 flags (1 BaseSynergy, 2 StaticDamage)."""
+    t = _tsv(os.path.join(BUILT_EXCEL, "skills.txt"))
+    col = {c: i for i, c in enumerate(t[0])}
+
+    def cell(r, c):
+        return r[col[c]] if col[c] < len(r) else ""
+
+    def num(r, c):
+        try:
+            return int(cell(r, c))
+        except ValueError:
+            return 0
+
+    idmap = json.load(open(_main_checkout(os.path.join(REPO, "work", "named", "idmap.json")), encoding="utf-8"))
+    sk2 = open(_main_checkout(os.path.join(REPO, "extract", "mxl", "data", "global", "excel", "skills2.bin")), "rb").read()
+    n = struct.unpack_from("<I", sk2)[0]
+    flags = {}
+    for e in idmap["skills"]:
+        if e["row"] < n:
+            o = 4 + e["row"] * 66
+            f = (1 if sk2[o + 0x2d] else 0) | (2 if sk2[o + 0x2e] else 0)
+            if f:
+                flags[e["id"]] = f
+    skills = {}
+    for r in t[1:]:
+        if not r or not cell(r, "*Id").lstrip("-").isdigit():
+            continue
+        sid = int(cell(r, "*Id"))
+        skills[sid] = {
+            "name": r[0], "flags": flags.get(sid, 0), "shift": num(r, "HitShift"), "srcdam": num(r, "SrcDam"),
+            "pmin": num(r, "MinDam"), "pmax": num(r, "MaxDam"), "pminst": [num(r, "MinLevDam%d" % i) for i in range(1, 6)],
+            "pmaxst": [num(r, "MaxLevDam%d" % i) for i in range(1, 6)], "pcalc": cell(r, "DmgSymPerCalc"),
+            "etype": cell(r, "EType"), "emin": num(r, "EMin"), "emax": num(r, "EMax"),
+            "eminst": [num(r, "EMinLev%d" % i) for i in range(1, 6)], "emaxst": [num(r, "EMaxLev%d" % i) for i in range(1, 6)],
+            "ecalc": cell(r, "EDmgSymPerCalc"), "passive": cell(r, "passive"),
+        }
+    return skills, {v["name"]: k for k, v in skills.items()}
+
+
+def _sd_query(sid, lvl, mastery=True):
+    """`skilldmg` parsed to a dict of ints; ele / phys / orig_ele / orig_phys are (min, max)."""
+    for _ in range(3):  # the harness now and then misses its 15 s window while the game is busy
+        ok, line, _l = hv("skilldmg %d %d%s" % (sid, lvl, "" if mastery else " nomastery"), "skilldmg")
+        if ok and "skilldmg skill=" in line:
+            break
+        time.sleep(1)
+    else:
+        return None
+    d = {k: int(v) for k, v in kv(line).items() if re.fullmatch(r"-?\d+", v)}
+    for key in ("ele", "phys", "orig_ele", "orig_phys"):
+        m = re.search(r"\b" + key + r"=(-?\d+)-(-?\d+)", line)
+        d[key] = (int(m.group(1)), int(m.group(2))) if m else None
+    return d
+
+
+def check_skillscaling():
+    nm = "Skill damage scaling (Median): BaseSynergy percent, StaticDamage skips mastery, physical magic mastery, per-level steps"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    try:
+        skills, by_name = _sd_load()
+    except Exception as e:
+        return add(nm, "BLOCKED", "tables not readable: %r" % (e,))
+    has_ele = lambda s: s["emax"] > 0 or s["emin"] > 0 or any(s["emaxst"])  # noqa: E731
+    has_phys = lambda s: s["pmax"] > 0 or any(s["pmaxst"])  # noqa: E731
+    active = lambda s: s["passive"] in ("", "0")  # noqa: E731  (a passive-flagged skill keeps D2R's physical function)
+    pick = lambda pred, n=1: [i for i in sorted(skills) if pred(skills[i])][:n]  # noqa: E731
+    elem_ok = lambda s: has_ele(s) and s["etype"] in _SD_MASTERY_TYPES  # noqa: E731
+    phys_ok = lambda s: has_phys(s) and not has_ele(s) and s["srcdam"] == 0 and active(s)  # noqa: E731
+    syn_ele = pick(lambda s: s["flags"] == 1 and elem_ok(s), 2)
+    syn_phys = pick(lambda s: s["flags"] == 1 and phys_ok(s))
+    static_ele = pick(lambda s: s["flags"] == 2 and elem_ok(s))
+    static_phys = pick(lambda s: s["flags"] == 2 and phys_ok(s))
+    plain_ele = pick(lambda s: s["flags"] == 0 and elem_ok(s) and not s["ecalc"], 2)
+    plain_phys = pick(lambda s: s["flags"] == 0 and phys_ok(s) and not s["pcalc"], 2)
+    plain_weapon = pick(lambda s: s["flags"] == 0 and s["srcdam"] != 0 and not has_ele(s) and active(s) and not s["pcalc"], 2)
+    blvl = lambda s: [n for n in re.findall(r"skill\('([^']+)'\.blvl\)", s["ecalc"]) if n in by_name]  # noqa: E731
+    calc_ele = pick(lambda s: elem_ok(s) and active(s) and blvl(s), 8)  # synergy formulas over other skills' levels
+    groups = [("BaseSynergy elemental", syn_ele), ("BaseSynergy physical", syn_phys), ("StaticDamage elemental", static_ele),
+              ("StaticDamage physical", static_phys), ("plain elemental", plain_ele), ("plain physical", plain_phys),
+              ("synergy-formula elemental", calc_ele[:2])]
+    keep = {s: rd("player", s) for s in (1, 12, 514) + _SD_MASTERY_STATS}
+    log, bad, checked = [], [], 0
+
+    def expect(sid, d, lvl, mastery):
+        """Median's value for one skill: table columns plus the inputs `skilldmg` printed for the player."""
+        s = skills[sid]
+        syn = _sd_base_synergy(d["clvl"], d["energy"], d["stat514"]) if s["flags"] & 1 else 0
+        m_ele = d["masteryElem"] if mastery and not s["flags"] & 2 else 0
+        m_phys = d["masteryMagic"] if not s["flags"] & 2 else 0
+        out = {"baseSyn": syn}
+        if has_ele(s):
+            out["ele"] = (_sd_elemental(s["emin"], s["eminst"], s["shift"], lvl, d["calcElem"] + syn, m_ele),
+                          _sd_elemental(s["emax"], s["emaxst"], s["shift"], lvl, d["calcElem"] + syn, m_ele))
+        if has_phys(s):
+            out["phys"] = (_sd_physical(s["pmin"], s["pminst"], lvl, s["shift"], d["calcPhys"] + syn, m_phys),
+                           _sd_physical(s["pmax"], s["pmaxst"], lvl, s["shift"], d["calcPhys"] + syn, m_phys))
+        return out
+
+    try:
+        for gname, ids in groups:
+            if not ids:
+                bad.append("no %s skill in the tables" % gname)
+        scenarios = ((1, 0, 0, 0), (40, 150, 0, 25), (100, 300, 600, 40), (150, 1000, 5000, 60))  # clvl, energy, stat 514, mastery
+        for clvl, energy, e514, mast in scenarios:
+            setstat("player", 12, clvl)
+            setstat("player", 1, energy)
+            setstat("player", 514, e514)
+            for st in _SD_MASTERY_STATS:
+                setstat("player", st, mast)
+            for gname, ids in groups:
+                for sid in ids:
+                    s = skills[sid]
+                    for lvl in (1, 2, 8, 9, 16, 17, 22, 23, 28, 29, 45):
+                        for mastery in ((True, False) if lvl in (1, 29) else (True,)):
+                            d = _sd_query(sid, lvl, mastery)
+                            if d is None or (d["ele"] is None and d["phys"] is None):
+                                bad.append("skilldmg %d %d failed" % (sid, lvl))
+                                continue
+                            want = expect(sid, d, lvl, mastery)
+                            problems = []
+                            if d["flags"] != s["flags"]:
+                                problems.append("plugin flags %d, skills2 %d" % (d["flags"], s["flags"]))
+                            if want["baseSyn"] != d["baseSyn"]:
+                                problems.append("BaseSynergy %d, formula %d" % (d["baseSyn"], want["baseSyn"]))
+                            if has_ele(s) and d["masteryElem"] != mast:
+                                problems.append("mastery stat of %s read %d, set %d" % (s["etype"], d["masteryElem"], mast))
+                            if has_phys(s) and d["masteryMagic"] != mast:
+                                problems.append("stat 357 read %d, set %d" % (d["masteryMagic"], mast))
+                            for key in ("ele", "phys"):
+                                if key in want and tuple(d[key]) != want[key]:
+                                    problems.append("%s %s, Median's formula %s" % (key, d[key], want[key]))
+                            checked += 1
+                            if problems or (lvl in (1, 9, 29) and mastery and clvl in (1, 100)):
+                                log.append("%s %s(%d) L%d clvl %d energy %d stat514 %d mastery %d%s: ele %s phys %s (calc %d/%d, synergy %d)%s" % (
+                                    gname, s["name"], sid, lvl, clvl, energy, e514, mast, "" if mastery else " (nomastery)", d["ele"],
+                                    d["phys"], d["calcElem"], d["calcPhys"], d["baseSyn"], " PROBLEM: " + "; ".join(problems) if problems else ""))
+                            if problems:
+                                bad.append(log[-1])
+        # where Median's rules change nothing (no synergy flag, no mastery) the plugin must give D2R's own numbers
+        setstat("player", 12, 30)
+        setstat("player", 1, 50)
+        for st in _SD_MASTERY_STATS:
+            setstat("player", st, 0)
+        same = 0
+        for sid in plain_ele + plain_phys + plain_weapon:
+            for lvl in (1, 10, 25):
+                d = _sd_query(sid, lvl, True)
+                if d is None:
+                    bad.append("skilldmg %d %d failed" % (sid, lvl))
+                    continue
+                same += 1
+                s = skills[sid]
+                if has_ele(s) and d["ele"] != d["orig_ele"]:
+                    bad.append("plain elemental %s L%d: plugin %s, D2R's own %s" % (s["name"], lvl, d["ele"], d["orig_ele"]))
+                if (has_phys(s) or sid in plain_weapon) and d["phys"] != d["orig_phys"]:
+                    bad.append("plain physical %s L%d: plugin %s, D2R's own %s" % (s["name"], lvl, d["phys"], d["orig_phys"]))
+        log.append("%d plain-skill samples compared with D2R's own functions (%s)" % (same, ", ".join(skills[i]["name"] for i in plain_ele + plain_phys + plain_weapon)))
+        # synergy: raising a skill that a synergy formula names raises the percent column, and the damage follows
+        setstat("player", 12, 60)
+        syn_done = 0
+        for sid in calc_ele:
+            s = skills[sid]
+            names = blvl(s)
+            src = by_name[names[0]]
+            low = _setskill(src, 1)
+            a = _sd_query(sid, 10, True)
+            high = _setskill(src, 12)
+            b = _sd_query(sid, 10, True)
+            if a is None or b is None or low is None or high is None:
+                bad.append("synergy test of %s from %s: setskill / skilldmg failed (%s %s)" % (s["name"], names[0], low, high))
+                continue
+            wa, wb = expect(sid, a, 10, True), expect(sid, b, 10, True)
+            log.append("synergy %s(%d) from %s level %s -> %s: percent column %d -> %d, elemental %s -> %s (formula %s -> %s)" % (
+                s["name"], sid, names[0], low, high, a["calcElem"], b["calcElem"], a["ele"], b["ele"], wa["ele"], wb["ele"]))
+            syn_done += 1
+            if b["calcElem"] <= a["calcElem"] or tuple(a["ele"]) != wa["ele"] or tuple(b["ele"]) != wb["ele"] or b["ele"][1] <= a["ele"][1]:
+                bad.append(log[-1])
+            if syn_done >= 3:
+                break
+        if not syn_done:
+            bad.append("no skill with a skill() synergy formula could be tested")
+    finally:
+        for st, v in keep.items():
+            if v is not None:
+                setstat("player", st, v)
+    add(nm, "PASS" if not bad and checked else "FAIL",
+        ("%d samples at 11 skill levels and 4 character setups (%s) equal Median's formula computed from the tables; %d synergy raises followed" % (
+            checked, ", ".join("%s: %s" % (n, "/".join(skills[i]["name"] for i in ids)) for n, ids in groups), syn_done))
+        if not bad and checked else "; ".join(bad[:8]), [], log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -5336,7 +5595,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
           ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("heat", check_heat),
           ("trophytimer", check_trophytimer),
-          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages)]
+          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages),
+          ("skillscaling", check_skillscaling)]
 
 
 def write_report(extra=""):

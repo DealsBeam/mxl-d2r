@@ -323,6 +323,7 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `skills` / `skill [left\|right <id>]` | the player's skill list (id, base level, skill mode, the game's usability code from `0x33f360`: 0 usable, 2 passive or requirements, 5 no weapon), or selects the active left / right skill (packet 0x3c) |
 | `xp <amount>` | D2R's award function `0x44f2e0(game, player, level, amount)`: adds the experience and runs the level-ups (stat / skill points, the class level cap); prints `level`, `experience`, `statpoints`, `skillpoints` |
 | `setskill <id> <level>` | gives a skill levels with the game's own `0x438670` (stat 5 refilled each step, restored after); Median skills with prerequisites work, the prerequisite check is skipped |
+| `skilldmg <skill> [level] [nomastery]` | the skill's damage at that level for the player through the damage hooks and through D2R's own functions (elemental and physical, min and max), with the inputs of Median's formula: flags (1 BaseSynergy, 2 StaticDamage), character level, energy, stat 514, the synergy percent columns, the BaseSynergy percent, the mastery stats (`docs/plugin-spec.md` "Skill damage scaling") |
 | `cast <id> [x y\|unit <id>\|nearest [class]\|self]` | selects the skill as the left skill, then uses it the way the cast packets do (`0x4fdb40` at a position, `0x4f8de0` at a unit: a melee skill walks up to the monster first and the cast starts when it is in reach, so repeat it for a wandering target); prints the usability code, mode and mana at the call |
 | `missiles [reset]` | live missile units (type 3, hash base `0x646`) and the distinct missiles seen by any server frame since `reset` (class ids; short-lived ones are counted); `state` ends with the same line |
 | `dump player` / `dump client` / `dump mon <class>` / `dump ground` | hex dumps for the RE work behind plugin offsets: the player's data block (`0x34b240`: the character name at +0), the client record of the player in the game, a monstats record (`0x976e0`; the treasure class words are u16 at +0xc0 + difficulty * 0x10 + (n - 1) * 2, n = 1..4; the quest class is n = 4), the items on the ground |
@@ -464,6 +465,16 @@ How they work and what is not tested: `docs/plugin-spec.md` "Skill restrictions"
 sets stat 378 to the Heart of Sin code (167166) with the harness: nothing in the data names the skill a boss kill casts, so the
 kill itself is not exercised. Findings on the way: `tools/formula.py` turned a missile `stat(x, n)` with a layer into a plain stat
 read (wrong layer), and `txt_migrate.py formula_proxies` read the `ParamN` columns by position; both fixed.
+
+### Skill damage scaling (2026-10-22, lane pa-skills, background mode, slot 1, plugin 0.54.0 + the lane's part)
+
+`py -3 tools/game_checks.py --slot 1 all skillscaling` (evidence `checks-20261022-223626-s1`; data and DLL installed together with `install_mod.py --slot 1`; the plugin reports `skill damage on: elemental + physical min/max, 164 BaseSynergy and 423 StaticDamage skills`). Nothing but the harness: `skilldmg` prints the damage through the hooks and through D2R's own functions, and the inputs the formula needs (character level, energy, stat 514, the synergy percent columns, the mastery stats); the check computes Median's formula in Python from the built `skills.txt` columns and `skills2.bin` flags and compares.
+
+| Check | Result |
+|---|---|
+| `skillscaling` | PASS: 572 samples (7 groups of skills x skill levels 1, 2, 8, 9, 16, 17, 22, 23, 28, 29, 45 x 4 character setups: level 1 / energy 0, level 40 / 150, level 100 / 300 with stat 514 = 600, level 150 / 1000 with stat 514 = 5000, each with 0-60% mastery stats) equal the formula. BaseSynergy is -42% at level 1 and 1626% at level 100 / 300 energy / stat 514 600. Nova and Meteor (BaseSynergy elemental), blast_wave (BaseSynergy physical), Magic Arrow (StaticDamage elemental: mastery 40 changes nothing), immersion (StaticDamage physical), Fire Bolt, Telekinesis, DiabRun, PoisonBallTrap (plain; stat 357 raises the physical ones). 18 samples of skills with no flag and no mastery equal D2R's own functions to the digit (elemental, physical, and skills with a weapon share: Sanctuary, MonLeapAttack). Synergy: raising Fire Arrow 1 -> 12 raises Poison Javelin's percent column 12 -> 144 and its damage (8744-9891 -> 19051-21550) as the formula says; Charged Bolt from Lightning likewise |
+
+Not tested in the game: the weapon share of the four BaseSynergy skills that have one (scorpion_blade, thunder_hammer, thunder_wave, angel_of_death; the unit tests cover the arithmetic, and the weapon share of plain skills equals D2R's), skills whose `passive` flag keeps D2R's physical function. A first run on slot 3 gave the same results but lost two samples to harness time-outs (`no answer in 15 s`); `_sd_query` now retries.
 
 ## Scripted checks (tools/game_checks.py, 2026-10-21, foreground input)
 
