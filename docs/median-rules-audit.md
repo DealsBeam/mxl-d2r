@@ -28,15 +28,15 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 
 | Category | ported | partly | missing | deviation | unknown | total |
 |---|---|---|---|---|---|---|
-| Death and corpse | 2 | 0 | 3 | 0 | 4 | 9 |
+| Death and corpse | 6 | 0 | 1 | 0 | 2 | 9 |
 | Gold, stash and shared stash | 4 | 3 | 3 | 0 | 2 | 12 |
 | Inventory, cube and belt sizes | 3 | 0 | 0 | 0 | 2 | 5 |
 | Item rules | 10 | 3 | 1 | 2 | 2 | 18 |
-| Crafting and the cube | 3 | 0 | 2 | 0 | 2 | 7 |
+| Crafting and the cube | 4 | 0 | 1 | 0 | 2 | 7 |
 | Experience, party and level cap | 5 | 0 | 0 | 0 | 4 | 9 |
 | Difficulty, area levels and monster scaling | 7 | 1 | 0 | 0 | 2 | 10 |
 | Uber and quest content | 3 | 2 | 1 | 0 | 1 | 7 |
-| Skills, respec and caps | 5 | 1 | 3 | 0 | 4 | 13 |
+| Skills, respec and caps | 8 | 1 | 2 | 0 | 2 | 13 |
 | Mercenaries | 3 | 1 | 0 | 1 | 0 | 5 |
 | NPC services and town | 3 | 0 | 0 | 0 | 1 | 4 |
 | Waypoints and travel | 1 | 1 | 1 | 0 | 1 | 4 |
@@ -45,7 +45,7 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 | Multiplayer | 0 | 0 | 0 | 1 | 3 | 4 |
 | Hardcore | 1 | 0 | 1 | 0 | 0 | 2 |
 | Anything else Median documents as different | 1 | 0 | 0 | 2 | 1 | 4 |
-| **All** | **54** | **14** | **17** | **9** | **30** | **124** |
+| **All** | **61** | **14** | **14** | **9** | **26** | **124** |
 
 ## Top 10 gaps (by player impact)
 
