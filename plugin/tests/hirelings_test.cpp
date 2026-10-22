@@ -126,6 +126,16 @@ int RunHirelingsTests() {
 		Check(!hire::MercMayWield(*barb, is({})), "an item of no listed type is refused");
 	}
 
+	// revive price: D2Hirelings 0x10067450, 100 per level up to 105, then 250 * (level - 90)^1.5
+	{
+		Check(hire::RevivePrice(1) == 100 && hire::RevivePrice(80) == 8000, "revive: 100 gold per level");
+		Check(hire::RevivePrice(105) == 10500, "revive: level 105 is still flat");
+		Check(hire::RevivePrice(106) == 16000, "revive: 16^1.5 * 250 above 105");
+		Check(hire::RevivePrice(126) == 54000, "revive: 36^1.5 * 250 = 54000");
+		Check(hire::RevivePrice(150) == 116189, "revive: truncated, not rounded");
+		Check(hire::RevivePrice(106) > hire::RevivePrice(105), "revive: the curve continues upward past the flat part");
+	}
+
 	// Kashya's level gate: only the value D2R ships is cleared, only for that class
 	{
 		uint8_t table[hire::NpcRecordLayout::Size * 3] = {};

@@ -316,6 +316,36 @@ and RBX at the client charge site (`0x2188b0`, call 0x218937), picked by return 
 callers (`0x338110` / `0x33d480` tooltips and checks) keep D2R's value. Skills record: minmana +0x226, manashift
 +0x228, mana +0x22a, lvlmana +0x22c, calc7 +0x1a8, calc8 +0x1ac.
 
+**Free mana in town (audit SK3, Median P2.1.0; off word `townmana`).** At the two charge sites the hook returns 0 when the
+caster stands in a town (`0x34b440` unit -> room, `0x2f0750` room is a town); every other caller keeps its value. Found in
+game (lane gap-items, 2026-10-22): the server charge does **not** run at `0x4369fb`. D2RLoader replaces `0x436830` with a
+re-assembled copy of its body (registers reallocated, the call through a pointer: `ff 15 ..`, then `89 c3 85 c0 b8 ..`, at
+a heap address), so neither the return address nor RDI identifies the site. The stub now picks the site by the bytes after
+the call (server original `8b d8 85 c0 7f 04`, server copy `89 c3 85 c0 b8`, client `8b f8 85 c0 7e`) and the server copy's
+caster comes from a second hook, on the skill use function `0x43acb0` (entry `48 89 5c 24 10 44 89 4c 24 20 44 89 44 24 18
+55 56 57 41 54`; the unit is its second argument, RDX): a stub stores RDX in `g_caster` and jumps on. Only a player
+(unit type 0) counts. The Sigma formulas therefore also reach the server charge now (before, only the client charge site
+matched). The harness verb `manacharge` shows the last decision (calls, room, town test, cost, charge, site).
+
+## Item rules (`item_rules.cpp`, `item_gen.cpp`, audit IT1, IT2, IT3; off words `durability`, `quantity`, `autoid`)
+
+Median keeps the durability and quantity columns and removes the behaviour from D2Game.dll with binary patches (D2Sigma's
+patch table: the call to the wear dispatcher at D2Game+0xdee28 is NOPed, the `dec ebp` of the quantity use at D2Game+0xa16be
+is NOPed). D2R's counterparts, hooked with whole-instruction entries (recorded in the file):
+
+| Rule | D2R function | Replacement |
+|---|---|---|
+| IT1 durability | `0x441b10` wear dispatcher (game, unit, item), a 4-10% proc per hit; `0x5590c0` skill-use wear / stack chance | no-ops (the dispatcher is the only writer of stat 0x48 on a hit; stat 0x49 stays) |
+| IT2 quantity | `0x439130` quantity use (game, unit, item, flag), callers `0x439320` from `0x432f90`, `0x4333f0`, `0x43acb0`, `0x55906e` | returns the stack's quantity and leaves it alone |
+| IT3 drops identified | generator `0x442d60` `(game, &item, genRecord)`, the hook that also rolls ethereal (`item_gen.cpp`; off word `autoid`) | after the original: for quality 4 (magic), 5 (set), 6 (rare), 7 (unique) `SetItemFlag 0x36d8f0 (item, 0x10, 1)`; low, normal, superior and crafted items stay as generated |
+
+Median does IT3 in its generators: the magic (D2Game `0x104c1`), rare (`0x15443`), set (`0x13daa`) and unique item pickers push 1
+instead of 0 as the third argument of `SetItemFlag(item, 0x10 identified)` (docs/sigma-patch-audit.md item 1). D2R's
+generator dispatches on the quality at `0x442d60`; its sub-generators set the flag with 0, so the plugin sets it with 1 once
+the generator returned, for qualities 4-7. The harness `item` and `itemroll` create items through `MakeItem` `0x43d530`,
+which sets 0x10 itself at its end, so only real drops (`dump ground`, `identified=`) show the part. Pure rules live in
+`item_rules_logic.h` (`DropsIdentified`, `QuantityUseResult`, `ManaCharge`), unit tests in `item_rules_test.cpp`.
+
 ## Skill damage scaling (`skill_damage.cpp`, `skill_damage_logic.h`, `mxl_skill_flags.h`, off word `skilldmg`)
 
 D2Sigma replaces the four D2Common damage functions of a skill (`D2SkillCalc` `0x100a5d00` elemental max, `0x100a5de0`
@@ -903,7 +933,7 @@ the `mxl` line says why).
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem mercrevive questxp questrewards`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500

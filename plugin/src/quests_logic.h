@@ -230,4 +230,35 @@ constexpr auto RespecRearms(int level) noexcept -> bool {
 	return level > RespecLevelAbove;
 }
 
+// ---- Act 5 quest experience and the vanilla rewards D2Sigma removes (docs/sigma-patch-audit.md sections 9-10) -------------
+//
+// D2Sigma 0x9fa20 replaces the a5q5.cpp (Rite of Passage) level-up bonus (D2R 0x550c20, 1.4M / 20M / 40M experience by difficulty, capped at the
+// next level): every difficulty gets a flat 50,000, none at all for a player above level 129 (the compare is `cmp edi,0x81`
+// with a signed `cmovg`).
+constexpr int32_t QuestExperienceAmount = 50000;
+constexpr int32_t QuestExperienceLastLevel = 129;
+constexpr auto QuestExperienceFor(int32_t level) noexcept -> int32_t {
+	return level > QuestExperienceLastLevel ? 0 : QuestExperienceAmount;
+}
+
+// The Hellforge (Hephasto) and the Countess hand out a treasure class, again by dummy monstats rows (one class per
+// difficulty, TreasureClass1 of that difficulty's column set): halbu 257 "Quest Hellforge", navi 266 "Quest Countess".
+constexpr int32_t RowHellforge = 257;
+constexpr int32_t RowCountess = 266;
+constexpr auto TcHellforge(int difficulty) noexcept -> BonusTc {
+	return {RowHellforge, difficulty};
+}
+constexpr auto TcCountess(int difficulty) noexcept -> BonusTc {
+	return {RowCountess, difficulty};
+}
+
+// The vanilla Countess reward (D2R 0x5e3010) runs when the quest data says the Countess is dead (+0x118) and the reward has
+// not been handed out (+0x119). The hook keeps that gate and sets +0x119 itself.
+constexpr auto CountessRewardDue(bool countessDead, bool handedOut) noexcept -> bool {
+	return countessDead && !handedOut;
+}
+
+// Prison of Ice (a5q3.cpp): D2Sigma 0x1009b7d0 rewrites the item request to an amulet in place of the class item.
+constexpr uint32_t CodePrisonAmulet = Code("amu ");
+
 }  // namespace quests
