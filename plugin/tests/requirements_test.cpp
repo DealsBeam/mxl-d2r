@@ -31,6 +31,7 @@ int RunSkillRestrictTests();  // skill_restrict_test.cpp
 int RunHeatTests();  // heat_test.cpp
 int RunStatRulesTests();  // stat_rules_test.cpp
 int RunTrophyTimerTests();  // trophy_timer_test.cpp
+int RunMonsterRulesTests();  // monster_rules_test.cpp
 
 namespace {
 
@@ -156,6 +157,7 @@ int main() {
 	failures += RunHeatTests();
 	failures += RunStatRulesTests();
 	failures += RunTrophyTimerTests();
+	failures += RunMonsterRulesTests();
 	std::printf(failures == 0 ? "requirements: all tests passed\n" : "requirements: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }

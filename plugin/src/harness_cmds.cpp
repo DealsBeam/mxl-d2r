@@ -30,6 +30,7 @@
 #include "map_memory.h"
 #include "level_types.h"
 #include "monster_looks.h"
+#include "monster_rules.h"
 #include "skill_damage.h"
 #include "skill_tree.h"
 #include "mxl_skill_flags.h"
@@ -2062,6 +2063,84 @@ auto CmdMercPrice(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return price == expected;
 }
 
+// `players [n]`: D2R's "Offline Difficulty Scaling" setting, the number the /players chat command sets (1-8): what the monster
+// setup 0x543e90 reads as the players count of a monster spawned from now on. The chat command also saves the setting
+// (0xa07670); this verb does not. Prints the value now.
+constexpr uint64_t RvaPlayersSetting = 0xe19e0;     // () -> the setting object; the value at +0xc
+constexpr uint64_t RvaPlayersSettingSet = 0xd2f020; // (setting, value)
+
+auto CmdPlayers(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	void* setting = Fn<void* (*)()>(RvaPlayersSetting)();
+	if (setting == nullptr) {
+		return Fail(c, "players: no setting object");
+	}
+	if (t.n >= 2) {
+		long long n = 0;
+		if (!hcmd::ParseInt(t.tok[1], &n) || n < 1 || n > 8) {
+			return Fail(c, "usage: players [1-8]");
+		}
+		Fn<void (*)(void*, int32_t)>(RvaPlayersSettingSet)(setting, static_cast<int32_t>(n));
+	}
+	Out("players setting=%d", d2r::At<int32_t>(setting, 0xc));
+	return true;
+}
+
+// `tctrace [reset]`: the class lookups of the treasure-class executor since start (or the last reset): the level it handed
+// the class getter 0x397290 is above 0 only when the monster's level steps the class up (Median: in Normal too).
+auto CmdTcTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	(void)c;
+	const TcTrace tc = NormalTcTrace(t.n >= 2 && hcmd::LowerEq(t.tok[1], "reset"));
+	Out("tctrace calls=%d leveled=%d lastclass=%d lastlevel=%d", tc.calls, tc.leveled, tc.lastClass, tc.lastLevel);
+	return true;
+}
+
+// `leash [distance]`: the player's mercenary against its owner. With a distance, moves the MERCENARY (the unit move 0x491ca0,
+// as `interact` does for the player) to a free spot that far from the player, along an axis or a diagonal: moving the player
+// pulls the mercenary along at once, whatever the leash. Prints both positions, the distance D2R's own owner-distance function
+// 0x596720 gives, the Euclidean one, and the mercenary's mode.
+constexpr uint64_t RvaOwnerDistance = 0x596720;  // (unit, owner) -> sub-tile distance
+using OwnerDistanceFn = int32_t (*)(Unit*, Unit*);
+
+auto CmdLeash(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+	if (merc == nullptr) {
+		return Fail(c, "leash: the player has no mercenary");
+	}
+	long long want = -1;
+	if (t.n >= 2 && (!hcmd::ParseInt(t.tok[1], &want) || want < 0 || want > 200)) {
+		return Fail(c, "usage: leash [distance 0-200]");
+	}
+	int32_t px = 0, py = 0;
+	d2r::UnitXY(c->player, &px, &py);
+	if (want >= 0) {
+		static const double dir[][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {0.7071, 0.7071}, {-0.7071, 0.7071}, {0.7071, -0.7071}, {-0.7071, -0.7071}};
+		bool moved = false;
+		for (const auto& d : dir) {
+			const int32_t x = px + static_cast<int32_t>(std::lround(d[0] * static_cast<double>(want)));
+			const int32_t y = py + static_cast<int32_t>(std::lround(d[1] * static_cast<double>(want)));
+			if (x < 0 || y < 0 || Fn<BlockedFn>(RvaMoveBlocked)(merc, x, y, 0x804) != 0) {
+				continue;
+			}
+			Fn<MoveFn>(RvaMove)(c->game, merc, 0, x, y, 0, 0);
+			int32_t mx = 0, my = 0;
+			d2r::UnitXY(merc, &mx, &my);
+			if (mx == x && my == y) {
+				moved = true;
+				break;
+			}
+		}
+		if (!moved) {
+			return Fail(c, "leash: no free spot %lld sub-tiles from the player", want);
+		}
+	}
+	int32_t mx = 0, my = 0;
+	d2r::UnitXY(merc, &mx, &my);
+	Out("leash merc id=%u at %d,%d player at %d,%d distance=%d euclid=%.1f mode=%d", IdOf(merc), mx, my, px, py,
+	    Fn<OwnerDistanceFn>(RvaOwnerDistance)(merc, c->player),
+	    std::sqrt(static_cast<double>((mx - px) * (mx - px) + (my - py) * (my - py))), ModeOf(merc));
+	return true;
+}
+
 auto CmdMerc(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
 	if (merc == nullptr) {
@@ -3012,7 +3091,7 @@ auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
-	Out("verbs: state | merc | mercreq | mercprice [level] | a5done | countessreward | hellforgereward [class] | prisonreward | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
+	Out("verbs: state | merc | mercreq | mercprice [level] | players [1-8] | tctrace [reset] | leash [distance] | a5done | countessreward | hellforgereward [class] | prisonreward | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
@@ -3633,7 +3712,7 @@ const Verb Verbs[] = {
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
 };
 

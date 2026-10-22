@@ -162,7 +162,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | DF4 | Monster immunities replaced by absorb (25/50/75% by difficulty); monster resists 0% Normal, 15% elemental Nightmare, 10%/35% Hell. | P1.0.0 | ported | D:monstats; verified (`absorb`); listed |
 | DF5 | Monster unique affixes, champion/minion density, Median-only mods. | W:Monsters | ported | D:monumod, D:levels |
 | DF6 | Elite and uber boss behaviours (summons, phases). | W:Bosses | partly | boss AI is D2Sigma's AI table module (`docs/subsystems/monsters-ai.md`) |
-| DF7 | Players X: monster count and life scale with party size. | D2Sigma | unknown | D2R's own scaling is used; Median's not compared |
+| DF7 | Players X: monster count and life scale with party size. | D2Sigma | ported | lane pa2-monsters: hook `0x543e90`, off word `playersx`; check `monlevel`: 8 players vs 1 in Hell, life x4.49, experience equal |
 | DF8 | Hell difficulty needs the previous difficulty completed; difficulty names are vanilla. | P1.0.0 | ported | D2R |
 | DF9 | Monsters do not drop guaranteed uniques on Nightmare/Hell act bosses. | P1.0.0 | ported | treasure classes replaced by Median's |
 | DF10 | Monster level for skill/hit formulas uses the area level the monster was found in. | P2.3.0 | unknown | not compared |
@@ -252,7 +252,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 |---|---|---|---|---|
 | MP1 | Party experience award. | D2Sigma | unknown | listed (Party experience award) |
 | MP2 | Shared stash on TCP/IP. | P2.0.0, P2.9.0 | unknown | see GS6 |
-| MP3 | Players X scaling. | D2Sigma | unknown | see DF7 |
+| MP3 | Players X scaling. | D2Sigma | ported | see DF7 |
 | MP4 | PvP arena. | D2Sigma | deviation | the arena table has no D2R equivalent and was skipped (`docs/txt-migrate.md`) |
 
 ## 16. Hardcore

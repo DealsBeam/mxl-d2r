@@ -300,6 +300,9 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `msg nearest\|<npc class> <message id>` | packet 0x31 (a dialog line ended): quest event 11 (Akara `0x76` = Griswold's Heart) |
 | `menu list` / `menu <line>` / `menu cancel` | client side: the open NPC menu's record (`0x2a48830`, 48 x 0x48), line string ids and handler (`plugin@` = a plugin line); `menu <line>` calls that line's click handler |
 | `quest <id> <bit> set\|clear\|get`, `quest <id> dump` | quest bits (`0x325c00` / `0x325990` / `0x325c50`) of the game's difficulty |
+| `players <n>` | D2R's players setting (`0xe19e0()` then `0xd2f020(setting, n)`): monsters spawned afterwards carry players count `n` (stat 100) and the scaling record of that count; not persistent |
+| `tctrace [reset]` | the class lookups of the treasure-class executor (`0x397290`): `calls leveled lastclass lastlevel` (level above 0 only when the monster's level steps the class up) |
+| `leash [d]` | the mercenary against its owner: with `d` moves the mercenary `d` sub-tiles from the player (unit move `0x491ca0`); prints both positions, `0x596720`'s owner distance, the Euclidean distance and the mercenary's mode |
 | `waypoint <level id>\|n <number>\|all [get\|set\|clear]`, `waypoint open\|tabs\|panel` | the server's waypoint record of the player's difficulty (`0x3d6890` set, `0x3d6930` test): one level, one number, or all 112; `open` sends packet 0x63 (`0x4812c0`) so the panel opens as in play; `tabs` sets the client's quests 7, 15, 23, 26 (bit 0) so tabs II-V are enabled; `panel` prints the plugin's button table (level, listed flag) |
 | `item <code> [stat=value ...] [q=n] [ilvl=n] [uniq=n] [inv\|cube\|ground]` | creates the item in the backpack, the Horadric Cube or on the ground (port of `0x517530` with the page chosen and the stats set before the client is told); `uniq=<row>` makes a named unique (the generator hook of quests_act1.cpp picks it; unique index = `uniqueitems.txt` line - 2); answers with the item's id, page, position, quality, unique index |
 | `cubecraft` / `cubeclear` / `cuberec <n>` | the transmute on the cube contents (`0x529090` search, then `0x5269c0`), prints the recipe row (`FAIL no recipe matches` when none does; portal outputs return no item, look at `state`); empties the cube; hex dump of a cubemain record |
@@ -608,6 +611,19 @@ Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261022-224210-s1\` (not committe
 | Waypoint auto-activation (WP2, WP3) | PASS | Cold Plains waypoint (number 1): bit set within 1.5 s at distance 3, still clear at distance 47 (negative control), set at distance 24 while walking up. Two players in one game were not run |
 | Hotkeys X / R / C (UI4, CR5) | PASS | window-message presses reach InputService: X toggles (0->1->2 presses, pickup on/off/on), R reveals (+1), C with the cube closed is counted and ignored (transmutes 0, blocked 1), C with the cube open calls Transmute (transmutes 1). The cube-open state comes from the UI message `PanelManager:OpenPanel(<cube panel>)` and `ClosePanel` / `UnloadPanel`. The default keys can overlap D2R's own R and C bindings; not checked |
 | Stash pages (GS5) | PASS | `add_shared_tabs = 7` in `d2rloader.toml`: an item created through ItemService lands in shared tabs 0-9, tabs 10 and 12 are refused. The personal stash stays one page; no Prev / Next / Sort / Mode buttons |
+
+### Monster level, players scaling, Normal drops, leash (lane pa2-monsters, 2026-10-23, slot 1, background mode, plugin 0.54.0 + the lane's parts)
+
+Run folders `%USERPROFILE%\mxl-d2r-runs\checks-20261023-010539-s1\` (parts on) and `checks-20261023-010836-s1\` (negative control, `mxl-core-off.txt` words `monlevel playersx normaltc leash`; not committed): `py -3 tools/game_checks.py all monlevel normaltc leash --slot 1`. The plugin's real-input watchdog saw 0 cursor changes and 0 focus changes.
+
+| Row | Result | Note |
+|---|---|---|
+| Monster level (DF3, item 17) | PASS | stat 12 of spawned monsters equals the area's `MonLvlEx` in areas 2 / 76 / 111 in Normal, Nightmare and Hell, for a living class (18) and a lUndead class (0). Off: Normal monsters keep their own monstats level (28 and 2 in area 2, where the area level is 1): FAIL |
+| Players scaling (DF7, MP3) | PASS | 8 monsters in Hell at `players 1` and `players 8`: mean life x4.49 (Median 4.50), experience 450 / 450, level 100 / 100, players stat 1 / 8. Off: the `mxl` line says off and the checks fail on the line |
+| Normal-difficulty drops (item 18) | PASS | a Normal kill of a level 6 monster hands the class getter level 6; a Nightmare kill of a level 52 monster level 52. Off: no lookups traced (the trace hook is only installed with the part) |
+| Leash (item 19) | PASS | the mercenary moved 20 / 30 / 36 sub-tiles from the player walks back; at 44 / 47 / 60 it warps (distance drops 25 / 32 / 39 within one sample). Off: it walks back at 44 / 47 / 60 |
+
+Not run: summons and the AI 112 / 107 followers (only the mercenary is checked), a second real player, the Baal throne delay, the items rolled by the stepped Normal class. Moving the player to make the distance pulls the mercenary along at once (that is how the first probe misled); the harness moves the mercenary instead.
 
 ### Gamble window and small engine rules (lane pa2-gamble, 2026-10-23, slot 3, background mode)
 
