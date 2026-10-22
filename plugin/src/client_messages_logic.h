@@ -147,6 +147,8 @@ inline void FormatClock(uint32_t seconds, char* out, size_t outSize) noexcept {
 // Median string 11192 ("Join another game to enter again\nThis area is locked") is the sealed level's tooltip.
 inline constexpr const char* SealedLine1 = "This area is locked";
 inline constexpr const char* SealedLine2 = "Join another game to enter again";
+// The quest-table condition of the warp test has no text of its own in Median (the unit message alone); this stands in.
+inline constexpr const char* QuestLine = "You have not finished the quest for this area";
 // Median string 11189 "(Required Level: %d)".
 inline void RequiredLevelLine(int level, char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize, "(Required Level: %d)", level);

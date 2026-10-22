@@ -14,8 +14,10 @@
 #include "d2r.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
+#include "mxl_hirelings.h"
 #include "item_events.h"
 #include "npc_actions.h"
+#include "item_gen.h"
 #include "quests_act1.h"
 #include "testharness.h"
 #include "waypoints.h"
@@ -38,6 +40,7 @@ using d2r::Unit;
 uint64_t g_base = 0;
 volatile LONG g_ready = 0;
 volatile LONG g_frames = 0, g_lastGame = 0;
+volatile LONG g_playerId = 0;  // unit id of the player the last server frame saw (client verbs read their client copy)
 
 // --- addresses (docs/d2r-addresses.md; the ones not listed there were read from the Ghidra decompile this session) ---
 constexpr uint64_t RvaGetStat = 0x2f5020;       // (unit, stat, layer)
@@ -69,6 +72,7 @@ constexpr uint64_t RvaPacketTable = 0x1d2a790;  // server packet handlers: (game
 constexpr uint64_t RvaInventory = 0x34a360;     // (unit, file, line)
 constexpr uint64_t RvaInvFirst = 0x388c10;
 constexpr uint64_t RvaInvNext = 0x38aba0;
+constexpr uint64_t RvaItemLevel = 0x3730d0;     // (item) -> item level
 constexpr uint64_t RvaItemPage = 0x36cfe0;      // (item) -> page byte (0 inventory, 3 cube, 4 stash)
 constexpr uint64_t RvaItemLocation = 0x382d20;  // (int32 location[4], item): unit id, page, packed x/y
 constexpr uint64_t RvaItemRecord = 0x314110;    // (dataFlag, class id)
@@ -156,6 +160,7 @@ using InventoryFn = void* (*)(Unit*, const char*, int32_t);
 using InvFirstFn = Unit* (*)(void*);
 using InvNextFn = Unit* (*)(Unit*);
 using ItemByteFn = uint8_t (*)(Unit*);
+using ItemLevelFn = uint32_t (*)(Unit*);
 using ItemLocationFn = int32_t* (*)(int32_t*, Unit*);
 using ItemRecordFn = const uint8_t* (*)(uint32_t, int32_t);
 using ItemByCodeFn = const uint8_t* (*)(uint32_t, uint32_t, int32_t*);
@@ -332,6 +337,8 @@ auto FindMonsterById(Ctx* c, uint32_t id) noexcept -> Unit* {
 	return found;
 }
 
+auto ResolveRef(Ctx* c, const char* text) noexcept -> Unit*;  // "player", "merc", "mon:<id>"; defined with the verify verbs
+
 // Items of the player's inventory (all pages: backpack, cube, stash, equipped).
 template <typename F>
 void EachItemOf(Unit* owner, F f) noexcept {
@@ -367,10 +374,11 @@ void DescribeItem(Ctx* c, Unit* item) noexcept {
 	int32_t loc[8] = {};
 	Fn<ItemLocationFn>(RvaItemLocation)(loc, item);
 	const auto* data = Fn<uint8_t* (*)(Unit*)>(0x34a500)(item);  // item data: +0 quality, +0x34 unique index
-	Out("item id=%u code=%s class=%d page=%d x=%d y=%d qty=%d stat532=%d quality=%d unique=%d body=%d", IdOf(item), code, ClassOf(item),
-	    static_cast<int>(Fn<ItemByteFn>(RvaItemPage)(item)), loc[2] & 0xffff, (loc[2] >> 16) & 0xffff, Stat(item, 70), Stat(item, 532),
+	Out("item id=%u code=%s class=%d page=%d x=%d y=%d qty=%d stat532=%d quality=%d unique=%d body=%d sockets=%d flags=0x%x ilvl=%d", IdOf(item), code,
+	    ClassOf(item), static_cast<int>(Fn<ItemByteFn>(RvaItemPage)(item)), loc[2] & 0xffff, (loc[2] >> 16) & 0xffff, Stat(item, 70), Stat(item, 532),
 	    data != nullptr ? d2r::At<int32_t>(data, 0) : -1, data != nullptr ? d2r::At<int32_t>(data, 0x34) : -1,
-	    loc[0] == 1 ? loc[3] : 0);
+	    loc[0] == 1 ? loc[3] : 0, Stat(item, 194), data != nullptr ? d2r::At<uint32_t>(data, 0x18) : 0U,
+	    static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(item)));
 }
 
 auto FindItemByCode(Ctx* c, uint32_t code, int page) noexcept -> Unit* {
@@ -428,7 +436,7 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	GoblinsStatus(goblins, sizeof(goblins));
 	int refused = 0, started = 0;
 	DungeonLockoutCounts(&refused, &started);
-	Out("plugin goblins: %s | lockout refused=%d clocks=%d", goblins, refused, started);
+	Out("plugin goblins: %s | lockout refused=%d clocks=%d | tower skips=%d", goblins, refused, started, QuestsTowerSkips());
 	const auto* b = reinterpret_cast<const uint8_t*>(g_base);
 	Out("npcmenu open=%u npc=%u class=%u rows=%u", *reinterpret_cast<const uint32_t*>(b + RvaMenuOpenFlag),
 	    *reinterpret_cast<const uint32_t*>(b + RvaMenuNpcId), static_cast<unsigned>(*reinterpret_cast<const uint16_t*>(b + RvaMenuNpcClass)),
@@ -605,7 +613,7 @@ auto CmdStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long who = 0, stat = 0, layer = 0, value = 0;
 	int next = 3;
 	if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &stat)) {
-		return Fail(c, "usage: stat player|m<monster id>|<item unit id>|<item code> <stat> [layer] [set <value>]");
+		return Fail(c, "usage: stat player|merc|mon:<id>|m<monster id>|<item unit id>|<item code> <stat> [layer] [set <value>]");
 	}
 	if (t.n > next && !hcmd::LowerEq(t.tok[next], "set")) {
 		if (!hcmd::ParseInt(t.tok[next], &layer)) {
@@ -618,8 +626,9 @@ auto CmdStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		return Fail(c, "stat: set needs a number");
 	}
 	Unit* unit = nullptr;
-	if (hcmd::LowerEq(t.tok[1], "player")) {
-		unit = c->player;
+	hcmd::UnitRef ref;
+	if (hcmd::ParseUnitRef(t.tok[1], &ref)) {
+		unit = ResolveRef(c, t.tok[1]);
 	} else if ((t.tok[1][0] == 'm' || t.tok[1][0] == 'M') && hcmd::ParseInt(t.tok[1] + 1, &who)) {
 		unit = FindMonsterById(c, static_cast<uint32_t>(who));  // monsters, e.g. stat m1234 6 (life is stat 6, times 256)
 	} else if (hcmd::ParseInt(t.tok[1], &who)) {
@@ -932,6 +941,29 @@ auto CmdDifficulty(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		*reinterpret_cast<uint8_t*>(reinterpret_cast<uint8_t*>(c->game) + GameDifficulty) = static_cast<uint8_t>(n);
 	}
 	Out("difficulty = %d", static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)));
+	return true;
+}
+
+// `towerprobe`: would the quest 5 kill hook skip the vanilla handler for the nearest Countess (class 45)? Spawn one first.
+auto CmdTowerprobe(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Unit* victim = NearestMonster(c, 45, false);
+	if (victim == nullptr) {
+		return Fail(c, "towerprobe: no Countess (spawn 45) alive");
+	}
+	Out("towerprobe class=45 skip=%d", QuestsTowerProbe(c->game, victim, c->player) ? 1 : 0);
+	return true;
+}
+
+// `lockcheck <level>`: the dungeon warp test's verdict for the player entering the level (dungeon_lockout.cpp).
+auto CmdLockcheck(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &n)) {
+		Out("lockcheck: usage lockcheck <level>");
+		return true;
+	}
+	static const char* const Names[] = {"allow", "requirements", "quest", "sealed"};
+	const int v = DungeonLockoutProbe(c->game, c->player, static_cast<int>(n));
+	Out("lockcheck %lld = %s", n, v >= 0 && v < 4 ? Names[v] : "none");
 	return true;
 }
 
@@ -1572,7 +1604,7 @@ auto CmdDump(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 			const auto* data = Fn<ItemDataFn>(0x34a500)(it);
 			++n;
 			Out("ground id=%u code=%s class=%d mode=%d at %d,%d ilvl=%d quality=%d", IdOf(it), code, ClassOf(it), ModeOf(it), x, y,
-			    data != nullptr ? d2r::At<int32_t>(data, 0x28) : -1, data != nullptr ? d2r::At<int32_t>(data, 0) : -1);
+			    static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(it)), data != nullptr ? d2r::At<int32_t>(data, 0) : -1);
 		});
 		Out("ground items %d (mode 3 or 5 = on the ground)", n);
 		return true;
@@ -1694,6 +1726,341 @@ auto CmdHire(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return Fail(c, "hire: no free entry %lld", which);
 }
 
+// --- verify verbs (docs/testing.md "Verify checks"): hit, avoid, itemroll, colour, req, cstat; unit references --------------
+// A unit reference is "player", "merc" (the player's mercenary) or "mon:<unit id>" (hcmd::ParseUnitRef).
+auto ResolveRef(Ctx* c, const char* text) noexcept -> Unit* {
+	hcmd::UnitRef ref;
+	if (!hcmd::ParseUnitRef(text, &ref)) {
+		return nullptr;
+	}
+	switch (ref.kind) {
+		case hcmd::UnitRef::Player:
+			return c->player;
+		case hcmd::UnitRef::Merc:
+			return Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+		case hcmd::UnitRef::Monster:
+			return FindMonsterById(c, static_cast<uint32_t>(ref.id));
+		default:
+			return nullptr;
+	}
+}
+
+constexpr uint64_t RvaHitUnit = 0x44ce80;      // (game, attacker, target, 1, &damage)
+constexpr uint64_t RvaApplyDamage = 0x44a9b0;  // (game, attacker, target, &damage)
+constexpr uint64_t RvaAvoidCheck = 0x44ef70;   // (attacker unit, defender unit, missile flag) -> 0 / 2 / 4 / 8 / 0x10
+constexpr uint64_t RvaAllocator = 0x12063c0;   // -> allocator object; vtable +0x20 frees
+constexpr uint64_t RvaItemColour = 0x3710d0;   // (player, item, &colour byte, mode) -> palette entry
+constexpr uint64_t RvaIsItemType = 0x373890;   // (item, type id) -> nonzero when the item is of that type
+constexpr int ItemFlagsOffset = 0x18;          // item data: flag word (0x400000 ethereal, 0x800 socketed, 0x10 identified)
+constexpr uint32_t ItemFlagEthereal = 0x400000;
+constexpr int StatSockets = 194, StatDefence = 31, StatMaxDurabilityItem = 0x49, StatDye = 368, StatClassLock = 492;
+using HitUnitFn = void (*)(Game*, Unit*, Unit*, int32_t, void*);
+using ApplyDamageFn = void (*)(Game*, Unit*, Unit*, void*);
+using AvoidCheckFn = int32_t (*)(Unit* attacker, Unit* defender, int32_t missile);
+constexpr uint64_t RvaUnitDataFlag = 0x34a0e0;  // (unit) -> data bank flag byte
+using UnitDataFlagFn = uint8_t (*)(Unit* unit);
+using AllocatorFn = void** (*)();
+using AllocFreeFn = void (*)(void*, void*);
+using DamageDestroyFn = void (*)(void*, int32_t);
+using ItemColourFn = int64_t (*)(Unit*, Unit*, uint8_t*, int32_t);
+using IsItemTypeFn = int32_t (*)(Unit*, int32_t);
+
+// D2R's damage block (0x180 bytes), set up and torn down the way area_damage.cpp does it.
+struct alignas(16) DamageBlock {
+	uint8_t b[0x180];
+};
+
+template <typename T>
+auto DmgField(DamageBlock& d, int off) noexcept -> T& {
+	return *reinterpret_cast<T*>(d.b + off);
+}
+
+void DamageInit(DamageBlock& d) noexcept {
+	std::memset(d.b, 0, sizeof(d.b));
+	DmgField<uint8_t*>(d, 0x40) = d.b + 0x58;
+	DmgField<uint64_t>(d, 0x50) = 0x8000000000000010ULL;
+	DmgField<uint64_t>(d, 0x158) = 1;
+}
+
+void DamageFreeBlock(void* block) noexcept {
+	void** allocator = Fn<AllocatorFn>(RvaAllocator)();
+	reinterpret_cast<AllocFreeFn>(reinterpret_cast<void**>(*allocator)[4])(allocator, block);
+}
+
+void DamageDestroy(DamageBlock& d) noexcept {
+	uint64_t& callback = DmgField<uint64_t>(d, 0x158);
+	void* object = (callback & 1) == 0 ? static_cast<void*>(&callback) : reinterpret_cast<void*>(callback & ~1ULL);
+	if (object != nullptr) {
+		reinterpret_cast<DamageDestroyFn>((*static_cast<void***>(object))[0])(object, 0);
+		if ((callback & 1) != 0) {
+			DamageFreeBlock(reinterpret_cast<void*>(callback & ~1ULL));
+		}
+		callback = 1;
+	}
+	if (static_cast<int64_t>(DmgField<uint64_t>(d, 0x50)) >= 0) {
+		DamageFreeBlock(DmgField<void*>(d, 0x40));
+	}
+}
+
+auto FlagsOf(Unit* item) noexcept -> uint32_t {
+	const auto* data = Fn<ItemDataFn>(RvaItemData)(item);
+	return data != nullptr ? d2r::At<uint32_t>(data, ItemFlagsOffset) : 0;
+}
+
+// `hit <target ref> phys|fire|ltng|magic|cold <amount> [attacker ref]`: one hit of that damage through D2R's hit and apply
+// steps (0x44ce80, 0x44a9b0; the same pair the area damage hook uses), so the resist step 0x4523e0 and the absorb step
+// 0x450670 run. The amount goes into the damage block's field as is. Attacker: the player; for the player as target the
+// nearest live monster (else the player itself).
+auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	struct Elem {
+		const char* name;
+		int offset;
+		int hitClass;
+	};
+	static const Elem elems[] = {{"phys", 0x18, 0}, {"fire", 0x20, 0x20}, {"ltng", 0x2c, 0x40}, {"magic", 0x30, 0}, {"cold", 0x34, 0x30}};
+	long long amount = 0;
+	if (t.n < 4 || !hcmd::ParseInt(t.tok[3], &amount) || amount < 0) {
+		return Fail(c, "usage: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker ref]");
+	}
+	const Elem* elem = nullptr;
+	for (const Elem& e : elems) {
+		if (hcmd::LowerEq(t.tok[2], e.name)) {
+			elem = &e;
+		}
+	}
+	Unit* target = ResolveRef(c, t.tok[1]);
+	if (elem == nullptr || target == nullptr) {
+		return Fail(c, "hit: unknown element or target (%s)", t.tok[1]);
+	}
+	Unit* attacker = nullptr;
+	if (t.n > 4) {
+		attacker = ResolveRef(c, t.tok[4]);
+	} else if (target == c->player) {
+		attacker = NearestMonster(c, -1, false);
+		if (attacker == nullptr) {
+			attacker = target;
+		}
+	} else {
+		attacker = c->player;
+	}
+	if (attacker == nullptr) {
+		return Fail(c, "hit: attacker not found");
+	}
+	DamageBlock d;
+	DamageInit(d);
+	DmgField<uint32_t>(d, 0x00) |= 2;
+	DmgField<uint16_t>(d, 0x04) |= 1;
+	DmgField<int32_t>(d, elem->offset) = static_cast<int32_t>(amount);
+	if (elem->hitClass != 0) {
+		DmgField<int32_t>(d, 0x144) = elem->hitClass;
+	}
+	const int32_t before = Stat(target, StatLife);
+	Fn<HitUnitFn>(RvaHitUnit)(c->game, attacker, target, 1, d.b);
+	Fn<ApplyDamageFn>(RvaApplyDamage)(c->game, attacker, target, d.b);
+	const int32_t after = Stat(target, StatLife);
+	Out("hit target=%s elem=%s amount=%lld life=%d->%d lost=%d absorbed=%d result=0x%x", t.tok[1], elem->name, amount, before, after,
+	    hcmd::LifeLost(before, after), DmgField<int32_t>(d, 0x130), static_cast<unsigned>(DmgField<uint16_t>(d, 0x04)));
+	DamageDestroy(d);
+	return true;
+}
+
+// `avoid <ref> melee|missile|evade [n]`: D2R's avoid check 0x44ef70 (the hooked one: Median's caps) n times (default 200) against
+// the unit (arguments: attacker unit = the player, defender unit, missile flag; a Game there crashes the debug logger); evade is rolled while walking, so the unit's mode is set to walk (2) for the loop and put back. Tally of the
+// results: none, avoid (2), dodge (4), evade (8), block (0x10).
+auto CmdAvoid(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 200;
+	if (t.n < 3 || (t.n > 3 && !hcmd::ParseInt(t.tok[3], &n)) || n < 1 || n > 20000) {
+		return Fail(c, "usage: avoid <player|merc|mon:id> melee|missile|evade [n]");
+	}
+	Unit* unit = ResolveRef(c, t.tok[1]);
+	if (unit == nullptr) {
+		return Fail(c, "avoid: unit not found (%s)", t.tok[1]);
+	}
+	const bool missile = hcmd::LowerEq(t.tok[2], "missile");
+	const bool evade = hcmd::LowerEq(t.tok[2], "evade");
+	if (!missile && !evade && !hcmd::LowerEq(t.tok[2], "melee")) {
+		return Fail(c, "avoid: melee, missile or evade");
+	}
+	auto* modeField = reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(unit) + UnitMode);
+	const int32_t savedMode = *modeField;
+	if (evade) {
+		*modeField = 2;
+	}
+	hcmd::AvoidTally tally;
+	for (long long i = 0; i < n; ++i) {
+		tally.Add(Fn<AvoidCheckFn>(RvaAvoidCheck)(c->player, unit, missile ? 1 : 0));
+	}
+	*modeField = savedMode;
+	Out("avoid ref=%s kind=%s n=%d none=%d avoid=%d dodge=%d evade=%d block=%d other=%d success=%d mode=%d dataflag=%d gameflag=%d asgame=%d", t.tok[1], t.tok[2], tally.n,
+	    tally.none, tally.avoid, tally.dodge, tally.evade, tally.block, tally.other, tally.Successes(), static_cast<int>(savedMode), static_cast<int>(Fn<UnitDataFlagFn>(RvaUnitDataFlag)(unit)),
+	    static_cast<int>(c->dataFlag), static_cast<int>(d2r::DataFlag(reinterpret_cast<Game*>(c->player))));
+	return true;
+}
+
+// `itemroll <code> <n> [q=quality] [ilvl=level]`: makes n items the way `item` does (the generator, quality default 2, item
+// level default 110 so the ethereal gate is open), reads sockets, the ethereal flag, defence and maximum durability and frees
+// them again. Prints the socket histogram and the ethereal count, then the defence and durability by ethereal or not.
+auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 0, quality = 2, ilvl = 110;
+	if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &n) || n < 1 || n > 20000) {
+		return Fail(c, "usage: itemroll <code> <n> [q=quality] [ilvl=level]");
+	}
+	for (int i = 3; i < t.n; ++i) {
+		long long v = 0;
+		if (std::strncmp(t.tok[i], "q=", 2) == 0 && hcmd::ParseInt(t.tok[i] + 2, &v)) {
+			quality = v;
+		} else if (std::strncmp(t.tok[i], "ilvl=", 5) == 0 && hcmd::ParseInt(t.tok[i] + 5, &v)) {
+			ilvl = v;
+		} else {
+			return Fail(c, "itemroll: cannot read '%.40s'", t.tok[i]);
+		}
+	}
+	int32_t classId = 0;
+	if (Fn<ItemByCodeFn>(RvaItemByCode)(c->dataFlag, hcmd::CodeToDword(t.tok[1]), &classId) == nullptr) {
+		return Fail(c, "itemroll: unknown code");
+	}
+	hcmd::RollTally tally;
+	int failed = 0, nNormal = 0, nEth = 0, firstLevel = -1;
+	long long sumNormal = 0, sumEth = 0;
+	int32_t durNormalMin = 1 << 30, durNormalMax = -1, durEthMin = 1 << 30, durEthMax = -1;
+	for (long long i = 0; i < n; ++i) {
+		Unit* item = Fn<MakeItemFn>(RvaMakeItem)(c->player, classId, c->game, 4, static_cast<int64_t>(quality), 0, 0, static_cast<int32_t>(ilvl), 0, 0, 0);  // bit B (the 2 in the generator flags) would skip the ethereal gate
+		if (item == nullptr) {
+			++failed;
+			continue;
+		}
+		if (firstLevel < 0) {
+			firstLevel = static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(item));
+		}
+		const bool eth = (FlagsOf(item) & ItemFlagEthereal) != 0;
+		const int32_t def = Stat(item, StatDefence), dur = Stat(item, StatMaxDurabilityItem);
+		tally.Add(Stat(item, StatSockets), eth);
+		if (eth) {
+			++nEth;
+			sumEth += def;
+			durEthMin = dur < durEthMin ? dur : durEthMin;
+			durEthMax = dur > durEthMax ? dur : durEthMax;
+		} else {
+			++nNormal;
+			sumNormal += def;
+			durNormalMin = dur < durNormalMin ? dur : durNormalMin;
+			durNormalMax = dur > durNormalMax ? dur : durNormalMax;
+		}
+		Fn<FreeItemFn>(RvaFreeItem)(c->game, item);
+	}
+	char sockets[96];
+	tally.Sockets(sockets, sizeof(sockets));
+	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d sockets=[%s]", t.tok[1], tally.n, failed, firstLevel, tally.ethereal, sockets);
+	Out("itemroll def normal n=%d sum=%lld, ethereal n=%d sum=%lld; maxdur normal %d..%d, ethereal %d..%d", nNormal, sumNormal, nEth, sumEth,
+	    durNormalMax < 0 ? 0 : durNormalMin, durNormalMax, durEthMax < 0 ? 0 : durEthMin, durEthMax);
+	char gate[256];
+	ItemGenGateText(gate, sizeof(gate));
+	Out("itemroll %s", gate);
+	return true;
+}
+
+// `colour <item id|code>`: D2R's item colour function 0x3710d0 (hooked for stat 368, the dye) on an item of the player's:
+// the colour byte (transform kind << 5 + colour) and the palette entry it returns.
+auto CmdColour(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long who = 0;
+	if (t.n < 2) {
+		return Fail(c, "usage: colour <item unit id|item code>");
+	}
+	Unit* item = nullptr;
+	if (hcmd::ParseInt(t.tok[1], &who)) {
+		EachItem(c, [&](Unit* it) {
+			if (item == nullptr && IdOf(it) == static_cast<uint32_t>(who)) {
+				item = it;
+			}
+		});
+	} else {
+		item = FindItemByCode(c, hcmd::CodeToDword(t.tok[1]), -1);
+	}
+	if (item == nullptr) {
+		return Fail(c, "colour: item not found");
+	}
+	uint8_t colour = 0xee;
+	const int64_t palette = Fn<ItemColourFn>(RvaItemColour)(c->player, item, &colour, 0);
+	const uint8_t* rec = Fn<ItemRecordFn>(RvaItemRecord)(c->dataFlag, Fn<UnitClassFn>(RvaUnitClass)(item, "harness", 0));
+	Out("colour item=%u dye=%d byte=0x%02x kind=%d palette=%s", IdOf(item), Stat(item, StatDye), static_cast<unsigned>(colour),
+	    rec != nullptr ? static_cast<int>(d2r::At<uint8_t>(rec, 0x151)) : -1, palette != 0 ? "set" : "none");
+	return true;
+}
+
+// `req <ref> [as <class>]`: the item requirement check 0x36bc50 (item_gen.cpp hooks it: class lock, mercenary lists) of every
+// backpack item against the player or the mercenary. `as` puts another class on the unit for the call (a character class 0-6
+// for the player, a monster class such as 338 for the mercenary) and restores it. Prints the class lock stat of the item and
+// the ids of the mercenary list item types (hireclasses allow / deny lists) it belongs to.
+auto CmdReq(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long as = -1;
+	if (t.n < 2 || (t.n > 2 && !(hcmd::LowerEq(t.tok[2], "as") && t.n > 3 && hcmd::ParseInt(t.tok[3], &as)))) {
+		return Fail(c, "usage: req player|merc|mon:id [as <class>]");
+	}
+	Unit* unit = ResolveRef(c, t.tok[1]);
+	if (unit == nullptr) {
+		return Fail(c, "req: unit not found (%s)", t.tok[1]);
+	}
+	auto* classField = reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(unit) + UnitClass);
+	const int32_t savedClass = *classField;
+	if (as >= 0) {
+		*classField = static_cast<int32_t>(as);
+	}
+	int n = 0;
+	EachItemOf(c->player, [&](Unit* it) {
+		if (Fn<ItemByteFn>(RvaItemPage)(it) != 0) {
+			return;
+		}
+		char code[5];
+		ItemCode(c, it, code);
+		uint32_t str = 9, dex = 9, level = 9;
+		const uint64_t r = Fn<RequirementFn>(RvaRequirement)(it, unit, 0, &str, &dex, &level, 0);
+		char types[96] = "";
+		size_t len = 0;
+		int seen[16] = {};
+		int nseen = 0;
+		for (const auto& mc : mxl_hirelings::MercClasses) {
+			for (const int32_t* list : {mc.allow, mc.deny}) {
+				for (int k = 0; k < 7 && list[k] >= 0; ++k) {
+					bool dup = false;
+					for (int s = 0; s < nseen; ++s) {
+						dup = dup || seen[s] == list[k];
+					}
+					if (dup || nseen >= 16) {
+						continue;
+					}
+					seen[nseen++] = list[k];
+					if (Fn<IsItemTypeFn>(RvaIsItemType)(it, list[k]) != 0 && len + 8 < sizeof(types)) {
+						len += static_cast<size_t>(std::snprintf(types + len, sizeof(types) - len, "%s%d", len > 0 ? "," : "", list[k]));
+					}
+				}
+			}
+		}
+		Out("req id=%u code=%s usable=%d lock=%d weapon=%d shield=%d types=%s", IdOf(it), code, static_cast<int>(r & 0xff), Stat(it, StatClassLock),
+		    Fn<IsItemTypeFn>(RvaIsItemType)(it, 0x2d) != 0, Fn<IsItemTypeFn>(RvaIsItemType)(it, 2) != 0, len > 0 ? types : "-");
+		++n;
+	});
+	*classField = savedClass;
+	Out("req items %d unit=%s class=%d%s", n, t.tok[1], static_cast<int>(savedClass), as >= 0 ? " (restored)" : "");
+	return true;
+}
+
+// Client side (UI thread): `cstat <stat> [layer]` reads a stat of the client's copy of the player (what the screen shows).
+auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long stat = 0, layer = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &stat) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &layer))) {
+		return Fail(c, "usage: cstat <stat> [layer]");
+	}
+	if (g_playerId == 0) {
+		return Fail(c, "cstat: no player seen yet");
+	}
+	Unit* unit = Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(g_playerId), 0);
+	if (unit == nullptr) {
+		return Fail(c, "cstat: no client player unit");
+	}
+	Out("cstat %lld:%lld = %d", stat, layer, Stat(unit, static_cast<int>(stat), static_cast<int>(layer)));
+	return true;
+}
+
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
 	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
@@ -1701,6 +2068,8 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
+	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] | avoid <ref> melee|missile|evade [n] | "
+	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | stat merc|mon:<id> <stat>");
 	return true;
 }
 
@@ -1948,9 +2317,11 @@ struct Verb {
 const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false}, {"waypoint", CmdWaypoint, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
-    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
+    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
+    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
+    {"cstat", CmdClientStat, true},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 
@@ -2023,6 +2394,9 @@ void HarnessGameFrame(void* gamePtr) noexcept {
 	c.game = game;
 	c.dataFlag = d2r::At<uint8_t>(game, d2r::GameDataFlag);
 	c.player = FindPlayer(game);
+	if (c.player != nullptr) {
+		InterlockedExchange(&g_playerId, static_cast<LONG>(IdOf(c.player)));
+	}
 	if (c.player == nullptr) {
 		g_job.rc = 0;
 		std::snprintf(c.why, sizeof(c.why), "no player in the game yet");

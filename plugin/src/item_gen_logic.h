@@ -33,6 +33,12 @@ constexpr auto EtherealChancePerMille(int32_t quality) noexcept -> int32_t {
 	}
 }
 
+// Median's die: `rand(1000) <= chance` with the roll in 0..999.
+inline constexpr int32_t MedianEtherealDie = 1000;
+constexpr auto EtherealRolls(int32_t chancePerMille, int32_t roll) noexcept -> bool {
+	return roll <= chancePerMille;
+}
+
 // D2R's own roll (0x442d60) lets 5 of 100 items of item level 100+ through to the ethereal function. Median's roll is
 // `rand(1000) <= chance`, i.e. chance + 1 of 1000. To get Median's overall rate out of D2R's gate the items that passed
 // are accepted with probability (chance + 1) / 50 (capped at 1): 5% x 26/50 = 2.6% = 26/1000.

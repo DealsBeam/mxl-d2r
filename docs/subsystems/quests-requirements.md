@@ -161,7 +161,7 @@ code in the player's inventory), drops with D2Game +0x12380 (drop a treasure cla
 | Quest id | Slot | Sigma fn | Vanilla fn (D2Game +) | Trigger and effect |
 |---|---|---|---|---|
 | 4 (Search for Cain) | 11 | 0x9e730 (reward 0x9e810) | 0x66ce0 | Akara dialog message 0x76 with bit 1 set (Cain rescued): gives **Griswold's Heart** (`GriswoldsHeart`, `(N)`, `(H)` by difficulty; uniqueitems rows 71-73) and shows message 0x61 |
-| 5 | 8 | 0x9e8b0 | 0x68b90 | skips the vanilla kill handler when quest 5 already has bit 0, 0xe or 0xf (stops a repeat completion) |
+| 5 | 8 | 0x9e8b0 | 0x68b90 (D2R `0x5e10c0`) | skips the vanilla kill handler when quest 5 already has bit 0, 0xe or 0xf (stops a repeat completion). **Ported**, section 5b |
 | 6 (Andariel) | 8 | 0x9e9f0 | 0x67e00 | Normal only: Andariel dies -> drops treasure class "Quest Cata Disenchant" (stored on monstats row 155 `warriv1`, field TreasureClass1) once per player in the game, at the killer's level, sets flag byte +0x198 of the quest data (data size 0x199 = vanilla 0x198 + 1) |
 | 6 | 0 | 0x9eb40 | 0x60a80 | player activates an NPC while the flag is set: if the player lacks `3o[ ` (catalyst of disenchantment), creates it. Pairs with Cain action row 28 |
 | 13 (Summoner, class 250) | 8 | 0x9ed00 | 0xc66b0 | Nightmare only: drops "Quest Cata Learning" (monstats row 177 `drognan` TreasureClass1(N)), flag byte +0xc (data size 0xd) |
@@ -246,7 +246,7 @@ Order = what a player meets first. Sizes: S < 100 lines, M 100-300, L > 300 of p
 | 8 | Baal-in-Hell relic orb | c | S | kill event for monster 544 |
 | 9 | Notices 0x5f-0x61 | d | S | use D2R's message line |
 | 10 | Quest init functions, act-intro stubs, the 15-slot callback table, D2QuestFlags packet | e | - | D2R has its own quest system; test whether intros play; do not port Sigma's list |
-| 11 | Quest 5 repeat guard (0x9e8b0), quest 38 re-arm (0x9f960) | e/defer | S | unconfirmed purpose; defer until Act 1 and 5 are tested |
+| 11 | Quest 5 repeat guard (0x9e8b0), quest 38 re-arm (0x9f960) | e/defer | S | quest 5 guard ported (5b); quest 38 needs nothing |
 
 Milestone note (Barbarian, Act 1): items 2, 3 (Andariel part) and 4 are enough for Act 1; Akara's Heart is the first
 visible reward. Cain's buttons (item 5) are the first Median NPC UI and are needed to recover a lost catalyst.
@@ -261,6 +261,7 @@ Hooks sit on D2R's per-quest handlers (same slot as Median's, run in front of th
 | item generator | `0x43cd50` | when a request is armed on the thread, writes unique index + 1 at block +0x50 (read by the quality-7 chooser `0x443910`); the unique-already-exists bit (game+0x3638) is cleared first |
 | a1q6 event 8 | `0x5e1f00` | Andariel (class 156) in Normal, flag clear: creates `3o[ ` (catalyst of disenchantment) in the killer's inventory, sets the flag |
 | a1q6 event 0 | `0x5e1d30` | NPC activate: flag set, NPC class 0x9b (**Warriv**, from D2Sigma `0xbff40(0)`, not Cain) and no `3o[ ` held (`0x441980`): creates it again |
+| a1q5 event 8 | `0x5e10c0` | Countess (any monster kill reaching the quest): when the killer's record already holds quest 5 bit 0 (reward granted), 0xe (completed now) or 0xf (completed before), the vanilla handler is skipped (`TowerKillHook`, rule `questlogic::SkipTowerKill`, counter `QuestsTowerSkips`). Median's guard `0x9e8b0` is the same test in front of the re-created vanilla handler `0x68b90` |
 
 Findings that change the earlier notes: (1) the Akara reward is not an "Akara's Heart" but the unique Griswold's Heart, picked by
 difficulty from three strings at `0x1018fd54`. (2) The re-issue hook fires on Warriv (act 1, monster 155), the same row Median uses as a
@@ -271,8 +272,7 @@ quest object (its data block is full); it is quest id 47, bit 0 of the player's 
 
 Bonus drop: the treasure class is now dropped once per player in the game on the ground through D2R's `0x441300` (`DropBonusPerPlayer`
 in `quests_common.h`; the class index is the monstats word at +0xc0 + difficulty * 0x10), the inventory item stays as the fallback. Notice 0x61 (`0xb15d0`) after the Heart. Requirement rows 26 (Akara level-51 slot), quest 41 level flag (`0x9e600`), Cain
-and Akara/Charsi/Warriv/Meshif/Larzuk/Drehya action buttons (NPC lane). Quest 5 repeat guard `0x9e8b0` (a1q5 event 8 `0x5e10c0`): purpose
-unconfirmed, deferred. The requirements evaluator (`requirements.cpp`) gates nothing in Act 1 yet; its only Act 1 consumers are the NPC action rows.
+and Akara/Charsi/Warriv/Meshif/Larzuk/Drehya action buttons (NPC lane). Quest 5 repeat guard `0x9e8b0` (a1q5 event 8 `0x5e10c0`): see the table below. The requirements evaluator (`requirements.cpp`) gates nothing in Act 1 yet; its only Act 1 consumers are the NPC action rows.
 
 ## 5c. Implemented: Acts 2-5 (plugin/src/quests_act2_5.cpp, quests_logic.h; switch `quests2`)
 
@@ -296,13 +296,14 @@ tyrael2 367, baalcrab 544, jerhyn 201, ormus 255, cain3 245, qual-kehk 515; **no
 | 41 (respec) | `0x5d9ae0` (10), the only caller is the respec packet `0x4b2530`, also the NPC lane's respec action | `0x9e600`, patched in place of the 1.13c call `0x6fc83bb0` (the respec packet handler's "used up" step): level above 50: clear quest-41 bit 0, set bit 1, and if bit 0xf is clear switch quest object 30 off | **replaces** the D2R function with the same logic; at level 50 or below it does nothing, so, like D2Sigma, the token is not used up at all (see the in-game check) |
 
 **Not ported, with reasons**
-- Quest 5 repeat guard (`0x9e8b0`): skips the vanilla kill handler once quest-5 bits 0, 0xe or 0xf are set. D2Sigma re-creates all quest init
-  functions, so a finished quest can still have its kill handler registered; D2R's own handler `0x5e10c0` clears its slot (`quest+0x2b0 = 0`)
-  when it finishes and the init respects the record, so the guard has nothing to guard. Left out (a wrong guess could block the real completion).
+- (Ported later, see 5b.) Quest 5 repeat guard (`0x9e8b0`): skips the vanilla kill handler once quest-5 bits 0, 0xe or 0xf are set. D2Sigma
+  re-creates all quest init functions, so a finished quest keeps its kill handler registered. D2R's init respects the record in vanilla, but the
+  handler is cheap to guard and Median's rule is a pure function of three bits, so it is ported as is.
 - Quest 38 re-arm (`0x9f960`, replaces the vanilla handler): D2R's own event-2 handler `0x54dd30` already does the same with the same fields
   (Anya, class 512: re-arm when `quest+0xa6` is set, clear it, run `0x550570` when `+0xa7` and not `+0xa8`). Nothing to add.
-- Empty act-intro event-2 handlers (`0x9e5f0`, quests 0, 8, 16, 24): D2R's quests 16 and 24 have no event-2 handler; quest 8's is `0x5a2830`
-  (purpose not read). Left alone; if an Act 2 intro dialog plays wrongly, this is the place to look.
+- Empty act-intro event-2 handlers (`0x9e5f0`, quests 0, 8, 16, 24): D2R's quests 8, 16 and 24 have no event-2 handler (`0x5a2830`, which the
+  first notes listed for quest 8, is quest 9's Radament handler: `d2r_find.py qinit 8` runs on into quest 9's init). Median's stub is empty, so
+  there is nothing to port.
 - Notices 0x5f-0x61 (D2Sigma `0xb15d0`): client strings, not found in D2R; the rewards just appear in the inventory.
 - The TC is dropped once per player in the game on the ground (Summoner: Learning TC 177, Jewelcraft TC 367, as Act 1).
 

@@ -3,7 +3,8 @@
   plugin/src/mxl_requirements.h  requirements.bin (33 rows x 44 bytes): the boolean condition trees that gate NPC services
   plugin/src/mxl_dungeons.h      levels.bin extension fields +0x151..+0x15f except the goblin chance: dungeon lockout
                                  (lock time, lock group), entry requirements (minimum difficulty, level per difficulty,
-                                 class lock) and the fields whose meaning is not established (kept raw)
+                                 class lock), the quest each level needs (leveldefs.bin QuestFlagEx) and the fields
+                                 whose meaning is not established (kept raw)
   plugin/src/mxl_goblins.h       GoblinChance per level (levels +0x15c) and the monstats3 treasure goblin rows
 
 Sources are the compiled tables in extract/mxl (raw bytes: the sigma decode has no names for these fields); ids go
@@ -24,6 +25,7 @@ SRC = ROOT / "plugin" / "src"
 
 REQ_ROW = 44
 LEVEL_ROW = 0x220
+LEVELDEF_ROW = 0x9c    # leveldefs.bin: QuestFlag (+0) and QuestFlagEx (+4) first; D2Sigma's table at TxtRecords +0xc60
 MONSTATS3_ROW = 44
 GOBLIN_FLAG = 0x400    # monstats3 flag word (+0): goblin candidate (D2Goblins 0x65be0)
 RAINBOW_FLAG = 0x1000  # ... only the Halloween rainbow goblin
@@ -88,6 +90,10 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
     if len(lrows) != len(levels):
         raise SystemExit(f"levels.bin has {len(lrows)} rows, idmap {len(levels)}")
 
+    # D2Sigma's warp test (0x5d810) reads QuestFlagEx (+4) of the destination's leveldefs row; row = Median level row
+    ldefs = table("leveldefs", LEVELDEF_ROW)
+    if len(ldefs) != len(lrows):
+        raise SystemExit(f"leveldefs.bin has {len(ldefs)} rows, levels.bin {len(lrows)}")
     dungeon, chances = [], []
     for row, r in enumerate(lrows):
         lid = levels[row]
@@ -103,8 +109,12 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
         group = r[0x15f]
         if chance:
             chances.append((lid, chance, lnames[row], struct.unpack_from("<HHH", r, 0x16)))
-        if any((min_diff, unk152, lock, unk155, unk156, *req, unk15b, class_lock, group)):
-            dungeon.append((lid, lock, group, min_diff, req, class_lock, unk152, unk155, unk156, unk15b, lnames[row]))
+        quest_lock = struct.unpack_from("<I", ldefs[row], 4)[0]
+        if quest_lock > 255:
+            raise SystemExit(f"leveldefs row {row}: quest id {quest_lock} does not fit a byte")
+        if any((min_diff, unk152, lock, unk155, unk156, *req, unk15b, class_lock, group, quest_lock)):
+            dungeon.append((lid, lock, group, min_diff, req, class_lock, unk152, unk155, unk156, unk15b, quest_lock,
+                            lnames[row]))
 
     out = [HEADER, "#pragma once", "", "#include <cstdint>", "", "namespace mxl_dungeons {", "",
            "// levels.bin extension fields +0x151..+0x15f (D2Dungeon.cpp 0x5cee0 / 0x5d9d0; docs/subsystems/ubers-events.md",
@@ -114,14 +124,16 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
            "// difficulty (+0x158..+0x15a, player level), classLock (+0x15e: 0 none, else only class value - 1 may enter).",
            "// Raw, meaning not established: unk152 (+0x152), unk155 (+0x155: set on harder areas), portalObject",
            "// (+0x156 u16, 585 only on level 247 = the rainbow portal; a Median objects row, not remapped), unk15b",
-           "// (+0x15b). The goblin chance (+0x15c) is in mxl_goblins.h.",
+           "// (+0x15b). questLock is QuestFlagEx of leveldefs.bin (+4; 0 = none): D2Sigma's warp test refuses the level",
+           "// unless the player's record of that quest holds bit 1, 0, 0xe or 0xf. The goblin chance (+0x15c) is in",
+           "// mxl_goblins.h.",
            "struct Entry {", "\tint32_t level;         // D2R level id", "\tuint16_t lockSeconds;", "\tuint8_t lockGroup;",
            "\tuint8_t minDifficulty;", "\tuint8_t levelReq[3];   // Normal, Nightmare, Hell", "\tuint8_t classLock;",
-           "\tuint8_t unk152;", "\tuint8_t unk155;", "\tuint16_t portalObject;", "\tuint8_t unk15b;", "};",
+           "\tuint8_t unk152;", "\tuint8_t unk155;", "\tuint16_t portalObject;", "\tuint8_t unk15b;", "\tuint8_t questLock;", "};",
            f"inline constexpr int32_t EntryCount = {len(dungeon)};", "inline constexpr Entry Entries[EntryCount] = {"]
-    for lid, lock, group, md, req, cl, u152, u155, u156, u15b, name in dungeon:
+    for lid, lock, group, md, req, cl, u152, u155, u156, u15b, ql, name in dungeon:
         out.append(f"    {{{lid}, {lock}, {group}, {md}, {{{req[0]}, {req[1]}, {req[2]}}}, {cl}, {u152}, {u155}, {u156}, "
-                   f"{u15b}}},  // {name}")
+                   f"{u15b}, {ql}}},  // {name}")
     out += ["};", "", "}  // namespace mxl_dungeons", ""]
 
     m3 = table("monstats3", MONSTATS3_ROW)

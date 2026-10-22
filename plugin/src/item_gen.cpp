@@ -62,6 +62,8 @@ constexpr uint64_t QualityRva = 0x36cf60;        // (item) -> quality
 constexpr uint64_t HasDurabilityRva = 0x373540;  // (item)
 constexpr uint64_t CanSocketRva = 0x373610;      // (item): the base can have sockets (items record +0x147)
 constexpr uint64_t NoSocketBaseRva = 0x374660;   // (item): items record +0x142, nonzero keeps the item without sockets
+constexpr uint64_t ItemLevelRva = 0x3730d0;      // (item) -> item level (item data +0x40)
+constexpr uint64_t NoEtherealBaseRva = 0x3744d0; // (item): items record +0x13a, nonzero keeps D2R's generator from making it ethereal
 constexpr uint64_t SetSocketsRva = 0x375560;     // (item, count): sets stat 0xc2, clipped to what the item can hold
 
 constexpr int GenFlags = 0xc0;       // generator record: bit 2 no ethereal, 4 force ethereal, 8 no sockets, 0x10 force sockets
@@ -75,6 +77,7 @@ constexpr int32_t StatMaxDurability = 0x49;
 constexpr int32_t StatDefence = 0x1f;
 constexpr int32_t WeaponStats[] = {0x15, 0x16, 0x17, 0x18, 0x9f, 0xa0};
 constexpr int32_t ItemTypeWeapon = 0x2d;
+constexpr int32_t ItemTypeArmour = 0x32;
 constexpr int32_t ItemTypeShield = 2;  // itemtypes row `shie`
 constexpr uint32_t FlagEthereal = 0x400000;
 constexpr uint32_t FlagSocketed = 0x800;
@@ -101,6 +104,7 @@ using SeedFn = void* (*)(Unit* unit);
 using RandFn = int32_t (*)(void* seed, int32_t n);
 using ItemFn = int32_t (*)(Unit* item);
 using SetSocketsFn = void (*)(Unit* item, uint32_t count);
+using ItemLevelFn = uint16_t (*)(Unit* item);
 
 RequirementFn g_originalRequirement = nullptr;
 GenerateFn g_originalGenerate = nullptr;
@@ -125,6 +129,8 @@ ItemFn g_hasDurability = nullptr;
 ItemFn g_canSocket = nullptr;
 ItemFn g_noSocketBase = nullptr;
 SetSocketsFn g_setSockets = nullptr;
+ItemLevelFn g_itemLevel = nullptr;
+ItemFn g_noEtherealBase = nullptr;
 
 int g_lockChecked = 0;
 int g_lockDenied = 0;
@@ -132,6 +138,17 @@ int g_mercChecked = 0;
 int g_mercDenied = 0;
 int g_etherealSeen = 0;
 int g_etherealMade = 0;
+int g_etherealLow = 0;
+int g_gateGenerated = 0;
+int g_gateLevel = 0;
+int g_gateType = 0;
+int g_gateDurable = 0;
+int g_gateQuality = 0;
+int g_gateBase = 0;
+int g_levelIn = -1;
+int g_levelOut = -1;
+int g_qualityIn = -1;
+int g_qualityOut = -1;
 int g_socketsRolled = 0;
 int g_socketsGiven = 0;
 int g_dyed = 0;
@@ -210,8 +227,67 @@ struct GenState {
 };
 thread_local GenState* g_state = nullptr;
 
+// How many generated items pass each part of D2R's ethereal gate in 0x442d60 (item level 100+, weapon or armour type,
+// durability, quality other than 1 and 5, the base's flag at items record +0x13a clear), for the itemroll check.
+void ProbeGate(Unit* item, const uint8_t* gen) {
+	++g_gateGenerated;
+	if (g_itemLevel(item) < 100 || (d2r::At<uint8_t>(gen, GenFlags) & 2) != 0) {
+		return;
+	}
+	++g_gateLevel;
+	if (g_isType(item, ItemTypeWeapon) == 0 && g_isType(item, ItemTypeArmour) == 0) {
+		return;
+	}
+	++g_gateType;
+	if (g_hasDurability(item) == 0) {
+		return;
+	}
+	++g_gateDurable;
+	const int32_t quality = g_quality(item);
+	if (quality == 1 || quality == 5) {
+		return;
+	}
+	++g_gateQuality;
+	if (g_noEtherealBase(item) == 0) {
+		++g_gateBase;
+	}
+}
+
+void MakeEthereal(Unit* item);
+
+// D2R's gate (item level 100+, no generator flag 2, weapon or armour with durability and a base that allows it) never lets
+// quality 1 (low) through to 0x3d3510, Median's roll does (qualities word2 = 25 for quality 1 as for the others). Items of
+// that quality get Median's roll here, after the generator, with the same conditions as D2R's gate.
+bool GatePasses(Unit* item, const uint8_t* gen) {
+	return g_itemLevel(item) >= 100 && (d2r::At<uint8_t>(gen, GenFlags) & 2) == 0 &&
+	       (g_isType(item, ItemTypeWeapon) != 0 || g_isType(item, ItemTypeArmour) != 0) && g_hasDurability(item) != 0 &&
+	       g_noEtherealBase(item) == 0;
+}
+
+void RollLowQualityEthereal(Unit* item, const uint8_t* gen) {
+	if (g_quality(item) != 1 || !GatePasses(item, gen)) {
+		return;
+	}
+	const bool forced = (d2r::At<uint8_t>(gen, GenFlags) & 4) != 0 || (d2r::At<uint32_t>(gen, GenItemFlags) & FlagEthereal) != 0;
+	if (!forced && !item_gen::EtherealRolls(item_gen::EtherealChancePerMille(1), g_rand(g_seed(item), item_gen::MedianEtherealDie))) {
+		return;
+	}
+	const int32_t maxDurability = g_getStat(item, StatMaxDurability, 0);
+	MakeEthereal(item);
+	++g_etherealLow;
+	if (maxDurability > 0) {
+		const int32_t value = item_gen::EtherealDurability(maxDurability);
+		g_setStat(item, StatMaxDurability, value, 0);
+		g_setStat(item, StatDurability, value, 0);
+	}
+}
+
 // Hook A.
 uint64_t GenerateHook(void* game, Unit** item, uint8_t* gen) {
+	if (item != nullptr && *item != nullptr) {
+		g_levelIn = g_itemLevel(*item);
+		g_qualityIn = g_quality(*item);
+	}
 	GenState state;
 	state.item = item;
 	state.gen = gen;
@@ -219,6 +295,14 @@ uint64_t GenerateHook(void* game, Unit** item, uint8_t* gen) {
 	g_state = &state;
 	const uint64_t result = g_originalGenerate(game, item, gen);
 	g_state = outer;
+	if (result != 0 && item != nullptr && *item != nullptr && !state.touched) {
+		RollLowQualityEthereal(*item, gen);
+	}
+	if (item != nullptr && *item != nullptr) {
+		g_levelOut = g_itemLevel(*item);
+		g_qualityOut = g_quality(*item);
+		ProbeGate(*item, gen);
+	}
 	if (state.touched && item != nullptr && *item != nullptr && state.maxDurability > 0 && g_hasDurability(*item) != 0) {
 		const int32_t value = state.accepted ? item_gen::EtherealDurability(state.maxDurability) : state.maxDurability;
 		g_setStat(*item, StatMaxDurability, value, 0);
@@ -341,6 +425,8 @@ auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool eth
 	g_canSocket = reinterpret_cast<ItemFn>(base + CanSocketRva);
 	g_noSocketBase = reinterpret_cast<ItemFn>(base + NoSocketBaseRva);
 	g_setSockets = reinterpret_cast<SetSocketsFn>(base + SetSocketsRva);
+	g_itemLevel = reinterpret_cast<ItemLevelFn>(base + ItemLevelRva);
+	g_noEtherealBase = reinterpret_cast<ItemFn>(base + NoEtherealBaseRva);
 	g_palette = reinterpret_cast<PaletteFn>(base + PaletteRva);
 
 	if (classLock) {
@@ -403,4 +489,9 @@ auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool eth
 void ItemGenSummary(char* text, size_t size) noexcept {
 	std::snprintf(text, size, "class lock denied %d of %d locked-item checks, mercenary equip refused %d of %d | ethereal %d of %d at item level 100+ | sockets given %d of %d rolls | dyed colours drawn %d",
 	              g_lockDenied, g_lockChecked, g_mercDenied, g_mercChecked, g_etherealMade, g_etherealSeen, g_socketsGiven, g_socketsRolled, g_dyed);
+}
+
+void ItemGenGateText(char* text, size_t size) noexcept {
+	std::snprintf(text, size, "ethereal gate of 0x442d60: %d generated, level 100+ %d, weapon or armour %d, durable %d, quality ok %d, base ok %d | hook B called %d, ethereal made %d, quality 1 made %d | last item level %d -> %d, quality %d -> %d",
+	              g_gateGenerated, g_gateLevel, g_gateType, g_gateDurable, g_gateQuality, g_gateBase, g_etherealSeen, g_etherealMade, g_etherealLow, g_levelIn, g_levelOut, g_qualityIn, g_qualityOut);
 }

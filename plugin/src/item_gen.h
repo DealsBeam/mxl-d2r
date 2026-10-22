@@ -15,3 +15,6 @@ auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool eth
 
 // Counters for the "mxl" console line.
 void ItemGenSummary(char* text, size_t size) noexcept;
+
+// The counts of items that pass each part of D2R's ethereal gate (harness verb itemroll).
+void ItemGenGateText(char* text, size_t size) noexcept;

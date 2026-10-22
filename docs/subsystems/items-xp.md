@@ -188,8 +188,8 @@ Orphan's Call is split. Nothing to port. Tooltip colouring of the other pieces i
 
 ## 5. Item colour, generation and flags (shipped by the item-gen lane: `item_gen.cpp`, `item_gen_logic.h`)
 
-Off words `classlock`, `ethereal`, `sockets`, `dyes`. All four were read in the D2R dump; none has been seen in game yet
-(docs/testing.md). Entry bytes below are whole instructions, no rip-relative.
+Off words `classlock`, `ethereal`, `sockets`, `dyes`. All four were read in the D2R dump; the ethereal and socket rolls were
+checked in game (`itemrolls`, plugin 0.51.0, docs/testing.md), the others not yet. Entry bytes below are whole instructions, no rip-relative.
 
 - **Class lock (0x7e470 -> D2R `0x36bc50`).** D2R's requirement check is `0x36bc50(item, unit, flag, &strOk, &dexOk, &levelOk, flag2)`
   (entry `4c 89 4c 24 20 44 89 44 24 18`): item record `+0x11a` / `+0x11c` strength / dexterity, `item_req_percent` (stat 91), minus 10
@@ -205,8 +205,11 @@ Off words `classlock`, `ethereal`, `sockets`, `dyes`. All four were read in the 
   percent and the 75 percent durability (`item_gen_logic.h`). Hook A wraps `0x442d60` (remembers item and gen record, fixes
   the durability afterwards), hook B replaces `0x3d3510` while hook A runs (forced items always; the others are accepted with
   probability 26/50 so the overall rate is Median's; accepted items get Median's effect; the fix-up gives 75 percent or puts back
-  what D2R halved). One difference kept from D2R: it never makes quality 1 (low) and 5 (set) ethereal, Median's 7e120 allows
-  quality 1.
+  what D2R halved). D2R never makes quality 1 (low) and 5 (set) ethereal, Median's 7e120 allows
+  quality 1 (and 5 has chance 0): hook A rolls Median's die (`rand(1000) <= 25`) for generator items of quality 1 that pass the rest
+  of the gate (level 100+, gen `+0xc0` bit 2 clear, weapon / armour type, durability, base flag `0x3744d0` clear), forced
+  ones always, and gives them +25% and 75% durability. **Harness note:** `0x43d530`'s bitB argument (the 7th) is generator
+  `+0xc0` bit 2 = "no ethereal"; a creation call that passes 1 there (the harness `item` / `equip`) never gets an ethereal item.
 - **Sockets (0x7e240 -> D2R `0x441fc0`).** `0x441fc0(game, item, gen)` (entry `48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20`)
   is D2R's socket roll for quality 1-3, called from `0x442d60` and `0x443670` (the two 1.13c call sites). D2R rolls
   `rand(100) <= 32` for `rand(max) + 1` sockets (cap 3 / 4 / 6 by difficulty), Median `rand() % 7` clipped to what the

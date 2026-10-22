@@ -93,6 +93,34 @@ int main() {
 	}
 	Check(seen.n == SeenUnits::Max && seen.overflow == 5, "seen overflow counted");
 
+	UnitRef ref;
+	Check(ParseUnitRef("player", &ref) && ref.kind == UnitRef::Player && ParseUnitRef("MERC", &ref) && ref.kind == UnitRef::Merc, "unit refs");
+	Check(ParseUnitRef("mon:0x1f", &ref) && ref.kind == UnitRef::Monster && ref.id == 31 && ParseUnitRef("mon:7", &ref) && ref.id == 7, "monster ref");
+	Check(!ParseUnitRef("mon:", &ref) && !ParseUnitRef("mon:-3", &ref) && !ParseUnitRef("monster", &ref) && !ParseUnitRef("12", &ref) &&
+	          !ParseUnitRef(nullptr, &ref) && ref.kind == UnitRef::None,
+	      "bad unit refs");
+
+	RollTally roll;
+	roll.Add(0, false);
+	roll.Add(3, true);
+	roll.Add(3, false);
+	roll.Add(99, false);
+	roll.Add(-1, false);
+	char sock[80];
+	roll.Sockets(sock, sizeof(sock));
+	Check(roll.n == 5 && roll.ethereal == 1 && roll.sockets[0] == 2 && roll.sockets[3] == 2 && roll.sockets[RollTally::MaxSockets] == 1 &&
+	          std::strcmp(sock, "0:2 3:2 8:1") == 0,
+	      "roll tally");
+
+	AvoidTally av;
+	const int results[] = {0, 0, 2, 4, 8, 0x10, 0x10, 0x40};
+	for (int r : results) {
+		av.Add(r);
+	}
+	Check(av.n == 8 && av.none == 2 && av.avoid == 1 && av.dodge == 1 && av.evade == 1 && av.block == 2 && av.other == 1 && av.Successes() == 6,
+	      "avoid tally");
+	Check(LifeLost(100 * 256, 40 * 256) == 60 && LifeLost(100 * 256, 130 * 256) == -30 && LifeLost(5, 5) == 0, "life lost");
+
 	std::printf(failures == 0 ? "harness: all tests passed\n" : "harness: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }
