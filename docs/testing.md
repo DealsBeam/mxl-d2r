@@ -75,6 +75,7 @@ Use [test-sessions.md](test-sessions.md) to run these checks by character.
 | 0.10.0 | Missile formulas (msyn, blvl) | A skill whose missile damage/size scales with the skill's points or synergy items (32 missiles use blvl) | Missile effect grows with points spent |
 | 0.9.0 | "Maxed skill" effects (bmax/maxe) | Skills whose tooltip/bonus changes when maxed (e.g. "max this skill ... to remove cooldown") | The bonus appears once the skill reaches its current cap |
 | 0.9.0 | Cooldown in skill tooltips (skcd) | Tooltip of a skill with a cooldown | Shows the cooldown (not 0) |
+| 0.54.x | Cooldown reduction and shared groups (`cooldowns`) | Item with stat 309 (reduces cooldown of a skill); cast a skill of a group (Deep Freeze, Thunderstorm, Purifying Flame) | The wait is shorter by the stat; the other skills of the group are on cooldown until the same moment (game check `cooldowns`) |
 | 0.9.0 | Area-dependent skills (area) | The class "slow missiles" passives (paragon_of_sanc...) in their level range | Active only in the areas their Param7..Param8 range covers |
 | data | Formulas with other Median codes (aura, area, bl12...) | Skills whose tooltips previously showed odd or zero values | Values show (codes not yet implemented count as 0) |
 | 0.6.0 | States fix (bug #14) | Play a while with buffs, auras, curses, summons; enter/leave towns and areas | No crashes; buffs show and expire normally |
@@ -340,6 +341,11 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `infopanel [close <n>]` | (client side) the presentation state of Median's help panels (2 = open) and how many opens the plugin message `I` asked for / the UI thread did / failed |
 | `rewardsnd`, `rewardmsg`, `goblinsay` | the quest reward sound the client hook last played (0x5f-0x61); a reward unit message to the player; the goblin "<name> appears!" line for a monster class |
 | `sysmsg <type> <colour> <text...>` | one chat packet 0x26 to the player (docs/d2r-addresses.md section 13): type 4 = message-log line, 5 = overhead bubble; colour byte 0-11 |
+| `automap` | (client side) the automap's cell count (sum of the four element counts of every layer), current layer, layer count and the debug flag byte `0x2a2add4` |
+| `reveal` | (client side) the R hotkey's work without the key: D2R's debug Reveal Automap `0xd42b0`, flag byte restored; fails when the part is off or no local player exists |
+| `wpobj` | every waypoint object of the game (class, position, distance, level, whether it is within 36 sub-tiles) and the player's level and waypoint number |
+| `travel` | (client side) the hotkey bindings (key and modifier as D2RLoader reports them), counters (waypoints activated, scans, reveals, key presses, transmutes, cube open / closed) and the distinct UI messages seen (`uimsgs`) |
+| `stashprobe <tab>` / `stashprobe result` | queues, on the game thread, a rune created by ItemService in shared stash tab `<tab>` and destroyed again; `result` answers `1 page=<n> create=0 ...` when the tab took the item, `0` when it refused |
 
 Where the answers cannot come from a call they come from the screenshot: the NPC popup text (`cain_menu.png`) and
 D2R's own cheat output.
@@ -537,3 +543,14 @@ New harness verbs (client side unless noted): `skilltab [n]` (selected tab, or s
 
 Slot procedure used: `py -3 tools/game_slots.py lock 2 lane-backlog-b`, `py -3 tools/install_mod.py --slot 2`, `MXL_RUN=lane-backlog-b py -3 tools/game_checks.py --slot 2 all <checks>` (the run keeps the lock and releases it at its end). A full install is needed after another lane has used the slot: a partial data set from a foreign install made `strings` fail once (253 wrong, "Missing string"), and a re-install fixed it.
 Noticed and not fixed: the Wolf Stance tooltip shows a literal `%+d%%` (bugs.md #30).
+
+### Travel: map reveal, waypoint auto-activation, hotkeys, stash pages (lane gap-travel, 2026-10-22, slot 1, background mode)
+
+Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261022-224210-s1\` (not committed; the run is `py -3 tools/game_checks.py --slot 1 all mapreveal wpauto hotkeys stashpages`). Plugin verbs: `mapcells`, `reveal`, `wpobj`, `travel`, `stashprobe` ([Harness commands](#harness-commands-gameplay-without-input-pluginsrcharness_cmdscpp)).
+
+| Row | Result | Note |
+|---|---|---|
+| Map reveal (R, MU2) | PARTIAL | the harness `reveal` (the R hotkey's call of D2R's debug Reveal Automap) returns, the automap layer list grows 1 -> 25, a second reveal adds nothing, the debug flag byte is kept. The picture did not change: `cheat goto` and the town arrive with the map drawn whole (`mapreveal_before.png` = `mapreveal.png`), and the cell count stays 8878. A fresh field level reached by walking was not tested. A first pixel-difference criterion passed on a moving NPC only and was removed |
+| Waypoint auto-activation (WP2, WP3) | PASS | Cold Plains waypoint (number 1): bit set within 1.5 s at distance 3, still clear at distance 47 (negative control), set at distance 24 while walking up. Two players in one game were not run |
+| Hotkeys X / R / C (UI4, CR5) | PASS | window-message presses reach InputService: X toggles (0->1->2 presses, pickup on/off/on), R reveals (+1), C with the cube closed is counted and ignored (transmutes 0, blocked 1), C with the cube open calls Transmute (transmutes 1). The cube-open state comes from the UI message `PanelManager:OpenPanel(<cube panel>)` and `ClosePanel` / `UnloadPanel`. The default keys can overlap D2R's own R and C bindings; not checked |
+| Stash pages (GS5) | PASS | `add_shared_tabs = 7` in `d2rloader.toml`: an item created through ItemService lands in shared tabs 0-9, tabs 10 and 12 are refused. The personal stash stays one page; no Prev / Next / Sort / Mode buttons |

@@ -24,6 +24,7 @@
 #include "goblins_logic.h"
 #include "strings.h"
 #include "testharness.h"
+#include "travel.h"
 #include "trophy_timer.h"
 
 #define NOMINMAX
@@ -190,6 +191,7 @@ void FrameHook(Game* game) {
 		return;
 	}
 	HarnessGameFrame(game);  // test harness gameplay commands (off in normal play)
+	TravelGameFrame(game, d2r::At<uint32_t>(game, GameFrame));  // waypoint auto-activation (every fifth frame)
 	FlushClientMessages(game);  // quest notices held until the NPC menu is up
 	TrophyTimerFrame(game);  // trophy challenge windows (trophy_timer.cpp)
 	const uint32_t frame = d2r::At<uint32_t>(game, GameFrame);

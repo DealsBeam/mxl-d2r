@@ -84,7 +84,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | GS2 | All teleport and warping skills pick gold up. | P1.6.0 | missing | `teleport.cpp` header: "Not ported: D2Sigma's gold auto-pickup after a player's teleport". Check: teleport onto a gold pile |
 | GS3 | Gold drops and vendor prices were rebalanced (vendors buy cheap, potions and oils cost more). | P1.0.0, P2.0.0 | ported | D:monstats, D:treasureclassex replaced by Median's; D:npc buy mult 52 (D2R 512), sell mult 1024; stock in `docs/vendors.md` |
 | GS4 | Larger inventory and stash. | P1.0.0 | ported (unverified) | `inventory.txt` gridX/gridY via `txt_migrate`; HD panels; in-game look pending (`docs/testing.md` "Median stash size") |
-| GS5 | Shared stash and multi-page personal stash in Single Player. | P2.0.0 | partly | only the grid is set. `tools/install_mod.py` writes `d2rloader.toml` with `save_format` only; D2RLoader's `d2rcore.stash.add_shared_tabs` (`docs/services.md` L11) is not used, so D2R's own tab count applies. Check: open the stash, count tabs |
+| GS5 | Shared stash and multi-page personal stash in Single Player. | P2.0.0 | partly | Median's panel counts "n / 10" pages in both modes (D2Sigma `0x1130a0`). `tools/install_mod.py` writes `add_shared_tabs = 7` (D2R's 3 normal shared tabs + 7 = 10) into `d2rloader.toml`; `game_checks stashpages` PASS: ItemService puts an item into tabs 0-9, tab 10 is refused. The personal stash stays one page; Median's Prev / Next / Sort / Mode buttons are not ported (`docs/unported.md` "Stash pages") |
 | GS6 | Shared stash on TCP/IP had stability problems (disabled in 2.0, "potential fix" in 2.9). | P2.0.0, P2.9.0 | unknown | D2R/D2RLoader share the stash file in TCP/IP; bug #20 (stash link check) is "mostly fixed" (`docs/bugs.md`). Check: TCP/IP game with two profiles |
 | GS7 | A sort button in the stash; a button in the inventory that collects every item that fits a container (AC, runes, shrines). | P2.2.0, P2.9.0 | missing | container right-click is ported (`item_spells.cpp`, pSpell 18); the two buttons are Median UI with no panel code |
 | GS8 | Containers: Greater Signets of Learning, Enchanted Runes, Corrupted Treasures; shrines and vessels are 1x1. | P2.11.0, P2.12.0 | partly | pSpell 18 logic ported; which container items exist in the built data was not counted. Check: `item` each code, `use` |
@@ -134,7 +134,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | CR2 | Median cube conditions (ops 29-42: gold payment, craft guards, class conditions). | D2Sigma | ported | `cube_conditions.cpp`; `docs/plugin-spec.md` |
 | CR3 | Craft guard flags: once per game or per character. | D2Sigma | ported | ops 38, 39, 41 |
 | CR4 | Trophy challenge charms: kill the boss and cube the charm within the limit (10 seconds unless stated, e.g. 25 s); death or zone change voids it. | P2.10.0 | ported (kill trigger open) | Median has no cube timer op: the recipes (op 6, param 202) compare the stat that 15 timed aura states put on the player (`auralencalc` 250 frames = 10 s), so the timer is the state duration. Ported: the cube condition on stat 378 also needs the plugin's window (in time per trophy, same area, alive; `docs/plugin-spec.md` "Trophy timer"), `game_checks trophytimer` (in time passes, 12 s later refused). Open: which skill a boss kill casts is in no table, so the real kill path is untested (the check sets the stat) |
-| CR5 | Cube transmute hotkey 'C'. | P1.0.0 | unknown | D2R transmute button only; no hotkey code. Check: press C with the cube open |
+| CR5 | Cube transmute hotkey 'C'. | P1.0.0 | partly | D2Sigma `0x69820` transmutes while the cube panel is open. `travel.cpp` registers an InputService action (default C) that calls the panel's Transmute `0x2cd720`, only while the panel is open (UI messages). `game_checks hotkeys`: C with the cube closed is counted and ignored (PASS); see `docs/unported.md` "Cube hotkey" for the open-cube press |
 | CR6 | The "Cow Level" portal can be made in any Act town. | P1.0.0 | unknown | recipe is in D:cubemain; the town restriction check was not looked at. Check: make the portal in Act 5 |
 | CR7 | Imbue, socket and personalize rewards highlight the eligible items. | P2.0.0 | missing | Median UI |
 
@@ -188,7 +188,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | SK3 | Skills cost no mana in town. | P2.1.0 | missing | no town-mana code. Check: cast a mana skill in town, read mana |
 | SK4 | Many skills castable in town (buffs, totems, warp, Shadow Refuge, Acid aura). | P1.1.0, P1.2.0, P1.7.0, P2.1.0 | unknown | skills.txt `town` column carried from Median; not tested. Check: `cast` each in town |
 | SK5 | Town Portal is an innate skill (no scrolls) with a 10 s cooldown, and a 1 second delay when opening. | P1.0.0, P2.2.0 | partly | D:skills town_portal srvdofunc 109, localdelay 250; the 1 s delay is not checked |
-| SK6 | Skill cooldowns are computed dynamically; skill groups no longer share cooldowns. | P1.0.0 | unknown | D2Sigma engine feature; D2R's cooldown. Check: two groups' cooldowns |
+| SK6 | Skill cooldowns are computed dynamically; skill groups no longer share cooldowns. | P1.0.0 | ported | D2Sigma's cooldown start: one timer per skill or per skills2 cooldown group, no unit-wide delay state; `cooldowns.cpp` ports it on D2R's cooldown starts. Check `cooldowns` (PASS 2026-10-22, Blast Wave (group 4, localdelay 500): 494 frames without and 390 with stat 309 = 100, the six other group skills got the same end frame; server start only, the client twin is not reached by the harness cast) |
 | SK7 | Run/walk toggle is renamed "Toggle Sprint"; a sprint lasts about 5 seconds and is much faster than walking. The patch note's "stamina removed" means the vitality and level stamina gains, not the stamina bar. | P1.0.0, patch strings, D:charstats | ported (verified) | Median's sprint is data: `charstats` stamina 50, WalkVelocity 10, RunVelocity 15 (Barbarian 14), RunDrain 60, StaminaPerLevel and StaminaPerVitality blank, built identical to Median's. D2Game's drain (RunDrain x2 per frame, forced to walk at 0) is vanilla 1.13c code in both games; there is no sprint state or skill and no cooldown timer (the bar refilling is the cooldown). Game check `sprint`: run from full drains 100 raw per frame = 5.1 s, run/walk speed 1.44 (data 1.40), walking from empty refills, a run starts at 2 points of stamina, R toggles run and walk. Not comparable: Median's stamina regen rate (unpublished) |
 | SK8 | Most melee skills can be used with Shift without a target. | P2.3.0 | missing | no code. Check: shift-click a Great Hunt with no target |
 | SK9 | Skill tree UI: base/max levels, Alt shows soft level, prerequisite arrows, Shift+Click maxes a skill. | P2.0.0 | missing | Median UI, no panel code |
@@ -221,8 +221,8 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
 | WP1 | The waypoint UI shows more waypoints; acts are reachable with number keys. | P1.1.0, P2.0.0 | partly | listed (Waypoint panel, done); number-key navigation unknown |
-| WP2 | Waypoints activate automatically as you walk over them. | P1.0.0 | missing | no auto-activation code. Check: walk onto a fresh waypoint and open the panel |
-| WP3 | Waypoint activation applies to every player in multiplayer (bug fix). | P1.8.0 | unknown | multiplayer only |
+| WP2 | Waypoints activate automatically as you walk over them. | P1.0.0 | ported | D2Sigma `D2AutoPickup.cpp` `0x4c7e0`: used when the distance is below 36 sub-tiles after a walk. `travel.cpp`: server scan every 5th frame, bit set with `0x3d6890`; `game_checks wpauto` PASS (distance 3 and 25 set it, 47 does not) |
+| WP3 | Waypoint activation applies to every player in multiplayer (bug fix). | P1.8.0 | ported (unverified) | the scan walks the game's client list and handles every player in range; no two-player run yet |
 | WP4 | Extra waypoints in endgame areas (Fauztinville etc.). | P1.1.0, P2.0.0 | ported | levels / objects data |
 
 ## 13. Maps and areas
@@ -230,7 +230,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
 | MU1 | Median adds new areas (Rifts, Dungeons, Labyrinth, the new towns). | W:Areas | ported | `docs/maps-hd.md`, levels, DS1 files |
-| MU2 | Map Reveal: accessible from the UI or the R key (shows Cairn Stones, shrines, Staff altar, Tal Rasha tomb, Act 5 waypoints). | P1.0.0 | missing | no map reveal code. Check: press R in a new area |
+| MU2 | Map Reveal: accessible from the UI or the R key (shows Cairn Stones, shrines, Staff altar, Tal Rasha tomb, Act 5 waypoints). | P1.0.0 | partly | D2Sigma `0x887c0` reveals the act once per game. `travel.cpp`: R (InputService action) calls D2R's debug Reveal Automap `0xd42b0` on the current level (preset objects included); `game_checks mapreveal` PARTIAL: layers 1 -> 25, repeat adds nothing, flag kept; the drawn map did not visibly change because `cheat goto` arrives with it whole. Starts from the player's room, repeatable, no UI button |
 | MU3 | Area level can be displayed in the corner of the screen (optional). | P1.0.0 | unknown | no area-level HUD code. Check: look for the option in settings |
 | MU4 | Terror zones removed. | docs/PLAN.md | deviation | removed in the port plan |
 
@@ -241,7 +241,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | UI1 | Character sheet shows Median's stat layout (physical/magic resistance, extended stats). | P1.0.0 | partly | listed (Character sheet, approx) |
 | UI2 | Infographic help panel. | D2Sigma | partly | listed (Infographic help panel, approx) |
 | UI3 | New configuration menu: hotkeys, notifications, interface (always show life/mana, game name/password), video and sound. | P1.0.0 | deviation | D2R options instead; no port planned |
-| UI4 | Hotkeys: nopickup (X), Map Reveal (R), transmute (C). | P1.0.0 | missing | no code (see CR5, MU2). Check: press X and walk over items |
+| UI4 | Hotkeys: nopickup (X), Map Reveal (R), transmute (C). | P1.0.0 | partly | Median's table at `0x1d9110`; the three are InputService actions (Controls menu, rebindable); `game_checks hotkeys` PASS for X and R, C closed. X gates the plugin's waypoint auto-activation (D2R has no auto-pickup to switch) |
 | UI5 | Dangerous-monster alert above the life globe. | P2.10.0 | missing | Median UI |
 | UI6 | Custom GUI themes (Tartarus), fonts, classic panels, 16:9. | P2.0.0 | deviation | deferred in `docs/PLAN.md` |
 | UI7 | Trade window layout. | D2Sigma | ported (unverified) | listed (Trade window) |
