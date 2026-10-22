@@ -27,6 +27,9 @@
 #include "item_spells.h"
 #include "missile_hits.h"
 #include "mana_costs.h"
+#include "heat.h"
+#include "trophy_timer.h"
+#include "skill_restrict.h"
 #include "craft_flags.h"
 #include "client_messages.h"
 #include "strings.h"
@@ -70,6 +73,9 @@ char g_levelTypesReport[160] = "off: not the expected game image";
 char g_calcReport[160] = "off: not the expected game image";
 char g_itemSpellsReport[160] = "off: not the expected game image";
 char g_manaCostsReport[160] = "off: not the expected game image";
+char g_skillRestrictReport[160] = "off: not the expected game image";
+char g_heatReport[160] = "off: not the expected game image";
+char g_trophyReport[200] = "off: not the expected game image";
 char g_missileHitsReport[1024] = "";
 char g_cubeReport[192] = "off: not the expected game image";
 char g_craftReport[96] = "off: not the expected game image";
@@ -122,7 +128,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
+// items missiles mana restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -197,6 +203,16 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "mana costs %s", g_manaCostsReport);
 	Say(command, line);
+	std::snprintf(line, sizeof(line), "skill restrict %s", g_skillRestrictReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "heat %s", g_heatReport);
+	Say(command, line);
+	{
+		char status[96];
+		TrophyTimerStatus(status, sizeof(status));
+		std::snprintf(line, sizeof(line), "trophy timer %s (%s)", g_trophyReport, status);
+		Say(command, line);
+	}
 	std::snprintf(line, sizeof(line), "cube conditions %s", g_cubeReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "craft flags %s", g_craftReport);
@@ -402,6 +418,27 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			InstallManaCosts(context, g_manaCostsReport, sizeof(g_manaCostsReport));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: mana costs %s", g_manaCostsReport);
+		context->LogInfo(line);
+		if (Off("restrict")) {
+			std::snprintf(g_skillRestrictReport, sizeof(g_skillRestrictReport), "%s", OffNote);
+		} else {
+			InstallSkillRestrict(context, g_skillRestrictReport, sizeof(g_skillRestrictReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: skill restrict %s", g_skillRestrictReport);
+		context->LogInfo(line);
+		if (Off("heat")) {
+			std::snprintf(g_heatReport, sizeof(g_heatReport), "%s", OffNote);
+		} else {
+			InstallHeat(context, g_heatReport, sizeof(g_heatReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: heat %s", g_heatReport);
+		context->LogInfo(line);
+		if (Off("trophy")) {
+			std::snprintf(g_trophyReport, sizeof(g_trophyReport), "%s", OffNote);
+		} else {
+			InstallTrophyTimer(context, g_trophyReport, sizeof(g_trophyReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: trophy timer %s", g_trophyReport);
 		context->LogInfo(line);
 		{
 			char report[96];
