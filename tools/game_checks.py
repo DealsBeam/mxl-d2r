@@ -1910,6 +1910,109 @@ def check_gameend():
         % (l0[0][:40] if l0 else "-", g0[0], g1[0], e0, e1), [sh("gameend")], [x for x in t1.splitlines() if "game end" in x])
 
 
+def _weapon_bonus(code):
+    """(StrBonus, DexBonus) of a weapons.txt row of the built mod (blank = 0): the independent source for the formula."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "mod", "data", "global", "excel", "base", "weapons.txt")
+    with open(path, encoding="utf-8-sig") as f:
+        rows = [l.rstrip("\n").split("\t") for l in f]
+    h = rows[0]
+    for r in rows[1:]:
+        if r[h.index("code")] == code:
+            return int(r[h.index("StrBonus")] or 0), int(r[h.index("DexBonus")] or 0)
+    return None
+
+
+def _panelrow(stat):
+    """`panelrow <stat>` -> (displayed value, text, weapon (str bonus, dex bonus) or None)."""
+    ok, lines = H("panelrow %d" % stat)
+    row = next((l for l in lines if l.startswith("panelrow %d " % stat)), "")
+    m = re.search(r"value=(-?\d+) text=\[(.*)\]", row)
+    w = next((l for l in lines if l.startswith("panelrow weapon")), "")
+    mw = re.search(r"strbonus=(-?\d+) dexbonus=(-?\d+)", w)
+    return (int(m.group(1)), m.group(2), (int(mw.group(1)), int(mw.group(2))) if mw else None) if ok and m else None
+
+
+def check_statcols():
+    name = "Stat pages: Str / Dex damage bonus rows and the total / % bonus / base columns of the Advanced Stats panel"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    rows, bad = [], []
+    base = {s: rd("player", s) for s in (0, 2)}
+    try:
+        # no weapon: both damage bonus rows are 0 (Median's handler returns 0 without a weapon)
+        for slot in ("rhand", "lhand"):
+            H("unequip " + slot)
+        time.sleep(1)
+        for stat in (299, 300):
+            r = _panelrow(stat)
+            rows.append("no weapon, stat %d: %s" % (stat, r))
+            if r is None or r[0] != 0 or r[2] is not None:
+                bad.append("no weapon: stat %d row %s (want value 0, no weapon)" % (stat, r))
+        for code in ("hfh", "hst"):  # strength-only (16 / 0) and dexterity-only (0 / 6) in weapons.txt
+            want_b = _weapon_bonus(code)
+            if want_b is None:
+                bad.append("%s is not in weapons.txt" % code)
+                continue
+            for sv, dv in ((50, 30), (123, 77), (300, 9)):
+                setstat("player", 0, sv)
+                setstat("player", 2, dv)
+                ok, _l = H("equip %s rhand" % code)
+                if not ok:
+                    bad.append("equip %s failed: %s" % (code, _l[:1]))
+                    continue
+                time.sleep(1.2)
+                tot_s, tot_d = stat_of(H("cstat 0")[1]), stat_of(H("cstat 2")[1])
+                r299, r300 = _panelrow(299), _panelrow(300)
+                if r299 is None or r300 is None:
+                    bad.append("%s str %d dex %d: panelrow failed" % (code, sv, dv))
+                    H("unequip rhand")
+                    continue
+                want_s = tot_s * want_b[0] // 100
+                want_d = tot_d * want_b[1] // 100
+                rows.append("%s (bonus %d/%d), Str %s Dex %s: str row %d [%s], dex row %d [%s], weapon %s"
+                            % (code, want_b[0], want_b[1], tot_s, tot_d, r299[0], r299[1], r300[0], r300[1], r299[2]))
+                if r299[0] != want_s or r300[0] != want_d:
+                    bad.append("%s Str %s Dex %s: rows %d / %d, want %d / %d" % (code, tot_s, tot_d, r299[0], r300[0], want_s, want_d))
+                if r299[2] != want_b:
+                    bad.append("%s: weapon bonuses read %s, weapons.txt %s" % (code, r299[2], want_b))
+                for v, t, lbl in ((want_s, r299[1], "str"), (want_d, r300[1], "dex")):
+                    if v != 0 and str(v) not in t:
+                        bad.append("%s %s row text [%s] lacks %d" % (code, lbl, t, v))
+                H("unequip rhand")
+        # the columns: attribute rows carry the % stat and the base after the total
+        setstat("player", 0, 100)
+        setstat("player", 2, 60)
+        time.sleep(1.2)
+        for stat in (0, 2):
+            r = _panelrow(stat)
+            tot = stat_of(H("cstat %d" % stat)[1])
+            rows.append("stat %d: total %s -> %s" % (stat, tot, r))
+            if r is None:
+                bad.append("stat %d: panelrow failed" % stat)
+                continue
+            if r[0] != tot:
+                bad.append("stat %d: displayed value %d, total %s" % (stat, r[0], tot))
+            if "%d base" % (rd("player", stat) or 0) not in r[1]:
+                bad.append("stat %d: text [%s] lacks base %s" % (stat, r[1], rd("player", stat)))
+        # a % stat on gear shows as the column (the stat has no row of its own)
+        ok, _l = H("equip rin 388=25 389=-10 rring")
+        time.sleep(1.2)
+        rs, rdx = _panelrow(0), _panelrow(2)
+        rows.append("ring with +25%% str / -10%% dex: %s / %s" % (rs, rdx))
+        if not ok or rs is None or rdx is None or "+25%" not in rs[1] or "-10%" not in rdx[1]:
+            bad.append("ring %% columns: %s / %s (equip ok %s)" % (rs, rdx, ok))
+    finally:
+        for s, v in base.items():
+            if v is not None:
+                setstat("player", s, v)
+        for slot in ("rhand", "rring"):
+            H("unequip " + slot)
+    add(name, "PASS" if not bad else "FAIL",
+        "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
+        "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -1919,7 +2022,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
-          ("trophy", check_trophy)]
+          ("trophy", check_trophy), ("statcols", check_statcols)]
 
 
 def write_report(extra=""):

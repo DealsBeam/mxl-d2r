@@ -16,6 +16,7 @@
 #include "level_types.h"
 #include "calc_codes.h"
 #include "combat.h"
+#include "stat_columns.h"
 #include "item_events.h"
 #include "properties_ext.h"
 #include "item_spells.h"
@@ -51,7 +52,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.51.0";
+constexpr const char* PluginVersion = "0.52.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -77,6 +78,7 @@ char g_hirelingsReport[192] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
 char g_reqGatesReport[256] = "off: not the expected game image";
 char g_combatReport[256] = "off: not the expected game image";
+char g_statColumnsReport[256] = "off: not the expected game image";
 char g_itemEventsReport[448] = "off: not the expected game image";
 char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
@@ -107,7 +109,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat itemevents props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat statcols itemevents props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -233,6 +235,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "combat %s", g_combatReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "stat columns %s", g_statColumnsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "item events %s", g_itemEventsReport);
 	Say(command, line);
@@ -490,6 +494,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallCombat(context, g_combatReport, sizeof(g_combatReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: combat %s", g_combatReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("statcols")) {
+				std::snprintf(g_statColumnsReport, sizeof(g_statColumnsReport), "%s", OffNote);
+			} else {
+				InstallStatColumns(context, g_statColumnsReport, sizeof(g_statColumnsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: stat columns %s", g_statColumnsReport);
 			context->LogInfo(line);
 		}
 		{
