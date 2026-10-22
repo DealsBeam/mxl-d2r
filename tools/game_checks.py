@@ -2103,10 +2103,11 @@ def check_nslong():
     for k in ("Sunstone of the Twin Seas", "MRVasily's Falling Star", "To The Island of the Sunless Sea"):
         full = "medianxl:" + aliases[k]
         ok, lines = H("str key " + full)  # the harness splits a line at spaces: the long keys themselves cannot be asked
-        text = recs[aliases[k]].replace(chr(255) + "c", "")  # the console drops the colour codes' first two characters
+        # colour codes (ÿc + 1 character) are dropped on both sides, as check_strings does
+        text = _COLOUR.sub("", recs[aliases[k]])
         want = [w for w in text.split(chr(10)) if w][0]
         log.append("%s -> %s %s (record starts '%s')" % (full, ok, lines[0] if lines else "", want))
-        if not (ok and want in " ".join(lines)):
+        if not (ok and want in _COLOUR.sub("", " ".join(lines))):
             bad.append("alias %s does not give the record text '%s'" % (full, want))
     goto(1)
     close_menu()
