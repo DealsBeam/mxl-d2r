@@ -10,6 +10,8 @@
 // Median's own texts (D2Sigma string table, ids from the client code 0x5d150 / 0xf4bb0): docs/subsystems/ubers-events.md 3a.
 #pragma once
 
+#include "strings_logic.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -107,6 +109,7 @@ inline auto ParsePluginMessage(const char* text, char* kind, uint8_t* out, size_
 // Kinds in use.
 constexpr char PluginKindNpcPage = 'N';  // the server answers a click on an NPC page line: which entries are open (npc_actions)
 constexpr char PluginKindTimer = 'T';    // the dungeon clock of the level the player stands in (dungeon_lockout)
+constexpr char PluginKindInfo = 'I';     // open a help panel (info_panels): one byte, the panel index
 
 // Little endian field writers / readers for the payloads.
 inline void Put16(uint8_t* p, uint16_t v) noexcept { p[0] = static_cast<uint8_t>(v); p[1] = static_cast<uint8_t>(v >> 8); }
@@ -144,27 +147,49 @@ inline void FormatClock(uint32_t seconds, char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize, "%02u:%02u", seconds / 60, seconds % 60);
 }
 
-// Median string 11192 ("Join another game to enter again\nThis area is locked") is the sealed level's tooltip.
-inline constexpr const char* SealedLine1 = "This area is locked";
-inline constexpr const char* SealedLine2 = "Join another game to enter again";
+// The Median texts of the lockout. Each has a key in the `medianxl` namespace (strings_logic.h) and the plugin shows the text
+// of the active language (strings.h StringText); the English below stands in when the localization service is not there
+// (and in the unit tests). A `tmpl` of null means the English.
+//
+// Median string 11192 (mxlstr::KeySealed) is the sealed level's tooltip: two lines.
+inline constexpr const char* SealedText = "Join another game to enter again\nThis area is locked";
 // The quest-table condition of the warp test has no text of its own in Median (the unit message alone); this stands in.
 inline constexpr const char* QuestLine = "You have not finished the quest for this area";
-// Median string 11189 "(Required Level: %d)".
-inline void RequiredLevelLine(int level, char* out, size_t outSize) noexcept {
-	std::snprintf(out, outSize, "(Required Level: %d)", level);
+// Median string 11189 (mxlstr::KeyRequiredLevel).
+inline constexpr const char* RequiredLevelText = "(Required Level: %d)";
+inline void RequiredLevelLine(int level, char* out, size_t outSize, const char* tmpl = nullptr) noexcept {
+	char number[16];
+	std::snprintf(number, sizeof(number), "%d", level);
+	mxlstr::Substitute(out, outSize, tmpl != nullptr ? tmpl : RequiredLevelText, number);
 }
-// Median string 11193, shown with the clock while the level is open.
+// Median string 11193 (mxlstr::KeyExitWarning), shown with the clock while the level is open.
 inline constexpr const char* ExitWarning = "ONCE YOU EXIT YOU CANNOT GO BACK";
-// Median string 11191 "Closing in: %s".
-inline void ClosingLine(uint32_t seconds, char* out, size_t outSize) noexcept {
+// Median string 11191 (mxlstr::KeyClosingIn).
+inline constexpr const char* ClosingText = "Closing in: %s";
+inline void ClosingLine(uint32_t seconds, char* out, size_t outSize, const char* tmpl = nullptr) noexcept {
 	char clock[16];
 	FormatClock(seconds, clock, sizeof(clock));
-	std::snprintf(out, outSize, "Closing in: %s", clock);
+	mxlstr::Substitute(out, outSize, tmpl != nullptr ? tmpl : ClosingText, clock);
 }
 
-// Quest reward notice (D2Sigma client messages 0x5f-0x61): the client text is not a string of the D2Sigma tables (searched
-// the client handler and every string table for the 0x5f-0x61 path: nothing fits; the pending message 0x61 of
-// D2Game 0xb15d0 may open an item popup, whose only text is the item's name), so the wording stays neutral.
+// Quest reward notice (D2Sigma client messages 0x5f-0x61). Median's replacement of the client's unit-message handler
+// (D2Sigma 0xb13a0, jump table 0xb13f8..) plays a sound on the player's unit and shows nothing else: 0x5f item_gem (sounds
+// row 217; the Arcane Crystal of Jerhyn / Cain), 0x60 shrine_boink (row 4715; Ormus's shrine items), 0x61 item_lightarmor
+// (row 230; Griswold's Heart). The messages ride D2R's unit-message packet 0x2c (server 0x491960, client handler 0x12c870),
+// so only the player they are sent to hears them. D2R knows 0x61 as the Ancients' reward voice (sound 4379) and nothing
+// for 0x5f / 0x60; the client hook plays Median's sounds instead. shrine_boink is a custom sound file (the final art pass),
+// D2R's holy shrine sound (row 2608) stands in. The text line below is only the fallback when the client hook is off.
+inline constexpr uint32_t MsgRewardGem = 0x5f;
+inline constexpr uint32_t MsgRewardShrine = 0x60;
+inline constexpr uint32_t MsgRewardArmor = 0x61;
+inline constexpr int SoundItemGem = 217;
+inline constexpr int SoundShrineStandIn = 2608;
+inline constexpr int SoundItemLightArmor = 230;
+// The sound row of a reward message, 0 for any other message.
+constexpr auto RewardSound(uint32_t message) noexcept -> int {
+	return message == MsgRewardGem ? SoundItemGem
+	                               : (message == MsgRewardShrine ? SoundShrineStandIn : (message == MsgRewardArmor ? SoundItemLightArmor : 0));
+}
 // `count` > 1 prefixes the number.
 inline void RewardLine(const char* what, int count, char* out, size_t outSize) noexcept {
 	if (count > 1) {
@@ -176,24 +201,28 @@ inline void RewardLine(const char* what, int count, char* out, size_t outSize) n
 
 // The goblin notice. Median's client keeps the goblin's unit id from packet 0x5a type 0x15 (handler 0x91a50) and its push
 // notification code (D2Notifications.cpp 0x90f00) shows the unit's name followed by string 12320 StrPushNotifGoblinAppear,
-// " appears!" (patchstring.tbl), so the line is "<monster name> appears!". The server part has no client-side unit name, it
-// writes the generic goblin name (the variants' own names are monstats strings the client resolves).
+// " appears!" (patchstring.tbl), so the line is "<monster name> appears!". The server has no client-side unit, it writes
+// the variant's own monstats NameStr text (mxl_goblins.h, from the migrated monstats row: "Shiny Hoarder", "Rift
+// Inspector", ...); the generic name only stands in when the row has none.
 inline constexpr const char* GoblinName = "Treasure Goblin";
-inline constexpr const char* GoblinAppearsSuffix = " appears!";
-inline void GoblinAppears(char* out, size_t outSize) noexcept {
-	std::snprintf(out, outSize, "%s%s", GoblinName, GoblinAppearsSuffix);
+inline constexpr const char* GoblinAppearsSuffix = " appears!";  // string 12320 (mxlstr::KeyGoblinAppears)
+// "<variant name> appears!": the goblin variant's own monstats name (GoblinName when unknown) and the suffix in the active
+// language (the plugin passes the text of medianxl:StrPushNotifGoblinAppear; nullptr = English).
+inline void GoblinAppears(const char* name, char* out, size_t outSize, const char* suffix = nullptr) noexcept {
+	std::snprintf(out, outSize, "%s%s", (name != nullptr && name[0] != 0) ? name : GoblinName,
+	              suffix != nullptr ? suffix : GoblinAppearsSuffix);
 }
 
 // The lines of an entry refusal for requirements, in the order Median's popup shows them: the level, the difficulty, the
 // class. Returns the number of lines written (0..3) into `lines` (each `lineSize` bytes). Only the failed requirements
 // are listed. `classLock` is class + 1, 0 = any class.
 inline auto RequirementLines(int levelReq, int minDifficulty, int classLock, int playerLevel, int difficulty, int cls,
-                             char lines[3][64]) noexcept -> int {
+                             char lines[3][64], const char* requiredLevelTmpl = nullptr) noexcept -> int {
 	static constexpr const char* DifficultyNames[] = {"Normal", "Nightmare", "Hell"};
 	static constexpr const char* ClassNames[] = {"Amazon", "Sorceress", "Necromancer", "Paladin", "Barbarian", "Druid", "Assassin"};
 	int n = 0;
 	if (playerLevel < levelReq) {
-		RequiredLevelLine(levelReq, lines[n++], 64);
+		RequiredLevelLine(levelReq, lines[n++], 64, requiredLevelTmpl);
 	}
 	if (difficulty < minDifficulty) {
 		const int d = minDifficulty < 0 ? 0 : (minDifficulty > 2 ? 2 : minDifficulty);

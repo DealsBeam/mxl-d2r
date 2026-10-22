@@ -193,30 +193,31 @@ struct Goblin {
 	uint16_t minLevel;
 	uint16_t maxLevel;
 	int32_t levelRestrict; // D2R level id, -1 = any
+	const char* name;     // monstats NameStr text, what the client shows as the unit's name
 };
 inline constexpr int32_t GoblinCount = 21;
 inline constexpr Goblin Goblins[GoblinCount] = {
-    {2791, 0x4020406, 2325, 0, 0, -1},  // treasure_goblin
-    {2792, 0x4020406, 184, 0, 0, -1},  // shiny_hoarder
-    {2793, 0x4030406, 184, 100, 0, -1},  // voided_horror
-    {2794, 0x4030406, 0, 0, 0, -1},  // voided_spawn
-    {2796, 0x4020406, 300, 0, 0, -1},  // arcane_collector
-    {2797, 0x4001406, 0, 0, 0, -1},  // rainbow_goblin
-    {2798, 0x4020406, 553, 0, 99, -1},  // glowing_baron
-    {2799, 0x400, 4, 100, 119, -1},  // relic_thief
-    {2800, 0x400, 10, 120, 0, -1},  // relic_thief_2
-    {2801, 0x4080406, 360, 0, 0, 140},  // rift_inspector
-    {2802, 0x4080406, 360, 0, 0, 39},  // rift_inspector_2
-    {2803, 0x4080406, 240, 0, 0, 141},  // rift_inspector_3
-    {2804, 0x4080406, 240, 100, 0, 142},  // rift_inspector_4
-    {2805, 0x4080406, 360, 116, 117, -1},  // rift_inspector_5
-    {2806, 0x4080406, 360, 0, 0, 147},  // rift_inspector_6
-    {2807, 0x4080406, 240, 0, 0, 149},  // rift_inspector_7
-    {2808, 0x4080406, 240, 0, 0, 151},  // rift_inspector_8
-    {2809, 0x4080406, 192, 0, 0, 152},  // rift_inspector_9
-    {2810, 0x4080406, 240, 0, 0, 271},  // rift_inspector_10
-    {2811, 0x4080406, 144, 0, 0, 155},  // rift_inspector_11
-    {2812, 0x4080406, 240, 0, 0, 156},  // rift_inspector_12
+    {2791, 0x4020406, 2325, 0, 0, -1, "Treasure Goblin"},  // treasure_goblin
+    {2792, 0x4020406, 184, 0, 0, -1, "Shiny Hoarder"},  // shiny_hoarder
+    {2793, 0x4030406, 184, 100, 0, -1, "Voided Horror"},  // voided_horror
+    {2794, 0x4030406, 0, 0, 0, -1, "Voided Spawn"},  // voided_spawn
+    {2796, 0x4020406, 300, 0, 0, -1, "Arcane Collector"},  // arcane_collector
+    {2797, 0x4001406, 0, 0, 0, -1, "\u00ffc9R\u00ffc8a\u00ffc1i\u00ffc;n\u00ffc3b\u00ffc:o\u00ffc2w \u00ffc9G\u00ffc8o\u00ffc1b\u00ffc;l\u00ffc3i\u00ffc:n"},  // rainbow_goblin
+    {2798, 0x4020406, 553, 0, 99, -1, "Glowing Baron"},  // glowing_baron
+    {2799, 0x400, 4, 100, 119, -1, "Relic Thief"},  // relic_thief
+    {2800, 0x400, 10, 120, 0, -1, "Relic Thief"},  // relic_thief_2
+    {2801, 0x4080406, 360, 0, 0, 140, "Rift Inspector"},  // rift_inspector
+    {2802, 0x4080406, 360, 0, 0, 39, "Rift Inspector"},  // rift_inspector_2
+    {2803, 0x4080406, 240, 0, 0, 141, "Rift Inspector"},  // rift_inspector_3
+    {2804, 0x4080406, 240, 100, 0, 142, "Rift Inspector"},  // rift_inspector_4
+    {2805, 0x4080406, 360, 116, 117, -1, "Rift Inspector"},  // rift_inspector_5
+    {2806, 0x4080406, 360, 0, 0, 147, "Rift Inspector"},  // rift_inspector_6
+    {2807, 0x4080406, 240, 0, 0, 149, "Rift Inspector"},  // rift_inspector_7
+    {2808, 0x4080406, 240, 0, 0, 151, "Rift Inspector"},  // rift_inspector_8
+    {2809, 0x4080406, 192, 0, 0, 152, "Rift Inspector"},  // rift_inspector_9
+    {2810, 0x4080406, 240, 0, 0, 271, "Rift Inspector"},  // rift_inspector_10
+    {2811, 0x4080406, 144, 0, 0, 155, "Rift Inspector"},  // rift_inspector_11
+    {2812, 0x4080406, 240, 0, 0, 156, "Rift Inspector"},  // rift_inspector_12
 };
 
 // Monsters whose kills do not count as "the player just killed something" (monstats3 +0x20, the loader's

@@ -1,6 +1,7 @@
 # D2Sigma-only tables
 
-30 tables (plus 7 name-index tables) that only D2Sigma.dll reads. Tools:
+30 tables (plus 7 name-index tables) that only D2Sigma.dll reads. The other half of D2Sigma's engine changes, its run-time patches of the 1.13c game code, is audited in
+[sigma-patch-audit.md](sigma-patch-audit.md). Tools:
 
 - `tools/sigma_tables.py init|evidence|decode`: schema skeleton, evidence reports (`research/sigma_evidence/`,
   regenerable, not committed), decoded TSVs (`work/sigma/`, or `decode --out DIR` to compare after a schema change).

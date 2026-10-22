@@ -7,6 +7,8 @@
 // become `jmp [rip+0]; dq hook`, the trampoline holds the copied 16 bytes and a jump back to stub+16.
 #include "testharness.h"
 
+#include "strings_probe.h"
+
 #include <windows.h>
 
 #include <cstdint>
@@ -98,7 +100,7 @@ void Note(Stat* stat, uint64_t a0 = 0, uint64_t a1 = 0, uint64_t a2 = 0, uint64_
 	X(NtUserGetPointerInfoList) X(NtUserMapWindowPoints) X(NtUserRegisterRawInputDevices)      \
 	X(NtUserGetMouseMovePointsEx) X(NtUserGetForegroundWindow) X(NtUserGetKeyNameText) X(NtUserSetCapture)          \
 	X(NtUserGetGUIThreadInfo) X(NtUserGetClipCursor) X(NtUserSetCursor) X(NtUserGetKeyboardLayout) \
-	X(NtUserTrackMouseEvent) X(NtUserGetPointerDevices) X(NtUserGetTouchInputInfo) X(NtUserGetCapture) X(NtUserSetWindowsHookEx) X(NtUserSetFocus) X(NtUserSetWindowPos) X(NtUserSetWindowLongPtr) X(NtUserSetWindowLong)
+	X(NtUserGetPointerDevices) X(NtUserGetTouchInputInfo) X(NtUserGetCapture) X(NtUserSetWindowsHookEx) X(NtUserSetFocus) X(NtUserSetWindowPos) X(NtUserSetWindowLongPtr) X(NtUserSetWindowLong)
 
 #define DECLARE(name)                                                                                               \
 	Stat g_stat_##name;                                                                                             \
@@ -111,7 +113,7 @@ void Note(Stat* stat, uint64_t a0 = 0, uint64_t a1 = 0, uint64_t a2 = 0, uint64_
 HARNESS_FUNCTIONS(DECLARE)
 #undef DECLARE
 
-#define HARNESS_ALL(X) HARNESS_FUNCTIONS(X) X(NtUserGetCursorPos) X(NtUserGetKeyState) X(NtUserSetCursorPos) X(NtUserClipCursor) X(NtUserSetForegroundWindow) X(NtUserPeekMessage) X(NtUserShowWindow) X(NtUserSetActiveWindow) X(NtUserCreateWindowEx)
+#define HARNESS_ALL(X) HARNESS_FUNCTIONS(X) X(NtUserGetCursorPos) X(NtUserGetKeyState) X(NtUserSetCursorPos) X(NtUserClipCursor) X(NtUserSetForegroundWindow) X(NtUserPeekMessage) X(NtUserTrackMouseEvent) X(NtUserShowWindow) X(NtUserSetActiveWindow) X(NtUserCreateWindowEx)
 
 // Virtual input, shared with tools/game_ctl.py through the mapping "Local\mxl-testharness-input-<game PID>". While `active` is
 // set, GetCursorPos returns the virtual client position (as screen coordinates of the game window), and GetKeyState
@@ -276,6 +278,21 @@ int64_t H_NtUserSetCursorPos(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uin
 		return 1;
 	}
 	return g_orig_NtUserSetCursorPos(a, b, c, d, e, f, g, h, i, j, k, l);
+}
+
+// The game asks Windows for WM_MOUSELEAVE after every mouse move (TrackMouseEvent). The real cursor is never over the game window
+// in background mode, so Windows answered each move with a leave and the game dropped its hover state at once: no tooltips, no
+// highlighted monsters or buttons (lane bug-backlog-b, bugs #9 / #22: the message log of the trace showed 46 moves, 46 leaves). With
+// the virtual input active the request is accepted and ignored, so no leave is ever sent.
+Stat g_stat_NtUserTrackMouseEvent;
+Fn g_orig_NtUserTrackMouseEvent = nullptr;
+int64_t H_NtUserTrackMouseEvent(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t f, uint64_t g, uint64_t h,
+                                uint64_t i, uint64_t j, uint64_t k, uint64_t l) {
+	Note(&g_stat_NtUserTrackMouseEvent, a, b, c, d);
+	if (g_shared != nullptr && g_shared->active != 0) {
+		return 1;
+	}
+	return g_orig_NtUserTrackMouseEvent(a, b, c, d, e, f, g, h, i, j, k, l);
 }
 
 Stat g_stat_NtUserClipCursor;
@@ -900,6 +917,8 @@ auto InstallTestHarness(const D2RL::PluginContext* context, char* report, size_t
 		g_isInGame = reinterpret_cast<IsInGameFn>(GetProcAddress(core, "IsInGame"));
 	}
 	HarnessCmdsInit(context->exeBase);
+	StringsProbeInit(context, context->exeBase);
+	HarnessCmdsContext(context);
 	g_running = 1;
 	g_thread = CreateThread(nullptr, 0, TraceThread, nullptr, 0, nullptr);
 	if (g_titleText[0] != L'\0') {

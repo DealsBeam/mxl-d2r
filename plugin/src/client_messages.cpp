@@ -42,7 +42,27 @@ constexpr int PacketTableEntry = 24;
 // 0x12c190: mov [rsp+0x10],rbx / mov [rsp+0x18],rsi / push rdi / sub rsp,0x190 (15 bytes)
 constexpr uint8_t ChatReaderEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x81, 0xec, 0x90};
 
+// Quest reward notices: the server sets a unit message with 0x491960 (player, message, subject; the pending message goes
+// out as packet 0x2c at the unit's next update) and the client's handler for packet 0x2c (table entry 0x2c, 0x12c870:
+// packet -> unit id +2, unit type +1, message +6) plays Median's sounds for 0x5f-0x61 (client_messages_logic.h).
+constexpr uint64_t UnitMessageRva = 0x491960;
+constexpr uint64_t UnitPacketId = 0x2c;
+constexpr uint64_t UnitPacketRva = 0x12c870;
+constexpr uint64_t ClientFindRva = 0x9a5d0;   // (unit id, unit type) -> client unit
+constexpr uint64_t PlaySoundRva = 0x1a0780;   // (sound row, unit, 0, 0, 0): the sound at a unit
+// 0x491960: mov [rsp+8],rbx / mov [rsp+0x18],rsi / push rdi / sub rsp,0x20 (15 bytes)
+constexpr uint8_t UnitMessageEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x20};
+// 0x12c870: movzx r8d,[rcx+6] / movzx edx,[rcx+1] / mov ecx,[rcx+2] / jmp (13 bytes)
+constexpr uint8_t UnitPacketEntry[] = {0x44, 0x0f, 0xb7, 0x41, 0x06, 0x0f, 0xb6, 0x51, 0x01, 0x8b, 0x49, 0x02, 0xe9};
+// 0x9a5d0: movsxd r9,edx / lea rax,[rip+..] (6 bytes)
+constexpr uint8_t ClientFindEntry[] = {0x4c, 0x63, 0xca, 0x48, 0x8d, 0x05};
+// 0x1a0780: push rbp rsi rdi r14 r15 / lea rbp,[rsp-0x2f] / sub rsp,... (15 bytes)
+constexpr uint8_t PlaySoundEntry[] = {0x40, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xd1, 0x48, 0x81};
+
 using ChatReaderFn = void (*)(uint8_t* packet);
+using UnitMessageFn = void (*)(Unit* player, int32_t message, Unit* subject);
+using ClientFindFn = Unit* (*)(uint32_t id, uint32_t type);
+using PlaySoundFn = void* (*)(int32_t sound, Unit* unit, int64_t, int64_t, int64_t);
 using ClientOfFn = void* (*)(Unit* player);
 using SendChatFn = void (*)(void* client, const uint8_t* record);
 using ClientUnitFn = Unit* (*)(void* client, int32_t zero);
@@ -55,6 +75,11 @@ uint64_t g_base = 0;
 std::atomic<int> g_sent{0}, g_failed{0};
 ChatReaderFn g_chatOriginal = nullptr;
 PluginMessageFn g_pluginHandlers[256] = {};
+UnitMessageFn g_unitMessage = nullptr;
+ChatReaderFn g_unitPacketOriginal = nullptr;
+ClientFindFn g_clientFind = nullptr;
+PlaySoundFn g_playSound = nullptr;
+std::atomic<int> g_rewardSounds{0}, g_rewardLastMessage{0}, g_rewardLastSound{0};
 std::atomic<int> g_pluginReceived{0};
 
 // Notices held for a later server frame (SendClientNotice).
@@ -149,6 +174,60 @@ auto HookChatReader(uint64_t base) noexcept -> bool {
 	return true;
 }
 
+// The client's handler of packet 0x2c: a reward message (0x5f-0x61) plays Median's sound at the unit, everything else goes
+// to D2R. The unit lookup failing (not in this client's game) swallows the message like D2R's handler does.
+auto TakeRewardMessage(uint8_t* packet) noexcept -> bool {
+	__try {
+		uint16_t message = 0;
+		std::memcpy(&message, packet + 6, sizeof(message));
+		const int sound = clientmsg::RewardSound(message);
+		if (sound == 0) {
+			return false;
+		}
+		uint32_t id = 0;
+		std::memcpy(&id, packet + 2, sizeof(id));
+		Unit* unit = g_clientFind(id, packet[1]);
+		if (unit != nullptr) {
+			g_playSound(sound, unit, 0, 0, 0);
+			g_rewardLastMessage.store(message);
+			g_rewardLastSound.store(sound);
+			g_rewardSounds.fetch_add(1);
+		}
+		return true;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_failed.fetch_add(1);
+		return true;
+	}
+}
+
+void UnitPacketHook(uint8_t* packet) {
+	if (!TakeRewardMessage(packet)) {
+		g_unitPacketOriginal(packet);
+	}
+}
+
+// Replaces the handler pointer of table entry 0x2c when it still points at D2R's handler. True when it did.
+auto HookUnitPacket(uint64_t base) noexcept -> bool {
+	auto* entry = reinterpret_cast<uint64_t*>(base + PacketTableRva + UnitPacketId * PacketTableEntry);
+	if (*entry != base + UnitPacketRva || !Matches(base + UnitPacketRva, UnitPacketEntry, sizeof(UnitPacketEntry)) ||
+	    !Matches(base + UnitMessageRva, UnitMessageEntry, sizeof(UnitMessageEntry)) ||
+	    !Matches(base + ClientFindRva, ClientFindEntry, sizeof(ClientFindEntry)) ||
+	    !Matches(base + PlaySoundRva, PlaySoundEntry, sizeof(PlaySoundEntry))) {
+		return false;
+	}
+	DWORD old = 0;
+	if (!VirtualProtect(entry, sizeof(uint64_t), PAGE_READWRITE, &old)) {
+		return false;
+	}
+	g_clientFind = reinterpret_cast<ClientFindFn>(base + ClientFindRva);
+	g_playSound = reinterpret_cast<PlaySoundFn>(base + PlaySoundRva);
+	g_unitMessage = reinterpret_cast<UnitMessageFn>(base + UnitMessageRva);
+	g_unitPacketOriginal = reinterpret_cast<ChatReaderFn>(*entry);
+	*entry = reinterpret_cast<uint64_t>(&UnitPacketHook);
+	VirtualProtect(entry, sizeof(uint64_t), old, &old);
+	return true;
+}
+
 }  // namespace
 
 auto InstallClientMessages(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
@@ -162,10 +241,12 @@ auto InstallClientMessages(const D2RL::PluginContext* context, char* report, siz
 		g_base = base;
 	}
 	const bool reader = ok && HookChatReader(base);
-	std::snprintf(report, reportSize, "%s",
+	const bool rewards = ok && HookUnitPacket(base);
+	std::snprintf(report, reportSize, "%s%s",
 	              !ok ? "off: entry bytes of 0x48fde0 / 0x477a30 differ"
 	                  : (reader ? "on: chat packet 0x26 to one player, plugin messages read on the client"
-	                            : "on: chat packet 0x26 to one player; plugin messages off (chat reader entry differs)"));
+	                            : "on: chat packet 0x26 to one player; plugin messages off (chat reader entry differs)"),
+	              !ok ? "" : (rewards ? "; reward sounds on (unit packet 0x2c)" : "; reward sounds off (0x2c handler differs), reward notices are text"));
 	return ok;
 }
 
@@ -334,6 +415,34 @@ auto SendPluginMessage(Unit* player, char kind, const uint8_t* data, size_t n) n
 		g_failed.fetch_add(1);
 		return false;
 	}
+}
+
+auto SendRewardMessage(Unit* player, uint32_t message, const char* what, int count) noexcept -> bool {
+	if (g_unitMessage == nullptr || clientmsg::RewardSound(message) == 0) {
+		char line[96];
+		clientmsg::RewardLine(what, count, line, sizeof(line));
+		return SendClientNotice(player, line, clientmsg::Tan);
+	}
+	__try {
+		if (player == nullptr || d2r::At<int32_t>(player, d2r::UnitType) != 0) {
+			return false;
+		}
+		g_unitMessage(player, static_cast<int32_t>(message), player);
+		return true;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_failed.fetch_add(1);
+		return false;
+	}
+}
+
+auto RewardSoundsOn() noexcept -> bool {
+	return g_unitPacketOriginal != nullptr;
+}
+
+void RewardSoundStats(int* played, int* lastMessage, int* lastSound) noexcept {
+	*played = g_rewardSounds.load();
+	*lastMessage = g_rewardLastMessage.load();
+	*lastSound = g_rewardLastSound.load();
 }
 
 auto PluginMessagesReceived() noexcept -> int {

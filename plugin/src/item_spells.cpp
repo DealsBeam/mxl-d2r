@@ -27,7 +27,9 @@
 //      ultracode) from the inventory and cube, and from the stash in town, adding `amount` to its count stat each,
 //      up to its maximum. Items are removed the way D2R removes a used-up tome (0x4712a0).
 //   13, 21 (arcane shards, catalysts, oils): D2Sigma only shows the item's help text; it is in the tooltip now
-//      (tools/txt_migrate.py help_tooltips), right-click is refused. The 20 trophies (misc2 InteractString) keep the text
+//      (tools/txt_migrate.py help_tooltips). The catalyst of disenchantment has an infographic (misc2 Infographic, Median's item
+//      event 13): its right click asks the client to open the help panel (info_panels.cpp, plugin message 'I'); other
+//      right clicks are refused. The 20 trophies (misc2 InteractString) keep the text
 //      back: their tooltip says "Right click to reveal trophy challenge" (the hover string of D2Sigma's interact mode)
 //      and the right click prints the challenge as chat lines (mxl_items.h Trophies, items_ext_logic.h).
 // Items D2Sigma keeps (13, 18, 21, keys with calc3) use pSpell PluginSpellKeep (17), whose table flag is set here:
@@ -38,8 +40,10 @@
 #include "client_messages.h"
 #include "client_messages_logic.h"
 #include "d2r.h"
+#include "info_panels.h"
 #include "items_ext_logic.h"
 #include "mxl_items.h"
+#include "strings.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -452,7 +456,11 @@ auto TrophyOf(const mxl_items::SigmaItem& entry) noexcept -> const mxl_items::Tr
 
 // The right click on a trophy: its challenge text in the chat log, the title in gold.
 void RevealTrophy(d2r::Unit* player, const mxl_items::Trophy& trophy) noexcept {
-	items_ext::ForEachTrophyLine(trophy.text, [player](const char* line, bool title) {
+	char text[2048];
+	if (!StringLookup(trophy.key, text, sizeof(text))) {
+		return;  // no localization service: nothing to print
+	}
+	items_ext::ForEachTrophyLine(mxlstr::SkipLeadingNumberLine(text), [player](const char* line, bool title) {
 		SendClientMessage(player, line, title ? clientmsg::Tan : clientmsg::White);
 	});
 }
@@ -477,7 +485,7 @@ auto CheckDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Uni
 		return ContainerOf(*entry) != nullptr ? 1 : 0;
 	case 13:
 	case 21:
-		return TrophyOf(*entry) != nullptr ? 1 : 0;
+		return TrophyOf(*entry) != nullptr || InfoPanelOf(entry->code) >= 0 ? 1 : 0;
 	default:
 		return 0;  // not implemented: refuse, so the item is not used up
 	}
@@ -514,6 +522,8 @@ auto UseDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Unit*
 	case 21:
 		if (const mxl_items::Trophy* t = TrophyOf(*entry)) {
 			RevealTrophy(player, *t);
+		} else if (const int panel = InfoPanelOf(entry->code); panel >= 0) {
+			SendInfoPanel(player, panel);  // Median's item event 13: the client opens the item's help panel
 		}
 		break;
 	default:
@@ -536,6 +546,16 @@ auto SrvDoLevelPortal(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t
 	}
 	const int32_t target = LinkableLevel(game, unit, d2r::EvalCalc(game, unit, skill, d2r::SkCalc1, skillId, level));
 	return target != 0 && OpenPortal(game, unit, target, ObjectRedPortal) ? 1 : 0;
+}
+
+// D2Sigma's cube output byte 1 (handler 0x58d20): a red portal next to the player to Median level `median`. D2R's own
+// handler for that byte only knows the Cow Level (craft_flags.cpp swaps it for this one for the other levels).
+auto CubeLevelPortal(d2r::Game* game, d2r::Unit* player, int32_t median) noexcept -> bool {
+	if (game == nullptr || player == nullptr || g_createPortal == nullptr) {
+		return false;
+	}
+	const int32_t level = LinkableLevel(game, player, median);
+	return level != 0 && OpenPortal(game, player, level, ObjectRedPortal);
 }
 
 // D2Sigma missile hit 30 (0x1008d220 -> D2Objects.cpp 0x10097870 / 0x100976d0): a portal where the missile is, to

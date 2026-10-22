@@ -212,10 +212,8 @@ void TyraelActivateHook(void* quest, uint8_t* event) {
 
 // ---- dialog rewards ---------------------------------------------------------------------------------------------
 
-void Notice(Unit* player, const char* what, int count) noexcept {
-	char line[96];
-	clientmsg::RewardLine(what, count, line, sizeof(line));
-	SendClientNotice(player, line, clientmsg::Tan);
+void Notice(Unit* player, uint32_t message, const char* what, int count) noexcept {
+	SendRewardMessage(player, message, what, count);
 }
 
 void JerhynHook(void* quest, uint8_t* event) {
@@ -224,7 +222,7 @@ void JerhynHook(void* quest, uint8_t* event) {
 		void* record = Record(e.game, e.player);
 		if (quests::ShouldGiveCrystalJerhyn(e.npc, e.message, Bit(record, quests::QuestDuriel, quests::BitDurielTalk))) {
 			if (Give(e.game, e.player, quests::CodeArcaneCrystal)) {
-				Notice(e.player, "Arcane Crystal", 1);
+				Notice(e.player, clientmsg::MsgRewardGem, "Arcane Crystal", 1);
 			}
 		}
 	}
@@ -238,7 +236,7 @@ void CainHook(void* quest, uint8_t* event) {
 		if (quests::ShouldGiveCrystalCain(e.npc, e.message, Bit(record, quests::QuestKhalimsWill, quests::BitKhalimDone),
 		                                  Bit(record, quests::QuestKhalimsWill, quests::BitKhalimTalk))) {
 			if (Give(e.game, e.player, quests::CodeArcaneCrystal)) {
-				Notice(e.player, "Arcane Crystal", 1);
+				Notice(e.player, clientmsg::MsgRewardGem, "Arcane Crystal", 1);
 			}
 		}
 	}
@@ -259,7 +257,7 @@ void OrmusHook(void* quest, uint8_t* event) {
 				given += Give(e.game, e.player, quests::ShrineCodes[d2r::RandomBelow(seed, quests::ShrineCodeCount)]) ? 1 : 0;
 			}
 			if (given > 0) {
-				Notice(e.player, "Shrine", given);
+				Notice(e.player, clientmsg::MsgRewardShrine, "Shrine", given);
 			}
 		}
 	}

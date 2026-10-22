@@ -164,7 +164,7 @@ entries of the submenu that the top-level slot before them opens.
 | Warriv act 2 (175) | 3383 "go west" | none | 4 (8) | travel to level 1 | **D2R native** (1.6) |
 | Meshif act 2 (210) | 3384 "sail east" | 12 (quest 14 bit 0) | 24 (1) = rows 6 (level 75) + 2 + 10 (waypoint 75) | Kurast Docks + waypoint | **D2R native** (1.6) |
 | Meshif act 3 (264) | 3385 "sail west" | none | 5 (8) | travel to level 40 | **D2R native** (1.6) |
-| Tyrael act 4 (367) | 22738 "travel to harrogath" | 13 (quest 28 bit 0) | 25 (1) = rows 8 (level 109) + 3 + 12 (waypoint 109) | Harrogath + waypoint | **D2R native** (1.6) |
+| Tyrael act 4 (367) | 22738 "travel to harrogath" | 13 (quest 28 bit 0) | 25 (1) = rows 8 (level 109) + 3 + 12 (waypoint 109) | Harrogath + waypoint | **D2R native** (1.6), gate byte moved to quest 28 by the plugin (`FixTravelGates`) |
 
 Everything else in npcactions is client-side confirmation: rows 13 (type 18, string 321) and 14 (type 20, string 3650) sit
 in front of every Cain item row and only show a client message; types 4-7, 9, 10, 21 are used by no slot. Charsi's
@@ -196,6 +196,10 @@ lines are not repeatable (the reward is spent, see 1.6) and the conditions are D
   string id into the next free id slot, a handler pointer into the next free handler slot (at most five lines), before
   "Identify" (0xfb4) when the record has it, count = lines + 1 on every call. The Identify branch of the builder writes the
   count (2 or 3) back into the record, which would drop lines behind it, hence the re-set on every call and the position.
+  D2R also re-initialises the Cain records on its own (function `0x115d00`, found with a hardware write watch on the record,
+  2026-10-22): Identify over line 1, handler `0x114000`, count 3 - after a menu closes, e.g. Akara's respec confirmation. That
+  overwrote the plugin line and left the old Identify one line behind; each reset added a copy until the record was full
+  (`respec` then `cain cainsub`: Talk + four Identify lines). `AddMenuLines` drops repeated Identify lines first.
   Handlers are 16 thunks (`LineHandler<I>`), each sends `0x38 (kind, current NPC id)` through `0xec730`, then calls the
   Cancel handler `0x112c30` to close the menu. Only the lines the server can run are drawn.
 - Server (hook `0x4b0470`, the packet 0x38 handler): size 9 and kind >= 0x10 are Median's; the NPC unit must be within 50
@@ -247,10 +251,11 @@ waypoint of the arrival town (type 15, `0x94ab0`: level to waypoint number, then
 **Result.** For the quest-gated lines D2R's condition is Median's requirement row, and the waypoint grant is the same as Median's
 (Lut Gholein 40 for Warriv, Kurast Docks 75 for Meshif, Harrogath 109 for Tyrael; the "west" trips are ungated and grant none,
 as in Median). `npc_services.cpp` reads the NPC table (`0x237ea60`: `+0xb`, `+0xc`, `+0x10`) and the fix table and reports
-`N of 8 D2R-native services match Median's rows` in the `npc actions` line; it writes nothing. On build 93847 seven of eight
-match. The exception is Tyrael: D2R gates on quest 26 (gate byte 27, "Terror's End" done) and Median's row 13 reads quest 28
-(set by the first walk through Tyrael's portal), so D2R lets the first trip happen earlier. It is left as it is (D2R's is the
-looser and the first trip is the portal anyway); `Judge` reports it as `quest gate differs`.
+`N of 8 D2R-native services match Median's rows` in the `npc actions` line; its only write is Tyrael's gate byte below. On build 93847 seven of eight
+match before that write. The exception was Tyrael: D2R gates on quest 26 (gate byte 27, "Terror's End" done) and Median's row 13 reads quest 28 (set by the first walk through Tyrael's portal, `0x5e57e0`). The
+fix is one byte: the packet handler `0x4a9880` and the client read the gate from the same NPC table entry, so `FixTravelGates` (`npc_services.cpp`, pure rule `npcsvc::TravelGateFix`) writes 29 (quest 28 + 1) into
+`+0x10` of Tyrael's entry (class 367) at load, expected-byte checked (`PatchWriteU8`). It touches only a travel line that D2R already gates (so the waypoint grant stays) with the same destination, and only moves it to the
+quest bit 0 of Median's row; Warriv act 1 and Meshif act 2 already agree and are not written. `mxl` ends the npc actions line with `travel gates moved 1` and `Judge` now reports 8 of 8. Side effect: the same byte gates Tyrael's mercenary-resurrect line in D2R's client menu (seen in game: with quest 28 clear his menu has Talk only, with it set Talk, travel and resurrect), so that line now opens with quest 28 too; Median's rule for Tyrael's resurrect entry was not found to name a quest.
 
 Not done, and why: no hook, no menu line, no copy of the panel. A Median line would only duplicate the D2R line under the same
 bit. Costs and item filters are D2R's vanilla ones; if Median's item types need a different filter (e.g. more bases accept
@@ -355,7 +360,7 @@ D2Items.cpp equip test read again; D2R's hire path read in the dump (packet 0x36
 | 5 | Minion scaling (`mnhp`, `mnar`, resist and proc copy) | 0x100683d0 and callees | **already ported** (`pet_scaling.cpp`); summons only, hirelings do not use it |
 | 6 | Hire availability: hirer flag (npcext bit 2), quest requirement (Kashya row 9, Qual-Kehk row 14), resurrect entry (bit 3: the four hirers and Tyrael of act 4) | npcext, requirements | **mostly already in D2R's NPC table** (`+7` hire, `+4` resurrect, `+0x10` quest gate: the same five NPCs, the same quests). One difference, fixed: D2R also lets a character of level 8 hire from Kashya without Blood Raven (`+0x11`, read by `0x4b0470` and `0x53d350`); the plugin clears that byte so the quest alone opens her, as in Median |
 | 7 | Hire and equip tests: refuse while the player has state 0x4c, 0x51 or 0x50; mercenary equip test (class, strength, dexterity, level, plus a fixed list of eight states and the hireclasses state lists) | 0x100672a0, 0x10067220, 0x10066fd0, 0x1007e470 | **ported as item types** (2026-10-22): the "state" numbers are item type ids, not states. `0x4c`, `0x50`, `0x51` are potion types, the hireclasses lists are item types the class may (A) or may not (B) wield; the plugin refuses weapons and shields in the `0x36bc50` hook (`item_gen.cpp`, `MercRequirement`) by `MercClasses` of `mxl_hirelings.h`. Class-locked items (stat 492) check the merc's `equivalentcharclass` |
-| 8 | Revive cost | no D2Sigma code; the cost is D2Common's, and D2R's columns `resurrectcostmultiplier/divisor/max` (15 / 2 / 50000) copy the vanilla formula | **same as D2R**, nothing to do |
+| 8 | Revive cost | corrected 2026-10-22 ([sigma-patch-audit.md](../sigma-patch-audit.md)): D2Sigma patches D2Common export 11097 (rva `0x2cc60`) and the D2Game price sites (rvas `0x97593`, `0x981f5`, `0xc0e3e`, `0xc0f0e`) to `D2Hirelings_10067450`: level x 100 up to level 105, 250 x (level - 90)^1.5 above. D2R's columns `resurrectcostmultiplier/divisor/max` (15 / 2 / 50000) only copy the vanilla formula | **missing** (price is far lower than D2R's from level ~20 on), see [unported.md](../unported.md) |
 | 9 | Median's `Head`, `Torso`, `Weapon`, `Shield` columns (0 to 2, 48 rows) and `Share` (55 rows) | hireling.txt overflow | **cut** (checked in game 2026-10-22): a fresh Rogue has 0 items (`h merc`) and still draws its bow, so D2R's hire look is not made of items; there is no gear to create from these columns. `Share` is converted |
 | 10 | Death / revive stat handling (`0x10068020`, `0x10067e20`) | read again: 0x10068020 is the pet attribute copy (energy, strength, ... in full, masteries halved), not a death penalty | **n/a**, part of the minion scaling; the note in 2.2 step 4 is superseded |
 | 11 | Hireling skill use | skills are table data; no D2Hirelings code touches skill use | **data** |
@@ -384,7 +389,7 @@ player's mercenary record (`0x4ff2d0`, `+8`), the row from `0x3965d0(dataFlag, d
 of all four functions are checked at load; any mismatch leaves the part off with the reason in the `mxl` line. Switch:
 `hirelings` in mxl-core-off.txt.
 
-**Not changed:** the hire NPCs (Qual-Kehk is D2R's), the hire menu panel, the revive price.
+**Not changed:** the hire NPCs (Qual-Kehk is D2R's), the hire menu panel. The revive price **is** changed by D2Sigma (row 8, corrected 2026-10-22).
 
 **In-game checks** are in docs/testing.md (hirelings row): the `mxl` line, bonuses visible on the hireling screen and
 still there after a level-up or reload, Kashya before Blood Raven at level 8 or more, and class items on the desert
@@ -462,7 +467,7 @@ or harmful, take it out of `hireling_tables` (the only line that writes it).
    Cain has the same monster ids (monstats rows 244-246, 265, 520 in the converted data).
 9. 0x10067e20 (stat layer scaling by count): which minions it applies to.
 10. A real Cain submenu (one entry per missing material, as Median draws it) needs a second menu page; D2R has no such widget in the NPC menu. Worth it only if the one-line "give what I am owed" feels wrong.
-11. Imbue / sockets / personalize: answered in 1.6. D2R shows its own lines under the same quest bits and spends the reward itself; nothing to replace. Open: whether Median's item types pass the D2R item filters (`0x36aed0`, `0x36b410`, `0x36b1d0`) as Median intends (an in-game test with new base items), and the Tyrael gate (D2R quest 26, Median quest 28).
+11. Imbue / sockets / personalize: answered in 1.6. D2R shows its own lines under the same quest bits and spends the reward itself; nothing to replace. Open: whether Median's item types pass the D2R item filters (`0x36aed0`, `0x36b410`, `0x36b1d0`) as Median intends (an in-game test with new base items), (the Tyrael gate is moved to Median's quest 28 by `FixTravelGates`, 1.6).
 
 ## Hireling data check (2026-10-21)
 

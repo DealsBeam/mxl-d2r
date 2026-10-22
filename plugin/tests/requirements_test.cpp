@@ -15,6 +15,7 @@ int RunRequirementGatesTests();  // requirement_gates_test.cpp
 int RunHirelingsTests();  // hirelings_test.cpp
 int RunCombatTests();  // combat_test.cpp
 int RunStatColumnsTests();  // stat_columns_test.cpp
+int RunInfoPanelsTests();   // info_panels_test.cpp
 int RunItemsExtTests();  // items_ext_test.cpp
 int RunItemGenTests();  // item_gen_test.cpp
 int RunWaypointsTests();  // waypoints_test.cpp
@@ -133,6 +134,7 @@ int main() {
 	failures += RunHirelingsTests();
 	failures += RunCombatTests();
 	failures += RunStatColumnsTests();
+	failures += RunInfoPanelsTests();
 	failures += RunItemsExtTests();
 	failures += RunItemGenTests();
 	failures += RunWaypointsTests();
