@@ -1,14 +1,16 @@
 """The `medianxl` string namespace for the table and layout tools (docs/strings-namespace.md).
 
-Group 1 = keys D2R's own string files have (native, unqualified, = `d2r:`); group 2 = Median-only keys (namespaced,
-`medianxl:<key>` in table cells, `@medianxl:<key>` in HD layouts). A key is group 2 when it is not in D2R's string files
-(extract/d2r/93847/data/local/lng/{strings,strings-legacy}/*.json) and not a native exception (tools/strings_native.json:
-Median-only keys that stay native with a fixed ID, e.g. because their cell is a fixed-size field that cannot hold
-`medianxl:<key>`).
+Group 1 = keys D2R's own string files have (unqualified in table cells = `d2r:`; Median's text for them is a `d2r:<key>`
+record in `strings/medianxl/overrides.json`); group 2 = Median-only keys (namespaced, `medianxl:<key>` in table cells,
+`@medianxl:<key>` in HD layouts). A key is group 2 when it is not in D2R's string files
+(extract/d2r/93847/data/local/lng/{strings,strings-legacy}/*.json). D2R's own files are not part of the mod.
 
   d2r_keys()             every key of D2R's own string files (the group 1 set)
   load_group2()          group 2 keys: work/mod/strings_namespace.json (tbl2json) when it exists, else computed the same way
-  native_exceptions()    the keys of tools/strings_native.json
+  d2r_loaded()           key -> records of D2R's strings/ files (the keys the loader knows as `d2r:<key>`)
+  overrides()            the mod's `d2r:<key>` override records, by bare key
+  effective_texts(lang)  bare key -> displayed text (D2R's, the override's, or the Median-only key's)
+  native_exceptions()    the keys of tools/strings_native.json (must be empty)
   is_localization(t, c)  True if column c of table t holds a string key (LOCALIZATION below)
   qualify(ref, group2)   table / JSON reference as written: `medianxl:<key>` for group 2, anything else unchanged
   plan_aliases / load_aliases / write_aliases / retarget
@@ -27,6 +29,8 @@ PREFIX = NAMESPACE + ":"
 D2R_LNG = ROOT / "extract" / "d2r" / "93847" / "data" / "local" / "lng"
 NAMESPACE_FILE = ROOT / "work" / "mod" / "strings_namespace.json"
 EXCEPTIONS_FILE = ROOT / "tools" / "strings_native.json"
+OVERRIDE_FILE = "overrides.json"
+D2R_PREFIX = "d2r:"
 MOD_STRINGS = ROOT / "work" / "mod" / "data" / "local" / "lng" / "strings"
 ALIAS_FILE = ROOT / "work" / "mod" / "strings_alias.json"
 ALIAS_PREFIX = "mxlname_"
@@ -104,11 +108,43 @@ def is_range_column(table: str, column: str) -> bool:
 
 
 def d2r_keys() -> set[str]:
+    """Every key of D2R's string files, both folders (the group 1 set)."""
     return {e["Key"] for f in ("strings", "strings-legacy") if (D2R_LNG / f).exists()
             for p in (D2R_LNG / f).glob("*.json") for e in json.loads(p.read_text("utf-8-sig"))}
 
 
+def d2r_loaded() -> dict[str, list[dict]]:
+    """key -> its records in D2R's strings/ files: what the loader knows as `d2r:<key>` (a key can repeat in D2R's own
+    files). Keys that exist only in strings-legacy/ are not in it."""
+    out: dict[str, list[dict]] = {}
+    for p in sorted((D2R_LNG / "strings").glob("*.json")):
+        for e in json.loads(p.read_text("utf-8-sig")):
+            out.setdefault(e["Key"], []).append(e)
+    return out
+
+
+def overrides() -> dict[str, dict]:
+    """bare key -> record of the mod's `d2r:<key>` overrides (work/mod/.../strings/medianxl/overrides.json)."""
+    p = MOD_STRINGS / NAMESPACE / OVERRIDE_FILE
+    if not p.exists():
+        return {}
+    return {e["Key"][len(D2R_PREFIX):]: e for e in json.loads(p.read_text("utf-8-sig")) if e["Key"].startswith(D2R_PREFIX)}
+
+
+def effective_texts(lang: str = "enUS") -> dict[str, str]:
+    """bare key -> the text the player reads: D2R's strings/ text, replaced by the mod's override, plus the
+    Median-only keys of medianxl/median.json (a key has one text; D2R and Median-only key sets do not overlap)."""
+    out = {k: recs[0].get(lang, "") for k, recs in d2r_loaded().items()}
+    out.update({k: e[lang] for k, e in overrides().items() if lang in e})
+    p = MOD_STRINGS / NAMESPACE / "median.json"
+    if p.exists():
+        out.update({e["Key"]: e.get(lang, "") for e in json.loads(p.read_text("utf-8-sig"))})
+    return out
+
+
 def native_exceptions() -> set[str]:
+    """tools/strings_native.json. Must stay empty: with a mod namespace an unqualified record is a `medianxl:` record
+    and its id is ignored, so no string can be native with a fixed id (validate.py fails otherwise)."""
     return set(json.loads(EXCEPTIONS_FILE.read_text("utf-8"))["keys"]) if EXCEPTIONS_FILE.exists() else set()
 
 
@@ -116,14 +152,9 @@ def load_group2() -> set[str]:
     """Median-only keys that need the `medianxl:` prefix."""
     if NAMESPACE_FILE.exists():
         return set(json.loads(NAMESPACE_FILE.read_text("utf-8"))["keys"])
-    # Not written yet: every key of the namespace file's folder is group 2 once tbl2json ran; without it the
-    # keys are the ones in the old native Median file that D2R does not have.
-    native = d2r_keys()
-    p = MOD_STRINGS / "medianxl" / "median.json"
-    if p.exists():
-        return {e["Key"] for e in json.loads(p.read_text("utf-8-sig"))} - native
-    p = MOD_STRINGS / "item-modifiers.json"
-    return ({e["Key"] for e in json.loads(p.read_text("utf-8-sig"))} - native - native_exceptions()) if p.exists() else set()
+    # Not written yet (tbl2json has not run): the keys of the namespace file
+    p = MOD_STRINGS / NAMESPACE / "median.json"
+    return {e["Key"] for e in json.loads(p.read_text("utf-8-sig"))} if p.exists() else set()
 
 
 def qualify(ref: str, group2: set[str], aliases: dict[str, str] | None = None) -> str:

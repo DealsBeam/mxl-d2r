@@ -128,10 +128,10 @@ def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, d
     if not toml.exists():  # never overwrite a config someone edited
         toml.write_text('[d2rcore.save_format]\nmode = "extended"\n', encoding="utf-8")
 
-    for folder in ("strings", "strings-legacy"):
-        ns_file = data / "local" / "lng" / folder / NAMESPACE / "median.json"
+    for rel in ("strings/%s/median.json", "strings/%s/overrides.json", "strings-legacy/%s/median.json"):
+        ns_file = data / "local" / "lng" / (rel % NAMESPACE)
         if not ns_file.exists():
-            print(f"warning: {ns_file.relative_to(data)} is missing: the namespace {NAMESPACE} has no strings (run tools/tbl2json.py)")
+            print(f"warning: {ns_file.relative_to(data)} is missing: no Median strings (run tools/tbl2json.py)")
     files = sum(1 for _ in data.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in data.rglob("*") if p.is_file()) / 1e6
     print(f"installed {files} files ({size:.0f} MB) -> {mod}")

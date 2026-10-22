@@ -11,24 +11,29 @@ Tool: `tools/tbl2json.py` (reads Median's `.tbl` files directly; output in `work
   cells, so they stay as they are;
   `work/mod/strings_idkeys.json` maps every Median ID to its final key (for Sigma tables and plugins).
 - **Duplicate keys:** 377 entries are shadowed; patchstring wins over expansionstring over string (1.13c order).
-- **Loading (hybrid, contract: docs/strings-namespace.md):**
-  - **Group 1, overrides (8,375 keys):** keys D2R already has load natively. The output files are complete copies of
-    D2R's native string files (a mod file replaces the game's file) in both `strings/` and `strings-legacy/`, with
-    Median's text and D2R's own IDs (8,079 / 8,075 overridden; 296 / 295 keep D2R's text because the printf
-    placeholders differ, listed in `strings_report.md`). Table cells keep plain keys (= `d2r:`).
+- **Loading (hybrid, contract: docs/strings-namespace.md):** the mod has a namespace, so an unqualified record in
+  its `strings/*.json` is a `medianxl:` record. The mod ships three kinds of record, and no copy of D2R's string files
+  (they load from the game):
+  - **Group 1, overrides (8,375 keys in D2R's files here):** Median's text for a key D2R already has is a record
+    `{"Key": "d2r:<key>", <13 languages>}`, no `id`, in `lng/strings/medianxl/overrides.json` (one record per key; the
+    loader refuses to start when a key is defined twice in the package). Written: 8,033 keys. Skipped, listed in
+    `strings_report.md`: 46 whose text equals D2R's, 296 whose printf placeholders differ from D2R's (they keep D2R's
+    text, bug #12), and keys that are only in `strings-legacy/` (the loader does not know them as `d2r:<key>`; none
+    of Median's keys is one). Table cells keep plain keys (= `d2r:`).
   - **Group 2, Median-only (12,516 keys):** written to `lng/strings/medianxl/median.json` as
     `{"Key", <13 languages>}` with no `id`; full key `medianxl:<key>`. `install_mod.py` writes
     `"namespace": "medianxl"` into `d2rloader/metadata.json`. No numeric ID, so no collision with D2R's IDs (bug #7).
     `work/mod/strings_namespace.json` (`{"namespace", "keys"}`) lists them for the other tools.
   - **`strings_idkeys.json`:** Median ID -> final key; `medianxl:<key>` for group 2, the plain key otherwise.
-  - **Exceptions:** group 2 keys listed in `tools/strings_native.json` (`{"keys": [...]}`) stay native: appended to
-    `item-modifiers.json` with a fixed ID below 65,536 (the first free 16-bit value above D2R's highest, skipping every
-    low-16-bit value in use) and a plain key in the idkeys. Currently none (the keys too long for a fixed-size cell use short
-    aliases `mxlname_<n>` instead, txt_migrate, docs/strings-namespace.md "Exceptions").
-  - **`strings-legacy/`:** the same `medianxl/median.json` is written there too. D2RLoader's documentation
-    (`LOCALIZATION.md`) only names `data/local/lng/strings/` for namespaced files and says nothing about
-    `strings-legacy/`, so whether the loader reads the legacy copy (for classic-mode text) is unverified; the extra
-    copy is harmless if it is ignored. `tbl2json.py` prints a per-folder count in `strings_report.md`.
+  - **No exceptions:** a string cannot stay native with a fixed ID (an unqualified record is a `medianxl:` record, its `id`
+    ignored). `tools/strings_native.json` stays empty (keys too long for a fixed-size cell use short aliases
+    `mxlname_<n>`, txt_migrate, docs/strings-namespace.md "Exceptions"); tbl2json and validate.py fail on a key in it.
+  - **`strings-legacy/`:** only a mirror of `medianxl/median.json`. The `d2r:` overrides are not mirrored (a duplicate key
+    refuses the start; in HD mode the legacy folder is not read, measured; classic graphics mode is untested). Decision and
+    measurements: docs/strings-namespace.md "strings-legacy/".
+  - **Readers of D2R's text** use `extract/d2r/93847/.../strings/` plus the overrides file (`strings_ns.d2r_loaded()`,
+    `overrides()`, `effective_texts()`): txt_migrate (advanced stats), `npc_actions_data.py` (D2R ids), `hd_monsters.py`
+    (monster / NPC names), `validate.py`, `plugin_keys.py`.
   - **Packaging:** the mod is installed as a folder-style MPQ (a directory), so no `(listfile)` is needed. If it is ever
     packed into a real `.mpq`, the namespace file (an extra filename) needs a `(listfile)` entry.
 - **Languages:** Median is English-only. By default the English text fills all 13 languages so non-English
@@ -41,11 +46,11 @@ The decision and the contract every tool works against are in [strings-namespace
 
 | | Group 1: native overrides | Group 2: Median-only (`medianxl` namespace) | Exceptions |
 |---|---|---|---|
-| Keys | every key D2R's own string files have (8,375 here) | every other Median key (12,516) | group 2 keys listed in `tools/strings_native.json` (the ones too long for a fixed-size field, strings-namespace.md "Exceptions") |
-| File | complete copies of D2R's `strings/` and `strings-legacy/` files, Median's text, D2R's ids | `lng/strings/medianxl/median.json`, no `id` | appended to `item-modifiers.json` with a fixed id below 65,536 |
-| Table cell | plain key (= `d2r:`) | `medianxl:<key>` (txt_migrate) | plain key |
-| HD layout | `@d2r:<key>` | `@medianxl:<key>` | `@d2r:<key>` |
-| Why | D2R reads them by id and key unchanged | no numeric id, so no collision with D2R's ids (bug #7) | the whole `namespace:key` must fit a fixed-size field (`levels.LevelWarp` 39 characters, `uniqueitems.index` / `setitems.index` 31) |
+| Keys | every key D2R's own string files have (8,375 here, 8,033 with a changed text) | every other Median key (12,516) | none |
+| File | `lng/strings/medianxl/overrides.json`: `{"Key": "d2r:<key>", ...}`, no `id`; D2R's own files are not shipped | `lng/strings/medianxl/median.json`, no `id` | (none: impossible with a namespace) |
+| Table cell | plain key (= `d2r:`) | `medianxl:<key>` (txt_migrate) | |
+| HD layout | `@d2r:<key>` | `@medianxl:<key>` | |
+| Why | an unqualified record would define `medianxl:<key>`, not override D2R's | no numeric id, so no collision with D2R's ids (bug #7) | |
 
 `work/mod/strings_namespace.json` lists the group 2 keys; `work/mod/strings_idkeys.json` maps every Median id to its full
 key. The group 2 test is shared in `tools/strings_ns.py` (`load_group2()`, `qualify()`, `qualify_layout()`).
@@ -62,9 +67,11 @@ For every localization column (`strings_ns.LOCALIZATION`: namestr, name, index, 
 long / alt, descstr*, ...):
 
 - **error** an unqualified cell that names a group 2 key (or another spelling of its case); a `medianxl:` cell whose key is
-  not in the namespace list; a `d2r:` cell whose key D2R does not have; a range column (`hireling.NameFirst` / `NameLast`)
-  that names a namespaced key; a cell longer than its field (the whole `medianxl:<key>` must fit; put the key into
-  `tools/strings_native.json` otherwise); a native exception that is not in the native string files.
+  not in the namespace list; a `d2r:` cell whose key D2R does not have; a key defined twice in the mod's string files
+  (both folders are one package: the loader refuses to start); a `d2r:` override record of a key D2R's `strings/` files
+  do not have (the loader rejects it); an unqualified record with an `id` (it defines `medianxl:<key>`); a range column (`hireling.NameFirst` / `NameLast`)
+  that names a namespaced key; a cell longer than its field (the whole `medianxl:<key>` must fit; use a short alias otherwise);
+  a key in `tools/strings_native.json`.
 - **warn** an unqualified cell that is no known key (not D2R's, not an exception, not in Median's strings either). D2R
   looks keys up without regard to case (vanilla automagic.txt has `of Darkness` for the key `Of Darkness`), so a case-only
   difference is fine. Not a finding: a value D2R's own table holds in the same column (vanilla quirks such as the objects

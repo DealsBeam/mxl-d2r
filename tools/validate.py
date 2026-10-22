@@ -343,6 +343,7 @@ class Validator:
             self.check_table(t)
         self.engine_rules()
         self.native_exceptions()
+        self.string_package()
         self.alias_refs(names)
 
     def alias_refs(self, names: set[str]) -> None:
@@ -367,13 +368,41 @@ class Validator:
                                  r[0] if r else "-", v)
 
     def native_exceptions(self) -> None:
-        """Keys kept native because their cell cannot hold medianxl:<key> must exist in the native string files."""
-        native = set()
-        for p in (MOD / "local" / "lng" / "strings").glob("*.json"):  # not the namespace folder
-            native |= {e["Key"] for e in json.loads(p.read_text("utf-8-sig")) if isinstance(e, dict) and "Key" in e}
-        for k in sorted(self.native - native):
-            self.add("error", "strings", "Key", "native exception (tools/strings_native.json) is not in the native "
-                     "string files", "-", k)
+        """No key can stay native with a fixed id any more: in a namespaced mod an unqualified record is a `medianxl:`
+        record and its id is ignored (docs/strings-namespace.md), so tools/strings_native.json must be empty."""
+        for k in sorted(self.native):
+            self.add("error", "strings", "Key", "native exception (tools/strings_native.json): an unqualified record of a "
+                     "namespaced mod is a medianxl: record, its id is ignored", "-", k)
+
+    def string_package(self) -> None:
+        """The mod's string files as the loader reads them: a full key defined twice in the package refuses the start
+        (checked per folder: strings-legacy/ only mirrors median.json and HD mode does not read it, docs/strings.md);
+        a `d2r:<key>` override needs a key D2R's strings/ files have (the loader rejects others, e.g. keys that exist
+        only in strings-legacy/); an unqualified record belongs to the mod's namespace, not to `d2r:`. A `d2r:` record in
+        strings-legacy/ is an error: it would repeat a key of strings/medianxl/overrides.json."""
+        known = set(strings_ns.d2r_loaded())
+        for folder in ("strings", "strings-legacy"):
+            seen: dict[str, str] = {}
+            for p in sorted((MOD / "local" / "lng" / folder).rglob("*.json")):
+                where = p.relative_to(MOD / "local" / "lng").as_posix()
+                for e in json.loads(p.read_text("utf-8-sig")):
+                    if not isinstance(e, dict) or "Key" not in e:
+                        continue
+                    key = e["Key"]
+                    ns, bare = strings_ns.split_key(key)
+                    full = key if ns else strings_ns.PREFIX + key
+                    if full in seen:
+                        self.add("error", "strings", "Key", f"defined twice in the package ({seen[full]} and {where})", "-", full)
+                    seen[full] = where
+                    if ns == "d2r" and folder == "strings-legacy":
+                        self.add("error", "strings", "Key", f"`d2r:` record in strings-legacy/ ({where}): it repeats a key "
+                                 "of strings/ (docs/strings.md)", "-", key)
+                    if ns == "d2r" and bare not in known:
+                        self.add("error", "strings", "Key", f"`d2r:` override of a key D2R's strings/ files do not have ({where})",
+                                 "-", key)
+                    if not ns and "id" in e:
+                        self.add("error", "strings", "Key", f"unqualified record with an id ({where}): it defines "
+                                 f"medianxl:{key}, not D2R's {key}; an override is `d2r:{key}` without id", "-", key)
 
     def engine_rules(self) -> None:
         """Rules D2R asserts on at load time that the field schema does not express."""
@@ -509,11 +538,8 @@ class Validator:
     _string_ids: dict | None = None
 
     def string_ids(self) -> dict[str, int]:
-        if self._string_ids is None:
-            self._string_ids = {}
-            for p in (MOD / "local" / "lng" / "strings").glob("*.json"):
-                for e in json.loads(p.read_text("utf-8-sig")):
-                    self._string_ids.setdefault(e["Key"], e["id"])
+        if self._string_ids is None:  # D2R's ids (the mod ships no native string file)
+            self._string_ids = {k: recs[0]["id"] for k, recs in strings_ns.d2r_loaded().items()}
         return self._string_ids
 
 
