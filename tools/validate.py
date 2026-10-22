@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import art_fix  # noqa: E402
+import strings_ns  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 D2R = ROOT / "extract" / "d2r" / "93847" / "data"
@@ -117,9 +118,13 @@ class Validator:
         self.bank = bank
         self.examples = examples
         self.findings: dict[tuple, list] = defaultdict(list)
-        self.strings = set()
-        for p in (MOD / "local" / "lng" / "strings").glob("*.json"):
-            self.strings |= {e["Key"] for e in json.loads(p.read_text("utf-8-sig"))}
+        # string keys: D2R's (group 1, cells stay unqualified) and Median-only (group 2, cells are medianxl:<key>)
+        self.d2r_keys = strings_ns.load_d2r_keys()
+        self.group2 = strings_ns.load_group2()
+        self.strings = set(self.d2r_keys) | self.group2
+        for p in (MOD / "local" / "lng" / "strings").rglob("*.json"):
+            self.strings |= {e["Key"].split(":", 1)[-1] if e["Key"].startswith(strings_ns.PREFIX) else e["Key"]
+                             for e in json.loads(p.read_text("utf-8-sig")) if isinstance(e, dict) and "Key" in e}
         d2r_codes = lambda t: (self.data_d2r(t) or set())
         self.d2r_calc = {t: d2r_codes(t) for t in ("skillcalc", "misscalc", "moncalc")}
 
@@ -216,6 +221,32 @@ class Validator:
             elif v not in d2r_codes:
                 self.add("plugin", table, column, f"Median calc code '{v}'", row, text)
 
+    # ---- localization cells (docs/strings-namespace.md) ---------------------------------------------------
+    def check_localization(self, table: str, col: str, row: str, v: str, typ) -> None:
+        """A localization cell: unqualified = D2R's `d2r:` string, `medianxl:<key>` = Median-only string."""
+        if strings_ns.NUMERIC.fullmatch(v):
+            return
+        limit = typ.get("dataLength") if isinstance(typ, dict) else None
+        ns, key = strings_ns.split_key(v)
+        if ns == strings_ns.NAMESPACE:
+            if key not in self.group2:
+                self.add("error", table, col, f"{strings_ns.PREFIX} cell names a key that is not in the namespace list", row, v)
+            elif strings_ns.is_range_column(table, col):
+                self.add("error", table, col, "range column (string IDs from first to last) cannot use a namespaced key", row, v)
+        elif ns is not None:
+            if ns != "d2r":
+                self.add("warn", table, col, f"cell is qualified with the namespace '{ns}:'", row, v)
+            elif key not in self.d2r_keys:
+                self.add("error", table, col, "d2r: cell names a key that is not in D2R's strings", row, v)
+        elif v in self.group2:
+            self.add("error", table, col, "unqualified cell names a Median-only (group 2) string; it must be "
+                     f"{strings_ns.PREFIX}<key>", row, v)
+        elif v not in self.d2r_keys and v not in strings_ns.NATIVE_EXCEPTIONS:
+            self.add("warn", table, col, "cell names no known string (not in D2R's, not in the namespace list)", row, v)
+        if limit and len(v) > limit:
+            self.add("error", table, col, f"longer than {limit} characters (the whole {strings_ns.PREFIX}<key> must fit "
+                     "the field; a key that cannot goes into strings_ns.NATIVE_EXCEPTIONS)", row, v)
+
     # ---- columns ----------------------------------------------------------------------------------------
     def check_table(self, table: str) -> None:
         t = self.data.table(table)
@@ -258,6 +289,9 @@ class Validator:
                 if v == "":
                     continue
                 rid = r[0]
+                if strings_ns.is_localization(table, col):
+                    self.check_localization(table, col, rid, v, typ)
+                    continue
                 if kind == "int" and not re.fullmatch(r"-?\d+", v):
                     self.add("error", table, col, "not an integer", rid, v)
                 elif kind == "boolean" and v not in ("0", "1"):
@@ -291,6 +325,16 @@ class Validator:
         for t in sorted(names):
             self.check_table(t)
         self.engine_rules()
+        self.native_exceptions()
+
+    def native_exceptions(self) -> None:
+        """Keys kept native because their cell cannot hold medianxl:<key> must exist in the native string files."""
+        native = set()
+        for p in (MOD / "local" / "lng" / "strings").glob("*.json"):  # not the namespace folder
+            native |= {e["Key"] for e in json.loads(p.read_text("utf-8-sig")) if isinstance(e, dict) and "Key" in e}
+        for k in sorted(strings_ns.NATIVE_EXCEPTIONS - native):
+            self.add("error", "strings", "Key", "native exception (strings_ns.NATIVE_EXCEPTIONS) is not in the native "
+                     "string files", "-", k)
 
     def engine_rules(self) -> None:
         """Rules D2R asserts on at load time that the field schema does not express."""
@@ -302,7 +346,8 @@ class Validator:
             known = set()
             for t, c in (("weapons", "code"), ("armor", "code"), ("misc", "code"), ("itemtypes", "Code"),
                          ("treasureclassex", "Treasure Class"), ("uniqueitems", "index"), ("setitems", "index")):
-                known |= d.values(t, c) or set()
+                # a unique / set item is named by its index, which is a localization cell (medianxl:<key> when Median-only)
+                known |= {x.removeprefix(strings_ns.PREFIX) for x in d.values(t, c) or set()}
             pos = {r[0]: i for i, r in enumerate(rows) if r[0]}
             for ci, c in enumerate(h):
                 if not re.fullmatch(r"Item\d+", c):

@@ -32,6 +32,9 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import strings_ns  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 NAMED = ROOT / "work" / "named"
 D2R = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "excel"
@@ -1854,6 +1857,39 @@ class Migrator:
                     out[dc] = mc
         return out
 
+    def namespace_cells(self) -> None:
+        """The last pass: every localization cell that names a Median-only (group 2) key becomes `medianxl:<key>`,
+        in both banks (docs/strings-namespace.md). Unqualified cells mean D2R's own `d2r:` strings, so group 1 keys
+        (keys of D2R's string files, whose text tbl2json overwrites in place) stay as they are. Only the columns of
+        strings_ns.LOCALIZATION are looked at, numbers are never touched, and a row is edited cell by cell so the
+        rest of the file stays byte for byte as written by migrate()."""
+        group2 = strings_ns.load_group2()
+        self.prefixed: Counter = Counter()
+        for bank in ("base", ""):
+            folder = OUT / "data" / "global" / "excel" / bank
+            for path in sorted(folder.glob("*.txt")):
+                table = path.stem
+                if table not in strings_ns.LOCALIZATION:
+                    continue
+                lines = path.read_bytes().decode("utf-8").split("\r\n")
+                header = lines[0].split("\t")
+                cols = [i for i, c in enumerate(header) if strings_ns.is_localization(table, c)]
+                changed = False
+                for n in range(1, len(lines)):
+                    cells = lines[n].split("\t")
+                    if cells[0] == "Expansion":
+                        continue
+                    for i in cols:
+                        if i < len(cells):
+                            new = strings_ns.qualify(cells[i], group2)
+                            if new != cells[i]:
+                                cells[i] = new
+                                self.prefixed[(bank or "rotw", table, header[i])] += 1
+                                changed = True
+                    lines[n] = "\t".join(cells)
+                if changed:
+                    path.write_text("\r\n".join(lines), encoding="utf-8", newline="")
+
     def migrate(self, table: str) -> None:
         mh, mrows = read_tsv(NAMED / f"{table}.txt")
         mrows = [[c.rstrip() for c in r] for r in mrows]  # .bin codes are space-padded ("gps ")
@@ -2051,9 +2087,16 @@ def main() -> int:
     m.automap_tables()
     m.extra_calc_codes()
     m.formula_proxies()
+    m.namespace_cells()
     if m.dangling:
         m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]
         m.report += [f"- {t}: {n} cells" for t, n in sorted(m.dangling.items())]
+    m.report += ["", "## Cells written as `medianxl:<key>` (Median-only strings, docs/strings-namespace.md)", "",
+                 "| Table | Column | rotw bank | base bank |", "|---|---|---|---|"]
+    for t, c in sorted({(t, c) for (_b, t, c) in m.prefixed}):
+        m.report.append(f"| {t} | {c} | {m.prefixed[('rotw', t, c)]} | {m.prefixed[('base', t, c)]} |")
+    m.report.append(f"| **total** | | {sum(v for k, v in m.prefixed.items() if k[0] == 'rotw')} | "
+                    f"{sum(v for k, v in m.prefixed.items() if k[0] == 'base')} |")
     m.report += ["", "## Overflow: Median values with no D2R column (kept in work/mod/overflow/<table>.txt)", ""]
     for t, (cols, n) in sorted(m.overflow.items()):
         m.report.append(f"- **{t}** ({n} rows): " + ", ".join(f"{c} ({m.dropped[t][c]})" for c in cols))
