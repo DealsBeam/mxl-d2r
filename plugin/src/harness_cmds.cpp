@@ -141,6 +141,8 @@ constexpr uint64_t RvaDeadCheck = 0x34c2c0;     // (unit) -> 1 dead / dying
 constexpr uint64_t RvaPosCheck = 0x4fe1f0;      // (unit, x, y, tolerance) -> 0 when the unit is within the tolerance of x,y
 constexpr uint64_t RvaPathDistance = 0x325370;  // (unit, x, y) -> distance used by the walk packet check (<= 15 accepted)
 constexpr uint64_t RvaUnitClientOf = 0x48fde0;  // (unit) -> client
+constexpr uint64_t RvaMonsterUseSkill = 0x4a7bc0;  // (game, monster, mode < 0x10, skill id, target unit, x, y, 0): the AI's skill use -> 1 started
+constexpr uint64_t RvaUnitHasState = 0x3351b0;     // (unit, state) -> non-zero when set
 // client
 constexpr uint64_t RvaClientFind = 0x9a5d0;     // (id, type) -> client unit
 constexpr uint64_t RvaMenuRecord = 0x113990;    // (npc unit) -> row index in the NPC menu table
@@ -224,6 +226,8 @@ using DeadCheckFn = int32_t (*)(Unit*);
 using PosCheckFn = int32_t (*)(Unit*, uint32_t, uint32_t, int32_t);
 using PathDistanceFn = int32_t (*)(Unit*, int32_t, int32_t);
 using UnitClientFn = void* (*)(Unit*);
+using MonsterUseSkillFn = int64_t (*)(Game*, Unit*, uint32_t, int32_t, Unit*, int32_t, int32_t, uint8_t);
+using UnitHasStateFn = uint64_t (*)(Unit*, int32_t);
 using ClientFindFn = Unit* (*)(uint32_t, int32_t);
 using MenuRecordFn = int32_t (*)(Unit*);
 using MenuHandlerFn = uint8_t (*)(uint8_t);
@@ -452,9 +456,10 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Out("corpses %d players=%d self=%d | no corpse %s: skipped corpse calls=%ld penalty calls=%ld respawns held=%ld let=%ld xp=%u", corpses,
 	    players, self ? 1 : 0, noCorpseOn ? "on" : "off", skippedCorpses, skippedPenalties, respawnsHeld, respawns,
 	    static_cast<uint32_t>(Stat(p, 13)));
-	long cdStarts = 0, cdReduced = 0, cdShared = 0, cdDropped = 0;
-	const bool cooldownsOn = CooldownCounts(&cdStarts, &cdReduced, &cdShared, &cdDropped);
-	Out("cooldowns %s: starts=%ld reduced=%ld shared=%ld dropped=%ld", cooldownsOn ? "on" : "off", cdStarts, cdReduced, cdShared, cdDropped);
+	long cdStarts = 0, cdReduced = 0, cdShared = 0, cdDropped = 0, cdMonsters = 0;
+	const bool cooldownsOn = CooldownCounts(&cdStarts, &cdReduced, &cdShared, &cdDropped, &cdMonsters);
+	Out("cooldowns %s: starts=%ld reduced=%ld shared=%ld dropped=%ld monsters=%ld", cooldownsOn ? "on" : "off", cdStarts, cdReduced, cdShared, cdDropped,
+	    cdMonsters);
 	Out("skills left=%d right=%d", SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(p)), SkillIdOf(Fn<ActiveSkillFn>(RvaRightSkill)(p)));
 	PrintMissiles(c);
 	int mons = 0;
@@ -1784,6 +1789,30 @@ auto CmdCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	Out("cast skill %lld (level %d) at %u,%u: code %d, mode now %d, mana %d -> %d", id, SkillBaseLevel(sk), x, y, rc, ModeOf(c->player),
 	    manaBefore, Stat(c->player, StatMana) >> 8);
 	return rc == 0 ? true : Fail(c, "cast: the game refused the skill use (code %d; town, no mana, cooldown or busy?)", rc);
+}
+
+// `mcast <skill id> <mode> unit <id> | nearest [class]`: the monster uses the skill on the player through the AI's skill use
+// (0x4a7bc0, mode as monstats Sk<n>mode: 6 = A1, 7 = A2, 9 = SC, 10 = S1). The monster must own the skill (its monstats row
+// lists it). Prints the call's answer, the monster's mode and, for the cooldown check, its stat 359 at layer = skill (the end frame
+// of D2R's cooldown timer) and the states 0xb9 / 0x79 the cooldown starts set; poll `state` or repeat the command.
+auto CmdMonsterCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long skill = 0, mode = 0;
+	hcmd::CastTarget tg;
+	if (t.n < 4 || !hcmd::ParseInt(t.tok[1], &skill) || !hcmd::ParseInt(t.tok[2], &mode) || skill < 0 || skill > 0xffff || mode < 0 || mode > 15 ||
+	    !hcmd::ParseCastTarget(t, 3, &tg) || (tg.kind != hcmd::CastTarget::Unit && tg.kind != hcmd::CastTarget::Nearest)) {
+		return Fail(c, "usage: mcast <skill id> <mode 0-15> unit <id> | nearest [class]");
+	}
+	Unit* mon = tg.kind == hcmd::CastTarget::Unit ? FindMonsterById(c, static_cast<uint32_t>(tg.id)) : NearestMonster(c, tg.cls, false);
+	if (mon == nullptr) {
+		return Fail(c, "mcast: no such live monster");
+	}
+	const int modeBefore = ModeOf(mon);
+	const int64_t rc = Fn<MonsterUseSkillFn>(RvaMonsterUseSkill)(c->game, mon, static_cast<uint32_t>(mode), static_cast<int32_t>(skill), c->player, 0, 0, 0);
+	const auto hasState = Fn<UnitHasStateFn>(RvaUnitHasState);
+	Out("mcast monster id=%u class=%d skill %lld mode %lld: returned %lld, unit mode %d -> %d, stat359[%lld]=%d state 0xb9=%d state 0x79=%d", IdOf(mon),
+	    ClassOf(mon), skill, mode, static_cast<long long>(rc), modeBefore, ModeOf(mon), skill, Stat(mon, 359, static_cast<int>(skill)),
+	    hasState(mon, 0xb9) != 0 ? 1 : 0, hasState(mon, 0x79) != 0 ? 1 : 0);
+	return rc != 0 ? true : Fail(c, "mcast: the monster did not start the skill (not its skill, or the mode is not allowed)");
 }
 
 // --- missiles ---------------------------------------------------------------------------------------------------------
@@ -3232,7 +3261,7 @@ const Verb Verbs[] = {
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
-    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
+    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},

@@ -13,7 +13,7 @@ Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout l
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
 classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
-cowportals deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
+cowportals deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling.
 """
 import ctypes
@@ -705,6 +705,69 @@ def check_steadyaim():
         "Heartseeker usability (4 = restricted) before the first shot %s, counter %s; after Steady Shot x4 the counter reads %s "
         "and Heartseeker %s; one Heartseeker leaves %s; spent to %s and Heartseeker %s (4 restricted, or 1 while its cooldown runs)" % (
             before, first, seen, during, after_one, end, after), (), log)
+
+
+def check_restrictitems():
+    """Restrict modes 3-7 on item-triggered skills (D2Sigma applies them on the player's cast path only: its restrict test
+    0x6fd9f590 is called from D2Common 10787 alone, and the item event path 0x6fd114f0 -> 0x6fcc19a0 never reaches it; D2R's twin
+    0x33f6a0 on the item path knows modes 0 to 2 only, so the port leaves modes 3 to 7 unrestricted there, as Median does).
+    Heartseeker (352, restrict 5, needs Steady Aim's state) is refused for the player's own cast without the state (usable 4),
+    yet an item with a "cast on kill" of it (stat 376, the item event registry's function 20 -> 0x5896e0 -> 0x589930) casts it
+    both without and with the state: the handler is reached with the skill and its missile appears."""
+    nm = "Restrict modes 3-7 on item-triggered skills: the cast path refuses Heartseeker, an item's cast on kill does not (as Median)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(2)  # Blood Moor
+    kill_all_near()
+    st0 = hstate()["player"]
+    cls0 = st0.get("class")
+    log, notes = [], []
+    for cmd in ("class 5", "stat player 0 set 400", "stat player 2 set 400", "unequip rhand", "equip 163 rhand",
+                "unequip lhand", "equip aqv lhand", "setskill 1368 5", "setskill 352 5", "unequip lring"):
+        log += H(cmd)[1]
+    counter = lambda: stat_of(H("stat player 220 5")[1])
+
+    def proc():
+        """One cast on kill of Heartseeker level 5 from a ring: (handler reached, missiles seen)."""
+        H("unequip lring")
+        H("equip rin 376:%d=100 lring" % (352 * 64 + 5))
+        m = spawn_id()
+        time.sleep(2)  # a monster that was just spawned is not a valid target yet
+        H("missiles reset")
+        H("evtrace fire 9 player m%d" % m)
+        _o, lm = H("missiles")
+        _o2, lk = H("evtrace calls")
+        log.extend(lm + lk)
+        last = re.search(r"last cast on kill: skill (-?\d+) level (-?\d+)", " ".join(lk))
+        seen = re.search(r"seen=(\d+)", " ".join(lm))
+        H("kill nearest")
+        H("unequip lring")
+        return (last is not None and (int(last.group(1)), int(last.group(2))) == (352, 5)), int(seen.group(1)) if seen else None
+
+    usable0 = skill_usable(352)
+    counter0 = counter()
+    reached0, seen0 = proc()
+    notes.append("without Steady Aim (counter %s): player cast usable code %s (4 = restricted); item cast on kill reached %s, missiles seen %s" % (
+        counter0, usable0, reached0, seen0))
+    H("spawn 3 1")
+    for _ in range(4):
+        H("cast 1368 nearest")
+        time.sleep(2.5)
+    counter1 = counter()
+    usable1 = skill_usable(352)
+    reached1, seen1 = proc()
+    notes.append("with Steady Aim (counter %s): player cast usable code %s; item cast on kill reached %s, missiles seen %s" % (
+        counter1, usable1, reached1, seen1))
+    for _ in range(6):  # spend the counter as the steadyaim check does
+        if not counter():
+            break
+        H("cast 352 nearest")
+        time.sleep(2.5)
+    kill_all_near()
+    if cls0 is not None:
+        H("class %d" % cls0)
+    good = (usable0 == 4 and not counter0 and reached0 and seen0 and counter1 == 4 and usable1 == 0 and reached1 and seen1)
+    add(nm, "PASS" if good else "FAIL", " | ".join(notes), (), log)
 
 
 def check_heat():
@@ -3432,10 +3495,10 @@ def check_monster_hover():
                                                            ("; " + "; ".join(bad)) if bad else ""), [shot], [str(lives)])
 
 def _cd_counts():
-    """`h state`'s cooldowns line: (on, starts, reduced, shared, dropped) or None (retried: the answer can be cut short)."""
+    """`h state`'s cooldowns line: (on, starts, reduced, shared, dropped, monsters) or None (retried: the answer can be cut short)."""
     for _ in range(4):
         for ln in hstate()["lines"]:
-            m = re.match(r"cooldowns (on|off): starts=(-?\d+) reduced=(-?\d+) shared=(-?\d+) dropped=(-?\d+)", ln)
+            m = re.match(r"cooldowns (on|off): starts=(-?\d+) reduced=(-?\d+) shared=(-?\d+) dropped=(-?\d+) monsters=(-?\d+)", ln)
             if m:
                 return (m.group(1) == "on",) + tuple(int(x) for x in m.groups()[1:])
         time.sleep(0.5)
@@ -3478,6 +3541,49 @@ def _cd_cast(skill):
         if not ok:
             break
     return None, None
+
+
+# A monster class with a skill that has a constant localdelay (built mod): Andariel (156) andariel_skill_2 (812, delay 125, anim SC = special cast, mode 7)
+_CD_MON = (156, 812, 7)
+
+
+def _cd_monster():
+    """Median has no cooldown for non-players (D2Sigma 0x100b0a40+0x70: a unit that is not a player is always ready, and the start
+    stores into the player's table only). A spawned monster uses a skill with a localdelay twice in a row (harness `mcast`, the
+    AI's skill use 0x4a7bc0): both uses start, and the monster keeps no cooldown (stat 359 at the skill's layer and states 0xb9 /
+    0x79 stay clear; D2R would store them), the plugin's `monsters` counter counts the two skipped starts. (problems, notes)."""
+    cls, skill, mode = _CD_MON
+    problems, notes = [], []
+    c0 = _cd_counts()
+    mid = spawn_id(cls)
+    if mid is None:
+        return ["no monster of class %d could be spawned" % cls], notes
+    time.sleep(2)  # a monster that was just spawned is not a valid target yet
+    seen = []
+    for n in (1, 2):
+        ok, lines = H("mcast %d %d unit %d" % (skill, mode, mid))
+        text = " ".join(lines)
+        m = re.search(r"returned (-?\d+), unit mode (\d+) -> (\d+), stat359\[\d+\]=(-?\d+) state 0xb9=(\d) state 0x79=(\d)", text)
+        seen.append(m.groups() if m else None)
+        if not ok or not m:
+            problems.append("monster use %d of skill %d refused (%s)" % (n, skill, text[:160]))
+            break
+        deadline = time.time() + 6  # the attack animation runs; the skill finishes (and would start its cooldown) at its action frame
+        while time.time() < deadline and _cd_counts()[5] - c0[5] < n and not rd("m%d" % mid, 359, skill):
+            time.sleep(0.1)
+        notes.append("use %d: %s; monsters counter +%d" % (n, m.group(0)[:120], _cd_counts()[5] - c0[5]))
+    skipped = _cd_counts()[5] - c0[5]
+    end = rd("m%d" % mid, 359, skill)
+    notes.append("after both uses: stat 359 at layer %d = %s, monsters counter +%d (starts of non-players not passed on)" % (skill, end, skipped))
+    if len(seen) == 2 and None not in seen:
+        if end or any(x[4] != "0" or x[5] != "0" for x in seen):
+            problems.append("the monster holds a cooldown (stat 359 at layer %d = %s, uses read %s): its start was passed on to D2R" % (skill, end, seen))
+        if skipped:
+            notes.append("the hook skipped %d start(s) D2R made for the monster" % skipped)
+        else:
+            notes.append("the monster's skill finish made no cooldown start at all (the hook has nothing to skip on this path)")
+    H("kill %d" % mid)
+    return problems, notes
 
 
 # Barbarian skills of one skills2 cooldown group with a constant localdelay (built mod, mxl_cooldowns.h): group -> {skill: delay,
@@ -3569,6 +3675,9 @@ def check_cooldowns():
             if codes.get(_CD_CONTROL) == 0 and ends[_CD_CONTROL]:
                 problems.append("reduction %d: Spirit Reave (no group) got a cooldown (end %s)" % (red, ends[_CD_CONTROL]))
             notes.append("  stat 359 ends %s usable %s" % (ends, usable))
+        mp, mn = _cd_monster()
+        problems += mp
+        notes += mn
     finally:
         setstat("player", 309, base309 or 0, main)
         setstat("player", 12, base_level or 21)
@@ -5593,7 +5702,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("nslong", check_nslong),
           ("strings", check_strings),
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
-          ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("heat", check_heat),
+          ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("restrictitems", check_restrictitems), ("heat", check_heat),
           ("trophytimer", check_trophytimer),
           ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages),
           ("skillscaling", check_skillscaling)]
