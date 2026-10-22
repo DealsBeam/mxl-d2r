@@ -1238,6 +1238,51 @@ class Migrator:
         self.report.append("\nproperty default parameters (propertiesext): " +
                            (", ".join(f"{t} {n}" for t, n in counts.items() if n) or "none"))
 
+    def clear_unsaved_layers(self) -> None:
+        """A stat is saved in an item packet as its value plus a layer of `Save Param Bits` bits. Median's property function 28
+        (`properties_419`, 35 amulet uniques) stores the property's parameter as the layer of a stat that has no Save Param Bits
+        (Median's stat 494, D2R 523: a 1 / 1 / 1 marker nobody reads), and 1.13c's item writer ignores a layer it has no bits for.
+        D2R's item encoder (D2RCore, Items.cpp:1990) asserts and writes nothing, the packet reaches the client as an eight-byte
+        header, and the client dereferences a null unit while decoding it (crash at 0x34b891): any drop or gamble of one of those
+        amulets crashed the game. The parameter of such a property is cleared here (layer 0, the value is unchanged)."""
+        for bank in ("base", ""):
+            base = OUT / "data" / "global" / "excel" / bank
+            if not (base / "properties.txt").exists() or not (base / "itemstatcost.txt").exists():
+                continue
+            ih, irows = read_tsv(base / "itemstatcost.txt")
+            sp = ih.index("Save Param Bits")
+            unsaved = {r[0] for r in irows if r and len(r) > sp and r[sp].strip() in ("", "0")}
+            ph, prows = read_tsv(base / "properties.txt")
+            func = [i for i, c in enumerate(ph) if re.fullmatch(r"func\d+", c, re.I)]
+            stat = [i for i, c in enumerate(ph) if re.fullmatch(r"stat\d+", c, re.I)]
+            codes = set()
+            for r in prows:
+                if not is_record(r):
+                    continue
+                for f, s in zip(func, stat):
+                    if len(r) > s and r[f].strip() == "28" and r[s] in unsaved:
+                        codes.add(r[0])
+            counts: Counter = Counter()
+            for table in PROPERTY_TABLES:
+                tp = base / f"{table}.txt"
+                if not tp.exists():
+                    continue
+                th, trows = read_tsv(tp)
+                changed = 0
+                for r in trows:
+                    if not is_record(r):
+                        continue
+                    for code, par, _lo, _hi in self.property_columns(th):
+                        if par is not None and r[code] in codes and r[par].strip() not in ("", "0"):
+                            r[par] = ""
+                            changed += 1
+                write_tsv(tp, th, trows)
+                counts[table] += changed
+            if bank == "base":
+                self.report.append("\nproperty layers the item encoder cannot save (function 28 on a stat without Save Param Bits: " +
+                                   (", ".join(sorted(codes)) or "none") + "): " +
+                                   (", ".join(f"{t} {n}" for t, n in counts.items() if n) or "none"))
+
     def item_spell_tables(self) -> None:
         """plugin/src/mxl_items.h: the items behind PLUGIN_SPELL (item_spells) and D2Sigma's mysticorbs table
         (work/sigma/mysticorbs.txt, 143-byte records; docs/plugin-spec.md, Item spells), with every id migrated."""
@@ -2178,6 +2223,7 @@ def main() -> int:
     m.help_tooltips()
     m.remap_property_params()
     m.property_defaults()
+    m.clear_unsaved_layers()
     m.missile_functions()
     m.item_spell_tables()
     m.infographic_panels()

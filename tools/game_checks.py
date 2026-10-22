@@ -2025,7 +2025,9 @@ def clean_area():
     if left:
         g.log("clean_area: %d monsters cannot be killed (%s): a new game clears the level" % (
             len(left), ", ".join(str(m.get("class")) for m in left[:6])))
-        leave_and_reenter()
+        revive_if_dead()  # what survives may have killed the character meanwhile; a dead one has no pause menu (Esc respawns it in the town)
+        if not leave_and_reenter():
+            return
         goto(area)
         close_menu()
         kill_all_near()
@@ -2114,20 +2116,28 @@ def check_resistcap():
     amount, bad, rows = 100000, [], []
     for ref, attacker in (("player", atk), ("merc", atk)):  # never the nearest monster: that is the hired mercenary
         saved = {s: rd(ref, s) for e in elems for s in e[1:]}
+        # Median's stat 184 (D2R 369) cuts the damage after the resistance, and an item of the character can carry it (the level 32
+        # test character wields a weapon with 25%, so every hit did 75% of the cap's share): `stat set` writes the base value, so what
+        # is left after zeroing it is what the gear gives, and the expectation is the cap's share cut by that.
+        setstat(ref, 369, 0)
+        cut = rd(ref, 369) or 0
         for elem, res, mx in elems:
             for add_max, want in cases:
                 setstat(ref, res, 200)
                 setstat(ref, mx, add_max)
                 r = hit(ref, elem, amount, attacker)
                 got = r[0] / amount if r else None
+                want_cut = _reduce(round(want * amount), cut) / amount
                 rows.append("%s %s max+%d: %s%%" % (ref, elem, add_max, "-" if got is None else "%.1f" % (got * 100)))
-                if got is None or abs(got - want) > 0.006:
-                    bad.append("%s %s max+%d took %s (want %d%%)" % (ref, elem, add_max, rows[-1].split(": ")[1], round(want * 100)))
+                if got is None or abs(got - want_cut) > 0.006:
+                    bad.append("%s %s max+%d took %s (want %.1f%%: cap share %d%%, stat 184 from other sources %d%%)" % (
+                        ref, elem, add_max, rows[-1].split(": ")[1], want_cut * 100, round(want * 100), cut))
         for s, v in saved.items():
             setstat(ref, s, v or 0)
+        setstat(ref, 369, 0)
     H("kill nearest 1")
     add(name, "PASS" if not bad else "FAIL",
-        "resist 200 against a 100000-unit hit (damage taken): %s" % ("; ".join(rows) if not bad else "; ".join(bad)),
+        "resist 200 against a 100000-unit hit (damage taken; the cap's share cut by the gear's stat 184, if any): %s" % ("; ".join(rows) if not bad else "; ".join(bad)),
         [sh("resistcap")], rows)
 
 
@@ -2695,7 +2705,8 @@ def leave_and_reenter(menu_open=False):
     time.sleep(9)
     STATE["in_game"] = False
     left = not g.in_game()
-    if not left:
+    if not left:  # the click did not leave the game (a dead character has no pause menu): the game goes on
+        STATE["in_game"] = True
         return False
     time.sleep(2)
     return enter_game()
@@ -5199,8 +5210,9 @@ def _charstats_row(cls):
 
 
 def _sample():
+    """(frame, x, y, mode, stamina raw) of one `state` reply, so the pairs of samples compare the stamina of known server frames."""
     p = hstate()["player"]
-    return (p.get("frame", 0), p.get("x", 0), p.get("y", 0), p.get("mode", -1), rd("player", 10) or 0)
+    return (p.get("frame", 0), p.get("x", 0), p.get("y", 0), p.get("mode", -1), p.get("stamina", 0))
 
 
 def _sprint_leg(stam0, walk, max_s, stop_exhausted=False):
@@ -5275,7 +5287,18 @@ def check_sprint():
 
 
 def _check_sprint():
-    name = "Sprint (SK7): run lasts about 5 s on 50 stamina, faster than walking, no cooldown timer, stamina refills while walking"
+    """Median's stamina rules (audit SK7 and sigma-patch-audit item 15; plugin part `stamina`, D2Sigma 0x100a1f90), asserted per
+    frame and exactly. With the character's stamina bonuses zeroed (the wrapper) and 50 points of maximum (12800 raw):
+      standing (mode 1 / 5)      +max/256 = +50 raw per frame
+      walking, attacking, ...    +75% of that = +37 raw per frame (D2R's own step gives 50% = 25)
+      running (mode 3)           no regeneration, and the run's own drain: RunDrain x 2 = 120 raw per frame (D2Game 0x77bb0), so
+                                 a run from full lasts ceil(12800 / 120) = 107 frames = 4.3 s and then falls back to walking
+      state 136 (Stamina Shrine) fills the bar
+      no cooldown: a run starts with two points of stamina and the bar is the only limit
+    Every sample is one `state` reply: frame, mode and stamina of the same server frame. Two consecutive samples in the same mode
+    must differ by exactly rate x frames; a pair whose mode changed in between and came back (a walk that stopped for a frame and was
+    ordered again) lies strictly between its mode's rate and the neighbouring rates, and is counted as such, not as a pass."""
+    name = "Sprint (SK7) / stamina rules (audit item 15): run 107 frames on 50 stamina, 120 drain, no regeneration while running, standing 50, walking 37 per frame, no cooldown"
     p0 = hstate()["player"]
     try:
         cs = _charstats_row(p0.get("class", 0))
@@ -5283,50 +5306,95 @@ def _check_sprint():
         return add(name, "BLOCKED", "work/mod charstats.txt not readable: %r" % (e,))
     walk_v, run_v, run_drain = int(cs["WalkVelocity"]), int(cs["RunVelocity"]), int(cs["RunDrain"])
     full = rd("player", 11) or 0
+    stand_rate = full >> 8                      # max / 256 raw per frame (stat 28 is zero here)
+    walk_rate = stand_rate * 75 // 100          # 75% in every other mode
+    run_rate = -2 * run_drain                   # no regeneration, drain RunDrain x 2
     bad, notes, log = [], [], []
 
-    # 1. a run from full stamina: the drain per frame, the length it gives, the speed
+    def judge(label, rows, mode, rate, others, capped_at=None, need=8, allow_straddle=True):
+        """Pairs of consecutive samples that are both in `mode` (and not at the bar's end, where the cap hides the step): exact when the
+        stamina changed by rate x frames, a straddle when it lies strictly inside the band between `rate` and one of `others` (the
+        mode changed and changed back between the samples), wrong otherwise."""
+        exact = straddle = wrong = frames = 0
+        for a, b in _pairs(rows, mode):
+            d, n = b[4] - a[4], b[0] - a[0]
+            if capped_at is not None and (a[4] + max(rate, 0) * n >= capped_at or b[4] >= capped_at):
+                continue
+            if rate < 0 and (a[4] + rate * n <= 0 or b[4] <= 0):
+                continue
+            frames += n
+            if d == rate * n:
+                exact += 1
+            elif any(min(rate, o) * n < d < max(rate, o) * n for o in others):
+                straddle += 1
+            else:
+                wrong += 1
+        notes.append("%s: %d consecutive samples in mode %d change by exactly %d raw per frame (%d frames), %d straddle a mode change, %d wrong" % (
+            label, exact, mode, rate, frames, straddle, wrong))
+        if wrong or exact < need or (not allow_straddle and straddle):
+            bad.append("%s: %d exact / %d straddling / %d wrong pairs (rule %d raw per frame in mode %d)" % (label, exact, straddle, wrong, rate, mode))
+        return exact
+
+    # 1. a run from full stamina: drain 120 per frame, no regeneration, 107 frames, forced back to walking at the end
     run = _sprint_leg(full, False, 14, stop_exhausted=True)
     log += ["run  " + " ".join(map(str, r)) for r in run]
-    drain = _drain(run)
-    secs = full / drain / 25 if drain else 0
-    want_drain = run_drain * 2  # D2Game 0x77bb0: RunDrain * 2 per frame, scaled by the stamina drain stat 154
-    run_speed, run_frames = _speed(run, 3)
-    # `move` runs, so a walking sample with the stamina nearly gone is a run forced back (the sample before it may be an idle one:
-    # the path ended and the leg re-issued it)
+    judge("running", run, 3, run_rate, (stand_rate, walk_rate), need=5)
+    run_frames = sum(b[0] - a[0] for a, b in _pairs(run, 3))
     exhausted = any(r[3] == 2 and r[4] < STAMINA_POINT * 2 for r in run)
-    notes.append("run: stamina %d.. drains %.0f raw/frame (RunDrain %d x2 = %d) = %.1f s from full, %d frames seen, speed %.3f units/frame" % (
-        full >> 8, drain, run_drain, want_drain, secs, run_frames, run_speed))
-    if not run_frames or abs(drain - want_drain) > 0.25 * want_drain:
-        bad.append("run drain %.0f raw/frame, charstats RunDrain %d wants %d" % (drain, run_drain, want_drain))
-    if not 3.0 <= secs <= 6.5:
-        bad.append("a run from full lasts %.1f s (Median: about 5 s)" % secs)
+    want_frames = -(-full // -run_rate)
+    notes.append("run from %d: %d frames seen running of the %d (= %.1f s) the bar allows" % (full >> 8, run_frames, want_frames, want_frames / 25))
     if not exhausted:
         bad.append("the run was never forced back to walking when the stamina ran out")
+    run_speed, _ = _speed(run, 3)
 
-    # 2. the walk speed against the run speed
-    walk = _sprint_leg(full, True, 5)
+    # 2. walking: +75% of the standing step, from empty (the bar is not full, so the cap hides nothing), no minimum stamina
+    walk_from_empty = _sprint_leg(0, True, 3.5)
+    log += ["empty " + " ".join(map(str, r)) for r in walk_from_empty]
+    judge("walking from empty", walk_from_empty, 2, walk_rate, (stand_rate, 0), capped_at=full, need=8)
+    gained = max((r[4] for r in walk_from_empty if r[3] == 2), default=0) - (walk_from_empty[0][4] if walk_from_empty else 0)
+    if gained < STAMINA_POINT:
+        bad.append("no stamina came back while walking from empty (gain %d)" % gained)
+    walk = _sprint_leg(full, True, 5)  # speed only: the bar is full
     log += ["walk " + " ".join(map(str, r)) for r in walk]
     walk_speed, walk_frames = _speed(walk, 2)
     ratio, want_ratio = (run_speed / walk_speed if walk_speed else 0), run_v / walk_v
-    notes.append("walk speed %.3f units/frame over %d frames; run/walk %.2f (charstats %d/%d = %.2f)" % (
-        walk_speed, walk_frames, ratio, run_v, walk_v, want_ratio))
+    notes.append("walk speed %.3f units/frame over %d frames; run %.3f; run/walk %.2f (charstats %d/%d = %.2f)" % (
+        walk_speed, walk_frames, run_speed, ratio, run_v, walk_v, want_ratio))
     if not walk_frames or abs(ratio - want_ratio) > 0.15 * want_ratio:
         bad.append("run/walk speed %.2f, charstats wants %.2f" % (ratio, want_ratio))
 
-    # 3. empty: walking refills the stamina without standing still
-    empty = _sprint_leg(0, True, 3.5)
-    log += ["empty " + " ".join(map(str, r)) for r in empty]
-    gain = [b[4] - a[4] for a, b in _pairs(empty, 2)]  # the first sample is already a few frames after the stat was set, so no pair starts under one point
-    walked = max((r[4] for r in empty if r[3] == 2), default=0) - (empty[0][4] if empty else 0)
-    notes.append("walking from empty: stamina +%d raw over %.1f s, %d walking steps gained" % (
-        walked, 3.5, sum(1 for d in gain if d > 0)))
-    if walked < STAMINA_POINT or not any(d > 0 for d in gain):
-        bad.append("no stamina came back while walking from empty (gain %d)" % walked)
+    # 3. standing: +50 per frame, no stamina threshold, refilled from empty in max / 50 = 256 frames. The character is idle, so
+    # every pair is one mode and none may straddle.
+    setstat("player", 10, STAMINA_POINT * 2)
+    here = _sample()
+    H("move %d %d walk" % (here[1], here[2]))
+    time.sleep(1.5)
+    setstat("player", 10, 0)
+    refill = []
+    t0 = time.time()
+    while time.time() - t0 < 16:
+        r = _sample()
+        refill.append(r)
+        if r[4] >= full:
+            break
+        time.sleep(0.2)
+    log += ["refill " + " ".join(map(str, r)) for r in refill]
+    judge("standing refill", refill, 1, stand_rate, (walk_rate, 0), capped_at=full, need=8, allow_straddle=False)
+    first = refill[0] if refill else None
+    frames_full = (refill[-1][0] - first[0]) if first else 0
+    # From the first sample (stamina s0) the bar needs ceil((max - s0) / 50) frames; the last sample is the first at the maximum, so
+    # it can come later than that by the gap to the sample before it, never earlier.
+    need = -(-(full - first[4]) // stand_rate) if first else 0
+    gap = (refill[-1][0] - refill[-2][0]) if len(refill) > 1 else 0
+    notes.append("standing refill %d -> %d points: %d frames (= %.1f s; the rule needs %d from the first sample, up to %d with the sampling gap)" % (
+        first[4] >> 8 if first else -1, refill[-1][4] >> 8 if refill else -1, frames_full, frames_full / 25, need, need + gap))
+    if not refill or refill[-1][4] < full or not need <= frames_full <= need + gap:
+        bad.append("standing refill took %d frames, the rule %d..%d, reached %s" % (frames_full, need, need + gap, refill[-1][4] if refill else None))
 
-    # 4. no cooldown: one point of stamina is enough for a run to start; refilling takes the stamina's own time
+    # 4. no cooldown: two points of stamina are enough for a run to start (the first direction that is free; the points last only
+    # a few frames, so sample at once)
     modes = set()
-    for dx, dy in SPRINT_DIRS:  # the first direction that is free; two points of stamina last only a few frames, so sample at once
+    for dx, dy in SPRINT_DIRS:
         setstat("player", 10, STAMINA_POINT * 2)
         here = _sample()
         H("move %d %d" % (here[1] + dx, here[2] + dy))
@@ -5340,29 +5408,34 @@ def _check_sprint():
         bad.append("a run did not start with 2 points of stamina (modes %s)" % sorted(modes))
     here = _sample()
     H("move %d %d walk" % (here[1], here[2]))
-    time.sleep(1.5)
-    setstat("player", 10, 0)
-    refill = []
-    t0, f0 = time.time(), _sample()[0]
-    while time.time() - t0 < 16:
-        r = _sample()
-        refill.append(r)
-        if r[4] >= full:
-            break
-    log += ["refill " + " ".join(map(str, r)) for r in refill]
-    frames_full = (refill[-1][0] - f0) if refill else 0
-    notes.append("standing refill 0 -> %d points: %.1f s (%d frames)" % (refill[-1][4] >> 8 if refill else -1, frames_full / 25, frames_full))
-    if not refill or refill[-1][4] < full or not 6 <= frames_full / 25 <= 16:
-        bad.append("standing refill took %.1f s / reached %s" % (frames_full / 25, refill[-1][4] if refill else None))
+    time.sleep(1.0)
 
-    # 5. the key: R (toggle sprint) makes a click-to-move run, R again walks. The toggle is restored.
+    # 5. state 136 (the Stamina Shrine, "infinite stamina") fills the bar
+    setstat("player", 10, 0)
+    ok, ls = H("setstate player 136 1")
+    time.sleep(1.0)
+    filled = rd("player", 10) or 0
+    H("setstate player 136 0")
+    notes.append("state 136: stamina 0 -> %d of %d after 1 s" % (filled >> 8, full >> 8))
+    if not ok or filled < full:
+        bad.append("state 136 left the stamina at %d of %d" % (filled, full))
+
+    # 6. the key: R (toggle sprint) makes a click-to-move run, R again walks. The toggle is restored.
     setstat("player", 10, full)
     keyrun = {}
+    # Screen points in the directions the legs walked (world offset to isometric screen, the character is in the middle of the
+    # window), then a spread of fixed points: a character in a cramped spot has only a few free ways out.
+    click_points = []
+    for dx, dy in SPRINT_DIRS:
+        u, v = dx - dy, (dx + dy) / 2.0
+        n = (u * u + v * v) ** 0.5
+        click_points.append((0.5 + u / n * 190 / 1600.0, 0.5 + v / n * 190 / 900.0))
+    click_points += [(0.80, 0.50), (0.20, 0.50), (0.50, 0.85), (0.50, 0.15), (0.65, 0.65), (0.35, 0.35), (0.65, 0.30), (0.35, 0.70),
+                     (0.58, 0.50), (0.42, 0.50)]
     for label in ("on", "off"):
         g.press_bg("r", hold=0.1)
         time.sleep(0.3)
-        for fx, fy in ((0.80, 0.50), (0.20, 0.50), (0.50, 0.85), (0.50, 0.15), (0.65, 0.65), (0.35, 0.35), (0.65, 0.30), (0.35, 0.70),
-                       (0.58, 0.50), (0.42, 0.50)):  # a click on a wall does not move; the point depends on where the character stands
+        for fx, fy in click_points:  # a click on a wall does not move; the point depends on where the character stands
             g.click_bg(fx, fy)
             for _ in range(3):  # the order reaches the server a few frames after the click
                 time.sleep(0.1)
@@ -5381,7 +5454,6 @@ def _check_sprint():
     setstat("player", 10, full)
     add(name, "PASS" if not bad else "FAIL", "; ".join(notes) if not bad else "; ".join(bad) + " | " + "; ".join(notes),
         [sh("sprint")], log)
-
 
 
 def mapcells():
