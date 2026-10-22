@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import strings_ns  # noqa: E402
+from func_slots import CLT_START_DROP, SRV_DO_REMAP, SRV_START_REMAP, SRV_START_REMAP_WITH_DO  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 NAMED = ROOT / "work" / "named"
@@ -1563,6 +1564,11 @@ class Migrator:
           cltdofunc 45; Talic's 168) stop function 1, which ends the spin and its aurastate when the skill is let go
           or interrupted; 1.13c's rows had none. Median rows on a do function that D2R pairs with a stop function
           (whirlwind_2, windform) get the same one.
+        - 1.13c slots D2R renumbered (tools/func_slots.py, docs/function-slots.md): srvdofunc 109 (1.13c MonFrenzy: melee
+          + frenzy state; D2R merged it into Frenzy's 9 and reused 109 for its itemless Town Portal, so MonFrenzy, flash,
+          feral_strike and bloodlord1_skill opened a portal) -> 9; srvstfunc 64 (MonFrenzy's start, a target check; D2R's
+          64 is Bind Demon's) and 37 on a 109 row (bloodlord1_skill) -> 67 (D2R's frenzy counter reset); cltstfunc 82
+          (D2R's table ends at 55) -> none. The town_portal 155 -> 109 mapping below stays.
         - anim / seqtrans "GH" -> "SQ": 1.13c's plrmode.txt gives the Sequence mode (18) the code GH, the same as Get
           Hit, so the decoded tables wrote GH for every sequence skill (Whirlwind, Zeal, Fend, Strafe, ... 122 rows).
           D2R's plrmode.txt names it SQ (and Knockback KB; plrmode/monmode Code are kept from D2R, D2R_ALWAYS) and
@@ -1606,7 +1612,9 @@ class Migrator:
             an, st = h.index("anim"), h.index("seqtrans")
             clt_moved = {"97": "110", "98": "111", "99": "112", "15": "19", "11": "15", "95": "111", "22": "113"}
             n_cap = n_right = n_moved = n_ranged = n_start = 0
-            sf = h.index("srvstfunc")
+            sf, cst = h.index("srvstfunc"), h.index("cltstfunc")
+            d2r_cst = {(r[0], r[dh.index("cltstfunc")]) for r in drows}
+            n_remap: Counter = Counter()
             for r in rows:
                 if not is_record(r):
                     continue
@@ -1635,6 +1643,20 @@ class Migrator:
                     n_right += 1
                 if r[cdo] in clt_moved and (r[0], r[cdo]) not in d2r_clt:
                     r[cdo] = clt_moved[r[cdo]]
+                # 1.13c slots D2R renumbered (func_slots.py, docs/function-slots.md); before the chain below writes 109
+                # for town_portal, so only Median's own 1.13c 109 is remapped
+                if (r[sf], r[do]) in SRV_START_REMAP_WITH_DO and (r[0], r[sf]) not in d2r_start:
+                    r[sf] = SRV_START_REMAP_WITH_DO[(r[sf], r[do])]
+                    n_remap["srvstfunc"] += 1
+                if r[sf] in SRV_START_REMAP and (r[0], r[sf]) not in d2r_start:
+                    r[sf] = SRV_START_REMAP[r[sf]]
+                    n_remap["srvstfunc"] += 1
+                if r[do] in SRV_DO_REMAP and (r[0], r[do]) not in d2r_own:
+                    r[do] = SRV_DO_REMAP[r[do]]
+                    n_remap["srvdofunc"] += 1
+                if r[cst] in CLT_START_DROP and (r[0], r[cst]) not in d2r_cst:
+                    r[cst] = ""
+                    n_remap["cltstfunc"] += 1
                 if r[sf] in start_moved and (r[0], r[sf]) not in d2r_start:
                     r[sf] = start_moved[r[sf]]
                     n_start += 1
@@ -1644,7 +1666,7 @@ class Migrator:
                 elif r[do].isdigit() and int(r[do]) in ranged and r[arc]:
                     r[do] = str(ranged[int(r[do])])
                     n_ranged += 1
-                elif r[do].isdigit() and int(r[do]) in to_d2r:
+                elif r[do].isdigit() and int(r[do]) in to_d2r and (r[0], r[do]) not in d2r_own:  # not RotW's Death Mark (155)
                     r[do] = str(to_d2r[int(r[do])])
                     if r[pa] != "1":
                         r[rs] = "1"
@@ -1659,7 +1681,9 @@ class Migrator:
                                    f"{n_ranged} teleports with a range / layered buffs -> 179/174/180; "
                                    f"{n_start} skills with D2Sigma srvstfunc 30 / 66 -> 71 / 72; "
                                    f"{n_stop} skills given D2R's stop function for their do function (Whirlwind); "
-                                   f"{n_seq} sequence skills anim/seqtrans GH -> SQ")
+                                   f"{n_seq} sequence skills anim/seqtrans GH -> SQ; 1.13c slots D2R renumbered "
+                                   f"(srvdofunc 109 -> 9, srvstfunc 64/37 -> 67, cltstfunc 82 -> none): "
+                                   f"{dict(n_remap)}")
 
     def sound_rows(self) -> None:
         """Median's own sound rows (appended after D2R's: sounds is d2r_wins) come from 1.13c's format and miss D2R's
