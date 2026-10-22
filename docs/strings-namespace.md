@@ -31,3 +31,12 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
 ## Exceptions (strings that must stay native with a fixed ID)
 
 (filled in by ns-research / ns-plugin)
+
+## Generated plugin headers and layouts (ns-ui)
+
+- `plugin/src/mxl_npc_actions.h` `Slot` has `labelKey` / `promptKey` (`const char*`, nullptr when the string is native).
+  A namespaced string has `label` / `prompt` = 0 and the full key (`medianxl:<key>`) in the key field; the plugin
+  resolves the key to the string D2R shows at run time (a slot whose `label` is 0 but `labelKey` is set still has a label).
+- Layouts written by `tools/ui_layouts.py` qualify every reference: `@d2r:<key>` for D2R's own keys (the layouts are
+  copies of D2R's, LOCALIZATION.md), `@medianxl:<key>` for Median-only keys (none today).
+- `tools/strings_ns.py` is the shared helper (`load_group2()`, `qualify_layout()`, `bare()`).
