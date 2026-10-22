@@ -30,7 +30,18 @@
 // the defender. D2Sigma's twin (0x10057a20) does the same cuts but runs every credited amount through the defender's
 // Median stats 189 (divisor), 184 (percent off) and 417 (percent off per damage type; D2R 373 / 369 / 446); the damage
 // cut itself is unchanged. Those are monster stats (monprop rows) and no item rolls them, so the hook only matters for
-// monsters that absorb. D2Sigma's other helper, 0x10057c10 (the same stats applied to the damage fields), has no caller.
+// monsters that absorb.
+//
+// Damage reduction on the incoming damage (off word `damagered`): D2Sigma's other helper, 0x10057c10, is live. Its stub
+// (0x1009b7e0, D2Game rva 0xdc4ea) replaces the call of the per-type step 6fcfbd00 in the loop of SUnitDmg 6fcfc0b0 (the
+// twelve entries of the damage table), and the helper starts by calling the original step through the adapter 0x10041e00 (so
+// flat reduction, resistance and absorb are untouched). When the entry's field is still non-zero afterwards it applies the
+// defender's stats 189 (divisor: damage / divisor; a cold, freeze or poison length is halved, at least 5), 184 (percent off a
+// damage field) and 417 (percent off a damage field, layer = the damage type) to it, one after the other on the updated field.
+// D2R's twin of the step is 0x4523e0 (ctx, table entry, flag) -> the field's new value; entry + 0 points at the field and
+// entry + 0x30 at the entry's name ("Phys", "Fire", "Ligt", "Cold", "Magc", "CLen", "FLen", "PLen", "Pois", "Life", "Mana",
+// "Stam"), which tells the types apart. The hook runs D2R's step, then Median's stats on the field it left (combat_logic.h).
+// The absorb credit was computed inside the step, from the damage before these stats, exactly as in Median.
 //
 // Not ported: D2Sigma's small difference of letting a walking unit with no evade still try block/dodge/avoid (D2R returns 0).
 //
@@ -71,6 +82,9 @@ constexpr int DamageAbsorbed = 0x130;          // damage block: life the defende
 constexpr int EntryResistStat = 0x08;          // table entry: the resistance stat of the element
 constexpr int EntryAbsorbPercent = 0x18;       // table entry: the absorb-percent stat or -1
 constexpr int EntryAbsorbFlat = 0x1c;          // table entry: the flat absorb stat
+constexpr uint64_t HitStepRva = 0x4523e0;      // (ctx, table entry, flag) -> the entry's damage field after resist and absorb
+constexpr int EntryField = 0x00;               // table entry: pointer to the damage field (int32)
+constexpr int EntryName = 0x30;                // table entry: pointer to the name ("Phys", "Fire", ...)
 
 // mov [rsp+8],rbx / mov [rsp+0x10],rbp / push rsi / push rdi / push r14 / sub rsp,0x30
 constexpr uint8_t AvoidCheckEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24,
@@ -79,6 +93,9 @@ constexpr uint8_t AvoidCheckEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89,
 constexpr uint8_t BlockChanceEntry[] = {0xff, 0x25};
 // mov [rsp+8],rbx / mov [rsp+0x10],rsi / push rdi / sub rsp,0x20
 constexpr uint8_t AbsorbEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20};
+// mov [rsp+0x18],rbp / push rsi / push r12 / push r13 / push r14 / push r15 / sub rsp,0x50
+constexpr uint8_t HitStepEntry[] = {0x48, 0x89, 0x6c, 0x24, 0x18, 0x56, 0x41, 0x54, 0x41, 0x55,
+                                    0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x50};
 // push rsi / sub rsp,0x20 / mov rsi,rcx / call rel32
 constexpr uint8_t IsHirelingEntry[] = {0x40, 0x56, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xf1};
 // Resist ceiling immediates: the bytes of the instruction (`mov r32, 0x5f`) and the offset of its immediate.
@@ -101,6 +118,7 @@ using SetStatFn = void (*)(Unit* unit, int32_t stat, int32_t value, int32_t laye
 using SetItemFlagFn = void (*)(Unit* item, int32_t mask, int32_t on);
 using IsItemTypeFn = int32_t (*)(Unit* item, int32_t type);
 using AbsorbFn = int64_t (*)(void* ctx, const uint8_t* entry, int32_t damage);
+using HitStepFn = int32_t (*)(void* ctx, const uint8_t* entry, int32_t flag);
 using IsHirelingFn = int32_t (*)(Unit* monster);
 using UnitDataFlagFn = uint8_t (*)(Unit* unit);
 
@@ -114,10 +132,12 @@ SetStatFn g_setStat = nullptr;
 SetItemFlagFn g_setItemFlag = nullptr;
 IsItemTypeFn g_isItemType = nullptr;
 AbsorbFn g_absorbOriginal = nullptr;
+HitStepFn g_hitStepOriginal = nullptr;
 IsHirelingFn g_isHireling = nullptr;
 UnitDataFlagFn g_unitDataFlag = nullptr;
 int g_thinned = 0;
 int g_absorbed = 0;
+int g_reduced = 0;
 int g_logged = 0;
 
 auto Matches(uint64_t base, uint64_t rva, const uint8_t* bytes, size_t size) noexcept -> bool {
@@ -215,16 +235,54 @@ auto AbsorbHook(void* ctx, const uint8_t* entry, int32_t damage) -> int64_t {
 	return static_cast<int64_t>(static_cast<uint32_t>(left));
 }
 
+// D2R's per-type step, then Median's stats 189 / 184 / 417 on what it left in the entry's field (D2Sigma 0x10057c10).
+auto HitStepHook(void* ctx, const uint8_t* entry, int32_t flag) -> int32_t {
+	const int32_t result = g_hitStepOriginal(ctx, entry, flag);
+	auto* field = d2r::At<int32_t*>(entry, EntryField);
+	const char* name = d2r::At<const char*>(entry, EntryName);
+	Unit* defender = d2r::At<Unit*>(ctx, CtxDefender);
+	if (field == nullptr || name == nullptr || defender == nullptr || *field == 0) {
+		return result;
+	}
+	uint32_t word = 0;
+	std::memcpy(&word, name, sizeof(word));
+	const mxl_combat::DamageType type = mxl_combat::DamageTypeOfName(word);
+	if (type.kind == mxl_combat::FieldKind::None) {
+		return result;
+	}
+	const int32_t divisor = g_getStat(defender, mxl_combat::StatAbsorbDivisor, 0);
+	const int32_t percent = g_getStat(defender, mxl_combat::StatAbsorbPercent, 0);
+	const int32_t typePercent = g_getStat(defender, mxl_combat::StatAbsorbTypePercent, type.layer);
+	if (divisor == 0 && percent == 0 && typePercent == 0) {
+		return result;
+	}
+	const int32_t before = *field;
+	const int32_t after = mxl_combat::ReduceField(before, type, divisor, percent, typePercent);
+	if (after == before) {
+		return result;
+	}
+	*field = after;
+	if (g_reduced < 6 && g_context != nullptr) {
+		++g_reduced;
+		char line[200];
+		std::snprintf(line, sizeof(line), "mxl-core: combat: %.4s %d -> %d (189 %d, 184 %d%%, 417 layer %d %d%%)", name, before, after,
+		              divisor, percent, type.layer, typePercent);
+		g_context->LogInfo(line);
+	}
+	return after;
+}
+
 }  // namespace
 
-auto InstallCombat(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+auto InstallCombat(const D2RL::PluginContext* context, bool damageReduction, char* report, size_t reportSize) noexcept -> bool {
 	g_context = context;
 	const uint64_t base = context->exeBase;
 	if (!Matches(base, AvoidCheckRva, AvoidCheckEntry, sizeof(AvoidCheckEntry)) ||
 	    !Matches(base, BlockChanceRva, BlockChanceEntry, sizeof(BlockChanceEntry)) ||
 	    !Matches(base, AbsorbRva, AbsorbEntry, sizeof(AbsorbEntry)) ||
-	    !Matches(base, IsHirelingRva, IsHirelingEntry, sizeof(IsHirelingEntry))) {
-		std::snprintf(report, reportSize, "off: entry bytes of 0x44ef70 / 0x450070 / 0x450670 / 0x3af240 differ");
+	    !Matches(base, IsHirelingRva, IsHirelingEntry, sizeof(IsHirelingEntry)) ||
+	    (damageReduction && !Matches(base, HitStepRva, HitStepEntry, sizeof(HitStepEntry)))) {
+		std::snprintf(report, reportSize, "off: entry bytes of 0x44ef70 / 0x450070 / 0x450670 / 0x3af240 / 0x4523e0 differ");
 		return false;
 	}
 	d2r::Bind(base);
@@ -244,6 +302,10 @@ auto InstallCombat(const D2RL::PluginContext* context, char* report, size_t repo
 	const bool absorbHooked = context->InstallInlineHook(AbsorbRva, AbsorbEntry, sizeof(AbsorbEntry),
 	                                                     reinterpret_cast<void*>(&AbsorbHook),
 	                                                     reinterpret_cast<void**>(&g_absorbOriginal));
+	// Same entry shape as the absorb hook; D2RLoader's wrapper of the step calls the original, so this hook sees every call.
+	const bool reductionHooked =
+	    !damageReduction || context->InstallInlineHook(HitStepRva, HitStepEntry, sizeof(HitStepEntry), reinterpret_cast<void*>(&HitStepHook),
+	                                                    reinterpret_cast<void**>(&g_hitStepOriginal));
 	int resistPatched = 0;
 	for (const ResistClamp& clamp : ResistClamps) {
 		if (Matches(base, clamp.rva, clamp.bytes, sizeof(clamp.bytes)) &&
@@ -253,10 +315,11 @@ auto InstallCombat(const D2RL::PluginContext* context, char* report, size_t repo
 	}
 	const bool resistOk = resistPatched == static_cast<int>(sizeof(ResistClamps) / sizeof(ResistClamps[0]));
 	const int resistTotal = static_cast<int>(sizeof(ResistClamps) / sizeof(ResistClamps[0]));
+	const bool all = hooked && resistOk && absorbHooked && reductionHooked;
 	std::snprintf(report, reportSize,
 	              "%s: avoid/dodge/evade cap 60+stat (max 75, mercenaries too), block cap 50+stat (max 80), resist cap 75+max (max 90, %d/%d "
-	              "clamps), absorb credit stats 184/189/417; hooks 0x44ef70 %s, 0x450670 %s",
-	              hooked && resistOk && absorbHooked ? "on" : "partial", resistPatched, resistTotal, hooked ? "ok" : "NOT hooked",
-	              absorbHooked ? "ok" : "NOT hooked");
-	return hooked && resistOk && absorbHooked;
+	              "clamps), absorb credit and damage reduction stats 184/189/417; hooks 0x44ef70 %s, 0x450670 %s, 0x4523e0 %s",
+	              all ? "on" : "partial", resistPatched, resistTotal, hooked ? "ok" : "NOT hooked", absorbHooked ? "ok" : "NOT hooked",
+	              !damageReduction ? "off (damagered)" : reductionHooked ? "ok" : "NOT hooked");
+	return all;
 }
