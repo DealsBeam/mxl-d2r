@@ -72,6 +72,11 @@ the native exceptions (`tools/strings_native.json`) are never touched. The colum
 desctext / dsc2text / dsc3text a / b columns, `uniqueitems` and `setitems` index, `sets` / `runes` / `pettype` /
 `superuniques` / `lowqualityitems` / `objects` name, magicprefix / magicsuffix / automagic / rareprefix / raresuffix /
 unique prefix, suffix, appellation names, charstats Str*, hireling HireDesc, montype strplur, shrines, levelgroups.
+A key whose `medianxl:<key>` overflows a fixed-size cell (`dataLength` in the data guide: 31 for uniqueitems / setitems
+index, 39 for levels LevelWarp) gets a short alias `mxlname_<n>` in the same pass: the localization cells name
+`medianxl:<alias>`, plain references to the key (cubemain input / output, treasureclassex `ItemN`) the bare alias, the
+alias record is added to `median.json` and `work/mod/strings_alias.json` is written (docs/strings-namespace.md
+"Exceptions"). The report lists the aliases and the rewritten reference cells.
 `hireling` NameFirst / NameLast are a numeric range and stay native. The report lists the cells per table. Median's
 `levels.EntryFile` is not mapped to D2R's `LevelEntry`, so new levels have no entry banner text.
 Note: `uniqueitems.index` / `setitems.index` are qualified too, and the build tools that key on them (tools/item_hd.py HD

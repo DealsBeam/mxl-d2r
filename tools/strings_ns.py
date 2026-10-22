@@ -11,6 +11,8 @@ Median-only keys that stay native with a fixed ID, e.g. because their cell is a 
   native_exceptions()    the keys of tools/strings_native.json
   is_localization(t, c)  True if column c of table t holds a string key (LOCALIZATION below)
   qualify(ref, group2)   table / JSON reference as written: `medianxl:<key>` for group 2, anything else unchanged
+  plan_aliases / load_aliases / write_aliases / retarget
+                         short aliases `mxlname_<n>` for keys that do not fit a fixed-size cell (see below)
   split_key(ref)         ('medianxl', key) / (None, ref)
   bare(ref)              `medianxl:<key>` -> `<key>`
   qualify_layout(...)    every `@key` of a layout
@@ -26,6 +28,9 @@ D2R_LNG = ROOT / "extract" / "d2r" / "93847" / "data" / "local" / "lng"
 NAMESPACE_FILE = ROOT / "work" / "mod" / "strings_namespace.json"
 EXCEPTIONS_FILE = ROOT / "tools" / "strings_native.json"
 MOD_STRINGS = ROOT / "work" / "mod" / "data" / "local" / "lng" / "strings"
+ALIAS_FILE = ROOT / "work" / "mod" / "strings_alias.json"
+ALIAS_PREFIX = "mxlname_"
+LNG = ROOT / "work" / "mod" / "data" / "local" / "lng"
 
 NUMERIC = re.compile(r"-?\d+(\.\d+)?")
 
@@ -121,12 +126,61 @@ def load_group2() -> set[str]:
     return ({e["Key"] for e in json.loads(p.read_text("utf-8-sig"))} - native - native_exceptions()) if p.exists() else set()
 
 
-def qualify(ref: str, group2: set[str]) -> str:
-    """Table / JSON reference to a key: `medianxl:<key>` for group 2; empty cells, numbers, group 1 keys, native
-    exceptions and already qualified references stay as they are."""
+def qualify(ref: str, group2: set[str], aliases: dict[str, str] | None = None) -> str:
+    """Table / JSON reference to a key: `medianxl:<key>` for group 2 (`medianxl:<alias>` for a key with a short alias,
+    see load_aliases); empty cells, numbers, group 1 keys, native exceptions and already qualified references stay
+    as they are."""
     if not ref or NUMERIC.fullmatch(ref) or ref.startswith(PREFIX) or ref not in group2:
         return ref
-    return PREFIX + ref
+    return PREFIX + (aliases if aliases is not None else load_aliases()).get(ref, ref)
+
+
+# ---- short aliases for keys that do not fit a fixed-size field ----------------------------------------------------
+# uniqueitems.index and setitems.index (31 characters) and levels.LevelWarp (39) store the key in the cell itself, so
+# the whole `medianxl:<key>` must fit. A Median-only key that does not ("Sunstone of the Twin Seas") gets a short
+# alias `mxlname_<n>`: txt_migrate decides which keys (plan_aliases), writes the alias map (work/mod/strings_alias.json),
+# adds an alias record with the same 13 texts to the namespace files (write_aliases) and writes the alias in every
+# cell that names the key (localization cells as `medianxl:<alias>`, reference cells such as cubemain inputs and
+# treasure class items as the bare alias). The long key stays defined as well (the plugin and idkeys use it).
+
+def plan_aliases(keys) -> dict[str, str]:
+    """key -> alias for the given keys, numbered 1.. in key order (deterministic for the same set)."""
+    return {k: f"{ALIAS_PREFIX}{n}" for n, k in enumerate(sorted(set(keys)), 1)}
+
+
+def load_aliases() -> dict[str, str]:
+    """key -> alias, as written by txt_migrate (empty when the file does not exist)."""
+    return json.loads(ALIAS_FILE.read_text("utf-8"))["aliases"] if ALIAS_FILE.exists() else {}
+
+
+def retarget(cell: str, aliases: dict[str, str]) -> str:
+    """A cell that refers to an aliased key by name (cubemain input / output, treasure class item, with optional
+    quotes and a `,qty=2` suffix) names the bare alias instead."""
+    quoted = len(cell) > 1 and cell[0] == cell[-1] == '"'
+    name, sep, rest = (cell[1:-1] if quoted else cell).partition(",")
+    if name not in aliases:
+        return cell
+    body = aliases[name] + sep + rest
+    return f'"{body}"' if quoted else body
+
+
+def write_aliases(aliases: dict[str, str]) -> None:
+    """Write the alias map and the alias records (same texts as the long key) into median.json of both string
+    folders and strings_namespace.json. Idempotent: earlier alias records are replaced."""
+    ALIAS_FILE.write_text(json.dumps({"namespace": NAMESPACE, "aliases": aliases}, ensure_ascii=False, indent=0),
+                          encoding="utf-8")
+    for folder in ("strings", "strings-legacy"):
+        path = LNG / folder / NAMESPACE / "median.json"
+        if not path.exists():
+            continue
+        recs = [e for e in json.loads(path.read_text("utf-8-sig")) if not e["Key"].startswith(ALIAS_PREFIX)]
+        by_key = {e["Key"]: e for e in recs}
+        recs += [{**by_key[k], "Key": a} for k, a in aliases.items()]
+        path.write_text("﻿" + json.dumps(recs, ensure_ascii=False, indent=2).replace("\n", "\r\n"),
+                        encoding="utf-8", newline="")
+    ns = json.loads(NAMESPACE_FILE.read_text("utf-8"))
+    ns["keys"] = [k for k in ns["keys"] if not k.startswith(ALIAS_PREFIX)] + list(aliases.values())
+    NAMESPACE_FILE.write_text(json.dumps(ns, ensure_ascii=False, indent=0), encoding="utf-8")
 
 
 def split_key(ref: str) -> tuple[str | None, str]:

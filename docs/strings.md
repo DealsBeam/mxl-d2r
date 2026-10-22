@@ -23,8 +23,8 @@ Tool: `tools/tbl2json.py` (reads Median's `.tbl` files directly; output in `work
   - **`strings_idkeys.json`:** Median ID -> final key; `medianxl:<key>` for group 2, the plain key otherwise.
   - **Exceptions:** group 2 keys listed in `tools/strings_native.json` (`{"keys": [...]}`) stay native: appended to
     `item-modifiers.json` with a fixed ID below 65,536 (the first free 16-bit value above D2R's highest, skipping every
-    low-16-bit value in use) and a plain key in the idkeys. Currently none; the list is filled by the plugin lanes
-    (docs/strings-namespace.md "Exceptions").
+    low-16-bit value in use) and a plain key in the idkeys. Currently none (the keys too long for a fixed-size cell use short
+    aliases `mxlname_<n>` instead, txt_migrate, docs/strings-namespace.md "Exceptions").
   - **`strings-legacy/`:** the same `medianxl/median.json` is written there too. D2RLoader's documentation
     (`LOCALIZATION.md`) only names `data/local/lng/strings/` for namespaced files and says nothing about
     `strings-legacy/`, so whether the loader reads the legacy copy (for classic-mode text) is unverified; the extra

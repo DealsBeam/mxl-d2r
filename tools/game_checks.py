@@ -2090,6 +2090,47 @@ def check_statcols():
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
+def check_nslong():
+    name = "Short aliases of the long Median keys (docs/strings-namespace.md): service text and displayed names"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    import json
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    aliases = json.load(open(os.path.join(root, "work", "mod", "strings_alias.json"), encoding="utf-8"))["aliases"]
+    recs = {e["Key"]: e["enUS"] for e in json.load(open(os.path.join(
+        root, "work", "mod", "data", "local", "lng", "strings", "medianxl", "median.json"), encoding="utf-8-sig"))}
+    log, bad = [], []
+    for k in ("Sunstone of the Twin Seas", "MRVasily's Falling Star", "To The Island of the Sunless Sea"):
+        full = "medianxl:" + aliases[k]
+        ok, lines = H("str key " + full)  # the harness splits a line at spaces: the long keys themselves cannot be asked
+        text = recs[aliases[k]].replace(chr(255) + "c", "")  # the console drops the colour codes' first two characters
+        want = [w for w in text.split(chr(10)) if w][0]
+        log.append("%s -> %s %s (record starts '%s')" % (full, ok, lines[0] if lines else "", want))
+        if not (ok and want in " ".join(lines)):
+            bad.append("alias %s does not give the record text '%s'" % (full, want))
+    goto(1)
+    close_menu()
+    # ground labels (Alt held through the plugin's virtual modifier block) show the displayed names:
+    # unique "Sunstone of the Twin Seas" (uniqueitems data row 9, code twi), set item "MRVasily's Falling Star" (setitems row 141)
+    for cmd in ("item twi q=7 uniq=9 ground", "item 89@ q=5 uniq=141 ground", "item twi q=7 uniq=9 inv"):
+        ok, lines = H(cmd)
+        log.append("%s: %s" % (cmd, lines[0] if lines else ""))
+    time.sleep(1.0)
+    shots = []
+    g._set_mods(("alt",))
+    hwnd = g.need_window()
+    g.user32.PostMessageW(hwnd, g.WM_SYSKEYDOWN, 0x12, g._lparam(0x12, 0, False))
+    try:
+        for i in range(3):
+            time.sleep(1.5)
+            shots.append(sh("nslong_labels%d" % i))
+    finally:
+        g.user32.PostMessageW(hwnd, g.WM_SYSKEYUP, 0x12, g._lparam(0x12, 0, True))
+        g._set_mods(())
+    add(name, "FAIL" if bad else "REVIEW", "service answers: %s; ground labels with Alt held (read the screenshots: the label is the displayed name)" % (
+        "; ".join(bad) or "alias texts match the records"), shots, log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -2099,7 +2140,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
-          ("trophy", check_trophy), ("statcols", check_statcols)]
+          ("trophy", check_trophy), ("statcols", check_statcols), ("nslong", check_nslong)]
 
 
 def write_report(extra=""):
