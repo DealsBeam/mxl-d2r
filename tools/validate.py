@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import art_fix  # noqa: E402
+from txt_migrate import TIMED_POTION_TOTAL_STATS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 D2R = ROOT / "extract" / "d2r" / "93847" / "data"
@@ -314,6 +315,20 @@ class Validator:
                         self.add("error", "treasureclassex", c, "not an item, item type, treasure class, unique or set item", r[0], v)
                     elif pos.get(name, -1) > i:
                         self.add("error", "treasureclassex", c, "names a treasure class defined further down", r[0], v)
+        # timed potions (pSpell 3, Median's with a len formula): D2R's handler (0x57ecb0) stores a stat's calc divided by len
+        # unless it is hp / mana (bug #10), so txt_migrate multiplies the others by len; an unscaled mana recovery ends as 0
+        misc = d.table("misc")
+        if misc:
+            h, rows = misc
+            if {"pSpell", "len", "stat1", "calc1"} <= set(h):
+                ps, ln = h.index("pSpell"), h.index("len")
+                for r in rows:
+                    if len(r) <= max(ps, ln) or r[ps].strip() != "3" or "stat(" not in r[ln]:
+                        continue
+                    for k in (1, 2, 3):
+                        sc, cc = h.index(f"stat{k}"), h.index(f"calc{k}")
+                        if r[sc] and r[sc] not in TIMED_POTION_TOTAL_STATS and not r[cc].endswith(f"*({r[ln]})"):
+                            self.add("error", "misc", f"calc{k}", "timed potion stat not multiplied by len (D2R divides it)", r[h.index("code")], r[cc])
         # sets: at most 6 items
         si = d.table("setitems")
         if si:

@@ -2392,13 +2392,21 @@ def check_potions():
     goto(1)
     close_menu()
     H("difficulty 0")
-    cases = [("hp1", True, False), ("hp5", True, False), ("rvs", True, False), ("rvl", True, False), ("mp1", False, True), ("mp5", False, True)]
+    # (code, heals, mana, stat 27 right after the use): Median's calc1 / calc2 are 100 / 200 per cent (rejuvenation 125 / 200); D2R's
+    # timed potion stores calc / len, which ended mp1 / mp5 at 0 / 1 until txt_migrate multiplied the calc by len
+    cases = [("hp1", True, False, None), ("hp5", True, False, None), ("rvs", True, False, 125), ("rvl", True, False, 200),
+             ("mp1", False, True, 100), ("mp5", False, True, 200)]
     rows = {True: [], False: []}
     bad = {True: [], False: []}
     log = []
     maxhp, maxmp = rd("player", 7), rd("player", 9)
 
     def drain():
+        # the previous potion's state (len 175 frames = 7 s) must be over: a second potion within it averages the stat
+        for _ in range(40):
+            if not rd("player", 27) and not rd("player", 74):
+                break
+            time.sleep(0.5)
         setstat("player", 6, maxhp // 5)
         setstat("player", 8, maxmp // 5)
         time.sleep(0.5)
@@ -2413,12 +2421,14 @@ def check_potions():
             ok, line, _ = hv("use %s" % code, "use")
             if not ok:
                 return None
+        if code:
+            time.sleep(0.75)  # the potion's stat list can land a server frame after `use` returns (mp1 once read 0 right away)
         h1, r1 = rd("player", 74), rd("player", 27)
         time.sleep(seconds)
         return rd("player", 6) - l0, rd("player", 8) - m0, h0, h1, r0, r1, line
 
     control = gain(None)
-    for code, heals, mana in cases:
+    for code, heals, mana, want27 in cases:
         key = heals
         H("remove %s 9" % code)
         ok, line, _ = hv("item %s" % code, "item")
@@ -2436,6 +2446,9 @@ def check_potions():
             good = False
         if mana and (r1 is None or r1 <= (r0 or 0) or pm <= control[1] + 256 * 2):
             good = False
+        if want27 is not None and (r1 or 0) - (r0 or 0) != want27:
+            good = False
+            rows[key].append("%s: manarecoverybonus rose by %s, wanted %d" % (code, (r1 or 0) - (r0 or 0), want27))
         rows[key].append("%s: %s (life +%d vs control +%d, mana +%d vs +%d, hpregen %s->%s, manarecoverybonus %s->%s)" % (
             code, "ok" if good else "WRONG", pl >> 8, control[0] >> 8, pm >> 8, control[1] >> 8, h0, h1, r0, r1))
         if not good:
@@ -2448,9 +2461,8 @@ def check_potions():
         "`use` consumed each potion; in the 4 s after it hpregen (stat 74) rose and life rose above a control wait: " + "; ".join(rows[True]),
         [shot], log)
     add(n2, "PASS" if not bad[False] else "FAIL",
-        "`use` consumed each potion; the potion should set manarecoverybonus (stat 27, calc1 = 100 / 200 per cent) and mana rise above "
-        "a control wait. OPEN: the stat ends at 0 / 1 (setting 200 by hand triples the recovery), so the potion's calc1 value is "
-        "lost: " + "; ".join(rows[False]), [shot], log)
+        "`use` consumed each potion; the potion sets manarecoverybonus (stat 27) to calc1 = 100 (mp1) / 200 (mp5) per cent and mana "
+        "rises above a control wait: " + "; ".join(rows[False]), [shot], log)
 
 
 def check_deathcrash():
