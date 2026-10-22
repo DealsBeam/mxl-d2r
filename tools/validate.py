@@ -437,7 +437,7 @@ class Validator:
                     continue
                 for i, r in enumerate(rows):
                     v = r[ci].strip() if ci < len(r) else ""
-                    name = v.strip('"').split(",", 1)[0]
+                    name = v.strip('"').split(",", 1)[0].removeprefix(strings_ns.PREFIX)  # a unique / set item: medianxl:<key>
                     if name and name not in known and not AUTO_TC.match(name):
                         self.add("error", "treasureclassex", c, "not an item, item type, treasure class, unique or set item", r[0], v)
                     elif pos.get(name, -1) > i:
