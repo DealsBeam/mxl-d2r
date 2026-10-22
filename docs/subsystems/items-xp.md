@@ -23,7 +23,7 @@ count helpers; the item modules are D2Game's code compiled into Sigma with a han
   slots instead of 7, **Jewel padding** of the rune list), the **kill-experience penalty**, the **party split of kill
   experience**, a handful of **item event functions** (ids 11, 12, 32, 33, 34 and the monster immunity checks of 15/16)
   and the **item generation** details (ethereal roll, socket roll, item level 100+).
-- **Shipped here** (plugin `items_ext.cpp`, `tools/items_data.py`, off words `runewords` and `xp`, no version bump):
+- **Shipped here** (plugin `items_ext.cpp`, `tools/items_data.py`, off words `runewords`, `xp` and `partyxp`, no version bump):
   runeword properties 8-13 (197 of 237 runewords had lost properties), Jewel padding in the runeword matcher, and the
   kill-experience penalty. Everything else is classified in the tables and left for the next lane with a spec.
 - **Nothing in these modules gates the ubers or the endgame areas** (that was ubers-events.md). The generator keeps
@@ -85,10 +85,10 @@ the dispatcher is reached from the property function `0x3d4620`). Only 1 + 1 sta
 
 | Address | What it does | Bucket | Status | Content |
 |---|---|---|---|---|
-| 0x7e0f0 | byte 0 of the qualities row for a quality below 10 (`work/sigma/qualities.txt`, 5-byte rows [0] used here, [1] 1 for qualities 1-3 = runewords allowed (section 3), [2] 25 for most qualities, [4] 1 from quality 5) | a | open | |
+| 0x7e0f0 | byte 0 of the qualities row for a quality below 10 (`work/sigma/qualities.txt`, 5-byte rows: `Automagics` [0] used here, `Runeword` [1] 1 for qualities 1-3 = runewords allowed (section 3), `EthChance` [2] 25 for most qualities, `MaxSock` [4] 1 from quality 5) | a | open | |
 | 0x7e120 | Median's ethereal roll after generation: items with durability (`0x7fff0`: base flags, stat 0x49 non-zero, not indestructible stat 0x98) of item type 45 or 50: if a 1000-sided die passes, or the item is already ethereal, or the generator flag 4 is set, `0x7fdd0` makes it ethereal (flag `0x400000` set, `0x100000` cleared, +25 percent on type 45's five stats or on stat 0x1f) and durability and maximum durability become 75 percent (minimum 1). **Confirmed by the disassembly**: the die is `rand(1000) <= word [qualities row + 2]` (25 for qualities 1-4, 6, 7, 0 for 5, 8, 9: about 2.6 percent), the +25 is `value + value * 25 / 100`, the tail call `0x7fd70` is the durability step; the call is only reached for item level 100+ (it replaces 1.13c's call inside that branch). D2R's own branch (`0x442d60`) lets 5 in 100 through to `0x3d3510` (+50 percent, then durability / 2 + 1) | c | **shipped** (`ethereal`) | ethereal drops |
 | 0x7e3b0 | thunk for 7e120, patched over the call at D2Game `0x10c88`: 1.13c's own branch of the generator `0x10a20` for item level above 99. read | | | |
-| 0x7e240 | Median's version of the call 1.13c makes for quality 1-3 items at D2Game `0x106b0` / `0x10ca9` (old target `0x6fc2ec90`): a socket roll. **Read (disassembled; the decompiler had mixed up the registers)**: base flag `+0x137` (can have sockets), quality row byte 4 (`FixedRoll`) clear, generator flag 8 clear, then `rand() % 7` is the count: none for a remainder of 0 (1 in 7), else the remainder 1-6 through `0x800b0` (stat 0xc2, clipped to what the item holds). For `FixedRoll` qualities (5-9) the same function gives 6 sockets (clipped), unless a unique's row flag `0x10` is set; the 1.13c call sites only reach it for qualities 1-3, so that branch is dead in practice | c | **shipped** (`sockets`) | sockets on normal items |
+| 0x7e240 | Median's version of the call 1.13c makes for quality 1-3 items at D2Game `0x106b0` / `0x10ca9` (old target `0x6fc2ec90`): a socket roll. **Read (disassembled; the decompiler had mixed up the registers)**: base flag `+0x137` (can have sockets), quality row byte 4 (`MaxSock`) clear, generator flag 8 clear, then `rand() % 7` is the count: none for a remainder of 0 (1 in 7), else the remainder 1-6 through `0x800b0` (stat 0xc2, clipped to what the item holds). For `MaxSock` qualities (5-9) the same function gives 6 sockets (clipped), unless a unique's row flag `0x10` is set; the 1.13c call sites only reach it for qualities 1-3, so that branch is dead in practice | c | **shipped** (`sockets`) | sockets on normal items |
 | 0x7e3c0, 0x7e3e0 | pick one of two 1.13c functions by the flags `0x1000000` / `0x10000000` (thunks to D2Game) | | | |
 | 0x7e400 | qualities row accessor (table at +0x68, 5-byte rows) | a | n/a | |
 | 0x7e450, 0x7e830 | read / set-clear a mask in the item data flags (+0x18) | | | |
@@ -221,42 +221,71 @@ Off words `classlock`, `ethereal`, `sockets`, `dyes`. All four were read in the 
   Median's `7e6d0` checks stat 183 first, so the hook reads stat 368 first: 1..21 gives palette index 0..20 and the same
   composition as D2R's. The stat is 5 bits signed in the data (Send Bits 5, Save Bits 5), so 16..21 may arrive as -16..-11
   at the client: `DyeIndex` adds 32 to negatives. If the game still shows nothing for 16..21 widen Send Bits to 6.
-- **Item events 11 / 12 / 32 / 33 / 34 and the immunity of 15 / 16: not located.** The itemstatcost loader `0x31e310`
-  puts `itemevent1` / `itemevent2` at stat record `+0x44` / `+0x46` and `itemeventfunc1` / `2` at `+0x48` / `+0x4a` (int16).
-  The dispatcher that reads them was not found: no pointer table of 32+ D2Game functions with the gaps of ids 0-5 / 22-27,
-  and the candidates `0x4734f0` (equip checks), `0x461530` (missile creation), `0x50a050` are other code. Next step: find the
-  readers of the stat record `+0x48` in the stat-list code (`0x2f0000-0x300000`) and `0x3d4000-0x3d5000`, or break on an item
-  with id 6 in game. Monster stat 373 (Median `0xbd`, immune to open wounds and crushing blow) is a data stat on the monster.
-  Second pass (lane caps-events, 2026-10-22), all negative:
-  - Median's side is clear: the 1.13c registration function (D2Sigma `0xbb9f0`, the D2UnitFind code) fills a per-item event
-    list and looks the handler up in the table `0x101d94e8 + 4 * func` with the three function ids at `item mod record + 0x5c`
-    and the event ids three words before; the handlers are then called by the generic unit-event system. D2R needs the
-    analogue: a table lookup by function id or a switch.
-  - Byte scans of the main image (`.text` 0x1000-0x2300000) for word reads/compares of record offsets `+0x44 / +0x46 / +0x48 /
-    +0x4a` (movzx / movsx / mov ax / cmp word) find 6 / 31 / 29 / 6 sites and no function that reads both an event and a
-    function word except: `0x461628`/`0x461642` (missile record, `MissMode.cpp`), `0x991905` (a record copy that moves the
-    words to `+0x92 / +0x94 / +0x96` of another struct; its readers `0x5d81b7` and `0x984105` are monster AI distances),
-    `0x126fa81` (client record copy by index) and `0x2329e6` (unit struct) - none is the dispatcher. `FieldDispatch` finds no
-    "read word, call through table" site for `+0x48` / `+0x4a` either.
-  - The assert strings `eEventType < snEventFunctions` / `scpfnEventFunctions[eEventType]` at `0x1d19328` / `0x1d19368` belong
-    to `PlrModes.cpp` (player mode events, functions `0x42ae90` / `0x42aef0`), not to item events.
-  - The 8-byte-pointer table scan (ids 6-10, 13-21, 28-31 non-null, 0-5 and 22-27 null) matches nothing in `.data` / `.rdata`;
-    a looser scan (6 zero slots) gives 30 dense false positives. D2RLoader's own `D2RCore.dll` reads none of the words in
-    its `.text` either (`movzx` of `+0x4a`: none; `+0x48`: five unrelated copies).
-  - In-game test (lane harness-cast, 2026-10-22; `py -3 tools/game_checks.py equipevents`, docs/testing.md "Player actions"):
-    `h equip 115 397=50 396=40 rhand` wears an item with both thorns stats (the equip applies the item's stats: a strength ring
-    changes the owner's stat 0), monsters hit the player, and `stat player 397` / `396` stay 0 while the item itself holds
-    them. D2R does not carry the event stats to the owner's list, so the events are not registered at equip. Next: a write watch
-    on the owner's stat list during `0x471500`, or compare both stat lists (`0x2f5b80`).
-  - Earlier note, before the harness had an equip verb: not yet tried: an in-game test. The data already carries Median's stats 396 (`attacker_takes_cold_damage`, func 12) and 397
-    (`attacker_takes_fire_damage`, func 11, also on `damagedbymissile`) and 265 (func 33) / 376 (func 34); equip an item that
-    rolls 397 (`h equip` does this now) and let a monster hit the character. If
-    D2R ignores unknown function ids nothing happens, and the dispatcher must be found by tracing the item's equip (a write
-    watch on the stat-list event array) rather than by scanning.
+- **Item events 11 / 12 / 32 / 33 / 34 and the immunity of 15 / 16: located and ported (lane p4ev, 2026-10-22;
+  `plugin/src/item_events.cpp`, `item_events_logic.h`, off word `itemevents`).** The registry is **not in the game's main image
+  but in D2RLoader's `D2RCore.dll`**, which is why every byte scan of the exe found nothing. Details in section 5b.
+  The earlier searches (byte scans for the record words `+0x44 / +0x46 / +0x48 / +0x4a`, the 8-byte pointer table scan, the
+  `PlrModes.cpp` asserts) are void; and the earlier in-game test was wrong: a weapon `115` in `rhand` does **not** apply
+  its stats to the owner in the harness (`stat player 397` stayed 0 for that reason), while a ring does (`equip rin 397=50
+  lring`). Use a ring.
   Monster stat 373 (Median `0xbd`, immune to open wounds and crushing blow) is a data stat on the monster; it is the same
   stat as Median 189 of the absorb credit (combat-stats.md section 2.4).
-- **Party experience (0x5e830): not done, multiplayer only.** Solo play is identical; Median pays every member in range the
-  full award, 1.13c splits by weights. The share loop in the kill function `0x44ece0` was not read.
+- **Party experience (0x5e830): shipped (off word `partyxp`), multiplayer only, not run in game with two players.** Solo
+  play is identical. Median overwrites the 1.13c share function `0xde8f0` (patch table `0xde8f0` = `E9` to thunk `0x5e910`)
+  and pays every collected member the monster's full experience through the per-member award (`0xdc030`: cap, level gap
+  penalty, ExpRatio, stat 0x55; hirelings capped) and the add (`0xde6d0`), with no division and no weighting; it also
+  widens the collect range from `0x1900` to `0x7d00` squared units (80 to about 179; patch table `0xdafcb`).
+  D2R's version: the kill function is `0x44a3b0` (not `0x44ece0`, which is the per-member award `(game, unit, level,
+  monster level, xp)`); it collects with the party iterator `0x506f90(game, killer, callback, ctx)` and callback `0x44fd50`
+  into a 0x70-byte stack context (monster `+0`, units[8] `+8`, levels[8] `+0x48`, count `+0x68`, level sum `+0x6c`) and
+  splits inline at `0x44a62e..0x44a6d7`: pool `xp + (n-1) * xp * 0x59 / 256`, member share `level * pool / sum`
+  (n = 1: the killer gets the full xp). `0x44a3b0` tests `count <= 0` after the iterator (`0x44a5e2`) and then skips the
+  split. The port hooks `0x506f90` (15 stolen bytes, whole instructions): after the original it checks the callback is
+  `0x44fd50`, pays each collected unit `0x44ece0(game, unit, level, monster level, base stat 13 of the monster)` then
+  `0x44f2e0(game, unit, level, amount)`, and sets the count to 0. The range immediate at `0x44fe7b` (`cmp ebx,0x1900`) is
+  patched to `0x7d00` (expected bytes checked). The collect callback also skips members with flag `+0x124 & 0x10000`
+  where 1.13c tested `+0xc6 & 1`; not compared. D2R's table of the vanilla numbers (xp 1000, two level-80 players: pool
+  1347, 673 each; three: 565 each; levels 60 and 90: 538 / 808) is in `items_ext_test.cpp`.
+
+## 5b. Item events on D2R (lane p4ev, 2026-10-22)
+
+How it works (read in the game with the harness verb `evtrace`, and in `D2RCore.dll` dumped from memory):
+
+- **Registration.** Equipping an item copies its stats to the owner and, for every stat whose itemstatcost record has an
+  event word (`+0x44` / `+0x46`) and a function word (`+0x48` / `+0x4a`; array `*(exe + 0x2a9a580 + 16) + 0x1258`, stride
+  `0x144`), calls D2RLoader's **register** thunk. The thunks sit at `exe + 0x3e2a400` (register, unregister, has, clear,
+  dispatch, registerFn: 10-byte `jmp [rip+x]` into `D2RCore.dll`, manually mapped, no MZ header; its base is the
+  `AllocationBase` of the thunk target). The unit's list head is `unit + 0xe0`; a node is `0x40` bytes: `+8` =
+  `(stat << 32) | layer`, `+0x28` the handler, `+0x38` next. `evtrace list [player|m<id>]` prints it.
+- **Dispatch.** The game raises an event with `0x44d570(game, event, unitA, unitB, arg5)`; the core walks `unitA`'s list and
+  calls the handler of every node whose event matches: `handler(game, event, unitA, unitB, arg5, code, a7, a8, a9)`.
+  `unitA` is the event's owner (the victim for "attacked", the attacker for "dealt"). Events seen: 2 / 3 (thorns, stat 396 /
+  397), 5 / 6 (open wounds / crushing blow, stats 135 / 136), 9 (kill: stats 265, 376).
+- **Handler table.** `D2RCore.dll + 0x630260`, 8-byte pointers, slot = function id (the id from itemeventfunc). The shipped
+  table gives: 10 / 11 / 12 (and 32) native handlers that do what Median's do (a damage struct with flags `0x4021` and
+  the amount in the fire / lightning / magic / cold field, skipped by monsters resisting 100 %): **thorns 397 = 50 takes
+  exactly 50 life points off the attacker per event** (check `itemevents`). 15 / 16 (open wounds, crushing blow) are
+  native too. 33 / 34 are *forwarders* to the exe's table (`exe + 0x238e5c0`, entry 33 / 34) that return 0 at once for any stat whose
+  high dword is not 0: they never did anything. The exe's own table has the working bodies under other ids:
+  **28 (`0x583a70`) is Median's 33** (flat life: heals `min(stat * 256, missing life)` and clears state `0x97`) and **20
+  (`0x583b30`, "OnHitOrAttack") is Median's 34** (chance to cast skill `layer >> 6` at level `layer & 63`, at the target or,
+  for skills with the self flag, on the owner). Both take the code as `(stat << 16) | layer`, the core calls with
+  `(stat << 32) | layer` (`ToD2rCode`).
+- **What the port does** (`item_events.cpp`, entry bytes checked against the shipped `D2RCore.dll`, slots written with
+  `VirtualProtect`): table slots 33 and 34 become wrappers that translate the code and call the exe's 28 and 20; slots 15 and
+  16 become gates that return 0 when the attacker or the victim is a monster with stat 373 (Median's wrappers `0x7de40` /
+  `0x7db40` test the unit they are given; the intent, "immune to open wounds and crushing blow", is the monster that is hit, so
+  both ends are tested) and otherwise call D2RCore's handler. 10 / 11 / 12 are left alone. `mxl` prints `item events on: ...`.
+- **In game** (`py -3 tools/game_checks.py all itemevents`, slot 3, plugin 0.50.0): ring `397=50` -> the monster loses 50 points
+  (12800 raw) on event 3; ring `265=50` -> +50 life points on a kill (event 9); ring `376:2309=100` (Fire Bolt 5 at 100 %) -> a
+  class-58 missile appears, **the owner does not need to know the skill**; ring `135=100 136=100` -> a plain monster loses life
+  on events 5 / 6, a monster with `stat m<id> 373 0 set 1` loses none.
+- **Not ported / open**, listed in docs/unported.md: function 32 (no stat of the mod's itemstatcost uses it); Median 34's
+  post-handler for skills with flag `0x40`; Fire Ball (47) as the cast skill returned success with the synthetic kill event but no
+  missile was seen (Fire Bolt 36 works; Median 47 may need a level or target the harness lacks).
+- **Harness.** `evtrace on|off|clear|dump` (thunk-slot logger), `list`, `rec <stat>` (the record's event words), `peek`, `watch`
+  (debug-register watch), `fire <event> player|m<id> player|m<id>|none` (calls `0x44d570`; the harness's `kill` does not raise the
+  kill event), `calls` (counters of the replaced handlers 33 / 34 and their last results).
 
 ## 6. D2R addresses found here
 
@@ -294,8 +323,8 @@ references by raw bytes, which finds callers in code Ghidra did not disassemble)
 | Runeword properties 8-13 | c + data | shipped: `items_data.py`, `items_ext.cpp` |
 | Runeword Jewel padding | c | shipped |
 | Kill experience penalty | c | shipped |
-| Party experience split | c | open (multiplayer) |
-| Item events 11/12/32/33/34, immunity of 15/16 | c | open (dispatcher not found, section 5) |
+| Party experience split | c | shipped (`partyxp`, hook `0x506f90` + range `0x44fe7b`); two-player run open |
+| Item events 11/12/32/33/34, immunity of 15/16 | c | shipped (`itemevents`: D2RCore handler table, section 5b); func 32 has no consumer |
 | Class lock stat 463 | c | shipped (`classlock`, hook `0x36bc50`) |
 | Ethereal / socket generation | c | shipped (`ethereal`, `sockets`; hooks `0x442d60`, `0x3d3510`, `0x441fc0`) |
 | Dye colour | d | shipped (`dyes`, hook `0x3710d0`; check in game) |
@@ -315,8 +344,8 @@ references by raw bytes, which finds callers in code Ghidra did not disassemble)
 
 ## 10. Uncertainties
 
-- The compiled item event ids (the base 0x101d94e8 comes from three matching positions, the behaviour of 11, 12, 32 in D2R
-  is unknown).
+- The item event ids: 10 / 11 / 12 are D2RCore's own handlers, verified for 11 (thorns 397) only; 12 (cold, 396) and 10 are
+  expected to behave the same (same code path, different damage field).
 - The `0x7e240` socket arithmetic and `0x7e120` die are read from decompiler output with register arguments; treat as
   inferred.
 - Whether D2R's inline hook relocates the `jg rel32` that follows the first 9 bytes of `0x44fef0` (the SDK source is

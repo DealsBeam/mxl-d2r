@@ -167,16 +167,17 @@ def _owner_pid(txt):
 
 
 def acquire(n, owner, pid=None):
-    """Take the lock of slot N. Returns (ok, message). Stale locks (owner pid gone) are replaced."""
+    """Take the lock of slot N. Returns (ok, message). Stale locks (owner pid gone) are replaced. pid=0 marks a manual
+    lock (command line `lock N`): it is never treated as stale and lasts until `unlock N`."""
     os.makedirs(RUNS, exist_ok=True)
-    pid = pid or os.getpid()
+    pid = os.getpid() if pid is None else pid
     info = lock_info(n)
     if info:
         path, txt = info
         op = _owner_pid(txt)
         if txt and txt.split()[0] == owner:
             return True, f"lock {path} already ours"
-        if op is not None and not pid_alive(op):
+        if op is not None and op != 0 and not pid_alive(op):  # pid 0: manual lock, never stale
             for p in lock_paths(n):
                 shutil.rmtree(p, ignore_errors=True)
         else:
@@ -270,7 +271,8 @@ def main():
         for n in [int(x) for x in a[1:]] or list(DEFAULTS):
             print(setup(n))
     elif c == "lock":
-        ok, msg = acquire(int(a[1]), a[2] if len(a) > 2 else "manual")
+        # pid 0: this command exits right away, so its own pid would make the lock look stale at once
+        ok, msg = acquire(int(a[1]), a[2] if len(a) > 2 else "manual", pid=0)
         print(msg)
         return 0 if ok else 1
     elif c == "unlock":

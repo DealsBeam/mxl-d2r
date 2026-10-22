@@ -46,6 +46,87 @@ inline void BuildChat(uint8_t* rec, uint8_t type, uint8_t colour, uint32_t speak
 	}
 }
 
+// Plugin messages: structured data from the server part of the plugin to the client part, carried in a chat packet 0x26 of
+// type 0 (which D2R shows nowhere, and which does not freeze an NPC's speech like a visible line does). The text is the
+// marker, one kind letter and the payload as hex digits; the client's packet-table entry for 0x26 (client_messages.cpp)
+// takes the packets that start with the marker and hands the rest to the registered handler, every other chat packet goes to
+// D2R's own reader.
+constexpr uint8_t TypeHidden = 0;
+constexpr char PluginMarker[] = "\x01MXL";  // 4 characters
+constexpr size_t PluginMarkerSize = 4;
+constexpr size_t PluginPayloadMax = (ChatTextMax - PluginMarkerSize - 1) / 2;  // 125 bytes
+
+// Fills `rec` as BuildChat does with a hidden plugin message. False when the payload is too long.
+inline auto BuildPluginMessage(uint8_t* rec, uint32_t speakerId, char kind, const uint8_t* data, size_t n) noexcept -> bool {
+	if (n > PluginPayloadMax || (n != 0 && data == nullptr)) {
+		return false;
+	}
+	char text[ChatTextMax + 1];
+	std::memcpy(text, PluginMarker, PluginMarkerSize);
+	text[PluginMarkerSize] = kind;
+	static constexpr char Hex[] = "0123456789abcdef";
+	for (size_t i = 0; i < n; ++i) {
+		text[PluginMarkerSize + 1 + i * 2] = Hex[data[i] >> 4];
+		text[PluginMarkerSize + 2 + i * 2] = Hex[data[i] & 15];
+	}
+	text[PluginMarkerSize + 1 + n * 2] = '\0';
+	BuildChat(rec, TypeHidden, 0, speakerId, text);
+	return true;
+}
+
+// Reads a chat text: true when it is a plugin message; `kind` and the payload bytes (at most `cap`) are filled, `n` is the
+// payload length. A malformed payload (odd length, a non-hex digit, more than `cap` bytes) is not a message.
+inline auto ParsePluginMessage(const char* text, char* kind, uint8_t* out, size_t cap, size_t* n) noexcept -> bool {
+	if (text == nullptr || std::memcmp(text, PluginMarker, PluginMarkerSize) != 0 || text[PluginMarkerSize] == '\0') {
+		return false;
+	}
+	*kind = text[PluginMarkerSize];
+	const char* hex = text + PluginMarkerSize + 1;
+	size_t len = 0;
+	auto digit = [](char c) -> int {
+		return c >= '0' && c <= '9' ? c - '0' : (c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1);
+	};
+	while (hex[len] != '\0') {
+		++len;
+	}
+	if (len % 2 != 0 || len / 2 > cap) {
+		return false;
+	}
+	for (size_t i = 0; i < len / 2; ++i) {
+		const int hi = digit(hex[i * 2]);
+		const int lo = digit(hex[i * 2 + 1]);
+		if (hi < 0 || lo < 0) {
+			return false;
+		}
+		out[i] = static_cast<uint8_t>(hi * 16 + lo);
+	}
+	*n = len / 2;
+	return true;
+}
+
+// Kinds in use.
+constexpr char PluginKindNpcPage = 'N';  // the server answers a click on an NPC page line: which entries are open (npc_actions)
+constexpr char PluginKindTimer = 'T';    // the dungeon clock of the level the player stands in (dungeon_lockout)
+
+// Little endian field writers / readers for the payloads.
+inline void Put16(uint8_t* p, uint16_t v) noexcept { p[0] = static_cast<uint8_t>(v); p[1] = static_cast<uint8_t>(v >> 8); }
+inline void Put32(uint8_t* p, uint32_t v) noexcept { Put16(p, static_cast<uint16_t>(v)); Put16(p + 2, static_cast<uint16_t>(v >> 16)); }
+inline auto Get16(const uint8_t* p) noexcept -> uint16_t { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
+inline auto Get32(const uint8_t* p) noexcept -> uint32_t { return Get16(p) | (static_cast<uint32_t>(Get16(p + 2)) << 16); }
+
+// 'T' payload (8 bytes): u16 level, u16 0, u32 milliseconds left on that level's clock (0 = no running clock).
+constexpr size_t TimerPayloadSize = 8;
+inline void BuildTimerPayload(uint8_t* p, uint16_t level, uint32_t remainingMs) noexcept {
+	Put16(p, level);
+	Put16(p + 2, 0);
+	Put32(p + 4, remainingMs);
+}
+
+// Whole seconds still shown for `ms` left (rounded up, like a countdown that reads 00:01 until it ends).
+constexpr auto SecondsLeft(uint64_t ms) noexcept -> uint32_t {
+	return static_cast<uint32_t>((ms + 999) / 1000);
+}
+
 // A line sent while an NPC is speaking stops the speech: a chat line of type 1, 4 or 5 that reaches the client during an
 // NPC's speech (the scrolling quest text) freezes it, the speech never ends and the NPC menu never opens (harness
 // experiment 2026-10-22, Akara's Cain speech; type 0, which shows nothing, does not). The client opens the menu when the
@@ -81,7 +162,9 @@ inline void ClosingLine(uint32_t seconds, char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize, "Closing in: %s", clock);
 }
 
-// Quest reward notice (D2Sigma client messages 0x5f-0x61, text not found in the D2Sigma tables: neutral wording).
+// Quest reward notice (D2Sigma client messages 0x5f-0x61): the client text is not a string of the D2Sigma tables (searched
+// the client handler and every string table for the 0x5f-0x61 path: nothing fits; the pending message 0x61 of
+// D2Game 0xb15d0 may open an item popup, whose only text is the item's name), so the wording stays neutral.
 // `count` > 1 prefixes the number.
 inline void RewardLine(const char* what, int count, char* out, size_t outSize) noexcept {
 	if (count > 1) {
@@ -91,8 +174,15 @@ inline void RewardLine(const char* what, int count, char* out, size_t outSize) n
 	}
 }
 
-// The goblin notice (D2Sigma packet 0x5a type 0x15, no text in the client): neutral wording.
-inline constexpr const char* GoblinSighted = "A treasure goblin has been sighted nearby!";
+// The goblin notice. Median's client keeps the goblin's unit id from packet 0x5a type 0x15 (handler 0x91a50) and its push
+// notification code (D2Notifications.cpp 0x90f00) shows the unit's name followed by string 12320 StrPushNotifGoblinAppear,
+// " appears!" (patchstring.tbl), so the line is "<monster name> appears!". The server part has no client-side unit name, it
+// writes the generic goblin name (the variants' own names are monstats strings the client resolves).
+inline constexpr const char* GoblinName = "Treasure Goblin";
+inline constexpr const char* GoblinAppearsSuffix = " appears!";
+inline void GoblinAppears(char* out, size_t outSize) noexcept {
+	std::snprintf(out, outSize, "%s%s", GoblinName, GoblinAppearsSuffix);
+}
 
 // The lines of an entry refusal for requirements, in the order Median's popup shows them: the level, the difficulty, the
 // class. Returns the number of lines written (0..3) into `lines` (each `lineSize` bytes). Only the failed requirements

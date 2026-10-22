@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -465,7 +465,7 @@ def check_mxl():
         return add("mxl console command", "BLOCKED", "not in a game")
     txt = mxl_text()
     wanted = ["states fix", "level types", "calc codes", "skill functions", "item spells", "missile hits", "mana costs",
-              "cube conditions", "craft flags", "act 1 quests", "dungeon lockout", "goblins on",
+              "cube conditions", "craft flags", "act 1 quests", "dungeon lockout", "goblins on", "item events on",
               "npc actions on", "skill tree on"]
     missing = [w for w in wanted if w not in txt]
     add("`mxl` console command output", "PASS" if not missing else "FAIL",
@@ -559,6 +559,50 @@ def check_cain():
     add(name, "PASS" if (menu and not full) else "FAIL",
         "menu opened by `h interact 265`: %s; no `menu record is full` log line: %s. Popup text must be read from the "
         "screenshot (cain_menu.png)" % (bool(menu), not full), [s], (menu or []) + lines)
+    close_menu()
+
+
+def check_cain_submenu():
+    """Median's Cain page: a click on 'crafting materials' opens the submenu of the materials whose requirement holds
+    (the server's plugin message 'N' makes the client rebuild the list; plugin/src/npc_actions.cpp)."""
+    name = "Cain crafting materials: the click opens a submenu with the open entries"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    H("stat player 7 set 20000000")
+    H("stat player 6 set 20000000")
+    H("quest 4 0 set")  # Search for Cain done: the cube entry's requirement (the page needs one open entry)
+    H("remove box 10")  # the entry shows only while the player lacks the cube
+    menu = npc_menu(265)
+    if not menu:
+        return add(name, "FAIL", "Cain's menu did not open")
+    # the menu flag is set when the talk starts; the client builds the list (and the plugin adds its line) when the speech ends (a first talk takes up to ~30 s)
+    t0 = time.time()
+    while time.time() - t0 < 240 and not any("handler=plugin" in x for x in menu):
+        time.sleep(1)
+        ok0, again = g.hcmd("menu list", 5)
+        menu = again if ok0 else menu
+    plugin_idx = [int(re.search(r"line (\d+)", x).group(1)) for x in menu if "handler=plugin" in x]
+    if not plugin_idx:
+        return add(name, "FAIL", "no plugin line in Cain's menu after the speech: %s" % menu, [sh("cain_submenu")], menu)
+    before = len([l for l in menu if "line " in l])
+    shot0 = sh("cain_menu_page")
+    ok, l = H("menu %d" % plugin_idx[0])
+    time.sleep(2.5)
+    ok2, after = g.hcmd("menu list", 5)
+    s = sh("cain_submenu")
+    n_after = len([x for x in (after or []) if "line " in x])
+    same = after == menu
+    if ok2 and n_after >= 1 and not same:
+        ok3, l3 = H("menu 0")  # the first entry: the Horadric Cube
+        time.sleep(2)
+        got = len(items(hstate(), "box"))
+        add(name + " (entry gives the item)", "PASS" if got >= 1 else "FAIL",
+            "`menu 0` in the submenu: %s; Horadric Cube (box) items now: %d" % (ok3, got), [sh("cain_entry")], l3 or [])
+    add(name, "PASS" if (ok and ok2 and n_after >= 1 and not same) else "FAIL",
+        "menu lines before %d; click on the plugin line: %s; menu open after: %s with %d lines (the list changed: %s). Entry texts must be "
+        "read from the screenshots (cain_menu_page.png: Talk / crafting materials, cain_submenu.png: the entries)" % (before, ok, ok2, n_after, not same),
+        [shot0, s], (menu or []) + (l or []) + (after or []))
     close_menu()
 
 
@@ -1079,37 +1123,92 @@ def check_casts():
     add(nm, "PASS" if good else "FAIL", "; ".join(notes), shots, log)
 
 
-def check_equip_events():
-    nm = "Item events (stat 396 / 397 thorns): equip with the harness and take a monster hit (documents the finding, see items-xp.md 5)"
+def spawn_id(cls=18):
+    """Spawns a monster and returns its unit id (the `spawned class N id=M` line)."""
+    ok, lines = H("spawn %d 1" % cls)
+    m = re.search(r"id=(\d+)", " ".join(lines))
+    return int(m.group(1)) if ok and m else None
+
+
+def check_item_events():
+    nm = "Item events (D2RCore registry): thorns 397, life on kill 265, cast on kill 376, open wounds / crushing blow skip immune monsters"
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
     goto(2)
+    close_menu()
     kill_all_near()
-    H("unequip rhand")
-    ok1, l1 = H("equip 115 397=50 rhand")
-    st = hstate()
-    weapon = [i for i in st["items"] if str(i.get("code")) == "115" and i.get("body") == 4]
-    # a plain stat proves the equip applies item stats to the player: strength (stat 0) +77 on a ring
     H("unequip lring")
-    ok3, l3 = H("equip rin 0=77 lring")
-    ok4, s1 = H("stat player 0")
+    log, notes = [], []
+    H("stat player 6 0 set 700000")  # no god mode: it refills life, which hides the life-on-kill gain; the checks take a second
+
+    def life_of(mid):
+        ok, l = H("stat m%d 6" % mid)
+        log.extend(l)
+        return stat_of(l)
+
+    # thorns: stat 397 (func 11, events 2 / 3): 50 fire damage is taken off the monster per event (life is stat 6, 1/256 points)
+    ok, l = H("equip rin 397=50 lring")
+    mid = spawn_id()
+    log += l
+    if mid is None:
+        return add(nm, "BLOCKED", "no monster could be spawned")
+    a = life_of(mid)
+    H("evtrace fire 3 player m%d" % mid)
+    b = life_of(mid)
+    thorns = ok and a is not None and b is not None and a - b == 50 * 256
+    notes.append("thorns 50: monster life %s -> %s (%s)" % (a, b, "-50 points" if thorns else "WRONG"))
+    H("kill nearest")
+    # life on kill: stat 265 = 50 (D2RCore function 33 -> D2R function 28), +50 points to a character at 100 life
+    # (the character's own gear may heal on a kill too: the gain is measured against a kill without the ring)
     H("unequip lring")
-    ok2, s0 = H("stat player 0")
-    str0, str1 = stat_of(s0), stat_of(s1)
-    equips = ok1 and bool(weapon) and ok3 and str1 == (str0 or 0) + 77
-    # the event itself: monsters melee the player while the 397 weapon is worn; the monster's life is not readable yet
-    H("spawn 18 2")
-    time.sleep(12)
-    st2 = hstate()
-    hit = st2["player"].get("life", 0) < st["player"].get("life", 0)
-    ok5, s397 = H("stat player 397")
-    note = ("equip -> worn item body=%s, strength %s -> %s with a +77 ring; player life %s -> %s (monsters hit: %s); player stat 397 reads %s "
-            "(the item event stat is not aggregated into a player stat; the thorns damage dealt to the monster cannot be read yet, "
-            "see items-xp.md section 5)" % (weapon[0].get("body") if weapon else None, str0, str1, st["player"].get("life"),
-                                           st2["player"].get("life"), hit, stat_of(s397)))
-    add(nm, "PASS" if equips and hit else "FAIL", note, [sh("equip_events")], l1 + l3)
+    mid = spawn_id()
+    H("stat player 6 0 set 25600")
+    H("evtrace fire 9 player m%d" % mid)
+    base = stat_of(H("stat player 6")[1])
+    ok, l = H("equip rin 265=50 lring")
+    H("stat player 6 0 set 25600")
+    ok2, l2 = H("evtrace fire 9 player m%d" % mid)
+    life = stat_of(H("stat player 6")[1])
+    heal = ok and ok2 and base is not None and life is not None and 50 * 256 <= life - base < 50 * 256 + 2000  # plus a little regeneration
+    notes.append("life on kill 50: player life 25600 -> %s without the ring, %s with it (%s)" % (base, life, "+50 points" if heal else "WRONG"))
+    H("kill nearest")
+    # cast on kill: stat 376 layer 36 * 64 + 5 (Fire Bolt level 5, 100 %): a missile (class 58) appears, the skill need not be known
+    H("unequip lring")
+    ok, l = H("equip rin 376:2309=100 lring")
+    mid = spawn_id()
+    time.sleep(2)  # a monster that was just spawned is not a valid target yet
+    H("missiles reset")
+    life0 = life_of(mid)
+    H("evtrace fire 9 player m%d" % mid)
+    ok2, l2 = H("missiles")
+    time.sleep(1.5)
+    life1 = life_of(mid)
+    log += l2 + H("evtrace calls")[1]
+    # the Fire Bolt is a missile (class 58) that may be gone again before `missiles` looks; it burns the monster
+    cast = ok and (any("class 58" in x for x in l2) or (life0 is not None and life1 is not None and life1 < life0))
+    notes.append("cast on kill (Fire Bolt 5): %s; monster life %s -> %s" % (" ".join(x for x in l2 if "missiles live" in x)[:60] or "-", life0, life1))
+    H("kill nearest")
+    # open wounds (135) / crushing blow (136): lose life on a hit; a monster with stat 373 (Median 189) skips them
+    H("unequip lring")
+    ok, l = H("equip rin 135=100 136=100 lring")
+    plain, immune = spawn_id(), spawn_id()
+    H("stat m%d 373 0 set 1" % immune)
+    res = {}
+    for who in (plain, immune):
+        a = life_of(who)
+        H("evtrace fire 5 player m%d" % who)
+        H("evtrace fire 6 player m%d" % who)
+        res[who] = (a, life_of(who))
+    wounds = ok and res[plain][1] < res[plain][0] and res[immune][1] == res[immune][0]
+    notes.append("open wounds / crushing blow: plain monster life %s -> %s, immune (373) %s -> %s" % (
+        res[plain][0], res[plain][1], res[immune][0], res[immune][1]))
+    H("unequip lring")
     kill_all_near()
-    H("unequip rhand")
+    H("stat player 6 0 set 2000000")  # the character is saved with its life: a dark orb is not taken for being in game on the next run
+    txt = mxl_text()
+    on = "item events on" in txt
+    notes.append("`mxl`: %s" % ("item events on" if on else "item events not on"))
+    add(nm, "PASS" if thorns and heal and cast and wounds and on else "FAIL", "; ".join(notes), [sh("item_events")], log)
 
 
 def god(on):
@@ -1154,11 +1253,579 @@ def check_median_ai():
     add(name, "PASS" if ok_all else "FAIL", "; ".join(notes), shots)
 
 
+# ------------------------------------------------------------------ the "verify" rows of docs/unported.md (lane verify-checks)
+# Deterministic where the engine allows it: the harness verbs hit / avoid / itemroll / colour / req / cstat (docs/testing.md)
+# call the game's own damage, avoid, item generator, colour and requirement functions on units set up with `stat`.
+
+def hv(cmd, verb=None, timeout=15):
+    """One harness line -> (ok, first output line starting with the verb, all lines)."""
+    ok, lines = H(cmd, timeout)
+    verb = verb or cmd.split()[0]
+    first = next((l for l in lines if l.startswith(verb + " ") or l.startswith(verb + "=")), lines[0] if lines else "")
+    return ok, first, lines
+
+
+def rd(ref, stat, layer=None):
+    """Value of a stat of player / merc / mon:<id> (the base the checks restore afterwards)."""
+    _, lines = H("stat %s %d%s" % (ref, stat, (" %d" % layer) if layer is not None else ""))
+    return stat_of(lines)
+
+
+def setstat(ref, stat, value, layer=None):
+    H("stat %s %d%s set %d" % (ref, stat, (" %d" % layer) if layer is not None else "", value))
+
+
+BIG_LIFE = 2097151  # 8191 life points in D2's 8.8 fixed point
+
+
+def hit(ref, elem, amount, attacker=None):
+    """One `hit`: the target at full life, returns (lost raw, absorbed raw, result flags) or None."""
+    setstat(ref, 7, BIG_LIFE)
+    setstat(ref, 6, BIG_LIFE)
+    for _ in range(8):  # result 0: the engine ignored the hit (just arrived in the area, hit recovery); try again
+        ok, line, _l = hv("hit %s %s %d%s" % (ref, elem, amount, (" " + attacker) if attacker else ""), "hit")
+        m = re.search(r"life=(-?\d+)->(-?\d+) lost=\S+ absorbed=(-?\d+) result=0x(\w+)", line)
+        if not ok or not m:
+            return None
+        if int(m.group(4), 16) != 0:
+            break
+        time.sleep(1)
+    return int(m.group(1)) - int(m.group(2)), int(m.group(3)), int(m.group(4), 16)
+
+
+def spawn_attacker(cls=1):
+    ok, lines = H("spawn %d" % cls)
+    m = re.search(r"id=(\d+)", " ".join(lines))
+    return ("mon:%s" % m.group(1)) if ok and m else None
+
+
+def fight_ready():
+    """Outside the town (damage and avoidance run there), no god mode, no leftovers of the earlier check."""
+    god(False)
+    st = hstate()
+    if st["player"].get("area") != 2:
+        goto(2)
+    close_menu()
+    kill_all_near()
+
+
+def have_merc():
+    _, lines = H("merc")
+    return any(l.startswith("merc id=") for l in lines)
+
+
+def ensure_merc():
+    """A hired mercenary (Kashya, act 1 Rogue) standing next to the player in the field."""
+    if not have_merc():
+        goto(1)
+        close_menu()
+        H("gold set 20000 0")
+        H("quest 2 0 set")  # Kashya hires once Blood Raven is dead (Median's gate is the quest alone)
+        for _ in range(2):
+            ok, _l = H("hire 150 0")
+            if ok:
+                break
+            H("spawn 150")  # the hirer is not loaded yet
+            time.sleep(1)
+    if not have_merc():
+        return False
+    if hstate()["player"].get("area") != 2:
+        goto(2)
+    for _ in range(30):  # the mercenary follows a few seconds after the player's area change
+        if H("stat merc 7")[0]:
+            setstat("merc", 7, BIG_LIFE)  # a spawned monster would kill a level-4 mercenary before the check starts
+            setstat("merc", 6, BIG_LIFE)
+            return True
+        time.sleep(1)
+    return False
+
+
+def merc_boost():
+    """Strength / dexterity / level high enough that the requirement check judges the gate under test only."""
+    setstat("merc", 0, 900)
+    setstat("merc", 2, 900)
+    setstat("merc", 12, 90)
+
+
+def check_resistcap():
+    name = "Max resistance cap 90: player and mercenary (fire / lightning / cold / magic, max-resist 0 / +10 / +50)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    fight_ready()  # first: it kills everything near, the mercenary too
+    if not ensure_merc():
+        return add(name, "BLOCKED", "no mercenary could be hired")
+    atk = spawn_attacker()
+    if atk is None:
+        return add(name, "BLOCKED", "no attacker monster")
+    elems = [("fire", 39, 40), ("ltng", 41, 42), ("cold", 43, 44), ("magic", 37, 38)]
+    cases = [(0, 0.25), (10, 0.15), (50, 0.10)]  # resist 200; the cap is 75 + max-resist, at most 90 (95 would be 5%)
+    amount, bad, rows = 100000, [], []
+    for ref, attacker in (("player", None), ("merc", atk)):
+        saved = {s: rd(ref, s) for e in elems for s in e[1:]}
+        for elem, res, mx in elems:
+            for add_max, want in cases:
+                setstat(ref, res, 200)
+                setstat(ref, mx, add_max)
+                r = hit(ref, elem, amount, attacker)
+                got = r[0] / amount if r else None
+                rows.append("%s %s max+%d: %s%%" % (ref, elem, add_max, "-" if got is None else "%.1f" % (got * 100)))
+                if got is None or abs(got - want) > 0.006:
+                    bad.append("%s %s max+%d took %s (want %d%%)" % (ref, elem, add_max, rows[-1].split(": ")[1], round(want * 100)))
+        for s, v in saved.items():
+            setstat(ref, s, v or 0)
+    H("kill nearest 1")
+    add(name, "PASS" if not bad else "FAIL",
+        "resist 200 against a 100000-unit hit (damage taken): %s" % ("; ".join(rows) if not bad else "; ".join(bad)),
+        [sh("resistcap")], rows)
+
+
+def _reduce(amount, pct):
+    if amount == 0 or pct == 0:
+        return amount
+    return max(amount - amount * pct // 100, 256)
+
+
+def _credit(amount, divisor, pct, tpct):
+    if amount != 0 and divisor != 0:
+        amount = max(amount // divisor, 256)
+    return _reduce(_reduce(amount, pct), tpct)
+
+
+def check_absorb():
+    name = "Absorb credit stats 184 / 189 / 417 (D2R 369 / 373 / 446): the healed amount"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    fight_ready()
+    elem_res = [37, 39, 41, 43]
+    saved = {s: rd("player", s) for s in elem_res + [142, 143, 146, 148, 369, 373]}
+    saved_t = {l: rd("player", 446, l) for l in (1, 3, 4)}
+    for s in elem_res:
+        setstat("player", s, 0)
+    setstat("player", 369, 0)  # `stat set` writes the base value; what is left is what other sources give
+    base184 = rd("player", 369)
+    amount, rows, bad = 100000, [], []
+
+    def probe(label, elem, want):
+        r = hit("player", elem, amount)
+        got = r[1] if r else None
+        rows.append("%s: healed %s (want %s)" % (label, got, want))
+        if got is None or abs(got - want) > 2:
+            bad.append(rows[-1])
+
+    setstat("player", 142, 30)  # 30% of the fire damage is absorbed: 30000
+    probe("fire absorb 30%", "fire", _credit(30000, 0, base184, 0))
+    setstat("player", 369, 50)
+    p = rd("player", 369)
+    probe("+ stat 184 -> %d%%" % p, "fire", _credit(30000, 0, p, 0))
+    setstat("player", 369, 0)
+    setstat("player", 373, 4)
+    probe("+ stat 189 divisor 4", "fire", _credit(30000, 4, base184, 0))
+    setstat("player", 373, saved[373] or 0)
+    setstat("player", 446, 50, 1)
+    probe("+ stat 417 layer 1 (fire) 50%", "fire", _credit(30000, 0, base184, 50))
+    setstat("player", 148, 30)
+    probe("cold with 417 layer 1 only (unchanged)", "cold", _credit(30000, 0, base184, 0))
+    setstat("player", 446, 0, 1)
+    setstat("player", 146, 30)
+    setstat("player", 446, 50, 3)
+    probe("magic with 417 layer 3 50%", "magic", _credit(30000, 0, base184, 50))
+    setstat("player", 446, 0, 3)
+    setstat("player", 142, 60)
+    probe("percent limited to 40%", "fire", _credit(40000, 0, base184, 0))
+    setstat("player", 142, 30)
+    setstat("player", 143, 100)
+    probe("percent 30 + flat 100", "fire", _credit(30000, 0, base184, 0) + _credit(25600, 0, base184, 0))
+    for s, v in saved.items():
+        setstat("player", s, 0 if (v is None or s == 369) else v)
+    for l, v in saved_t.items():
+        setstat("player", 446, v or 0, l)
+    add(name, "PASS" if not bad else "FAIL",
+        "100000-unit hits on the player (stat 184 from other sources: %s%%); healed amount = D2R's cut run through the three stats: %s"
+        % (base184, "; ".join(rows)), [sh("absorb")], rows)
+
+
+def _avoid_rate(ref, kind, stat, value, max_avoid, n=2000):
+    setstat(ref, stat, value)
+    setstat(ref, 380, max_avoid)
+    for _ in range(6):
+        ok, line, _l = hv("avoid %s %s %d" % (ref, kind, n), "avoid", 60)
+        m = re.search(r"n=(\d+) .* success=(\d+)", line)
+        if ok and m and int(m.group(2)) == 0 and kind != "evade" and ref != "player" and "mode=1 " not in line:
+            time.sleep(1.5)  # a walking mercenary can neither dodge nor avoid: wait until it stands
+            continue
+        break
+    return (int(m.group(2)) / int(m.group(1))) if ok and m else None
+
+
+def check_avoidcaps():
+    name = "Avoid / dodge / evade caps (min(75, 60 + stat 380)): player and mercenary"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    fight_ready()  # first: it kills everything near, the mercenary too
+    if not ensure_merc():
+        return add(name, "BLOCKED", "no mercenary could be hired")
+    kinds = [("dodge", "melee", 338), ("avoid", "missile", 339), ("evade", "evade", 340)]
+    cases = [(100, 0, 0.60), (100, 10, 0.70), (100, 30, 0.75), (50, 0, 0.50)]  # (stat, stat 380, expected success rate)
+    rows, bad = [], []
+    for ref in ("player", "merc"):
+        saved = {s: rd(ref, s) for s in (338, 339, 340, 380)}
+        for label, kind, stat in kinds:
+            for value, mx, want in cases:
+                r = _avoid_rate(ref, kind, stat, value, mx)
+                rows.append("%s %s %d (380=%d): %s" % (ref, label, value, mx, "-" if r is None else "%.1f%%" % (r * 100)))
+                if r is None or abs(r - want) > 0.04:
+                    bad.append("%s (want %d%%)" % (rows[-1], round(want * 100)))
+            setstat(ref, stat, 0)
+        for s, v in saved.items():
+            setstat(ref, s, v or 0)
+    add(name, "PASS" if not bad else "FAIL",
+        "success rate of 2000 checks of the game's avoid function: %s" % ("; ".join(rows) if not bad else "; ".join(bad)),
+        [sh("avoidcaps")], rows)
+
+
+def _make_ring(lock):
+    ok, lines = H("item rin 492=%d inv" % lock)
+    m = re.search(r"item id=(\d+)", " ".join(lines))
+    return int(m.group(1)) if ok and m else None
+
+
+def _req(ref, cls=None):
+    ok, lines = H("req %s%s" % (ref, (" as %d" % cls) if cls is not None else ""), 30)
+    rows = {}
+    for l in lines:
+        if l.startswith("req id="):
+            d = kv(l)
+            rows[int(d["id"])] = {"usable": int(d["usable"]), "lock": int(d["lock"]), "weapon": int(d["weapon"]),
+                                  "shield": int(d["shield"]), "types": [] if d["types"] == "-" else [int(x) for x in d["types"].split(",")],
+                                  "code": d["code"]}
+    return rows
+
+
+MERC_LISTS = {271: (0, (27,), ()), 338: (3, (33, 34), (112,)), 359: (1, (30, 2), (212,)), 561: (4, (30,), (198,))}
+# monster class -> (the character class it equips as, weapon / shield types allowed, types refused again): hireclasses (mxl_hirelings.h)
+
+
+def check_classlock():
+    name = "Class-locked items (stat 492): player of each class and each mercenary type"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    if not ensure_merc():
+        return add(name, "BLOCKED", "no mercenary could be hired")
+    merc_boost()
+    rings = {lock: _make_ring(lock) for lock in range(1, 9)}
+    if not all(rings.values()):
+        return add(name, "BLOCKED", "could not create the locked rings: %s" % rings)
+    cls0 = hstate()["player"]["class"]
+    rows, bad = [], []
+    try:
+        for cls in range(7):
+            r = _req("player", cls)
+            got = "".join(str(r[rings[l]]["usable"]) for l in range(1, 9))
+            want = "".join("1" if (l == 8 or l - 1 == cls) else "0" for l in range(1, 9))
+            rows.append("player class %d: locks 1-8 usable %s" % (cls, got))
+            if got != want:
+                bad.append("player class %d: usable %s, want %s" % (cls, got, want))
+        for mcls, (equiv, _a, _d) in MERC_LISTS.items():
+            r = _req("merc", mcls)
+            got = "".join(str(r[rings[l]]["usable"]) for l in range(1, 9))
+            want = "".join("1" if (l == 8 or l - 1 == equiv) else "0" for l in range(1, 9))
+            rows.append("merc class %d (equips as class %d): locks 1-8 usable %s" % (mcls, equiv, got))
+            if got != want:
+                bad.append("merc class %d: usable %s, want %s" % (mcls, got, want))
+    finally:
+        H("class %d" % cls0)
+    add(name, "PASS" if not bad else "FAIL",
+        "`req` (the engine's requirement check, hooked for stat 492) of rings with lock 1-8 (lock = class + 1, 8 = nobody): %s"
+        % ("; ".join(rows) if not bad else "; ".join(bad)), [], rows)
+
+
+def check_hiregates():
+    name = "Mercenary equip gates by hire class (weapon / shield types), all four hire classes"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    if not ensure_merc():
+        return add(name, "BLOCKED", "no mercenary could be hired")
+    merc_boost()
+    for code in ("163", "139", "156", "104", "110", "158", "!1!", "tow", "l53", "115"):
+        H("item %s inv" % code)  # best effort: the backpack may be full of the earlier ones
+    rows, bad = [], []
+    for mcls, (equiv, allow, deny) in MERC_LISTS.items():
+        r = _req("merc", mcls)
+        allowed = refused = 0
+        for iid, it in r.items():
+            if not (it["weapon"] or it["shield"]):
+                continue
+            want = (not any(t in deny for t in it["types"])) and any(t in allow for t in it["types"])
+            if want:
+                allowed += 1
+            else:
+                refused += 1
+            if bool(it["usable"]) != want:
+                bad.append("class %d item %s (%s types %s): usable %d, want %d" % (mcls, it["code"], iid, it["types"], it["usable"], want))
+        rows.append("class %d: %d weapons / shields allowed, %d refused" % (mcls, allowed, refused))
+        if allowed == 0 or refused == 0:
+            bad.append("class %d: no %s item in the backpack to judge" % (mcls, "allowed" if allowed == 0 else "refused"))
+    add(name, "PASS" if not bad else "FAIL",
+        "`req merc as <class>` over the backpack weapons / shields: %s" % ("; ".join(rows) if not bad else "; ".join(bad[:6])), [], rows)
+
+
+def check_itemrolls():
+    n1 = "Socket roll (quality 1-3): rand() % 7, clipped to the base"
+    n2 = "Ethereal roll: 2.6%, +25% defence, 75% durability"
+    if not need_game():
+        add(n1, "BLOCKED", "not in a game")
+        return add(n2, "BLOCKED", "not in a game")
+    tried = []
+    for code in ("tow", "plt", "hax", "bsd"):  # a shield, body armour, an axe and a sword: the first base the ethereal gate lets through
+        ok, line, _l = hv("itemroll %s 4000 q=2 ilvl=110" % code, "itemroll", 120)
+        lines = _l
+        m0 = re.search(r"ethereal=(\d+)", line)
+        tried.append("%s %s" % (code, m0.group(1) if m0 else "-"))
+        if ok and m0 and int(m0.group(1)) > 0:
+            break
+    m = re.search(r"n=(\d+) failed=(\d+) ilvl=(\d+) ethereal=(\d+) sockets=\[([^\]]*)\]", line)
+    d = next((l for l in lines if l.startswith("itemroll def")), "")
+    md = re.search(r"normal n=(\d+) sum=(\d+), ethereal n=(\d+) sum=(\d+); maxdur normal (\d+)\.\.(\d+), ethereal (\d+)\.\.(-?\d+)", d)
+    if not (ok and m and md):
+        add(n1, "BLOCKED", "itemroll answered: %s" % lines[:2])
+        return add(n2, "BLOCKED", "itemroll answered: %s" % lines[:2])
+    n = int(m.group(1))
+    hist = {int(a): int(b) for a, b in (p.split(":") for p in m.group(5).split())}
+    top = max(hist)
+    exp = {k: n / 7.0 for k in range(top)}
+    exp[top] = n * (7 - top) / 7.0
+    bad = []
+    for k in range(top + 1):
+        sd = (exp[k] * (1 - exp[k] / n)) ** 0.5
+        if abs(hist.get(k, 0) - exp[k]) > 4 * sd:
+            bad.append("%d sockets: %d (want %.0f +- %.0f)" % (k, hist.get(k, 0), exp[k], 4 * sd))
+    add(n1, "PASS" if not bad and top >= 3 else "FAIL",
+        "%d items of the last base (quality 2): sockets histogram %s; expected 1/7 for 0..%d sockets and %d/7 for %d (D2R's own: a third of the items, rand(max)+1): %s"
+        % (n, m.group(5), top - 1, 7 - top, top, "; ".join(bad) or "all within 4 sigma"), [], [line])
+    eth = int(m.group(4))
+    rate = eth / float(n)
+    nn, sn, ne, se, dmin, dmax, emin, emax = (int(x) for x in md.groups())
+    avg_n = sn / float(nn) if nn else 0
+    avg_e = se / float(ne) if ne else 0
+    ratio = avg_e / avg_n if avg_n else 0
+    bad2 = []
+    if not 0.017 <= rate <= 0.036:
+        bad2.append("rate %.2f%% outside 1.7-3.6%% (Median 2.6%%, D2R 5%%)" % (rate * 100))
+    if ne and not 1.17 <= ratio <= 1.33:
+        bad2.append("defence ratio %.2f (want 1.25; D2R 1.5)" % ratio)
+    want_dur = dmax * 75 // 100
+    if ne and (emin != want_dur or emax != want_dur):
+        bad2.append("ethereal max durability %d..%d (want %d = 75%% of %d)" % (emin, emax, want_dur, dmax))
+    add(n2, "PASS" if not bad2 and ne >= 40 else "FAIL",
+        "%d items at item level %s (ethereal count per base tried: %s): %d ethereal (%.2f%%); defence average %.1f -> %.1f (x%.2f); max durability %d -> %d..%d%s"
+        % (n, m.group(3), ", ".join(tried), eth, rate * 100, avg_n, avg_e, ratio, dmax, emin, emax, ("; " + "; ".join(bad2)) if bad2 else ""),
+        [], [line, d])
+
+
+def check_dye():
+    name = "Dye colour (stat 368): the item colour byte and palette"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    H("cubeclear")
+    ok, lines = H("item tow cube")
+    m = re.search(r"item id=(\d+)", " ".join(lines))
+    if not ok or not m:
+        return add(name, "BLOCKED", "no item to dye: %s" % lines[:1])
+    iid = m.group(1)
+    rows, bad = [], []
+    for v in list(range(0, 22)) + [-5]:
+        setstat(iid, 368, v)
+        ok, line, _l = hv("colour %s" % iid, "colour")
+        d = kv(line)
+        byte = int(d.get("byte", "0xee"), 16) if ok else None
+        dyed = v >= 1
+        want_idx = v - 1
+        good = ok and ((d.get("palette") == "set" and byte is not None and (byte & 0x1f) == want_idx) if dyed else d.get("palette") == "none")
+        rows.append("%d->%s" % (v, ("0x%02x" % byte) if byte is not None else "-"))
+        if not good:
+            bad.append("stat 368 = %d gave %s" % (v, line[:70]))
+    H("cubeclear")
+    add(name, "PASS" if not bad else "FAIL",
+        "item colour function on a tower shield with stat 368 = 0..21 and -5: index = stat - 1 with a palette entry, 0 / negative = undyed; bytes: %s%s"
+        % (" ".join(rows), ("; " + "; ".join(bad[:4])) if bad else ""), [], rows)
+
+
+def check_goldclient():
+    name = "Gold payment: the client's gold follows the server after a cube payment"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    H("cubeclear")
+    H("stat player 532 set 140")
+    H("gold set 400000 100000")
+    H("item 0u1 cube uniq=30 532=1")
+    H("item f667 cube")
+    ok1, l1 = H("cubecraft")
+    time.sleep(1.5)
+    _, s1 = H("gold get")
+    _, c14 = H("cstat 14")
+    _, c15 = H("cstat 15")
+    H("cubeclear")
+    H("gold set 20000 100000")
+    H("item 0u1 cube uniq=30 532=1")
+    H("item f667 cube")
+    H("item f667 cube")
+    ok2, l2 = H("cubecraft")
+    time.sleep(1.5)
+    _, s2 = H("gold get")
+    _, d14 = H("cstat 14")
+    _, d15 = H("cstat 15")
+    H("cubeclear")
+    H("stat player 532 set 0")
+    a = (stat_of(c14), stat_of(c15))
+    b = (stat_of(d14), stat_of(d15))
+    good = ok1 and ok2 and a == (350000, 100000) and b == (0, 20000)
+    add(name, "PASS" if good else "FAIL",
+        "row 6327: server %s, client carried/bank %s (want 350000/100000); row 6328 from 20000/100000: server %s, client %s (want 0/20000)"
+        % (s1[0], a, s2[0], b), [], l1 + l2)
+
+
+def leave_and_reenter():
+    """Esc menu -> Save and Exit -> character select -> Play (the same character)."""
+    g.key("esc")
+    time.sleep(1.5)
+    g.click(*g.UI["save_exit"])
+    time.sleep(9)
+    STATE["in_game"] = False
+    left = not g.in_game()
+    if not left:
+        return False
+    time.sleep(2)
+    return enter_game()
+
+
+def check_bonusdrops():
+    name = "Summoner / Izual bonus catalysts (Nightmare): dropped once on the ground, flag set"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    fight_ready()
+    H("difficulty 1")
+    H("quest 47 1 clear")
+    H("quest 47 2 clear")
+    out = []
+    ok = True
+    for cls, code, bit in ((250, "0o[", 1), (256, "jcat", 2)):
+        before = ground_count(code)
+        H("spawn %d" % cls)
+        H("kill nearest %d" % cls)
+        time.sleep(1)
+        n1 = ground_count(code) - before
+        _, q = H("quest 47 %d get" % bit)
+        H("spawn %d" % cls)
+        H("kill nearest %d" % cls)
+        time.sleep(1)
+        n2 = ground_count(code) - before
+        out.append("class %d: %s on the ground after kill 1: %d, after kill 2: %d; flag bit %d: %s" % (cls, code, n1, n2, bit, q[0]))
+        ok = ok and n1 == 1 and n2 == 1
+    H("difficulty 0")
+    add(name, "PASS" if ok else "FAIL", "; ".join(out) + " (one per player: the multiplayer count is manual)", [sh("bonusdrops")], out)
+
+
+def check_summoner():
+    n1 = "Summoner AI (first skill branch by the aip3 roll) and MosquitoNest init"
+    if not need_game():
+        return add(n1, "BLOCKED", "not in a game")
+    fight_ready()
+    god(True)
+    notes, ok_all = [], True
+    for cls, label in ((250, "Summoner"), (2053, "MosquitoNest")):
+        H("spawn %d" % cls)
+        per = {}
+        t0 = time.time()
+        while time.time() - t0 < 14:
+            time.sleep(0.5)
+            for m in hstate()["mons"]:
+                if m.get("npc") or m.get("class") in (2, 271, 150):
+                    continue
+                d = per.setdefault(m["class"], {"modes": set(), "dists": set()})
+                d["modes"].add(m.get("mode"))
+                d["dists"].add(m.get("dist"))
+        mine = per.get(cls, {"modes": set(), "dists": set()})
+        others = sorted(k for k in per if k != cls)
+        acted = len(mine["modes"]) > 1 or len(mine["dists"]) > 1
+        if cls == 2053:
+            acted = acted and bool(others)  # the nest's init sets up the spawn of mosquitoes
+        ok_all = ok_all and acted
+        notes.append("%s %d: modes %s, distances %s, other monsters that appeared: %s" % (
+            label, cls, sorted(x for x in mine["modes"] if x is not None), sorted(x for x in mine["dists"] if x is not None)[:5], others))
+        for _ in range(8):
+            H("kill nearest")
+    god(False)
+    add(n1, "PASS" if ok_all else "FAIL", "; ".join(notes), [sh("summoner")], notes)
+
+
+def check_tooltip():
+    name = "Item tooltip text after the descfunc change (65 stats): screenshots of hovered items"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    pos = []
+    # stats whose Median text became D2R printf text (descfunc 19): strength 0, dexterity 2, vitality 3, energy 1, life 7 / mana 9
+    # (8.8 fixed point), attack rating 19, resists 39 / 41, increased attack speed 93
+    for stats in ("0=30 2=20 3=15", "1=12 7=2560 9=1536", "19=120 39=15 41=20 93=10"):
+        ok, lines = H("item rin q=4 %s inv" % stats)
+        m = re.search(r"item id=(\d+) .* x=(\d+) y=(\d+)", " ".join(lines[:1])) if ok else None
+        if m:
+            pos.append((int(m.group(2)), int(m.group(3)), stats))
+    g.key("i")
+    time.sleep(1.2)
+    shots = [sh("inventory")]
+    for i, (x, y, stats) in enumerate(pos):
+        fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
+        g.click(fx, fy, move_only=True)
+        time.sleep(1.0)
+        g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
+        time.sleep(2.0)
+        shots.append(sh("tooltip%d" % i))
+    g.key("esc")
+    add(name, "REVIEW", "rare rings with %s hovered in the inventory (read the screenshots by hand): %s" % (
+        " / ".join(p[2] for p in pos), ", ".join(shots)), shots)
+
+
+def check_gameend():
+    n1 = "Craft per-game flags reset when the game ends (dungeon key recipe sets game flag 50)"
+    if not need_game():
+        return add(n1, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    H("cubeclear")
+    H("stat player 536 set 1000")
+    H("item rx01 cube")
+    H("item f700 cube")
+    ok0, l0 = H("cubecraft")
+    _, g0 = H("flag game 50 get")
+    H("cubeclear")
+    H("stat player 536 set 0")
+    t0 = mxl_text()
+    e0 = counter(t0, "game end", r"games ended (\d+)")
+    if not leave_and_reenter():
+        return add(n1, "BLOCKED", "could not leave and re-enter the game (flag before: %s)" % g0[0])
+    time.sleep(3)
+    _, g1 = H("flag game 50 get")
+    t1 = mxl_text()
+    e1 = counter(t1, "game end", r"games ended (\d+)")
+    ok = ok0 and g0[0].endswith("= 1") and g1[0].endswith("= 0") and e0 is not None and e1 is not None and e1 > e0
+    add(n1, "PASS" if ok else "FAIL",
+        "game flag 50 set by the recipe (%s): %s; after Save and Exit and Play again (a new game): %s; `mxl` games ended %s -> %s"
+        % (l0[0][:40] if l0 else "-", g0[0], g1[0], e0, e1), [sh("gameend")], [x for x in t1.splitlines() if "game end" in x])
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
-          ("cain", check_cain), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
+          ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle), ("casts", check_casts), ("equipevents", check_equip_events), ("medianai", check_median_ai)]
+          ("areacycle", check_areacycle), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai),
+          # the verify rows of docs/unported.md
+          ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
+          ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
+          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend)]
 
 
 def write_report(extra=""):

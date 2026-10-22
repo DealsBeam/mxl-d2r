@@ -152,7 +152,7 @@ entries of the submenu that the top-level slot before them opens.
 | NPC (class id) | Label (Median string id, D2R id, text) | Requirement | npcactions row (type) | What Median does server-side | Port |
 |---|---|---|---|---|---|
 | Akara (148) | 11168 / 33257 "Reset Stat/Skill Points" | 26 = AND(8: quest 1 bit 0 Den of Evil done; 15: quest 41 bit 1 respec available) | 19 (14) | D2Respec.cpp `0xa2330`: refunds every skill point (stat 5), puts the stat points back to the class start values, re-checks equipment (same sequence as D2R's `0x580f20`) | **done** |
-| Cain, five classes (244, 245, 246, 265, 520) | 28640 / 40516 "crafting materials" (opens the submenu) | 31 = OR(27, 28, 29, 30) | 26 (3, text page) | none; the entries below | **done** (one line; see below) |
+| Cain, five classes (244, 245, 246, 265, 520) | 28640 / 40516 "crafting materials" (opens the submenu) | 31 = OR(27, 28, 29, 30) | 26 (3, text page) | none; the entries below | **done** (a submenu, see below) |
 | ... Cain sub 1 | 28641 / 40517 "horadric cube" | 27 = AND(10: quest 4 bit 0 Search for Cain done; 22: player lacks `box `) | 27 -> 15 (17) | creates `box ` at the player (quality 1, item level 1) | **done** |
 | ... Cain sub 2 | 28642 / 40518 "catalyst of disenchantment" | 28 = AND(10; 19: quest 6 bit 0 on Normal; 23: lacks `3o[ `) | 28 -> 16 (17) | creates `3o[ ` | **done** |
 | ... Cain sub 3 | 28643 / 40519 "catalyst of learning" | 29 = AND(10; 20: quest 13 bit 0 on Nightmare; 24: lacks `0o[ `) | 29 -> 17 (17) | creates `0o[ ` | **done** |
@@ -171,11 +171,16 @@ in front of every Cain item row and only show a client message; types 4-7, 9, 10
 mode 1, Anya's mode 3 and Larzuk's mode 2 in 1.2 are the client pages; in the data Charsi has type 11, Anya 12 and Larzuk 13.
 The Median-only NPCs (Atma, Geglash, ...) have no slots.
 
-**Why Cain is one line.** D2R's menu record allows five lines and the builder has no submenu. Median's page shows the entries
-whose requirement holds. The port shows one "crafting materials" line; the server gives every material whose row holds
-(cube after the rescue, each catalyst once its quest is done and while the player lacks it), so a Cain click is
-"give me what I am owed". A real submenu needs a second dialog page and is not worth it (open question 10).
-Item quality 1 in the rows is mapped to normal (2); the item level is the row's (1).
+**Cain's submenu.** D2R's menu record allows five lines and the builder has no submenu, so the page is made from two
+records' worth of the same record. The "crafting materials" line (type 3, text page) gives nothing: its click sends its
+kind and keeps the menu open; the server evaluates the requirement of each sub-slot (rows 27-30) and answers with the
+plugin message `N` (page kind, NPC class, mask of the open entries; d2r-addresses.md section 13); the client closes the list
+widget (`0x1e9390`), writes the open entries (their D2R labels 40517-40520 and handlers) into Cain's record, calls the original
+builder; the record keeps the entries until the next build, which puts its own bytes back first (ESC and the next talk show the normal menu; the harness `menu list` / `menu <line>` read the same record and see the entries). Each entry sends its own kind and closes the
+menu; the server runs that sub-slot under its requirement, as before. So the player sees only the materials whose row holds
+(cube after the rescue, each catalyst once its quest is done and while the player lacks it), as Median's page does.
+Item quality 1 in the rows is mapped to normal (2); the item level is the row's (1). Logic and tests:
+`npc_actions_logic.h` (`SubSlots`, `PageMask`, `BuildPagePayload`), `npc_actions_test.cpp`.
 
 **Travel packages, Imbue / sockets / personalize: D2R's own.** Median's slots only open a client page or send the player to a
 level; D2R already has each service and binds it to the same quest bits, so no line is drawn, nothing is hooked, and
@@ -420,7 +425,7 @@ or harmful, take it out of `hireling_tables` (the only line that writes it).
 **(c) Native hook in mxl-core**
 6. Travel packages: **done as D2R-native** (1.6): D2R's own packet 0x37 path travels and grants the arrival town's waypoint under the same quest bits; checked at load by npc_services.cpp. Size: 0.
 7. Cain's replacement materials: server-side "create item" action plus the per-item "player lacks it" test. Size: S
-   once requirements exist; M with a menu hook.
+   once requirements exist; M with a menu hook. Done, including the submenu (section 1.5).
 8. Restock for the rare group: only if the gated shops are revived. Size: M. **Defer** (see 11).
 
 **(d) UI rebuild**

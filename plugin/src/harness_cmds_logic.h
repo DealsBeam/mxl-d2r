@@ -286,4 +286,77 @@ struct SeenUnits {
 	}
 };
 
+// --- unit references of the verify verbs: "player", "merc" (the player's mercenary), "mon:<unit id>" ------------------------
+struct UnitRef {
+	enum Kind { None, Player, Merc, Monster } kind = None;
+	long long id = 0;
+};
+inline auto ParseUnitRef(const char* s, UnitRef* out) noexcept -> bool {
+	*out = UnitRef();
+	if (s == nullptr) {
+		return false;
+	}
+	if (LowerEq(s, "player")) {
+		out->kind = UnitRef::Player;
+		return true;
+	}
+	if (LowerEq(s, "merc")) {
+		out->kind = UnitRef::Merc;
+		return true;
+	}
+	if ((s[0] == 'm' || s[0] == 'M') && (s[1] == 'o' || s[1] == 'O') && (s[2] == 'n' || s[2] == 'N') && s[3] == ':') {
+		out->kind = UnitRef::Monster;
+		return ParseInt(s + 4, &out->id) && out->id >= 0;
+	}
+	return false;
+}
+
+// --- tallies of the verify verbs ---------------------------------------------------------------------------------------
+// `itemroll`: items made in a loop and freed again; sockets 0..7+ and the ethereal flag counted.
+struct RollTally {
+	static constexpr int MaxSockets = 8;
+	int n = 0;
+	int sockets[MaxSockets + 1] = {};  // the last slot holds MaxSockets and more
+	int ethereal = 0;
+	void Add(int socketCount, bool isEthereal) noexcept {
+		++n;
+		++sockets[socketCount < 0 ? 0 : (socketCount > MaxSockets ? MaxSockets : socketCount)];
+		ethereal += isEthereal ? 1 : 0;
+	}
+	// "0:12 1:14 2:15 ..." (only the sockets seen)
+	auto Sockets(char* out, size_t size) const noexcept -> void {
+		size_t len = 0;
+		if (size > 0) {
+			out[0] = '\0';
+		}
+		for (int i = 0; i <= MaxSockets && len + 12 < size; ++i) {
+			if (sockets[i] != 0) {
+				len += static_cast<size_t>(std::snprintf(out + len, size - len, "%s%d:%d", len > 0 ? " " : "", i, sockets[i]));
+			}
+		}
+	}
+};
+
+// `avoid`: results of D2R's avoid check 0x44ef70 (0 none, 2 avoid, 4 dodge, 8 evade, 0x10 block).
+struct AvoidTally {
+	int n = 0, none = 0, avoid = 0, dodge = 0, evade = 0, block = 0, other = 0;
+	void Add(int result) noexcept {
+		++n;
+		switch (result) {
+			case 0: ++none; break;
+			case 2: ++avoid; break;
+			case 4: ++dodge; break;
+			case 8: ++evade; break;
+			case 0x10: ++block; break;
+			default: ++other; break;
+		}
+	}
+	auto Successes() const noexcept -> int { return n - none; }
+};
+
+// The life a target lost to a hit, in whole life points (the stat is in 1/256), negative when the hit healed it.
+constexpr auto LifeLost(int lifeBefore, int lifeAfter) noexcept -> int {
+	return (lifeBefore - lifeAfter) / 256;
+}
+
 }  // namespace hcmd
