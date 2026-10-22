@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy. What a click in the world cannot do in background mode (kill a
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy sprint. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -2090,6 +2090,167 @@ def check_statcols():
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
+# ------------------------------------------------------------------ sprint (audit SK7)
+# Median's sprint is D2's run with Median's charstats: 50 stamina that the run drains (RunDrain 60), run / walk velocity 14-15 /
+# 10, no stamina per Vitality; a run lasts "about 5 seconds" (patch notes Sigma 1.0.0), there is no cooldown timer: the stamina
+# orb is the timer. Nothing in the plugin: the check pins the numbers the data and D2R's engine give.
+
+SPRINT_DIRS = [(0, 30), (30, 0), (0, -30), (-30, 0), (22, 22), (-22, -22), (22, -22), (-22, 22)]  # `move` offsets in `state` units; the Blood Moor start is cramped, so only short paths are accepted
+STAMINA_POINT = 256  # stamina is stored <<8
+
+
+def _charstats_row(cls):
+    """Median's charstats row of the player class from the built tables (stamina, WalkVelocity, RunVelocity, RunDrain)."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "mod", "data", "global", "excel", "charstats.txt")
+    with open(p, encoding="utf-8", errors="replace") as f:
+        rows = [ln.rstrip("\n").split("\t") for ln in f]
+    head = rows[0]
+    row = rows[1 + cls]
+    return {c: row[head.index(c)] for c in ("class", "stamina", "WalkVelocity", "RunVelocity", "RunDrain")}
+
+
+def _sample():
+    p = hstate()["player"]
+    return (p.get("frame", 0), p.get("x", 0), p.get("y", 0), p.get("mode", -1), rd("player", 10) or 0)
+
+
+def _sprint_leg(stam0, walk, max_s, stop_exhausted=False):
+    """Stamina set to stam0, then `move` runs (or walks) along the first free direction of SPRINT_DIRS, re-issued when the
+    path ends. Samples (frame, x, y, mode, stamina) until max_s seconds, or until a run has been forced back to walk."""
+    setstat("player", 10, stam0)
+    rows, di, ran, t0 = [], 0, False, time.time()
+    while time.time() - t0 < max_s:
+        row = _sample()
+        rows.append(row)
+        ran = ran or row[3] == 3
+        if stop_exhausted and ran and row[3] == 2 and row[4] < STAMINA_POINT * 2:
+            break
+        if row[3] not in (2, 3):
+            for k in range(len(SPRINT_DIRS)):
+                dx, dy = SPRINT_DIRS[(di + k) % len(SPRINT_DIRS)]
+                H("move %d %d%s" % (row[1] + dx, row[2] + dy, " walk" if walk else ""))
+                if _sample()[3] in (2, 3):
+                    di = (di + k) % len(SPRINT_DIRS)
+                    break
+            else:
+                di += 1
+    return rows
+
+
+def _pairs(rows, mode):
+    return [(a, b) for a, b in zip(rows, rows[1:]) if a[3] == mode and b[3] == mode and b[0] > a[0]]
+
+
+def _speed(rows, mode):
+    """Units per frame over the consecutive samples that are both in this mode; (speed, frames)."""
+    pr = _pairs(rows, mode)
+    frames = sum(b[0] - a[0] for a, b in pr)
+    dist = sum(((b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2) ** 0.5 for a, b in pr)
+    return (dist / frames if frames else 0.0), frames
+
+
+def _drain(rows):
+    """Median stamina lost per frame (raw, <<8) over consecutive run samples."""
+    per = sorted((a[4] - b[4]) / (b[0] - a[0]) for a, b in _pairs(rows, 3))
+    return per[len(per) // 2] if per else 0.0
+
+
+def check_sprint():
+    name = "Sprint (SK7): run lasts about 5 s on 50 stamina, faster than walking, no cooldown timer, stamina refills while walking"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    fight_ready()
+    p0 = hstate()["player"]
+    try:
+        cs = _charstats_row(p0.get("class", 0))
+    except Exception as e:
+        return add(name, "BLOCKED", "work/mod charstats.txt not readable: %r" % (e,))
+    walk_v, run_v, run_drain = int(cs["WalkVelocity"]), int(cs["RunVelocity"]), int(cs["RunDrain"])
+    full = rd("player", 11) or 0
+    bad, notes, log = [], [], []
+
+    # 1. a run from full stamina: the drain per frame, the length it gives, the speed
+    run = _sprint_leg(full, False, 14, stop_exhausted=True)
+    log += ["run  " + " ".join(map(str, r)) for r in run]
+    drain = _drain(run)
+    secs = full / drain / 25 if drain else 0
+    want_drain = run_drain * 2  # D2Game 0x77bb0: RunDrain * 2 per frame, scaled by the stamina drain stat 154
+    run_speed, run_frames = _speed(run, 3)
+    exhausted = any(r[3] == 2 and r[4] < STAMINA_POINT * 2 for a, r in zip(run, run[1:]) if a[3] == 3)
+    notes.append("run: stamina %d.. drains %.0f raw/frame (RunDrain %d x2 = %d) = %.1f s from full, %d frames seen, speed %.3f units/frame" % (
+        full >> 8, drain, run_drain, want_drain, secs, run_frames, run_speed))
+    if not run_frames or abs(drain - want_drain) > 0.25 * want_drain:
+        bad.append("run drain %.0f raw/frame, charstats RunDrain %d wants %d" % (drain, run_drain, want_drain))
+    if not 3.0 <= secs <= 6.5:
+        bad.append("a run from full lasts %.1f s (Median: about 5 s)" % secs)
+    if not exhausted:
+        bad.append("the run was never forced back to walking when the stamina ran out")
+
+    # 2. the walk speed against the run speed
+    walk = _sprint_leg(full, True, 5)
+    log += ["walk " + " ".join(map(str, r)) for r in walk]
+    walk_speed, walk_frames = _speed(walk, 2)
+    ratio, want_ratio = (run_speed / walk_speed if walk_speed else 0), run_v / walk_v
+    notes.append("walk speed %.3f units/frame over %d frames; run/walk %.2f (charstats %d/%d = %.2f)" % (
+        walk_speed, walk_frames, ratio, run_v, walk_v, want_ratio))
+    if not walk_frames or abs(ratio - want_ratio) > 0.15 * want_ratio:
+        bad.append("run/walk speed %.2f, charstats wants %.2f" % (ratio, want_ratio))
+
+    # 3. empty: walking refills the stamina without standing still
+    empty = _sprint_leg(0, True, 3.5)
+    log += ["empty " + " ".join(map(str, r)) for r in empty]
+    gain = [b[4] - a[4] for a, b in _pairs(empty, 2) if a[4] < STAMINA_POINT]
+    walked = max((r[4] for r in empty if r[3] == 2), default=0) - (empty[0][4] if empty else 0)
+    notes.append("walking from empty: stamina +%d raw over %.1f s, %d steps that started under one point gained" % (
+        walked, 3.5, sum(1 for d in gain if d > 0)))
+    if walked < STAMINA_POINT or not any(d > 0 for d in gain):
+        bad.append("no stamina came back while walking from empty (gain %d)" % walked)
+
+    # 4. no cooldown: one point of stamina is enough for a run to start; refilling takes the stamina's own time
+    setstat("player", 10, STAMINA_POINT * 2)
+    here = _sample()
+    H("move %d %d" % (here[1], here[2] + 30))
+    modes = {_sample()[3] for _ in range(2)}
+    notes.append("with 2 points of stamina a run starts: modes %s" % sorted(modes))
+    if 3 not in modes:
+        bad.append("a run did not start with 2 points of stamina (modes %s)" % sorted(modes))
+    here = _sample()
+    H("move %d %d walk" % (here[1], here[2]))
+    time.sleep(1.5)
+    setstat("player", 10, 0)
+    refill = []
+    t0, f0 = time.time(), _sample()[0]
+    while time.time() - t0 < 16:
+        r = _sample()
+        refill.append(r)
+        if r[4] >= full:
+            break
+    log += ["refill " + " ".join(map(str, r)) for r in refill]
+    frames_full = (refill[-1][0] - f0) if refill else 0
+    notes.append("standing refill 0 -> %d points: %.1f s (%d frames)" % (refill[-1][4] >> 8 if refill else -1, frames_full / 25, frames_full))
+    if not refill or refill[-1][4] < full or not 6 <= frames_full / 25 <= 16:
+        bad.append("standing refill took %.1f s / reached %s" % (frames_full / 25, refill[-1][4] if refill else None))
+
+    # 5. the key: R (toggle sprint) makes a click-to-move run, R again walks. The toggle is restored.
+    setstat("player", 10, full)
+    keyrun = {}
+    for label in ("on", "off"):
+        g.press_bg("r", hold=0.1)
+        time.sleep(0.3)
+        for fx, fy in ((0.80, 0.50), (0.20, 0.50), (0.50, 0.85), (0.50, 0.15)):  # a click on a wall does not move
+            g.click_bg(fx, fy)
+            keyrun[label] = _sample()[3]
+            if keyrun[label] in (2, 3):
+                break
+        time.sleep(2.5)
+    notes.append("key R: click-to-move mode %s after the first press (3 = run), %s after the second (2 = walk)" % (keyrun["on"], keyrun["off"]))
+    if keyrun["on"] != 3 or keyrun["off"] != 2:
+        bad.append("toggle key R gave modes %s / %s (want 3 / 2)" % (keyrun["on"], keyrun["off"]))
+    setstat("player", 10, full)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(notes) if not bad else "; ".join(bad) + " | " + "; ".join(notes),
+        [sh("sprint")], log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -2099,7 +2260,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
-          ("trophy", check_trophy), ("statcols", check_statcols)]
+          ("trophy", check_trophy), ("statcols", check_statcols), ("sprint", check_sprint)]
 
 
 def write_report(extra=""):
