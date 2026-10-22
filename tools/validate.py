@@ -12,6 +12,9 @@ Findings are grouped by severity:
   plugin  valid only once a D2RLoader plugin provides it (Median formula functions / calc codes, new level types)
   warn    suspicious, probably fine
 
+The plugin's string keys and ids (tools/plugin_keys.py: generated headers and literals in plugin/src) must exist in
+Median's namespace file / D2R's string files; a missing one is an error.
+
 Output: work/mod/validate_report.md, validate_findings.json. Exit code 1 if there are errors.
 Usage: python tools/validate.py [--bank base|rotw|both] [--examples 3]
 """
@@ -25,6 +28,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import art_fix  # noqa: E402
 from txt_migrate import TIMED_POTION_TOTAL_STATS  # noqa: E402
+
+import plugin_keys  # noqa: E402
+import strings_ns  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 D2R = ROOT / "extract" / "d2r" / "93847" / "data"
@@ -118,9 +124,18 @@ class Validator:
         self.bank = bank
         self.examples = examples
         self.findings: dict[tuple, list] = defaultdict(list)
-        self.strings = set()
-        for p in (MOD / "local" / "lng" / "strings").glob("*.json"):
-            self.strings |= {e["Key"] for e in json.loads(p.read_text("utf-8-sig"))}
+        # string keys: D2R's (group 1, cells stay unqualified) and Median-only (group 2, cells are medianxl:<key>)
+        self.d2r_keys = strings_ns.d2r_keys()
+        # D2R looks keys up without regard to case (vanilla automagic.txt names "of Darkness", the key is "Of Darkness")
+        self.d2r_lower = {k.lower() for k in self.d2r_keys}
+        self.group2 = strings_ns.load_group2()
+        self.group2_lower = {k.lower() for k in self.group2}
+        self.native = strings_ns.native_exceptions()
+        self.aliases = strings_ns.load_aliases()  # long key -> short alias (strings_ns "short aliases")
+        self.strings = set(self.d2r_keys) | self.group2
+        for p in (MOD / "local" / "lng" / "strings").rglob("*.json"):
+            self.strings |= {e["Key"].split(":", 1)[-1] if e["Key"].startswith(strings_ns.PREFIX) else e["Key"]
+                             for e in json.loads(p.read_text("utf-8-sig")) if isinstance(e, dict) and "Key" in e}
         d2r_codes = lambda t: (self.data_d2r(t) or set())
         self.d2r_calc = {t: d2r_codes(t) for t in ("skillcalc", "misscalc", "moncalc")}
 
@@ -217,6 +232,43 @@ class Validator:
             elif v not in d2r_codes:
                 self.add("plugin", table, column, f"Median calc code '{v}'", row, text)
 
+    # ---- localization cells (docs/strings-namespace.md) ---------------------------------------------------
+    def check_localization(self, table: str, col: str, row: str, v: str, typ) -> None:
+        """A localization cell: unqualified = D2R's `d2r:` string, `medianxl:<key>` = Median-only string."""
+        if strings_ns.NUMERIC.fullmatch(v):
+            if v in self.group2 and not strings_ns.is_range_column(table, col):
+                self.add("error", table, col, "unqualified numeric cell names a Median-only (group 2) string; it must be "
+                         f"{strings_ns.PREFIX}{v}", row, v)
+            return
+        limit = typ.get("dataLength") if isinstance(typ, dict) else None
+        ns, key = strings_ns.split_key(v)
+        if ns == strings_ns.NAMESPACE:
+            if key not in self.group2:
+                self.add("error", table, col, f"{strings_ns.PREFIX} cell names a key that is not in the namespace list", row, v)
+            elif strings_ns.is_range_column(table, col):
+                self.add("error", table, col, "range column (string IDs from first to last) cannot use a namespaced key", row, v)
+        elif ns is not None:
+            if ns != "d2r":
+                self.add("warn", table, col, f"cell is qualified with the namespace '{ns}:'", row, v)
+            elif key not in self.d2r_keys:
+                self.add("error", table, col, "d2r: cell names a key that is not in D2R's strings", row, v)
+        elif v in self.group2:
+            self.add("error", table, col, "unqualified cell names a Median-only (group 2) string; it must be "
+                     f"{strings_ns.PREFIX}<key>", row, v)
+        elif v.lower() in self.d2r_lower or v in self.native:
+            pass
+        elif v.lower() in self.group2_lower:
+            self.add("error", table, col, "unqualified cell names a Median-only (group 2) string by another spelling of "
+                     f"its case; it must be {strings_ns.PREFIX}<key>", row, v)
+        elif (strings_ns.is_label_column(table, col) or strings_ns.is_placeholder(table, col, v)
+              or v in self.vanilla_values(table, col)):
+            pass  # never displayed, or D2R's own table holds the same value
+        else:
+            self.add("warn", table, col, "cell names no known string (Median's own string tables lack it too)", row, v)
+        if limit and len(v) > limit:
+            self.add("error", table, col, f"longer than {limit} characters (the whole {strings_ns.PREFIX}<key> must fit "
+                     "the field; txt_migrate gives such a key a short alias, strings_ns.plan_aliases)", row, v)
+
     # ---- columns ----------------------------------------------------------------------------------------
     def check_table(self, table: str) -> None:
         t = self.data.table(table)
@@ -259,6 +311,9 @@ class Validator:
                 if v == "":
                     continue
                 rid = r[0]
+                if strings_ns.is_localization(table, col):
+                    self.check_localization(table, col, rid, v, typ)
+                    continue
                 if kind == "int" and not re.fullmatch(r"-?\d+", v):
                     self.add("error", table, col, "not an integer", rid, v)
                 elif kind == "boolean" and v not in ("0", "1"):
@@ -292,6 +347,79 @@ class Validator:
         for t in sorted(names):
             self.check_table(t)
         self.engine_rules()
+        self.native_exceptions()
+        self.string_package()
+        self.alias_refs(names)
+
+    def alias_refs(self, names: set[str]) -> None:
+        """Aliases must be defined in the namespace list; every cubemain input / output and treasureclassex item that
+        names a unique / set item by its index reads exactly as that index cell does (`medianxl:<key>` or
+        `medianxl:<alias>` for a Median-only name): the engine matches the text, an unqualified `HotTJ` names no item
+        (the recipe's input matches anything, the wrong recipe fires) and a name with a short alias must use the alias."""
+        for k, a in self.aliases.items():
+            if a not in self.group2:
+                self.add("error", "strings", "Key", f"alias of '{k}' is not in the namespace list", "-", a)
+        indexes = set()
+        for t in ("uniqueitems", "setitems"):
+            indexes |= self.data.values(t, "index") or set()
+        bare = {x.removeprefix(strings_ns.PREFIX) for x in indexes if x.startswith(strings_ns.PREFIX)}
+        for t in sorted(names):
+            tab = self.data.table(t)
+            if not tab or t not in strings_ns.REFERENCE_COLUMNS:
+                continue
+            header, rows = tab
+            cols = [ci for ci, c in enumerate(header) if strings_ns.is_reference(t, c)]
+            for r in rows:
+                for ci in cols:
+                    v = r[ci].strip() if ci < len(r) else ""
+                    if not v:
+                        continue
+                    name = strings_ns.reference_name(v)
+                    if name.startswith(strings_ns.PREFIX):
+                        if name not in indexes:
+                            self.add("error", t, header[ci], "names no unique / set item (no index cell reads like this)",
+                                     r[0] if r else "-", v)
+                    elif name in bare or name in self.aliases:
+                        self.add("error", t, header[ci], "names a Median-only unique / set item without the namespace; "
+                                 f"it must be {strings_ns.PREFIX}<key> (or the alias for a key with a short alias)",
+                                 r[0] if r else "-", v)
+
+    def native_exceptions(self) -> None:
+        """No key can stay native with a fixed id any more: in a namespaced mod an unqualified record is a `medianxl:`
+        record and its id is ignored (docs/strings-namespace.md), so tools/strings_native.json must be empty."""
+        for k in sorted(self.native):
+            self.add("error", "strings", "Key", "native exception (tools/strings_native.json): an unqualified record of a "
+                     "namespaced mod is a medianxl: record, its id is ignored", "-", k)
+
+    def string_package(self) -> None:
+        """The mod's string files as the loader reads them: a full key defined twice in the package refuses the start
+        (checked per folder: strings-legacy/ only mirrors median.json and HD mode does not read it, docs/strings.md);
+        a `d2r:<key>` override needs a key D2R's strings/ files have (the loader rejects others, e.g. keys that exist
+        only in strings-legacy/); an unqualified record belongs to the mod's namespace, not to `d2r:`. A `d2r:` record in
+        strings-legacy/ is an error: it would repeat a key of strings/medianxl/overrides.json."""
+        known = set(strings_ns.d2r_loaded())
+        for folder in ("strings", "strings-legacy"):
+            seen: dict[str, str] = {}
+            for p in sorted((MOD / "local" / "lng" / folder).rglob("*.json")):
+                where = p.relative_to(MOD / "local" / "lng").as_posix()
+                for e in json.loads(p.read_text("utf-8-sig")):
+                    if not isinstance(e, dict) or "Key" not in e:
+                        continue
+                    key = e["Key"]
+                    ns, bare = strings_ns.split_key(key)
+                    full = key if ns else strings_ns.PREFIX + key
+                    if full in seen:
+                        self.add("error", "strings", "Key", f"defined twice in the package ({seen[full]} and {where})", "-", full)
+                    seen[full] = where
+                    if ns == "d2r" and folder == "strings-legacy":
+                        self.add("error", "strings", "Key", f"`d2r:` record in strings-legacy/ ({where}): it repeats a key "
+                                 "of strings/ (docs/strings.md)", "-", key)
+                    if ns == "d2r" and bare not in known:
+                        self.add("error", "strings", "Key", f"`d2r:` override of a key D2R's strings/ files do not have ({where})",
+                                 "-", key)
+                    if not ns and "id" in e:
+                        self.add("error", "strings", "Key", f"unqualified record with an id ({where}): it defines "
+                                 f"medianxl:{key}, not D2R's {key}; an override is `d2r:{key}` without id", "-", key)
 
     def engine_rules(self) -> None:
         """Rules D2R asserts on at load time that the field schema does not express."""
@@ -303,14 +431,15 @@ class Validator:
             known = set()
             for t, c in (("weapons", "code"), ("armor", "code"), ("misc", "code"), ("itemtypes", "Code"),
                          ("treasureclassex", "Treasure Class"), ("uniqueitems", "index"), ("setitems", "index")):
-                known |= d.values(t, c) or set()
+                # a unique / set item is named by its index, which is a localization cell (medianxl:<key> when Median-only)
+                known |= {x.removeprefix(strings_ns.PREFIX) for x in d.values(t, c) or set()}
             pos = {r[0]: i for i, r in enumerate(rows) if r[0]}
             for ci, c in enumerate(h):
                 if not re.fullmatch(r"Item\d+", c):
                     continue
                 for i, r in enumerate(rows):
                     v = r[ci].strip() if ci < len(r) else ""
-                    name = v.strip('"').split(",", 1)[0]
+                    name = v.strip('"').split(",", 1)[0].removeprefix(strings_ns.PREFIX)  # a unique / set item: medianxl:<key>
                     if name and name not in known and not AUTO_TC.match(name):
                         self.add("error", "treasureclassex", c, "not an item, item type, treasure class, unique or set item", r[0], v)
                     elif pos.get(name, -1) > i:
@@ -440,11 +569,8 @@ class Validator:
     _string_ids: dict | None = None
 
     def string_ids(self) -> dict[str, int]:
-        if self._string_ids is None:
-            self._string_ids = {}
-            for p in (MOD / "local" / "lng" / "strings").glob("*.json"):
-                for e in json.loads(p.read_text("utf-8-sig")):
-                    self._string_ids.setdefault(e["Key"], e["id"])
+        if self._string_ids is None:  # D2R's ids (the mod ships no native string file)
+            self._string_ids = {k: recs[0]["id"] for k, recs in strings_ns.d2r_loaded().items()}
         return self._string_ids
 
 
@@ -475,6 +601,13 @@ def main() -> int:
                 report.append(f"| {table} | {col} | {problem} | {len(vals)} | {ex} |")
             report.append("")
         all_findings[bank] = {"|".join(k): vals for k, vals in v.findings.items()}
+    key_findings, key_counts = plugin_keys.check()
+    errors += len(key_findings)
+    report += ["## Plugin string keys", "",
+               f"errors {len(key_findings)} ({key_counts['keys']} keys, {key_counts['ids']} ids in {key_counts['files']} "
+               "plugin source files, tools/plugin_keys.py)", ""]
+    report += [f"- {f}" for f in key_findings] + ([""] if key_findings else [])
+    all_findings["plugin_keys"] = key_findings
     (out / "validate_report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
     (out / "validate_findings.json").write_text(json.dumps(all_findings, indent=0), encoding="utf-8")
     print("\n".join(line for line in report if line.startswith(("#", "errors"))))

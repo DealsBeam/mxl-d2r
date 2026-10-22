@@ -11,6 +11,10 @@ missile_hd.py (which maps by CelFile only), this step decides every Median row o
   variant   exact or stand-in effect scaled (TransformDefinitionComponent of every entity; that and the spot light are
             the only fields an HD definition has for size/colour/light, nothing for tint, transparency or speed): a
             stand-in is scaled by the ratio of Median's classic art to the stand-in's
+  provenance  Median-only art that tools/art_provenance.py found to be a vanilla animation (exact, rescaled, recoloured,
+            retimed or mashed up from vanilla frames): the HD effect of the D2R row that draws that vanilla art, scaled by the
+            measured factor; a recolour keeps the effect when the colour barely moved, takes a hue-shifted copy where the
+            effect's colour comes from a gradient texture (tools/hd_recolour.py) and otherwise falls through to
   stand-in  Median-only art: the D2R effect whose classic art and row behave most alike: colour sampled from the DCC
             frames (tools/dcc.py), size, frame count, moving / hit / loop role, element and shape words of the row, its
             art and the skills that reach it; custom HD art replaces these last (docs/unported.md)
@@ -92,6 +96,9 @@ FAM_W, SHAPE_W, WORD_W = 1.7, 0.7, 0.4
 # PalShift: a shift that moves the art's colour by more than SHIFT_MIN is honoured (the row is scored by the shifted
 # colour); a best stand-in further than SHIFT_FAR from it has no vanilla effect of that colour (custom art, low).
 SHIFT_MIN, SHIFT_FAR = 0.12, 0.30
+# Provenance (work/mod/art_provenance.json): matches below these are not trusted over the scoring
+PROV_COVER, PROV_Q, PROV_SHARE = 0.6, 0.8, 0.5
+PROV_STATS: Counter = Counter()  # rows by what happened to their provenance match (the report)
 
 
 def norm_key(name: str) -> str:
@@ -277,6 +284,7 @@ class Prof:
         self.hit = self.sub = False
         self.shift = 0  # missiles2 PalShift (Median rows), 0 = none
         self.shift_dist = 0.0  # colour distance the shift moves the art by
+        self.via = ""  # 'provenance' / 'provenance+tint' when art_provenance.json decided the effect
         self.model = ""  # D2R: the HD model
         self.folder = ""
         self._tags = None
@@ -465,6 +473,51 @@ def confidence(kind: str, sc: float, margin: float, ncand: int, m: Prof, c: Prof
     return "low"
 
 
+# ----------------------------------------------------------------------------------------------- provenance
+def load_provenance(path: Path) -> dict:
+    """Median art file ('missiles/<name>', '/' separators) -> match record of tools/art_provenance.py (effects group)."""
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text("utf-8")).get("effects", {}).get("files", {})
+
+
+def prov_pick(prov: dict, m: Prof, by_art: dict[str, list[Prof]], folder: str, recolour):
+    """The HD effect of the vanilla animation Median's art was made from. None when the art is not a vanilla animation
+    with an HD effect of the same kind (missile / overlay), or when the colour changed and cannot be reproduced (the
+    scoring then picks the effect of the nearest colour). Returns a dict: c (D2R row), kind, scale, conf, why, model."""
+    r = prov.get(f"{folder}/{m.art_name.replace(BS, '/')}")
+    if not r or r.get("category") in (None, "new", "error") or r.get("coverage", 0) < PROV_COVER:
+        return None
+    PROV_STATS["rows with a vanilla match"] += 1
+    for s in r["sources"]:
+        if not s["file"].startswith(folder + "/") or s["q"] < PROV_Q or s["share"] < PROV_SHARE:
+            continue
+        rows = by_art.get(s["file"][len(folder) + 1:].replace("/", BS))
+        if not rows:
+            PROV_STATS["vanilla source has no HD effect"] += 1
+            continue
+        c, sc, margin, _ = pick(m, rows, True)
+        k = 1.0
+        if "rescale" in s["kind"]:
+            k = min(2.5, max(0.4, round(s["scale"] * 20) / 20))
+            k = 1.0 if 0.85 <= k <= 1.15 else k
+        tint = None
+        if "recolour" in s["kind"] and m.art and c.art and colour_dist(m.art, c.art) > SHIFT_MIN:
+            tint = recolour(c, s.get("shift"), m.art, c.art)
+            if tint is None:
+                PROV_STATS["recolour not reproducible (no gradient colour), nearest-colour scoring"] += 1
+                return None  # colour cannot be reproduced: the nearest-colour scoring decides
+        what = {"exact": "exact", "recolour": "recoloured" if tint else "recoloured (colour close)",
+                "rescale": "rescaled", "rescale+recolour": "rescaled, recoloured"}[s["kind"]]
+        why = (f"provenance: art is {what} vanilla {s['file']} ({s['frames']} of {r['frames']} frames, q {s['q']:.2f}"
+               f"{', retimed' if r.get('retime') else ''}{', mashup' if r['category'] == 'mashup' else ''}); "
+               f"D2R {c.name} draws it" + (f" ({len({x.model or x.folder for x in rows})} effects)" if len(rows) > 1 else ""))
+        PROV_STATS["exact" if not tint and k == 1 else "scaled" if not tint else "tinted"] += 1
+        return {"c": c, "kind": "variant" if k != 1 else "exact", "scale": k, "conf": r["confidence"], "why": why,
+                "tint": tint, "margin": margin}
+    return None
+
+
 # ----------------------------------------------------------------------------------------------- main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -472,11 +525,16 @@ def main() -> int:
     ap.add_argument("--out", help="output data dir (default <work>/mod/data)")
     ap.add_argument("--only", help="comma separated row names (missiles and overlays)")
     ap.add_argument("--no-scale", action="store_true")
+    ap.add_argument("--no-provenance", action="store_true", help="skip tools/art_provenance.py matches")
     args = ap.parse_args()
     work = Path(args.work)
     out = Path(args.out) if args.out else work / "mod" / "data"
     only = {x.lower() for x in args.only.split(",")} if args.only else None
     ensure_hd_json()
+    prov = {} if args.no_provenance else load_provenance(out.parent / "art_provenance.json")
+    if not args.no_provenance and not prov:
+        print("no work/mod/art_provenance.json: run tools/art_provenance.py for exact-art matches")
+    import hd_recolour
     art = ArtCache(work / "effects_hd_art.json")
     d2r_excel, mod_excel = D2R / "data" / "global" / "excel", out / "global" / "excel"
 
@@ -534,6 +592,14 @@ def main() -> int:
                 kind, scale, model = "exact", 1.0, c.model
                 conf = confidence("exact", sc, margin, len({s.model for s in src}), m, c)
                 why = f"D2R {c.name} uses the art" + (f" ({len({s.model for s in src})} models)" if len({s.model for s in src}) > 1 else "")
+            elif (pv := None if m.shift else prov_pick(prov, m, by_art, "missiles", hd_recolour.plan_missile(HDM))):
+                c, kind, scale, conf, why, model = pv["c"], pv["kind"], pv["scale"], pv["conf"], pv["why"], pv["c"].model
+                m.via = "provenance"
+                if pv["tint"]:
+                    model = hd_recolour.recolour_missile(out, model, pv["tint"])
+                    kind, why, m.via = "variant", why + f"; tinted ({pv['tint']['label']})", "provenance+tint"
+                if args.no_scale:
+                    scale = 1.0
             else:
                 hand = [] if m.shift else [p for p in library if p.model == LOOKALIKE.get(m.art_name)]
                 c, sc, margin, parts = pick(m, hand or library, False)
@@ -560,7 +626,9 @@ def main() -> int:
         raw[name.lower()] = model
     # write missiles
     for vname, (base, k) in new_models.items():
-        write_json(out / "hd" / "missiles" / f"{vname}.json", scaled_definition(load_json(HDM / f"{base}.json"), vname, k))
+        src = out / "hd" / "missiles" / f"{base}.json"
+        write_json(out / "hd" / "missiles" / f"{vname}.json",
+                   scaled_definition(load_json(src if src.exists() else HDM / f"{base}.json"), vname, k))
     final = dict(hd_m)
     kept = 0
     for key, model in {**{k: v for k, v in raw.items() if k not in keys}, **keys}.items():
@@ -571,6 +639,8 @@ def main() -> int:
     if deps is not None:
         final = {"dependencies": deps, **final}
     write_json(out / "hd" / "missiles" / "missiles.json", final)
+
+    stats_m = Counter(PROV_STATS)
 
     # ---------------------------------------------------------------- overlays
     do, mo = overlay_profiles(d2r_excel, "d2r", art), overlay_profiles(mod_excel, "mxl", art)
@@ -588,7 +658,7 @@ def main() -> int:
         v = do.get(name)
         if v is not None and v.art_name == m.art_name:
             continue
-        c = None
+        c = tint_o = None
         if m.art_name in ("", "null"):
             rows_o.append((m.name, m.art_name, "exact", "", 1.0, "high", "no art", m, None))
             continue
@@ -597,6 +667,15 @@ def main() -> int:
             c, sc, margin, _ = pick(m, src, True)
             kind, scale, conf = "exact", 1.0, confidence("exact", sc, margin, len(src), m, c)
             why = f"D2R {c.name} uses the art"
+        elif (pv := prov_pick(prov, m, by_file, "overlays", hd_recolour.plan_overlay(HDO, norm_key))):
+            c, kind, scale, conf, why = pv["c"], pv["kind"], pv["scale"], pv["conf"], pv["why"]
+            m.via = "provenance"
+            if args.no_scale:
+                scale = 1.0
+            tint_o = pv["tint"]
+            if tint_o:
+                m.via = "provenance+tint"
+                kind, why = "variant", why + f"; tinted ({tint_o['label']})"
         else:
             c, sc, margin, parts = pick(m, olib, False)
             scale = 1.0 if args.no_scale else scale_for(m, c)
@@ -609,8 +688,10 @@ def main() -> int:
         base = HDO / c.folder / f"{norm_key(c.name)}.json"
         rows_o.append((m.name, m.art_name, kind, f"{c.folder}/{norm_key(c.name)}", scale, conf, why, m, c))
         folder = c.folder
-        write_json(out / "hd" / "overlays" / folder / f"{norm_key(name)}.json",
-                   scaled_definition(load_json(base), norm_key(name), scale))
+        d = scaled_definition(load_json(base), norm_key(name), scale)
+        if tint_o:
+            d = hd_recolour.recolour_overlay(out, d, tint_o)
+        write_json(out / "hd" / "overlays" / folder / f"{norm_key(name)}.json", d)
         if m.folder != folder:
             char_edits[name] = folder
     # overlay.txt Character: the HD folder, in both banks (excel/ and excel/base/)
@@ -626,6 +707,8 @@ def main() -> int:
             nl = CRLF if CRLF in p.read_text("utf-8-sig", errors="replace")[:4096] else LF
             p.write_text(nl.join(TAB.join(x) for x in [h] + rows) + nl, encoding="utf-8", newline="")
 
+    stats_o = PROV_STATS - stats_m
+
     # ---------------------------------------------------------------- report
     rep = ["# HD effects of Median's missiles and overlays (tools/effects_hd.py)", ""]
     for label, rows in (("Missiles", rows_m), ("Overlays", rows_o)):
@@ -639,6 +722,16 @@ def main() -> int:
                        f"{confs.get((k, 'low'), 0)} |")
         rep += ["", f"Stand-ins drawn scaled to Median's art size: {scaled}. Custom art (last): {len(custom)} rows on "
                 f"{len({r[1] for r in custom})} animations; the other stand-ins have D2R art but no D2R HD effect.", ""]
+        st = stats_m if label == "Missiles" else stats_o
+        via = Counter(r[7].via for r in rows if r[7].via)
+        if prov:
+            rep += [f"Provenance (tools/art_provenance.py, work/mod/art_provenance.json): {sum(via.values())} rows take the "
+                    f"HD effect of the vanilla animation their art was made from instead of a stand-in: "
+                    f"{st.get('exact', 0)} exact, {st.get('scaled', 0)} rescaled, {st.get('tinted', 0)} recoloured "
+                    f"(gradient tint). Of {st.get('rows with a vanilla match', 0)} rows with a vanilla match, "
+                    f"{st.get('vanilla source has no HD effect', 0)} follow a source no D2R row draws in HD and "
+                    f"{st.get('recolour not reproducible (no gradient colour), nearest-colour scoring', 0)} are recolours of "
+                    f"an effect whose colour is baked into its particles (nearest-colour stand-in).", ""]
         if label == "Missiles":
             shifted = [r for r in rows if r[7].shift]
             far = [r for r in shifted if "NO vanilla effect" in r[6]]

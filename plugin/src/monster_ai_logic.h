@@ -18,8 +18,16 @@
 //               := 11, on the target; else with skill 1 allowed, an enemy within 20: a 75% roll fails -> attack the target,
 //               passes -> a 50% roll picks skill 1 (pass) or skill 4 (fail) on the enemy; else walk
 // "attack or wait N%" = an N% roll passes -> attack (mode 4) the target, else wait 10 frames.
-// Not ported (documented): the branch for monster data +0x54 in {3, 0x13} (a controlled monster; none of the 47 qualifies) and
-// phase 2 (a charge while hit points are under 75%): ctl[5] is never set to 2 anywhere, so it is dead code in Median too.
+// The controlled branch (Input::controlled; asm 0x1004a912..): the gate is the monster's last-mode field (Sigma monster data
+// +0x54, D2R's +0x68) being 3 or 0x13, i.e. the monster has just come out of a GetHit (see IsControlledMode). It differs from
+// the live path in:
+//   - the phase is forced to 1 (never idles: out of reach past aip3 it walks); ctl[6] (mark) keeps the largest distance under 30;
+//   - in reach there is no aip1 roll and no 33% wait: a 30% roll with skill 1 allowed -> a 50% roll picks skill 1 (target) or
+//     skill 4 (the enemy); otherwise the plain attack on the target;
+//   - out of reach inside aip3, the skill 2 / 3 aip4 rolls are inverted: the skill is taken when the roll FAILS.
+// Not ported (documented): phase 2 (a charge while hit points are under 75%, chooser 0x1004aef0): ctl[5] is never set to 2
+// anywhere in D2AI.cpp, so it is dead code in Median too; the 0x64 / 0x65 flag byte of the in-reach attack command and the
+// D2Common ordinal 11103 call before it (D2R's attack primitive has no such flag).
 #pragma once
 
 #include <cstdint>
@@ -30,6 +38,15 @@ inline constexpr int32_t SkillCooldown = 11;  // ctl[7] after skill 2 / 3
 inline constexpr int32_t NearEnemy = 20;      // enemy distance limit of the ranged skills
 inline constexpr int32_t ChargeRange = 9;     // under this, a 50% roll charges (mode 8)
 inline constexpr int32_t ApproachRange = 20;  // over this, an unreached target is walked to
+inline constexpr int32_t ControlledMarkLimit = 30;  // the controlled branch records the largest distance seen under this
+
+// Median's gate of the controlled branch: the monster's "last mode" field (Sigma monster data +0x54, D2R +0x68) is GetHit.
+// Both engines store the mode being left on every mode change, except a change out of mode 1 (neutral), and D2R's hit
+// apply step stores 0x13 for a flagged hit (the next change turns it into 3): so it reads 3 from the end of a hit recovery
+// until the monster leaves its next non-neutral mode (an attack animation, say).
+inline constexpr auto IsControlledMode(int32_t hitMode) noexcept -> bool {
+	return hitMode == 3 || hitMode == 0x13;
+}
 
 // The three scratch words of the monster's AI control block: Sigma ctl[5..7] = D2R ctl+0x44 / +0x48 / +0x4c.
 struct Ctl {
@@ -49,6 +66,7 @@ struct Input {
 	int32_t enemyDist = 0;  // its distance (only read with hasEnemy)
 	Params p;
 	bool skillOk[5] = {false, false, false, false, false};  // [1..4]: the row names a usable skill
+	bool controlled = false;  // the monster's last-mode field is GetHit (3 or 0x13): Median's "controlled monster" branch
 };
 
 enum class Kind : uint8_t { Wait, Attack, Charge, Skill, Walk };
@@ -102,8 +120,24 @@ auto Andariel(const Input& in, Ctl& ctl, Roll&& roll) noexcept -> Decision {
 		d.kind = Kind::Walk;
 		return d;
 	};
+	// The aip4 roll of skills 2 / 3: the controlled branch takes the skill when the roll FAILS (Median's branch compares the other way).
+	const auto skillRoll = [&] { return roll(p.aip4) != in.controlled; };
 
-	if (in.inReach) {
+	if (in.controlled) {
+		if (ctl.phase == 0) {  // never idles: the first think already engages
+			ctl.phase = 1;
+		}
+		if (in.dist < ControlledMarkLimit && in.dist > ctl.mark) {
+			ctl.mark = in.dist;
+		}
+		if (in.inReach) {
+			// no aip1 roll: a 30% roll (with skill 1 allowed) picks skill 1 on the target or skill 4 on the enemy, else the plain attack
+			if (roll(30) && b1) {
+				return roll(50) ? skill(1, false) : skill(4, in.hasEnemy);
+			}
+			return AttackOn(false);
+		}
+	} else if (in.inReach) {
 		ctl.phase = 1;
 		Decision d;
 		if (roll(p.aip1)) {
@@ -140,11 +174,11 @@ auto Andariel(const Input& in, Ctl& ctl, Roll&& roll) noexcept -> Decision {
 		}
 		return attackOrWait(50);
 	}
-	if (b2 && ctl.cd <= 0 && roll(p.aip4)) {
+	if (b2 && ctl.cd <= 0 && skillRoll()) {
 		ctl.cd = SkillCooldown;
 		return skill(2, false);
 	}
-	if (b4 && ctl.cd <= 0 && roll(p.aip4)) {
+	if (b4 && ctl.cd <= 0 && skillRoll()) {
 		ctl.cd = SkillCooldown;
 		return skill(3, false);
 	}

@@ -51,6 +51,7 @@ constexpr int RowSkill = 0x1c4;           // Skill1..5 (int16), the modes at Row
 constexpr int RowSkillMode = 0x1d4;
 constexpr int ArgCtl = 0x00, ArgTarget = 0x10, ArgDist = 0x20, ArgReach = 0x24, ArgRow = 0x28, ArgDifficulty = 0x38;
 constexpr int CtlPhase = 0x44, CtlMark = 0x48, CtlCooldown = 0x4c;
+constexpr int MonsterHitMode = 0x68;      // monster data (unit+0x10): the last mode left, GetHit (3 / 0x13) = Median's "controlled" gate
 constexpr int GameFrame = 0x170;
 constexpr int SkLocalDelay = 0x238;       // skills record: compiled localdelay calc
 
@@ -86,7 +87,7 @@ const Entry* g_table0 = nullptr;
 Entry g_entry = {};
 bool g_native = false;
 
-std::atomic<uint32_t> g_thinks{0}, g_waits{0}, g_attacks{0}, g_enemyAttacks{0}, g_charges{0}, g_walks{0}, g_fallback{0};
+std::atomic<uint32_t> g_thinks{0}, g_waits{0}, g_attacks{0}, g_enemyAttacks{0}, g_charges{0}, g_walks{0}, g_fallback{0}, g_controlled{0};
 std::atomic<uint32_t> g_skills[5] = {};
 
 template <typename T>
@@ -133,6 +134,9 @@ void NativeThink(Game* game, Unit* unit, void* args) noexcept {
 	Unit* enemy = g_nearest(game, unit, &enemyDistance, nullptr);
 	in.hasEnemy = enemy != nullptr;
 	in.enemyDist = enemyDistance;
+	if (const auto* data = Load<const uint8_t*>(unit, 0x10)) {
+		in.controlled = monster_ai::IsControlledMode(Load<int32_t>(data, MonsterHitMode));
+	}
 
 	monster_ai::Ctl state;
 	state.phase = Load<int32_t>(ctl, CtlPhase);
@@ -145,9 +149,13 @@ void NativeThink(Game* game, Unit* unit, void* args) noexcept {
 	const monster_ai::Decision d = monster_ai::Andariel(in, state, [&](int32_t percent) { return Chance(seed, percent); });
 
 	*reinterpret_cast<int32_t*>(ctl + CtlPhase) = state.phase;
+	*reinterpret_cast<int32_t*>(ctl + CtlMark) = state.mark;
 	*reinterpret_cast<int32_t*>(ctl + CtlCooldown) = state.cd;
 
 	g_thinks.fetch_add(1, std::memory_order_relaxed);
+	if (in.controlled) {
+		g_controlled.fetch_add(1, std::memory_order_relaxed);
+	}
 	Unit* aim = (d.onEnemy && enemy != nullptr) ? enemy : target;
 	switch (d.kind) {
 	case monster_ai::Kind::Wait:
@@ -269,7 +277,9 @@ auto InstallMonsterAi(const D2RL::PluginContext* context, bool native, char* rep
 
 void MonsterAiStatus(char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize,
-	              "%u thinks (wait %u, attack %u + %u on the enemy, charge %u, walk %u, skills 1-4: %u %u %u %u), fallback thinks %u",
+	              "%u thinks (wait %u, attack %u + %u on the enemy, charge %u, walk %u, skills 1-4: %u %u %u %u), fallback thinks %u, "
+	              "controlled thinks %u",
 	              g_thinks.load(), g_waits.load(), g_attacks.load(), g_enemyAttacks.load(), g_charges.load(), g_walks.load(),
-	              g_skills[1].load(), g_skills[2].load(), g_skills[3].load(), g_skills[4].load(), g_fallback.load());
+	              g_skills[1].load(), g_skills[2].load(), g_skills[3].load(), g_skills[4].load(), g_fallback.load(),
+	              g_controlled.load());
 }
