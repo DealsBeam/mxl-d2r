@@ -13,22 +13,34 @@
 #include "craft_flags.h"
 #include "d2r.h"
 #include "dungeon_lockout.h"
+#include "engine_gaps.h"
+#include "engine_gaps_logic.h"
+#include "gamble_logic.h"
 #include "goblins.h"
+#include "hirelings.h"
+#include "hirelings_logic.h"
 #include "info_panels.h"
 #include "mxl_hirelings.h"
+#include "cooldowns.h"
 #include "no_corpse.h"
 #include "item_events.h"
 #include "npc_actions.h"
 #include "item_gen.h"
+#include "mana_costs.h"
 #include "map_memory.h"
 #include "level_types.h"
 #include "monster_looks.h"
+#include "monster_rules.h"
+#include "skill_damage.h"
 #include "skill_tree.h"
+#include "mxl_skill_flags.h"
 #include "quests_act1.h"
 #include "stat_columns.h"
 #include "strings.h"
 #include "strings_probe.h"
 #include "testharness.h"
+#include "travel.h"
+#include "travel_logic.h"
 #include "waypoints.h"
 #include "waypoints_logic.h"
 
@@ -136,6 +148,8 @@ constexpr uint64_t RvaDeadCheck = 0x34c2c0;     // (unit) -> 1 dead / dying
 constexpr uint64_t RvaPosCheck = 0x4fe1f0;      // (unit, x, y, tolerance) -> 0 when the unit is within the tolerance of x,y
 constexpr uint64_t RvaPathDistance = 0x325370;  // (unit, x, y) -> distance used by the walk packet check (<= 15 accepted)
 constexpr uint64_t RvaUnitClientOf = 0x48fde0;  // (unit) -> client
+constexpr uint64_t RvaMonsterUseSkill = 0x4a7bc0;  // (game, monster, mode < 0x10, skill id, target unit, x, y, 0): the AI's skill use -> 1 started
+constexpr uint64_t RvaUnitHasState = 0x3351b0;     // (unit, state) -> non-zero when set
 // client
 constexpr uint64_t RvaClientFind = 0x9a5d0;     // (id, type) -> client unit
 constexpr uint64_t RvaMenuRecord = 0x113990;    // (npc unit) -> row index in the NPC menu table
@@ -219,6 +233,8 @@ using DeadCheckFn = int32_t (*)(Unit*);
 using PosCheckFn = int32_t (*)(Unit*, uint32_t, uint32_t, int32_t);
 using PathDistanceFn = int32_t (*)(Unit*, int32_t, int32_t);
 using UnitClientFn = void* (*)(Unit*);
+using MonsterUseSkillFn = int64_t (*)(Game*, Unit*, uint32_t, int32_t, Unit*, int32_t, int32_t, uint8_t);
+using UnitHasStateFn = uint64_t (*)(Unit*, int32_t);
 using ClientFindFn = Unit* (*)(uint32_t, int32_t);
 using MenuRecordFn = int32_t (*)(Unit*);
 using MenuHandlerFn = uint8_t (*)(uint8_t);
@@ -447,6 +463,10 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Out("corpses %d players=%d self=%d | no corpse %s: skipped corpse calls=%ld penalty calls=%ld respawns held=%ld let=%ld xp=%u", corpses,
 	    players, self ? 1 : 0, noCorpseOn ? "on" : "off", skippedCorpses, skippedPenalties, respawnsHeld, respawns,
 	    static_cast<uint32_t>(Stat(p, 13)));
+	long cdStarts = 0, cdReduced = 0, cdShared = 0, cdDropped = 0, cdMonsters = 0;
+	const bool cooldownsOn = CooldownCounts(&cdStarts, &cdReduced, &cdShared, &cdDropped, &cdMonsters);
+	Out("cooldowns %s: starts=%ld reduced=%ld shared=%ld dropped=%ld monsters=%ld", cooldownsOn ? "on" : "off", cdStarts, cdReduced, cdShared, cdDropped,
+	    cdMonsters);
 	Out("skills left=%d right=%d", SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(p)), SkillIdOf(Fn<ActiveSkillFn>(RvaRightSkill)(p)));
 	PrintMissiles(c);
 	int mons = 0;
@@ -1135,6 +1155,95 @@ auto CmdTowerprobe(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
+// `a5done`: D2R's own Act 5 quest completion for quest 39 (Rite of Passage, 0x54af20(game, player)): with the quest not done,
+// the player in Act 5 and a level of 20 / 40 / 60 or more by difficulty it sets the quest's bits and pays the quest experience
+// (0x550c20). Prints the experience stat (13) and the level before and after.
+constexpr uint64_t RvaRiteOfPassage = 0x54af20;
+using RiteFn = void (*)(Game*, Unit*);
+
+auto CmdA5Done(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const int32_t xp0 = Stat(c->player, 13), lvl0 = Stat(c->player, StatLevel);
+	Fn<RiteFn>(RvaRiteOfPassage)(c->game, c->player);
+	const int32_t xp1 = Stat(c->player, 13), lvl1 = Stat(c->player, StatLevel);
+	void* rec = QuestRecord(c);
+	Out("a5done level %d->%d xp %d->%d gained=%d quest39bit0=%d", lvl0, lvl1, xp0, xp1, xp1 - xp0,
+	    rec != nullptr ? Fn<QuestFn>(RvaQuestTest)(rec, 39, 0) : -1);
+	return true;
+}
+
+// `countessreward`: the Countess reward function 0x5e3010 (quest 5, its data block at +0x20) run on its own for the nearest
+// Countess (spawn 45 first), as if she had just died to the player: the data block's "dead" byte (+0x118) is set and the
+// "handed out" byte (+0x119) cleared first, the quest 5 kill context is set by hand. Prints the byte afterwards.
+constexpr uint64_t RvaFindQuest = 0x518220;     // (game, quest id) -> quest object
+constexpr uint64_t RvaCountessReward = 0x5e3010;  // (quest 5, quest 5 + 0x20)
+using FindQuestFn = uint8_t* (*)(Game*, int32_t);
+using CountessRewardFn = void (*)(uint8_t*, uint8_t*);
+
+auto CmdCountessReward(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Unit* victim = NearestMonster(c, 45, false);
+	if (victim == nullptr) {
+		return Fail(c, "countessreward: no Countess (spawn 45) alive");
+	}
+	uint8_t* quest = Fn<FindQuestFn>(RvaFindQuest)(c->game, 5);
+	if (quest == nullptr) {
+		return Fail(c, "countessreward: no quest 5 object");
+	}
+	uint8_t* data = quest + 0x20;
+	data[0x118] = 1;
+	data[0x119] = 0;
+	QuestsTowerKillSet(victim, c->player);
+	Fn<CountessRewardFn>(RvaCountessReward)(quest, data);
+	QuestsTowerKillSet(nullptr, nullptr);
+	Out("countessreward done=%d", static_cast<int>(data[0x119]));
+	return data[0x119] != 0;
+}
+
+// `hellforgereward [monster class]`: the Hellforge reward function 0x5e4540 (quest 27, called by the quest dispatcher 0x516370
+// when the player smashes the Mephisto soulstone on the forge object, class 376) run on its own, with the nearest monster of
+// the class (default 1: spawn one first) standing in for the forge: the quest's active byte (+0x23) is set first. Prints the
+// byte afterwards (the plugin's hook clears it when it rolled Median's class; D2R's runes would clear it too, see the item count).
+constexpr uint64_t RvaHellforgeReward = 0x5e4540;  // (quest 27, forge unit)
+using HellforgeRewardFn = void (*)(uint8_t*, Unit*);
+
+auto CmdHellforgeReward(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long cls = 1;
+	if (t.n >= 2 && !hcmd::ParseInt(t.tok[1], &cls)) {
+		return Fail(c, "usage: hellforgereward [monster class]");
+	}
+	Unit* stand = NearestMonster(c, static_cast<int>(cls), false);
+	if (stand == nullptr) {
+		return Fail(c, "hellforgereward: no such monster alive (spawn it first)");
+	}
+	uint8_t* quest = Fn<FindQuestFn>(RvaFindQuest)(c->game, 27);
+	if (quest == nullptr) {
+		return Fail(c, "hellforgereward: no quest 27 object");
+	}
+	quest[0x23] = 1;
+	Fn<HellforgeRewardFn>(RvaHellforgeReward)(quest, stand);
+	Out("hellforgereward active=%d", static_cast<int>(quest[0x23]));
+	return quest[0x23] == 0;
+}
+
+// `prisonreward`: Anya's Prison of Ice reward task 0x546cc0 (a5q3.cpp) run on its own with a task node built by hand:
+// +8 the player's unit id, +0x10 the game, +0x18 the item code, here D2R's own ring ("rin "). The plugin's hook rewrites the
+// code to Median's amulet ("amu "); the item is created rare for the player (inventory, or the ground when full).
+constexpr uint64_t RvaPrisonReward = 0x546cc0;  // (task node, ctx)
+using PrisonRewardFn = void (*)(uint8_t*, void*);
+
+auto CmdPrisonReward(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	uint8_t node[0x40] = {};
+	const uint32_t id = IdOf(c->player);
+	const uint32_t code = 0x206e6972;  // "rin "
+	std::memcpy(node + 8, &id, 4);
+	std::memcpy(node + 0x10, &c->game, 8);
+	std::memcpy(node + 0x18, &code, 4);
+	Fn<PrisonRewardFn>(RvaPrisonReward)(node, nullptr);
+	uint32_t after = 0;
+	std::memcpy(&after, node + 0x18, 4);
+	Out("prisonreward code now %.4s", reinterpret_cast<const char*>(&after));
+	return after == 0x20756d61;  // "amu "
+}
+
 // `lockcheck <level>`: the dungeon warp test's verdict for the player entering the level (dungeon_lockout.cpp).
 auto CmdLockcheck(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long n = 0;
@@ -1712,6 +1821,29 @@ auto CmdSkills(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
+// `skilldmg <skill id> [level] [nomastery]`: the skill's damage at that level for the player, through the damage hooks
+// and through D2R's own functions (elemental and physical, min and max), with the inputs of Median's formula
+// (docs/plugin-spec.md, "Skill damage scaling"): flags (1 BaseSynergy, 2 StaticDamage), the player's level, energy and
+// stat 514 (Median 485), the synergy percent columns evaluated for the player, the BaseSynergy percent, the mastery stats.
+auto CmdSkillDmg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0, level = 1;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id) || id < 0 || id > 0xffff || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &level)) ||
+	    level < 1 || level > 255) {
+		return Fail(c, "usage: skilldmg <skill id> [level 1-255] [nomastery]");
+	}
+	const bool mastery = !(t.n > 3 && hcmd::LowerEq(t.tok[3], "nomastery"));
+	SkillDamageSample s;
+	if (!SampleSkillDamage(c->player, c->dataFlag, static_cast<int32_t>(id), static_cast<int32_t>(level), mastery ? 1 : 0, &s)) {
+		return Fail(c, "skilldmg: no skill record %lld (or the skill damage hooks are off)", id);
+	}
+	Out("skilldmg skill=%lld level=%lld mastery=%d flags=%d clvl=%d energy=%d stat%d=%d calcElem=%d calcPhys=%d baseSyn=%d masteryElem=%d "
+	    "masteryMagic=%d ele=%d-%d phys=%d-%d orig_ele=%d-%d orig_phys=%d-%d",
+	    id, level, mastery ? 1 : 0, s.flags, Stat(c->player, StatLevel), Stat(c->player, 1), mxl_skill_flags::StatBaseSynergy,
+	    Stat(c->player, mxl_skill_flags::StatBaseSynergy), s.calcElem, s.calcPhys, s.baseSynergy, s.masteryElem, s.masteryMagic, s.eleMin,
+	    s.eleMax, s.physMin, s.physMax, s.origEleMin, s.origEleMax, s.origPhysMin, s.origPhysMax);
+	return true;
+}
+
 // `cast <skill id> [x y | unit <id> | nearest [class] | self]`: uses the skill the way the cast packets do (location: 0x4fdb40,
 // unit: 0x4f8de0), from the player's own skill list. No target = the player's own position. The action runs over the
 // next frames: poll `state` (mode, mana) and `missiles`.
@@ -1735,8 +1867,9 @@ auto CmdCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	const int manaBefore = Stat(c->player, StatMana) >> 8;
 	int32_t px = 0, py = 0;
 	PlayerPos(c, &px, &py);
-	Out("cast checks: usable=%d (0 ok) busy=%d skill mode=%d unit mode=%d", Fn<SkillUsableFn>(RvaSkillUsable)(c->player, sk),
-	    Fn<PlayerBusyFn>(RvaPlayerBusy)(c->player), d2r::At<int32_t>(sk, 0x10), ModeOf(c->player));
+	Out("cast checks: usable=%d (0 ok) busy=%d (unit +0xa8 %d, +0xac %d, +0xb0 %d) skill mode=%d unit mode=%d", Fn<SkillUsableFn>(RvaSkillUsable)(c->player, sk),
+	    Fn<PlayerBusyFn>(RvaPlayerBusy)(c->player), d2r::At<int32_t>(c->player, 0xa8), d2r::At<int32_t>(c->player, 0xac),
+	    d2r::At<uint8_t>(c->player, 0xb0), d2r::At<int32_t>(sk, 0x10), ModeOf(c->player));
 	if (tg.kind == hcmd::CastTarget::Unit || tg.kind == hcmd::CastTarget::Nearest) {
 		Unit* target = tg.kind == hcmd::CastTarget::Unit ? FindMonsterById(c, static_cast<uint32_t>(tg.id)) : NearestMonster(c, tg.cls, false);
 		if (target == nullptr) {
@@ -1753,6 +1886,30 @@ auto CmdCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	Out("cast skill %lld (level %d) at %u,%u: code %d, mode now %d, mana %d -> %d", id, SkillBaseLevel(sk), x, y, rc, ModeOf(c->player),
 	    manaBefore, Stat(c->player, StatMana) >> 8);
 	return rc == 0 ? true : Fail(c, "cast: the game refused the skill use (code %d; town, no mana, cooldown or busy?)", rc);
+}
+
+// `mcast <skill id> <mode> unit <id> | nearest [class]`: the monster uses the skill on the player through the AI's skill use
+// (0x4a7bc0, mode as monstats Sk<n>mode: 6 = A1, 7 = A2, 9 = SC, 10 = S1). The monster must own the skill (its monstats row
+// lists it). Prints the call's answer, the monster's mode and, for the cooldown check, its stat 359 at layer = skill (the end frame
+// of D2R's cooldown timer) and the states 0xb9 / 0x79 the cooldown starts set; poll `state` or repeat the command.
+auto CmdMonsterCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long skill = 0, mode = 0;
+	hcmd::CastTarget tg;
+	if (t.n < 4 || !hcmd::ParseInt(t.tok[1], &skill) || !hcmd::ParseInt(t.tok[2], &mode) || skill < 0 || skill > 0xffff || mode < 0 || mode > 15 ||
+	    !hcmd::ParseCastTarget(t, 3, &tg) || (tg.kind != hcmd::CastTarget::Unit && tg.kind != hcmd::CastTarget::Nearest)) {
+		return Fail(c, "usage: mcast <skill id> <mode 0-15> unit <id> | nearest [class]");
+	}
+	Unit* mon = tg.kind == hcmd::CastTarget::Unit ? FindMonsterById(c, static_cast<uint32_t>(tg.id)) : NearestMonster(c, tg.cls, false);
+	if (mon == nullptr) {
+		return Fail(c, "mcast: no such live monster");
+	}
+	const int modeBefore = ModeOf(mon);
+	const int64_t rc = Fn<MonsterUseSkillFn>(RvaMonsterUseSkill)(c->game, mon, static_cast<uint32_t>(mode), static_cast<int32_t>(skill), c->player, 0, 0, 0);
+	const auto hasState = Fn<UnitHasStateFn>(RvaUnitHasState);
+	Out("mcast monster id=%u class=%d skill %lld mode %lld: returned %lld, unit mode %d -> %d, stat359[%lld]=%d state 0xb9=%d state 0x79=%d", IdOf(mon),
+	    ClassOf(mon), skill, mode, static_cast<long long>(rc), modeBefore, ModeOf(mon), skill, Stat(mon, 359, static_cast<int>(skill)),
+	    hasState(mon, 0xb9) != 0 ? 1 : 0, hasState(mon, 0x79) != 0 ? 1 : 0);
+	return rc != 0 ? true : Fail(c, "mcast: the monster did not start the skill (not its skill, or the mode is not allowed)");
 }
 
 // --- missiles ---------------------------------------------------------------------------------------------------------
@@ -1847,19 +2004,25 @@ auto CmdDump(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		return true;
 	}
 	if (hcmd::LowerEq(t.tok[1], "ground")) {
-		int n = 0;
+		int n = 0, listed = 0;
 		EachUnit(c->game, HashItems, [&](Unit* it) {
-			if (TypeOf(it) != 4 || n >= 40) {
+			if (TypeOf(it) != 4 || n >= 200 || (ModeOf(it) != 3 && ModeOf(it) != 5)) {  // the character's own items are not "ground"
 				return;
 			}
+			++n;
+			if (listed >= 400) {
+				return;
+			}
+			++listed;
 			int32_t x = 0, y = 0;
 			d2r::UnitXY(it, &x, &y);
 			char code[5];
 			ItemCode(c, it, code);
 			const auto* data = Fn<ItemDataFn>(0x34a500)(it);
 			++n;
-			Out("ground id=%u code=%s class=%d mode=%d at %d,%d ilvl=%d quality=%d", IdOf(it), code, ClassOf(it), ModeOf(it), x, y,
-			    static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(it)), data != nullptr ? d2r::At<int32_t>(data, 0) : -1);
+			const uint32_t flags = data != nullptr ? d2r::At<uint32_t>(data, 0x18) : 0;
+			Out("ground id=%u code=%s class=%d mode=%d at %d,%d ilvl=%d quality=%d identified=%d", IdOf(it), code, ClassOf(it), ModeOf(it), x, y,
+			    static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(it)), data != nullptr ? d2r::At<int32_t>(data, 0) : -1, (flags & 0x10) != 0 ? 1 : 0);
 		});
 		Out("ground items %d (mode 3 or 5 = on the ground)", n);
 		return true;
@@ -1876,6 +2039,107 @@ constexpr uint64_t RvaHireCost = 0x3c17b0;     // (expansion, player, hireling i
 using FindMercFn = Unit* (*)(Game*, Unit*, int32_t, int32_t);
 using MercListFn = uint8_t* (*)(Game*, Unit*, void*);
 using HireCostFn = int32_t (*)(int32_t, Unit*, uint32_t, uint8_t, uint32_t, uint32_t*);
+
+// `mercprice [level]`: the revive price of the player's mercenary from D2R's price function 0x3c1ad0 (the one the NPC dialog
+// and the charge call), at the level given (the mercenary's level stat is put back afterwards), next to Median's formula.
+constexpr uint64_t RvaRevivePrice = 0x3c1ad0;  // (merc, not classic, hireling id) -> gold
+using RevivePriceFn = int32_t (*)(Unit*, int32_t, int32_t);
+
+auto CmdMercPrice(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+	if (merc == nullptr) {
+		return Fail(c, "mercprice: the player has no mercenary");
+	}
+	const int32_t was = Stat(merc, StatLevel);
+	long long level = was;
+	if (t.n >= 2 && !hcmd::ParseInt(t.tok[1], &level)) {
+		return Fail(c, "usage: mercprice [level]");
+	}
+	Fn<SetStatFn>(RvaSetStat)(merc, StatLevel, static_cast<int32_t>(level), 0);
+	const int32_t price = Fn<RevivePriceFn>(RvaRevivePrice)(merc, 1, 0);
+	Fn<SetStatFn>(RvaSetStat)(merc, StatLevel, was, 0);
+	const int32_t expected = hire::RevivePrice(static_cast<int32_t>(level));
+	Out("mercprice level=%lld price=%d median=%d", level, price, expected);
+	return price == expected;
+}
+
+// `players [n]`: D2R's "Offline Difficulty Scaling" setting, the number the /players chat command sets (1-8): what the monster
+// setup 0x543e90 reads as the players count of a monster spawned from now on. The chat command also saves the setting
+// (0xa07670); this verb does not. Prints the value now.
+constexpr uint64_t RvaPlayersSetting = 0xe19e0;     // () -> the setting object; the value at +0xc
+constexpr uint64_t RvaPlayersSettingSet = 0xd2f020; // (setting, value)
+
+auto CmdPlayers(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	void* setting = Fn<void* (*)()>(RvaPlayersSetting)();
+	if (setting == nullptr) {
+		return Fail(c, "players: no setting object");
+	}
+	if (t.n >= 2) {
+		long long n = 0;
+		if (!hcmd::ParseInt(t.tok[1], &n) || n < 1 || n > 8) {
+			return Fail(c, "usage: players [1-8]");
+		}
+		Fn<void (*)(void*, int32_t)>(RvaPlayersSettingSet)(setting, static_cast<int32_t>(n));
+	}
+	Out("players setting=%d", d2r::At<int32_t>(setting, 0xc));
+	return true;
+}
+
+// `tctrace [reset]`: the class lookups of the treasure-class executor since start (or the last reset): the level it handed
+// the class getter 0x397290 is above 0 only when the monster's level steps the class up (Median: in Normal too).
+auto CmdTcTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	(void)c;
+	const TcTrace tc = NormalTcTrace(t.n >= 2 && hcmd::LowerEq(t.tok[1], "reset"));
+	Out("tctrace calls=%d leveled=%d lastclass=%d lastlevel=%d", tc.calls, tc.leveled, tc.lastClass, tc.lastLevel);
+	return true;
+}
+
+// `leash [distance]`: the player's mercenary against its owner. With a distance, moves the MERCENARY (the unit move 0x491ca0,
+// as `interact` does for the player) to a free spot that far from the player, along an axis or a diagonal: moving the player
+// pulls the mercenary along at once, whatever the leash. Prints both positions, the distance D2R's own owner-distance function
+// 0x596720 gives, the Euclidean one, and the mercenary's mode.
+constexpr uint64_t RvaOwnerDistance = 0x596720;  // (unit, owner) -> sub-tile distance
+using OwnerDistanceFn = int32_t (*)(Unit*, Unit*);
+
+auto CmdLeash(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+	if (merc == nullptr) {
+		return Fail(c, "leash: the player has no mercenary");
+	}
+	long long want = -1;
+	if (t.n >= 2 && (!hcmd::ParseInt(t.tok[1], &want) || want < 0 || want > 200)) {
+		return Fail(c, "usage: leash [distance 0-200]");
+	}
+	int32_t px = 0, py = 0;
+	d2r::UnitXY(c->player, &px, &py);
+	if (want >= 0) {
+		static const double dir[][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {0.7071, 0.7071}, {-0.7071, 0.7071}, {0.7071, -0.7071}, {-0.7071, -0.7071}};
+		bool moved = false;
+		for (const auto& d : dir) {
+			const int32_t x = px + static_cast<int32_t>(std::lround(d[0] * static_cast<double>(want)));
+			const int32_t y = py + static_cast<int32_t>(std::lround(d[1] * static_cast<double>(want)));
+			if (x < 0 || y < 0 || Fn<BlockedFn>(RvaMoveBlocked)(merc, x, y, 0x804) != 0) {
+				continue;
+			}
+			Fn<MoveFn>(RvaMove)(c->game, merc, 0, x, y, 0, 0);
+			int32_t mx = 0, my = 0;
+			d2r::UnitXY(merc, &mx, &my);
+			if (mx == x && my == y) {
+				moved = true;
+				break;
+			}
+		}
+		if (!moved) {
+			return Fail(c, "leash: no free spot %lld sub-tiles from the player", want);
+		}
+	}
+	int32_t mx = 0, my = 0;
+	d2r::UnitXY(merc, &mx, &my);
+	Out("leash merc id=%u at %d,%d player at %d,%d distance=%d euclid=%.1f mode=%d", IdOf(merc), mx, my, px, py,
+	    Fn<OwnerDistanceFn>(RvaOwnerDistance)(merc, c->player),
+	    std::sqrt(static_cast<double>((mx - px) * (mx - px) + (my - py) * (my - py))), ModeOf(merc));
+	return true;
+}
 
 auto CmdMerc(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
@@ -2005,10 +2269,14 @@ constexpr uint64_t RvaApplyDamage = 0x44a9b0;  // (game, attacker, target, &dama
 constexpr uint64_t RvaAvoidCheck = 0x44ef70;   // (attacker unit, defender unit, missile flag) -> 0 / 2 / 4 / 8 / 0x10
 constexpr uint64_t RvaAllocator = 0x12063c0;   // -> allocator object; vtable +0x20 frees
 constexpr uint64_t RvaItemColour = 0x3710d0;   // (player, item, &colour byte, mode) -> palette entry
+constexpr uint64_t RvaItemAutomagic = 0x36ca80;  // (item) -> automagic affix id (0 = none)
+constexpr uint64_t RvaItemQuality = 0x36cf60;    // (item) -> quality
 constexpr uint64_t RvaIsItemType = 0x373890;   // (item, type id) -> nonzero when the item is of that type
 constexpr int ItemFlagsOffset = 0x18;          // item data: flag word (0x400000 ethereal, 0x800 socketed, 0x10 identified)
 constexpr uint32_t ItemFlagEthereal = 0x400000;
 constexpr int StatSockets = 194, StatDefence = 31, StatMaxDurabilityItem = 0x49, StatDye = 368, StatClassLock = 492;
+using ItemQualityFn = int32_t (*)(Unit*);
+using ItemAutomagicFn = uint32_t (*)(Unit*);
 using HitUnitFn = void (*)(Game*, Unit*, Unit*, int32_t, void*);
 using ApplyDamageFn = void (*)(Game*, Unit*, Unit*, void*);
 using AvoidCheckFn = int32_t (*)(Unit* attacker, Unit* defender, int32_t missile);
@@ -2167,9 +2435,206 @@ auto CmdAvoid(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+constexpr uint64_t RvaMeleeWear = 0x4526c0;  // (game, attacker, defender): wear of the attacker's weapon and one of the defender's armour pieces
+using MeleeWearFn = void (*)(Game*, Unit*, Unit*);
+
+// `wear <attacker ref> <defender ref> [n]`: n times (default 100) the wear step of a melee hit, `0x4526c0`, the function
+// that calls the wear dispatcher `0x441b10` (weapon of the attacker, an armour piece of a player defender, 4 to 10 percent
+// each). Prints the durability sum of both units' worn items before and after (item stat 0x48), so the item rules check
+// (mxl-core "durability") can tell a worn-down item from one that stayed whole.
+auto CmdWear(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 100;
+	if (t.n < 3 || (t.n > 3 && !hcmd::ParseInt(t.tok[3], &n)) || n < 1 || n > 20000) {
+		return Fail(c, "usage: wear <player|merc|mon:id> <player|merc|mon:id> [n]");
+	}
+	Unit* attacker = ResolveRef(c, t.tok[1]);
+	Unit* defender = ResolveRef(c, t.tok[2]);
+	if (attacker == nullptr || defender == nullptr) {
+		return Fail(c, "wear: unit not found");
+	}
+	auto durability = [&]() {
+		long long sum = 0;
+		EachItemOf(c->player, [&](Unit* item) {
+			if (Fn<ItemByteFn>(RvaItemPage)(item) == 0xff) {  // worn
+				sum += Stat(item, StatDurability);
+			}
+		});
+		return sum;
+	};
+	const long long before = durability();
+	for (long long i = 0; i < n; ++i) {
+		Fn<MeleeWearFn>(RvaMeleeWear)(c->game, attacker, defender);
+	}
+	Out("wear %s -> %s n=%lld durability worn before=%lld after=%lld", t.tok[1], t.tok[2], n, before, durability());
+	return true;
+}
+
+constexpr uint64_t RvaPotionOfLifeStep = 0x580680;  // (game, unit): the Potion of Life's grant; max life (stat 7) += 0x1400 (Median 0x3200)
+constexpr uint64_t RvaLamEsenStep = 0x5ed6d0;       // (game, unit): Lam Esen's Tome reward, once per quest bit; unspent stat points (stat 4) += 5 (Median 10)
+constexpr uint64_t RvaSetState = 0x3355a0;          // (unit, state, on): needs the unit's state stat list
+constexpr uint64_t RvaClearState = 0x3354c0;        // (unit, state, 0)
+constexpr uint64_t RvaStateList = 0x2f5940;         // (unit, state) -> the unit's stat list for that state
+constexpr uint64_t RvaCreateStateList = 0x433d20;   // (&params) -> list (D2R's self buffs, srvdofunc 18, 0x553e60)
+constexpr uint64_t RvaBuffExpired = 0x5551f0;       // the self buffs' expiry callback
+constexpr uint64_t RvaDetachList = 0x2f7920;        // (unit, list)
+constexpr uint64_t RvaFreeList = 0x2f4180;          // (dataFlag, list)
+using RewardStepFn = int (*)(Game*, Unit*);
+using SetStateFn = void (*)(Unit*, int32_t, int32_t);
+using StateListFn = void* (*)(Unit*, int32_t);
+using CreateStateListFn = void* (*)(void* params);
+using DetachListFn = void (*)(Unit*, void*);
+using FreeListFn = void (*)(uint32_t, void*);
+
+// `rewardstep potion|tome`: runs the game's own grant step of the Potion of Life or of Lam Esen's Tome on the player and prints
+// the stat it changes (max life raw and in points; unspent stat points) before and after, so the amounts can be compared with
+// Median's (+50 life, 10 stat points). The Tome step grants only while quest 17 has bit 1 set (`quest 17 1 set`) and clears it.
+auto CmdRewardStep(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: rewardstep potion|tome");
+	}
+	const bool potion = hcmd::LowerEq(t.tok[1], "potion");
+	if (!potion && !hcmd::LowerEq(t.tok[1], "tome")) {
+		return Fail(c, "usage: rewardstep potion|tome");
+	}
+	const int stat = potion ? 7 : 4;
+	const int32_t before = Stat(c->player, stat);
+	Fn<RewardStepFn>(potion ? RvaPotionOfLifeStep : RvaLamEsenStep)(c->game, c->player);
+	const int32_t after = Stat(c->player, stat);
+	Out("rewardstep %s stat=%d before=%d after=%d gained=%d points=%d", t.tok[1], stat, before, after, after - before,
+	    potion ? (after - before) >> 8 : after - before);
+	return true;
+}
+
+// `setstate <ref> <state> <0|1>`: puts a state on a unit or takes it off, the way D2R's self buffs do (srvdofunc 18: a state
+// stat list from 0x433d20, then the set-state call); on lasts 10 minutes. Prints whether the unit has the state afterwards.
+// Gives the player the Stamina Shrine's state 136 without a shrine.
+auto CmdSetState(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long state = 0, on = 0;
+	if (t.n < 4 || !hcmd::ParseInt(t.tok[2], &state) || !hcmd::ParseInt(t.tok[3], &on) || state < 1 || state > 1023) {
+		return Fail(c, "usage: setstate <player|merc|mon:id> <state> <0|1>");
+	}
+	Unit* unit = ResolveRef(c, t.tok[1]);
+	if (unit == nullptr) {
+		return Fail(c, "setstate: unit not found (%s)", t.tok[1]);
+	}
+	const int32_t st = static_cast<int32_t>(state);
+	void* list = Fn<StateListFn>(RvaStateList)(unit, st);
+	if (on != 0 && list == nullptr) {
+		struct Params {  // the request of srvdofunc 18 (see missile_hits.cpp)
+			Unit* caster;
+			Unit* target;
+			int32_t skill, level, duration, minus1, zero, state;
+			void* expired;
+		} params{unit, unit, 0, 1, 25 * 600, -1, 0, st, reinterpret_cast<void*>(g_base + RvaBuffExpired)};
+		static_assert(sizeof(Params) == 0x30);
+		list = Fn<CreateStateListFn>(RvaCreateStateList)(&params);
+		if (list == nullptr) {
+			return Fail(c, "setstate: no state list could be created");
+		}
+		Fn<SetStateFn>(RvaSetState)(unit, st, 1);
+	} else if (on == 0 && list != nullptr) {
+		Fn<SetStateFn>(RvaClearState)(unit, st, 0);
+		Fn<DetachListFn>(RvaDetachList)(unit, list);
+		Fn<FreeListFn>(RvaFreeList)(c->dataFlag, list);
+	}
+	Out("setstate %s state=%lld on=%lld has=%d", t.tok[1], state, on, Fn<UnitHasStateFn>(RvaUnitHasState)(unit, st) != 0 ? 1 : 0);
+	return true;
+}
+
+// `manamin [reset]`: the lowest mana the player had on any server frame since `manamin reset` (a skill's mana is charged
+// when its action starts, a frame or more after `cast` returns, and regeneration refills it within a few frames, so a
+// single read after the cast sees nothing; every frame is sampled here).
+Unit* volatile g_manaWatch = nullptr;
+volatile LONG g_manaMin = 0;
+volatile LONG g_manaMax = 0;
+
+void TrackMana() noexcept {
+	Unit* p = g_manaWatch;
+	if (p != nullptr) {
+		const LONG now = Stat(p, StatMana);
+		if (now < g_manaMin) {
+			InterlockedExchange(&g_manaMin, now);
+		}
+		if (now > g_manaMax) {
+			InterlockedExchange(&g_manaMax, now);
+		}
+	}
+}
+
+auto CmdManaMin(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 2) {
+		if (!hcmd::LowerEq(t.tok[1], "reset")) {
+			return Fail(c, "usage: manamin [reset]");
+		}
+		const LONG now = Stat(c->player, StatMana);
+		InterlockedExchange(&g_manaMin, now);
+		InterlockedExchange(&g_manaMax, now);
+		g_manaWatch = c->player;
+	}
+	Out("manamin min=%d max=%d now=%d tracking=%s", g_manaMin >> 8, g_manaMax >> 8, Stat(c->player, StatMana) >> 8,
+	    g_manaWatch != nullptr ? "on" : "off (manamin reset starts it)");
+	return true;
+}
+
+// `manacharge`: what the mana cost hook (mana_costs.cpp) decided at the last charge site: its calls, the caster's room and the
+// town test, the cost and the charge in mana points, and the site (1 server, 2 client).
+auto CmdManaCharge(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const ManaChargeLog l = LastManaCharge();
+	Out("manacharge calls=%u room=%p town=%d cost=%d charged=%d site=%d other=%u from=0x%llx skill=%d", l.calls, l.room, l.roomIsTown, l.cost,
+	    l.charged, l.site, l.otherCalls, static_cast<unsigned long long>(l.otherFrom), l.otherSkill);
+	(void)c;
+	return true;
+}
+
+// `cursor`: the item on the player's cursor (inventory +0x40, the one 0x4249f0 reports as "busy": no skill can be used while
+// it is held): id and code, or "empty". Drop it with the client packet 0x17 + id (u32).
+auto CmdCursor(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	uint8_t* inv = static_cast<uint8_t*>(Fn<InventoryFn>(RvaInventory)(c->player, "harness", 0));
+	Unit* item = inv != nullptr && d2r::At<uint32_t>(inv, 0) == 0x1020304 ? d2r::At<Unit*>(inv, 0x40) : nullptr;
+	if (item == nullptr) {
+		Out("cursor empty");
+		return true;
+	}
+	char code[5] = {};
+	ItemCode(c, item, code);
+	Out("cursor id=%u code=%s", IdOf(item), code);
+	return true;
+}
+
+// `iflags <item id> [unid]`: flags (0x10 identified), mode, quantity (stat 0x46), durability (0x48) and maximum (0x49) of any
+// item unit in the game, on the ground too (`stat` only sees the player's items), and its position (the pick-up packet 0x16
+// carries it: id, x, y, to-inventory flag, 17 bytes); `unid` first clears the identified flag
+// (the generator may make the item identified already).
+auto CmdItemFlags(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id)) {
+		return Fail(c, "usage: iflags <item unit id>");
+	}
+	Unit* found = nullptr;
+	EachUnit(c->game, HashItems, [&](Unit* it) {
+		if (found == nullptr && TypeOf(it) == 4 && IdOf(it) == static_cast<uint32_t>(id)) {
+			found = it;
+		}
+	});
+	if (found == nullptr) {
+		return Fail(c, "iflags: no such item unit");
+	}
+	if (t.n > 2 && hcmd::LowerEq(t.tok[2], "unid")) {
+		Fn<DropFlagsFn>(RvaDropFlags)(found, 0x10, 0);
+	}
+	const auto* data = Fn<ItemDataFn>(RvaItemData)(found);
+	const uint32_t flags = data != nullptr ? d2r::At<uint32_t>(data, ItemFlagsOffset) : 0;
+	int32_t x = 0, y = 0;
+	d2r::UnitXY(found, &x, &y);
+	Out("iflags id=%u flags=0x%x identified=%d mode=%d quantity=%d durability=%d maxdurability=%d x=%d y=%d", IdOf(found), flags,
+	    (flags & 0x10) != 0 ? 1 : 0, ModeOf(found), Stat(found, 0x46), Stat(found, StatDurability), Stat(found, StatMaxDurabilityItem), x, y);
+	return true;
+}
+
 // `itemroll <code> <n> [q=quality] [ilvl=level]`: makes n items the way `item` does (the generator, quality default 2, item
-// level default 110 so the ethereal gate is open), reads sockets, the ethereal flag, defence and maximum durability and frees
-// them again. Prints the socket histogram and the ethereal count, then the defence and durability by ethereal or not.
+// level default 110 so the ethereal gate and the automagic roll are open), reads sockets, the ethereal flag, the quality the
+// generator gave, the automagic affix id, defence and maximum durability and frees them again. Prints the socket histogram,
+// the quality histogram, the automagic count and the ethereal count, then the defence and durability by ethereal or not.
 auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long n = 0, quality = 2, ilvl = 110;
 	if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &n) || n < 1 || n > 20000) {
@@ -2190,7 +2655,7 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		return Fail(c, "itemroll: unknown code");
 	}
 	hcmd::RollTally tally;
-	int failed = 0, nNormal = 0, nEth = 0, firstLevel = -1;
+	int failed = 0, nNormal = 0, nEth = 0, firstLevel = -1, nIdentified = 0;
 	long long sumNormal = 0, sumEth = 0;
 	int32_t durNormalMin = 1 << 30, durNormalMax = -1, durEthMin = 1 << 30, durEthMax = -1;
 	for (long long i = 0; i < n; ++i) {
@@ -2204,7 +2669,9 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		}
 		const bool eth = (FlagsOf(item) & ItemFlagEthereal) != 0;
 		const int32_t def = Stat(item, StatDefence), dur = Stat(item, StatMaxDurabilityItem);
+		nIdentified += (FlagsOf(item) & 0x10) != 0 ? 1 : 0;
 		tally.Add(Stat(item, StatSockets), eth);
+		tally.AddQuality(Fn<ItemQualityFn>(RvaItemQuality)(item), Fn<ItemAutomagicFn>(RvaItemAutomagic)(item) != 0);
 		if (eth) {
 			++nEth;
 			sumEth += def;
@@ -2218,13 +2685,17 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		}
 		Fn<FreeItemFn>(RvaFreeItem)(c->game, item);
 	}
-	char sockets[96];
+	char sockets[96], qualities[96];
 	tally.Sockets(sockets, sizeof(sockets));
-	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d sockets=[%s]", t.tok[1], tally.n, failed, firstLevel, tally.ethereal, sockets);
+	tally.Qualities(qualities, sizeof(qualities));
+	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d identified=%d sockets=[%s] qualities=[%s] automagic=%d", t.tok[1], tally.n, failed, firstLevel,
+	    tally.ethereal, nIdentified, sockets, qualities, tally.automagic);
 	Out("itemroll def normal n=%d sum=%lld, ethereal n=%d sum=%lld; maxdur normal %d..%d, ethereal %d..%d", nNormal, sumNormal, nEth, sumEth,
 	    durNormalMax < 0 ? 0 : durNormalMin, durNormalMax, durEthMax < 0 ? 0 : durEthMin, durEthMax);
-	char gate[256];
+	char gate[512];
 	ItemGenGateText(gate, sizeof(gate));
+	Out("itemroll %s", gate);
+	ItemGenSocketText(gate, sizeof(gate));
 	Out("itemroll %s", gate);
 	return true;
 }
@@ -2555,6 +3026,52 @@ auto CmdShop(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `gamble`: the player's gamble offers (the server builds the list on every gamble request: `interact <Gheed>`, then `menu <Gamble
+// line>`), read from the player data (+0x108); same item lines as `shop`, then `gamble offers N`. tools/game_checks.py check_gamble.
+auto CmdGamble(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const uint8_t* data = Fn<PlayerDataFn>(RvaPlayerData)(c->player);
+	void* list = data != nullptr ? d2r::At<void*>(data, 0x108) : nullptr;
+	int offers = 0;
+	if (list != nullptr) {
+		int guard = 0;
+		Unit* item = Fn<InvFirstFn>(RvaInvFirst)(list);
+		while (item != nullptr && guard++ < 200) {
+			Unit* next = Fn<InvNextFn>(RvaInvNext)(item);
+			if (TypeOf(item) == 4) {
+				++offers;
+				if (offers <= 60) {
+					DescribeItem(c, item);
+				}
+			}
+			item = next;
+		}
+	}
+	Out("gamble offers %d (expected %d, list %s) difficulty=%d", offers, gamble::MedianOffers, list != nullptr ? "present" : "none",
+	    static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)));
+	return list != nullptr;
+}
+
+// `gaps`: the small engine rules (engine_gaps_logic.h): the bytes at the three patched places and the player's slow floor as the
+// hooked function 0x449f40 returns it. tools/game_checks.py check_engine_gaps.
+auto CmdGaps(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	auto hex = [](uint64_t rva, size_t n, char* out) {
+		const uint8_t* p = reinterpret_cast<const uint8_t*>(g_base + rva);
+		for (size_t i = 0; i < n; ++i) {
+			std::snprintf(out + i * 2, 3, "%02x", p[i]);
+		}
+	};
+	char hit[32] = "", recast[40] = "";
+	hex(gaps::Hit20FloorRva, sizeof(gaps::Hit20FloorPatched), hit);
+	hex(gaps::RecastGuardRva, sizeof(gaps::RecastGuardPatched), recast);
+	const bool hitOn = gaps::SameBytes(reinterpret_cast<const uint8_t*>(g_base + gaps::Hit20FloorRva), gaps::Hit20FloorPatched, sizeof(gaps::Hit20FloorPatched));
+	const bool recastOn =
+	    gaps::SameBytes(reinterpret_cast<const uint8_t*>(g_base + gaps::RecastGuardRva), gaps::RecastGuardPatched, sizeof(gaps::RecastGuardPatched));
+	const int difficulty = static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty));
+	Out("gaps hit20=%s hit20_patched=%d recast=%s recast_patched=%d slowfloor=%d expected_slowfloor=%d difficulty=%d", hit, hitOn ? 1 : 0, recast,
+	    recastOn ? 1 : 0, EngineGapsSlowFloor(c->game, c->player), gaps::PlayerSlowFloor(difficulty), difficulty);
+	return true;
+}
+
 // Client side: the plugin's own string ids (strings.h). `mstr <full key>` reads the key through the localization service,
 // takes (or finds) the plugin id for it and reads the text back through D2R's numeric lookup, the way the NPC menu does.
 auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
@@ -2574,13 +3091,13 @@ auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
-	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
+	Out("verbs: state | merc | mercreq | mercprice [level] | players [1-8] | tctrace [reset] | leash [distance] | a5done | countessreward | hellforgereward [class] | prisonreward | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
-	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
-	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | levelact <id>..");
-	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | "
+	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
+	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | gamble | gaps | levelact <id>..");
+	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
 	Out("backlog verbs: stat <ref> <stat> scan [max layer] | cubeslots <first> <count> | cubeout <recipe> [slot] (portal outputs) | state (portal dest=)");
 	return true;
@@ -3107,6 +3624,79 @@ auto CmdEvTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// Client side (UI thread): the automap (layers, cells, the debug reveal flag) and the travel counters (waypoint auto-activation,
+// hotkeys, map reveal). `mapcells` is what the mapreveal check compares before and after a reveal.
+auto CmdMapCells(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	uint64_t cells = 0;
+	int layer = -1, flag = 0, layers = 0;
+	if (!TravelAutomap(&cells, &layer, &flag, &layers)) {
+		return Fail(c, "mapcells: not available (no game yet)");
+	}
+	Out("mapcells cells=%llu layer=%d layers=%d debugflag=%d", static_cast<unsigned long long>(cells), layer, layers, flag);
+	return true;
+}
+
+auto CmdTravel(Ctx*, const hcmd::Tokens&) noexcept -> bool {
+	char text[960];
+	TravelHotkeyReport(text, sizeof(text));
+	Out("travel %s", text);
+	char msgs[900];
+	TravelUiMessages("Panel", msgs, sizeof(msgs));
+	Out("uimsgs %s", msgs);
+	return true;
+}
+
+// stashprobe <page>: create a rune in shared stash tab <page> on the game thread, then delete it; stashprobe result: what happened.
+auto CmdStashProbe(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	char text[200];
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "result")) {
+		const int rc = TravelStashResult(text, sizeof(text));
+		Out("stashprobe result %d %s", rc, text);
+		return true;
+	}
+	long long page = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &page) || page < 0 || page > 998) {
+		return Fail(c, "usage: stashprobe <tab 0..998> | stashprobe result");
+	}
+	if (TravelStashProbe(static_cast<int>(page), text, sizeof(text)) == 0) {
+		return Fail(c, text);
+	}
+	Out("stashprobe tab %lld %s", page, text);
+	return true;
+}
+
+// wpobj: every waypoint object of the game with its position and its distance to the player (the wpauto check walks to one).
+auto CmdWpObj(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	int32_t px = 0, py = 0;
+	PlayerPos(c, &px, &py);
+	void* room = Fn<UnitRoomFn>(RvaUnitRoom)(c->player);
+	const int32_t level = room != nullptr ? Fn<RoomLevelFn>(RvaRoomLevel)(room) : -1;
+	int found = 0;
+	EachUnit(c->game, HashObjects, [&](Unit* u) {
+		if (TypeOf(u) != 2 || !travel::IsWaypointObject(ClassOf(u))) {
+			return;
+		}
+		int32_t ox = 0, oy = 0;
+		d2r::UnitXY(u, &ox, &oy);
+		void* oroom = Fn<UnitRoomFn>(RvaUnitRoom)(u);
+		++found;
+		Out("wpobj id=%u class=%d at %d,%d dist=%.0f level=%d inrange=%d", IdOf(u), ClassOf(u), ox, oy, DistTo(c->player, u),
+		    oroom != nullptr ? Fn<RoomLevelFn>(RvaRoomLevel)(oroom) : -1, travel::InPickupRange(px, py, ox, oy) ? 1 : 0);
+	});
+	Out("wpobj player at %d,%d level=%d number=%d objects=%d", px, py, level, travel::WaypointNumberOfLevel(level), found);
+	return true;
+}
+
+// Client side (UI thread): the map reveal the R hotkey runs, without the key.
+auto CmdReveal(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const int rc = TravelRevealNow();
+	if (rc < 0) {
+		return Fail(c, "reveal: not available (off, or no local player)");
+	}
+	Out("reveal done");
+	return true;
+}
+
 using VerbFn = bool (*)(Ctx*, const hcmd::Tokens&) noexcept;
 struct Verb {
 	const char* name;
@@ -3118,11 +3708,12 @@ const Verb Verbs[] = {
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
-    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
-    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
+    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false},
+    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
-    {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {
@@ -3178,6 +3769,13 @@ void HarnessCmdsInit(uint64_t exeBase) noexcept {
 void HarnessGameFrame(void* gamePtr) noexcept {
 	InterlockedIncrement(&g_frames);
 	g_lastGame = gamePtr != nullptr;
+	if (g_ready != 0 && g_manaWatch != nullptr && gamePtr != nullptr) {
+		__try {
+			TrackMana();
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			g_manaWatch = nullptr;
+		}
+	}
 	if (g_ready != 0 && g_trackMissiles != 0 && gamePtr != nullptr) {
 		__try {
 			TrackMissiles(static_cast<Game*>(gamePtr));

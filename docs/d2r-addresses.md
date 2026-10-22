@@ -785,6 +785,52 @@ callers and assert strings (`D2Game\src\Player\PlrModes.cpp`, `Player.cpp`, `Plr
 Level / experience stats: 12 / 13; gold 14, bank 15, `0xaf` gold lost (written by the penalty). The mode table entries for the player are
 unchanged by the port.
 
+## 17. Skill cooldowns (lane pa-cooldowns, 2026-10-22; plugin/src/cooldowns.cpp)
+
+Median's rules (D2Sigma, read from the disassembly; audit item 4 in sigma-patch-audit.md): delay `0x100b0f40` = the skill's delay formula - stat 309 at layer = skill id
+(unit total, only when not 0); start `0x100b1140` = player units only and delay > 0, end frame (now + delay) stored in the unit's extension
+(`unit + 0xf4`) at `ext[+8][group]` when skills2 byte `+0x2c` (CooldownGroup) is not 0, else `ext[+4][skill]`, and client packet `0x2b`; ready test
+`0x100b0ab0` = `now >= timer`, non-players always ready. The plugin passes on no start for a non-player (checked in game: the harness's monster skill use does not reach `0x439500` at all, with or without the hook). Median patch sites: D2Client `0xa2e06`, D2Common `0x52279` and `0x52462` (stub `0x1009b7f0`), D2Game `0xa09d5` /
+`0xa1aed` (stub `0x1009bc90`).
+
+| What | Address | Signature | Entry bytes (build 93847) | Notes |
+|---|---|---|---|---|
+| Server cooldown start | `0x439500` | `void (Game*, Unit*, int delay, int skillId)` | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 40` (20 bytes) | sets state `0xb9` with stat 359 (skill_cooldown) at layer = skill id, value = end frame (`game + 0x170` + delay), via `0x339e60`; D2R's ready test (`0x33f360`, usable code 1) treats stat 359 > 0 at the skill's layer as not ready. Hooked |
+| Client cooldown start | `0x217b90` | `void (Unit*, int delay, int skill)` | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20` (20 bytes) | time in ms = delay * 40; callers `0x2170d4`, `0x21604c`. Hooked |
+| Delay evaluation | `0x3b5160` | `(dataFlag, Unit*, calc, skill, level)` | | skill record `+0x234` = globaldelay calc, `+0x238` = localdelay calc. Not hooked |
+| Unit-wide delay state | `0x439470` | | | state `0x79` (Werewolf / Werebear); untouched, Median has no twin |
+| Stat getter | `0x2f5020` | `int (Unit*, stat, layer)` | | used for stat 309 |
+| Game frame | `game + 0x170` | u32 | | server frame, 25 per second |
+
+Design: D2R has one timer per skill, Median one per group, so a hooked start for a player starts the timer of every member of the group
+(`cooldowns_logic.h` StartList, proved equal to Median's bookkeeping by `cooldown_tests`). The group table comes from skills2 `CooldownGroup` through
+`txt_migrate cooldown_tables`. Skill ids >= 357 are renumbered +72 from Median. Non-player units go straight to D2R's start.
+
+## 18. Travel: waypoint auto-activation, map reveal, hotkeys, stash pages (lane gap-travel, 2026-10-22; plugin/src/travel.cpp)
+
+How Median does it (D2Sigma.dll 1.13c, 32-bit, RVAs of the dump in `ghidra\D2Sigma.dll`):
+
+| What | Median | Port |
+|---|---|---|
+| Waypoint activation | `D2AutoPickup.cpp` `0x4c7e0`, called after a walk order from `0xada40`: gold and waypoint objects are used when the distance to the unit is `< 0x24` (36 sub-tiles); the waypoint branch tests the player's record with `0xbffa0` and sets the bit when it is not known. A proximity rule after a walk, not "entering the area" | server scan, every 5th frame, `< 36` |
+| Hotkey table | `0x1d9110 + 15 * index`: X (`0x68cf0`, toggles the no-pickup flag `*[0x101f1058]`), C (`0x69820`, transmute while the cube panel is open), R (`0x887c0`, reveals the whole act once per game: it walks every level of the act and calls the level initialiser) | InputService actions `mxl_pickup_toggle`, `mxl_transmute`, `mxl_map_reveal` |
+| Stash pages | stash panel `0x113cf0` (`StashPanel:MainPanel`), page text `0x1130a0` prints `n / 10` in both modes (constant 10); buttons Prev / Next wrap modulo the page count, Sort and Mode | `add_shared_tabs = 7` in `d2rloader.toml` (3 normal tabs + 7 = 10) |
+
+D2R side (RVA = address - `0x140000000`, build 93847; all first bytes read from the dump, plugin checks them with `memcmp` before calling; nothing here is hooked):
+
+| What | RVA | Signature | Entry bytes | Use |
+|---|---|---|---|---|
+| waypoint set / test | `0x3d6890` / `0x3d6930` | (record, number u16) / -> nonzero | `48 89 5c 24 08 57 48 83 ec 20 0f b7 da 48 8b f9` (both) | the 112-bit record of section 11; the plugin sets the bit the way the object's operate function `0x58fe00` does |
+| player data / room / level | `0x34b240` / `0x34b440` / `0x2efc10` | (unit) / (unit) / (room) | not hooked | record = `data + 0x58 + difficulty * 8`; the level of a player or object = `0x2efc10(0x34b440(unit))` |
+| debug "Reveal Automap" | `0xd42b0` | () | `48 83 ec 58 48 8d 4c 24 20 48 c7 44 24 20 01 00` | breadth-first walk over the rooms joined to the player's room, visitor `0xd2240` adds each room's tiles and preset objects to the automap layer; then it flips the debug flag byte `0x2a2add4`, which the plugin writes back |
+| automap layers | list head `0x2a2cf60` (next at `+0xa8`), current `0x2a2cf68` (first int = layer number) | | | cell count of a layer = sum of the four element counts at `+0x28 / 0x50 / 0x78 / 0xa0` |
+| cube panel Transmute | `0x2cd720` | () | `4c 8b dc 55 53 48 8d 6c 24 88 48 81 ec 78 01 00` | the panel's own button handler: gathers the cube items and sends packet 0x20 (server `0x4c1590` -> `0x4f2490`) |
+| local player | `0x8b2d0` / `0x9a480` | () -> id / (id) -> client unit or null | `8b 05 2e 84 99 02 c3` / `48 89 5c 24 08 57 48 83 ec 20 83 f9 08` | the reveal and transmute run on the UI thread only when this finds a player |
+
+Waypoint object classes (`objects.txt` OperateFn 23, the same 16 rows in Median and vanilla): 119 145 156 157 237 238 288 323 324 398 402 429 494 496 511 539; waypoint numbers from `mxl_waypoints.h` (levels.txt Waypoint column).
+
+Checked in game (slot 1, 2026-10-22, `py -3 tools/game_checks.py --slot 1 all mapreveal wpauto hotkeys stashpages`): the waypoint of Cold Plains (number 1) is set within 1.5 s when its bit is cleared at distance 3, stays clear at distance 47, and a `move` to it sets it at distance 25; the reveal call returns, the automap layer list grows from 1 to 25 layers (the act's levels), a second reveal adds nothing and the debug flag is as it was (the cell count stays 8878: `cheat goto` and the town arrive with the automap already drawn whole, so no picture shows the difference; an earlier run that sampled a Cold Plains still streaming in saw 965 -> 8663 cells, which is the streaming, not proof); X / R / C pressed as window messages reach the actions (X toggles, R reveals, C with the cube closed is counted and ignored); an item created through ItemService lands in shared stash tabs 0-9 and tab 10 is refused.
+
 ## Appendix A. Quest descriptor table (D2R, verified)
 
 `0x239c5c0`, 36 entries of 0x20 bytes: `+0` init function VA, `+8` u32 act (0-4), `+0xc` u32 (`0x64` or 0), `+0x10`
@@ -918,6 +964,56 @@ handlers); `0x2e15a` = the end of the game frame function (the goblin / D2GS tic
 | `0x100bca20` | 3: 0x6b273 0x789bb 0xf3b37 |
 | `0x100bcd10` | 9: 0x4b17e 0x4b1b6 0x5568b 0x55955 0x9dd29 0xe176f 0xe1858 0xed3fe 0xed655 |
 
+
+## 19. Mercenary revive price, Act 5 quest experience, removed quest rewards (lane pa-quests, 2026-10-22)
+
+Median patches (docs/sigma-patch-audit.md items 8-10) ported in `hirelings.cpp` (`InstallMercRevive`, off word `mercrevive`) and
+`quests_rewards.cpp` (`InstallQuestXp` off word `questxp`, `InstallQuestRewards` off word `questrewards`). Entry bytes are checked before
+every hook, patched bytes before every patch; whole instructions, no rip-relative operand.
+
+| What | RVA | Entry bytes / patched bytes | Notes |
+|---|---|---|---|
+| Revive price (merc, not-classic flag, hireling id) -> gold | `0x3c1ad0` (hook) | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 41 8b f8` | D2R: `(level^2 / 2) x 15` capped by the hireling columns; Median `D2Hirelings 0x10067450`: level x 100 to 105, `(int)(pow(level - 90, 1.5) x 250)` above. Called at the mercenary's death (`0x4ffb90`, price stored and sent to the client) and again at charge time; the hook covers both. Harness `mercprice [level]` calls it. |
+| Rite of Passage experience | `0x550c20` (hook, function replaced) | `48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 54 41 56 41 57 48 83 ec 20` | D2R: 1.4M / 20M / 40M by difficulty. Replacement: client update `0x518620(game, player)`, then `0x44f2e0(game, player, level, 50000)`; none at level 130+. Harness `a5done` runs `0x54af20(game, player)` (the quest 39 completion that calls it). |
+| Qual-Kehk rune loop | `0x54c9ac` | `e8 7f ab fc ff` -> `b8 01 00 00 00` (call `0x517530` becomes `mov eax,1`) | the loop still counts a created item, nothing is created; `QualKehkHook` gives Median's runes. |
+| Akara ring | `0x5d9a6d` | `e8 be da f3 ff` -> `0f 1f 44 00 00` | the ring task `0x5d9a30`'s item creation. Griswold's Heart replaces it. |
+| Andariel chipped gems | `0x5e1fbd` and `0x5e1fc7` | `8d 7d 02` -> `31 ff 90`; `48 8b` -> `eb 56` | jumps over the two-gem loop (`edi = 0` as the standard gem roll after it expects). The standard gem drop `0x5e201f` stays (D2Sigma's nop covers the loop only). |
+| Prison of Ice item | `0x546cc0` (hook) | `48 89 5c 24 08 48 89 54 24 10 57 48 83 ec 30` | task node `+0x18` = item code; the hook writes `'amu '` before the original. The task is dispatched through the pointer table at `0x1d3d900`. |
+| Hellforge reward (quest 27) | `0x5e4540` (hook) | `40 53 55 48 83 ec 48` | called with the quest and the dying Hephasto (class 376): rolls Median's `Quest Hellforge` class (monstats row 257, `TreasureClass1` of the difficulty) once, clears quest `+0x23`, then the original runs without runes. |
+| Countess reward (quest 5) | `0x5e3010` (hook) | `48 8b c4 56 41 55 48 83 ec 58` | called by the quest 5 kill handler `0x5e10c0` (`TowerKillHook` records victim and killer) and by the retry task `0x5d98b0`. With a kill in progress and data `+0x118` set, `+0x119` clear: `DropBonusPerPlayer` of `Quest Countess` (row 266), `+0x119 = 1`. |
+
+Median-side corrections found on the way: D2Sigma's Andariel patch removes only the two chipped gems (the standard gem stays, the audit said "100 bytes nopped: the vanilla gift disappears"); the formula in the audit row game5-026 (`250*1.5^(level-90)`) is a misreading of `pow(level - 90, 1.5) * 250`.
+
+## 20. Gamble offers and small engine rules (lane pa2-gamble, 2026-10-23; plugin/src/gamble.cpp, engine_gaps.cpp)
+
+Median patches game5-022, game2-014, game4-020, game4-029 (docs/sigma-patch-audit.md items 16 and 21). Expected bytes are checked before every patch / hook.
+
+| What | RVA | Bytes | Notes |
+|---|---|---|---|
+| Gamble offer generator `(game, player, npc)` | `0x541880` | loop bound `83 fd 0e 0f 8c db fe ff ff` at `0x541a7c` (`cmp ebp, 0xe / jl 0x54195f`) -> immediate at `0x541a7e` becomes `0x20` | the only caller is `0x540913` (in `0x540850`, the gamble request). Offer 0 is item code `rin ` (`0x206e6972`), 1 is `amu ` (`0x20756d61`), the rest a random pick of the NPC's per-level list; the player's old list at player data `+0x108` is freed and a new one made (`0x386260`) |
+| Offer quality `(game, npc, code, level, rng)` | `0x541ab0` | - | rolls `0..99999` (`0x153b00(rng, 100000)`) against the difficulty row at `0x300830(expansion, difficulty)`: `+0x6c` rare, `+0x70` set, `+0x74` unique, `+0x78` / `+0x7c` upgrade chances; unique below `+0x74`, set below `+0x74 + +0x70`, rare below the sum, else magic (quality 4). Median's difficultylevels file has 25000 / 1000 / 1000, D2R's own 10000 / 100 / 50 |
+| Place the offer `(game, npc, item, list)` | `0x541d20` | - | `0x3865b0` / `0x389270` put it into the list's grid, which fails when the grid is full (the generator then returns): the 32 offers of Median fit page 0 of D2R's gamble grid |
+| Client gamble line | `0x112c80` | - | sends `0xec730(0x38, 2, npc id)`; `0x2a4875c` holds the current NPC id |
+| Missile hit 20 `(game, missile)` | `0x45ec20` (slot `0x23910d0`) | `3b c6 8b d8 0f 4c de` at `0x45edce` -> `31 db 85 c0 0f 4f d8` | two calc results floored at 1 (`0x45ed93` first, ebp; `0x45edce` second, ebx); Median changes the second (1.13c `0x6fc5de78`) |
+| srvdofunc 47 `0x56f750` (table `0x238ea00` slot 47 at `0x238eb78`) | guard at `0x56f859` | `e8 52 59 dc ff 85 c0 0f 85 b9 02 00 00` -> 13 x `90` | `0x3351b0(unit, state)` tests the state on the caster, the jump (`0x56fb1f`) leaves the function |
+| Slow / damage floor `(game, unit)` | `0x449f40` (hook) | entry `48 89 5c 24 08 57 48 83 ec 20` | unit type 1: monstats byte at record `+0x1ba + difficulty` (via `0x976e0`), else -0x32; difficulty is the byte at game `+0x104`. Callers `0x4509fa`, `0x451644`, `0x5619d8`, `0x561bde` (aura callback `0x5616f0`, aura apply `0x563d90`). The hook returns -12 / -25 / -50 for a player (unit type 0) on Normal / Nightmare / Hell |
+| Required level `0x376de0` | - | `ff 25` thunk into D2RCore.dll (`[0x143e2a3c0]`) | not patchable from the exe (common1-013 stays open) |
+
+## 21. Monster level, players scaling, Normal drops, leash, Baal throne delay (lane pa2-monsters, 2026-10-23; plugin/src/monster_rules.cpp)
+
+Median patches (docs/sigma-patch-audit.md items 17-19). Every patched byte is checked before it is changed; all sites of a part change or none.
+
+| What | RVA | Entry / patched bytes | Notes |
+|---|---|---|---|
+| Monster level gate | `0x543d32` | `45 85 ff 74 19` -> 5 nops | `test r15d,r15d / je` inside `0x543b50` (called from the monster setup `0x543120`): the area level is taken only above Normal. Stays: the classic test `cmp dl,1 / je` (`0x543d2d`) and the npc flag `0x4` test (`0x543d3c`, mask `0x1d996d8`). |
+| lUndead flag test | `0x543d44` | `85 05 9e 59 85 01 75 04` -> 8 nops | `test [rip+0x1859e],eax / jne`: mask `0x1d996e8` = `0x40`. The rip-relative operand is inside the patched bytes (nops, not a hook entry). |
+| Players record rewrite | `0x543e90` (hook) | `40 55 53 57 41 54` (6 bytes) | `(game, monster, record*)`: record `+0x24` life %, `+0x28` experience %, `+0x34` players (D2RCore fills it through the thunk `0x3e2b43c`). The hook writes Median's `(n-1)*50` / 0 and runs the original. A 0 / 0 record stays. |
+| Normal drop gate | `0x44138f` | `40 38 be 04 01 00 00 76 19` -> 9 nops | `cmp byte [rsi+0x104],dil / jbe 0x4413b1` in the executor `0x441300`: the monster's level (stat 12) goes to the class getter only above Normal. |
+| Class getter (trace) | `0x397290` (hook) | `48 89 5c 24 08` (5 bytes) | `(dataFlag, tc index, level)`; the hook only counts calls and keeps the last level (harness `tctrace [reset]`). |
+| Leash compares | `0x5bec51` `83 f9 64`; `0x5bd29f` `41 83 fc 50`; `0x5bd474` `41 83 fc 32`; `0x5c1136` `41 83 ff 32`; `0x5c96aa` `41 83 fc 32`; `0x5ccb39` `83 f8 32` | last byte -> `0x28` | Pet think `0x5bebe5`, approach chooser `0x5bd1e0` (two), owner think `0x5c1080`, AI 112 `0x5c95d0`, AI 107 `0x5cca50`. The distance is `0x596720(unit, owner)`: (max + min/2) of the coordinate differences minus both units' radii (about Euclid - 2). |
+| Baal throne countdown | `0x5c71e6` | `81 c1 fa 00 00 00` -> `81 c1 7d 00 00 00` | AI 134 `0x5c7070`: first-wave start `frame + 0xfa` (250) becomes `0x7d` (125). This is the audit's game5-001 "delay 250 becomes 125", which is not a leash. |
+
+Harness verbs: `players <n>` (sets D2R's players setting: `0xe19e0()` then `0xd2f020(setting, n)`; it is not persistent and only the next spawned monsters see it), `tctrace [reset]`, `leash [d]` (moves the mercenary `d` sub-tiles from the player with the unit move `0x491ca0`, prints both positions, `0x596720` and the mercenary's mode). Moving the player instead pulls the mercenary along at once, which hid the thresholds.
 
 ## Unknown / next steps
 

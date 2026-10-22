@@ -88,6 +88,10 @@ UniqueIdFn g_uniqueId = nullptr;
 const D2RL::PluginContext* g_context = nullptr;
 
 thread_local int32_t g_wantUnique = 0;  // unique index + 1 for the next generator call on this thread
+// The kill the quest 5 hook is handing to the vanilla handler: the Countess reward hook (quests_rewards.cpp) needs the
+// victim and the killer, which the vanilla reward function 0x5e3010 does not get.
+thread_local Unit* g_towerVictim = nullptr;
+thread_local Unit* g_towerKiller = nullptr;
 
 void Log(const char* what, int a, int b) noexcept {
 	if (g_context == nullptr) {
@@ -217,13 +221,33 @@ void TowerKillHook(void* quest, uint8_t* event) {
 	                                   d2r::At<Unit*>(event, EventPlayer), true)) {
 		return;
 	}
+	if (event != nullptr) {
+		g_towerVictim = d2r::At<Unit*>(event, EventUnit);
+		g_towerKiller = d2r::At<Unit*>(event, EventPlayer);
+	}
 	g_towerOriginal(quest, event);
+	g_towerVictim = nullptr;
+	g_towerKiller = nullptr;
 }
 
 }  // namespace
 
 auto QuestsTowerProbe(void* game, void* victim, void* player) noexcept -> bool {
 	return TowerSkips(static_cast<Game*>(game), static_cast<Unit*>(victim), static_cast<Unit*>(player), false);
+}
+
+auto QuestsTowerKill(void** victim, void** killer) noexcept -> bool {
+	if (g_towerVictim == nullptr || g_towerKiller == nullptr) {
+		return false;
+	}
+	*victim = g_towerVictim;
+	*killer = g_towerKiller;
+	return true;
+}
+
+void QuestsTowerKillSet(void* victim, void* killer) noexcept {
+	g_towerVictim = static_cast<Unit*>(victim);
+	g_towerKiller = static_cast<Unit*>(killer);
 }
 
 auto QuestsTowerSkips() noexcept -> int {

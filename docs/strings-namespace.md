@@ -40,6 +40,13 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
   matched anything and the wrong recipe fired (goldcraft ran recipe 4555 instead of 6327), and a treasure class entry
   dropped nothing (the Summoner / Izual catalysts). validate.py fails on an unqualified reference to a Median-only
   index, and on a `medianxl:` reference that no index cell reads like.
+  **Outputs take the same form** (lane cube-outputs, slot 1 background run): recipe 26 outputs `medianxl:SunstoneOfTheGods`
+  and `cubecraft` made `x4x`, quality unique, unique index 33 (the data row of that name in uniqueitems.txt); recipe 4950
+  (`useitem` + `gpw`, input `medianxl:DulraCatalyst`) made both items. `game_checks.py all cubeoutputs` repeats both. validate.py
+  also fails an output cell D2R cannot resolve (`cube_outputs`: not an item code, item type, index as the index cell reads it,
+  `useitem` / `usetype` / `Cow Portal` / Median's `void`) and a stray quote. The 0.54.0 release suite's failure of
+  "Cube outputs (bug #19)" (`cowportals`, rows 4950-4962, 5083-5100, 5133-...) was **not** an output form: see
+  docs/testing.md, `cubeslots`.
 - **Layouts (HD JSON):** a reference to a group 2 key is written `@medianxl:<key>`.
 - **Plugin / ID map:** `strings_idkeys.json` maps each Median string ID to its full key (`medianxl:<key>` for group 2).
   Code that hands D2R a numeric string ID for a group 2 string must get that number from the loader at run time

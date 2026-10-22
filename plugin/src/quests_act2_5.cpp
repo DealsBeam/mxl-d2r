@@ -266,6 +266,9 @@ void OrmusHook(void* quest, uint8_t* event) {
 
 void QualKehkHook(void* quest, uint8_t* event) {
 	const Event e = ReadEvent(event);
+	if (e.npc == quests::NpcQualKehk) {
+		Log("qual-kehk event, message", e.message, e.player != nullptr ? 1 : 0);
+	}
 	if (e.game != nullptr && e.player != nullptr && e.npc == quests::NpcQualKehk && e.message == quests::MsgQualKehkRunes) {
 		void* record = Record(e.game, e.player);
 		if (quests::ShouldGiveRunes(e.npc, e.message, Bit(record, quests::QuestRescue, quests::BitRescueDone),

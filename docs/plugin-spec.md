@@ -316,6 +316,73 @@ and RBX at the client charge site (`0x2188b0`, call 0x218937), picked by return 
 callers (`0x338110` / `0x33d480` tooltips and checks) keep D2R's value. Skills record: minmana +0x226, manashift
 +0x228, mana +0x22a, lvlmana +0x22c, calc7 +0x1a8, calc8 +0x1ac.
 
+**Free mana in town (audit SK3, Median P2.1.0; off word `townmana`).** At the two charge sites the hook returns 0 when the
+caster stands in a town (`0x34b440` unit -> room, `0x2f0750` room is a town); every other caller keeps its value. Found in
+game (lane gap-items, 2026-10-22): the server charge does **not** run at `0x4369fb`. D2RLoader replaces `0x436830` with a
+re-assembled copy of its body (registers reallocated, the call through a pointer: `ff 15 ..`, then `89 c3 85 c0 b8 ..`, at
+a heap address), so neither the return address nor RDI identifies the site. The stub now picks the site by the bytes after
+the call (server original `8b d8 85 c0 7f 04`, server copy `89 c3 85 c0 b8`, client `8b f8 85 c0 7e`) and the server copy's
+caster comes from a second hook, on the skill use function `0x43acb0` (entry `48 89 5c 24 10 44 89 4c 24 20 44 89 44 24 18
+55 56 57 41 54`; the unit is its second argument, RDX): a stub stores RDX in `g_caster` and jumps on. Only a player
+(unit type 0) counts. The Sigma formulas therefore also reach the server charge now (before, only the client charge site
+matched). The harness verb `manacharge` shows the last decision (calls, room, town test, cost, charge, site).
+
+## Item rules (`item_rules.cpp`, `item_gen.cpp`, audit IT1, IT2, IT3; off words `durability`, `quantity`, `autoid`)
+
+Median keeps the durability and quantity columns and removes the behaviour from D2Game.dll with binary patches (D2Sigma's
+patch table: the call to the wear dispatcher at D2Game+0xdee28 is NOPed, the `dec ebp` of the quantity use at D2Game+0xa16be
+is NOPed). D2R's counterparts, hooked with whole-instruction entries (recorded in the file):
+
+| Rule | D2R function | Replacement |
+|---|---|---|
+| IT1 durability | `0x441b10` wear dispatcher (game, unit, item), a 4-10% proc per hit; `0x5590c0` skill-use wear / stack chance | no-ops (the dispatcher is the only writer of stat 0x48 on a hit; stat 0x49 stays) |
+| IT2 quantity | `0x439130` quantity use (game, unit, item, flag), callers `0x439320` from `0x432f90`, `0x4333f0`, `0x43acb0`, `0x55906e` | returns the stack's quantity and leaves it alone |
+| IT3 drops identified | generator `0x442d60` `(game, &item, genRecord)`, the hook that also rolls ethereal (`item_gen.cpp`; off word `autoid`) | after the original: for quality 4 (magic), 5 (set), 6 (rare), 7 (unique) `SetItemFlag 0x36d8f0 (item, 0x10, 1)`; low, normal, superior and crafted items stay as generated |
+
+The get-hit path (audit item 12, D2Sigma NOPs the call `6fcfeba0` in SUnitDmg `6fcfed30`, D2Game+0xdee28): D2R's SUnitDmg
+`0x44b2b0` calls the wear step `0x4526c0` (game, attacker, defender) at `0x44b44b`, behind a test of the hit's flags. That step
+calls the dispatcher `0x441b10` twice: for the attacker's weapon (`0x45270c`) and, through `0x4527a0`, for one random piece
+of the defender's armour (`0x4528cd`). Those are the only two callers of the dispatcher, and `0x4526c0` has the one caller
+`0x44b2b0`, so the no-op above already covers it; no further hook is needed. The item generator `0x442d60`, `0x43ef29` and the
+other writers of stat 0x48 set a new item's durability and are not wear. `game_checks nodurability` runs `wear` (the step
+`0x4526c0` with a monster as attacker and the player as defender) and then lets three real monsters hit the character for 25 s.
+
+Median does IT3 in its generators: the magic (D2Game `0x104c1`), rare (`0x15443`), set (`0x13daa`) and unique item pickers push 1
+instead of 0 as the third argument of `SetItemFlag(item, 0x10 identified)` (docs/sigma-patch-audit.md item 1). D2R's
+generator dispatches on the quality at `0x442d60`; its sub-generators set the flag with 0, so the plugin sets it with 1 once
+the generator returned, for qualities 4-7. The harness `item` and `itemroll` create items through `MakeItem` `0x43d530`,
+which sets 0x10 itself at its end, so only real drops (`dump ground`, `identified=`) show the part. Pure rules live in
+`item_rules_logic.h` (`DropsIdentified`, `QuantityUseResult`, `ManaCharge`), unit tests in `item_rules_test.cpp`.
+
+## Skill damage scaling (`skill_damage.cpp`, `skill_damage_logic.h`, `mxl_skill_flags.h`, off word `skilldmg`)
+
+D2Sigma replaces the four D2Common damage functions of a skill (`D2SkillCalc` `0x100a5d00` elemental max, `0x100a5de0`
+elemental min, `0x100a5f40` physical max, `0x100a60a0` physical min; addresses in the 32-bit DLL). Each is D2's
+`(per-level steps + base) << shift`, then `+ that * DmgSymPerCalc% / 100`, then `+ that * mastery% / 100`, with three
+Median changes. D2R's four equivalents `(dataFlag, unit, skill, level, mastery flag)` are detoured the same way (inline
+hooks, entry bytes recorded in `skill_damage.cpp`, none with a rip-relative operand): elemental min `0x3387d0` (record
+base +0x288, steps +0x290), elemental max `0x338340` (+0x28c, +0x2a4), physical min `0x3385b0` (+0x250, +0x258), physical
+max `0x338160` (+0x254, +0x26c); shift +0x24c, weapon share (`SrcDam`) +0x24d, damage type +0x284, calc rows +0x2b8
+(elemental) and +0x280 (physical).
+
+* **BaseSynergy** (skills2 byte `+0x2d`, 164 skills, 152 of them class-less item / monster / pet spells): the calc
+  percent gets `((energy + 20) * 130 / (energy + 500) + 50 + min(stat 485 / 10, 100)) * (min(clvl, 120) + 5) * 10 / 100 - 75`
+  added. -42% at level 1 with no energy, +996% at level 100 with 300 energy. Median's stat 485 is D2R 514.
+* **StaticDamage** (skills2 byte `+0x2e`, 423 skills): no mastery bonus, elemental or physical.
+* **Physical mastery:** physical damage also takes stat 357 (`passive_mag_mastery`), added to the skill's own part only (not
+  to the weapon part); the elemental mastery stats of the damage type (0x149 fire, 0x14a lightning, 0x14b cold, 0x14c
+  poison, 0x165 magic) work as D2R's `0x337f40` already maps them.
+* The percent applies to the skill's own part and, separately, to the weapon part (`SrcDam * weapon damage >> 7`, only
+  when `SrcDam` is set and the call's mastery flag is non-zero); every product is 64-bit and truncated toward zero.
+  D2Sigma always evaluates the calc; D2R's versions skipped it for small damage without level steps, so the port
+  evaluates it always (`-1` = no calc = 0).
+* D2R's own functions answer the cases D2Sigma does not touch: no unit, level < 1, no record, and (physical) skills whose
+  `passive` flag meets the global mask byte `0x1d996d4`.
+
+`tools/sigma_data.py` writes `mxl_skill_flags.h` (the two flag bytes per skill by D2R id, stat 514) from `skills2.bin`.
+`harness_cmds.cpp` has `skilldmg <skill> [level] [nomastery]`: the damage through the hooks and through D2R's own
+functions, with the inputs of the formula. Checked by `game_checks skillscaling`.
+
 ## Skill restrictions (`skill_restrict.cpp`, off word `restrict`)
 
 Median's skills.txt has a `restrict` column (0-7) with `State1`-`State3`; D2Sigma's usability check
@@ -326,6 +393,13 @@ record (+0x2d0 mode byte, +0x2d2/+0x2d4/+0x2d6 states) has mode 3-7 applies the 
 returning 4 when it fails. The migrated record carries the column; the mode 7 rule needs two state ids that
 `txt_migrate.py` writes into `mxl_ids.h` (`StateMeleeDevotion`, `StateProgressiveCold`). Hunter Heartseeker is mode 5 with
 the states `sk1296_state` (Steady Aim) / `progressive_cold`: "Requires Steady Aim". Checked by `game_checks steadyaim`.
+
+**Item-triggered skills are not restricted** (lane skill-leftovers). D2R has a second restrict test, `0x33f6a0` (modes 0-2 only,
+gated by a flag bit of the skill record), whose single caller `0x589930` is the event-skill caster behind `0x5896e0` (item procs,
+charges, oskills). D2Sigma has no counterpart: 1.13c's restrict test `0x6fd9f590` is called from D2Common 10787 alone and the
+1.13c event-skill caster `0x6fd114f0` never reaches it, so in Median an item's cast ignores `restrict`; `0x33f6a0` lets 3-7
+through, which is the same, and is not hooked. Checked by `game_checks restrictitems` (Heartseeker refused for the player's cast
+without Steady Aim, cast by an item's cast-on-kill with and without it).
 
 ## Steady Aim (Hunter, audit SK10): data plus the restrict module
 
@@ -344,11 +418,47 @@ regeneration / 10`; D2Sigma's mana regeneration (D2Resource.cpp `0x100a1b50`) tu
 rate whenever stat 297 is not 0 (no drain in a town); the fire skills cost 0 mana in the data; Emberstep's aura and the
 hit states of the fire skills put a **negative** 297 on the caster for a while, which makes the drain a build-up. D2R's
 regeneration is `0x42e350` (game, unit; entry `48 89 5c 24 10 48 89 6c 24 18 56 57 41 57 48 83 ec 20`, 18 bytes): the
-plugin detours it. With stat 297 zero it calls the original; in a town (`0x34b440` room, `0x2f0750`) it does nothing;
+plugin detours it. With stat 297 zero it calls the original (unless the regeneration base is below 1, see "Stat rules" below: Median does not raise it to 1); in a town (`0x34b440` room, `0x2f0750`) it does nothing;
 otherwise `heat_logic.h` `HeatDelta` takes the regeneration D2R would give (max mana / the class's regeneration frames
 x (stat 27 + 140)%, plus stat 26), scales it by -stat 297% and adds the result to mana (stat 8), clamped to 0 and max
 mana. Not ported: the UI relabel of the mana bar as Heat. Checked by `game_checks heat` (drain, floor at 0, Flamefront
 build-up, town hold). Emberstep was not cast in the test (the harness cannot select it).
+
+## Stat rules: Potion of Life, Lam Esen's Tome, stamina and mana recovery (`stat_rules.cpp`, `heat.cpp`, audit items 11 and 15; off words `potionamounts`, `stamina`, `manaregen`)
+
+**Amounts (item 11).** D2Sigma changes two immediates in the original grants: the Potion of Life's `push 0x1400` becomes
+`0x3200` (+50 life instead of +20, stat 7 maximum life, D2Game+0xd9eea, ItemMode `6fcf9bf0`) and the byte of Lam Esen's Tome's
+stat point grant becomes `0xa` (10 unspent stat points instead of 5, stat 4, D2Game+0xe6496, `6fd06420`). The D2R twins are two
+in-place `PatchBytes` (expected bytes checked first): `0x5806b5` `41 b8 00 14 00 00` (`mov r8d,0x1400`) -> `0x3200` in the
+potion's step `0x580680` (game, unit), and `0x5ed70d` `8d 50 03 44 8d 40 04` (`lea edx,[rax+3]` / `lea r8d,[rax+4]`, rax = 1
+after the quest bit test) -> the last byte `09`, i.e. `r8d = 10`, in the Tome's step `0x5ed6d0`. The harness verb `rewardstep`
+runs both steps; `game_checks potionamounts` reads +50 and +10.
+
+**Stamina (item 15).** The per-frame regeneration of a player calls the stamina step and then the mana step (D2R `0x42e850` and
+`0x42e350`, from `0x42e73c`). D2Sigma redirects the call at D2Game+0x79b7c to `0x100a1f90` and the mana call at +0x79b77 to
+`0x100a1f60` (formula `0x100a1b50`). `stat_rules_logic.h` has Median's stamina rule, and `InstallInlineHook(0x42e850)` replaces
+D2R's step with it (entry bytes of 23 whole instructions without rip-relative operands, recorded in the file):
+
+| Case | Median | D2R's own step |
+|---|---|---|
+| state 136 (`shrine_stamina`, the Stamina Shrine "Gain infinite Stamina", shrines.txt code 14, 4800 frames) | the bar is filled at once, in any mode | no effect (a bar at 0 refills like a standing one, 6 of 50 points in 1 s) |
+| standing (mode 1) or standing in a town (mode 5) | max / 256 raw per frame x (100 + stat 28)% | |
+| running (mode 3) | nothing | |
+| every other mode (walking, attacking, casting, hit, dead) | 75% of the standing step | 50% walking and attacking, nothing in the rest without a recovery bonus of 1000 |
+| bar full, or under one point | no special case | |
+
+"Infinite stamina" is therefore the Stamina Shrine's state, not a stat. The town rule of Median's infinite running belongs to the
+drain, not to this step: the vanilla drain of a run (1.13c `6fc97bb0`) returns "no drain" when the unit's room is a town, and
+D2R's drain does the same (game check `manarules`, the run in the Rogue Encampment). Median's sprint (audit SK7, PR #101) is
+the 50-point bar with `RunDrain 60`, a data row; the stamina step above decides how fast the bar refills.
+
+**Mana (item 15).** D2Sigma's mana formula `0x100a1b50` is D2R's with two differences: stat 297 (heat, `heat.cpp`) turns the
+recovery into a drain, zero in a town, and the base `max mana / (regeneration seconds x 25)` is not raised to 1 when it comes
+out 0 (D2R and 1.13c raise it), so a pool smaller than the frame count regenerates nothing. `heat.cpp` detours `0x42e350`
+already; with stat 297 = 0 it now runs D2R's step when the base is at least 1 or the no-regeneration state (0x55) is set, and
+otherwise applies `statrules::ManaDelta` (base scaled by (100 + stat 27)%, plus stat 26, clamped to [-mana, max - mana]).
+Free mana in a town (audit SK3, `mana_costs.cpp`) is the skill-cost hook, a separate part. Off words: `potionamounts` (the two
+patches), `stamina` (the stamina hook), `manaregen` (the floor of 1 returns to D2R; the heat drain stays under `heat`).
 
 ## Trophy timer (`trophy_timer.cpp`, off word `trophy`)
 
@@ -788,6 +898,17 @@ pages of all classes, many item skills): the row is now split per sheet ("row~cl
 tree skill finds its own icon in its class sheet (bug #3b: empty sockets on masteries, wrong icons where a class-less
 skill came first). Classes with more than 62 tree icons get smaller HD frames (Amazon 113 px, Barbarian 116 px).
 
+## Cooldowns (`cooldowns.cpp`, off word `cooldowns`)
+
+Median's skill cooldown: delay = skill delay formula - stat 309 (layer = skill id), started only for a player when the delay is above 0, and skills of one
+skills2 cooldown group share one timer (D2Sigma `0x100b0f40` / `0x100b1140` / `0x100b0ab0`; details in d2r-addresses.md section 17). The plugin hooks D2R's two
+cooldown starts (server `0x439500`, client `0x217b90`; entry bytes are verified before the hook is installed): for a player it subtracts stat 309 and starts the D2R timer
+(state `0xb9`, stat 359 at layer = skill id) of every member of the skill's group with the same delay; other units keep D2R's behaviour. The group table is generated
+(`mxl_cooldowns.h`, `txt_migrate cooldown_tables`); the pure rules and a model of Median's tables are in `cooldowns_logic.h` (`cooldown_tests`). `mxl` prints the line
+`cooldowns` with the counters starts / reduced / shared / dropped / non-player starts skipped (also in `h state`, `monsters=`). Median's removal of monster cooldowns is ported:
+a start of a unit that is not a player (monster, pet, hireling) is not passed on at all, so it stores no timer (D2R's ready test `0x3404a0` already answers "ready" for non-players;
+what changes is the state `0xb9` / stat 359 left on the monster; in game the harness's monster skill use never reached `0x439500`, so the counter stayed 0 and the rule is a guard). The client packet `0x2b` is not ported.
+
 ## Runewords and kill experience (`items_ext.cpp`, off words `runewords`, `xp`)
 
 Details, addresses and evidence in [subsystems/items-xp.md](subsystems/items-xp.md). Three hooks, each checked against
@@ -832,10 +953,31 @@ handler (`0x12c870`) plays Median's sounds at the player's unit (217 item_gem, 4
 2608 as stand-in, 230 item_lightarmor); the chat line is the fallback when the hook is off. Harness verbs `rewardmsg`,
 `rewardsnd`, `goblinsay` (the goblin line with the variant's own monstats name).
 
+## Travel: waypoint auto-activation, map reveal, hotkeys (`travel.cpp`, off words `wpauto`, `mapreveal`, `hotkeys`)
+
+Pure rules in `travel_logic.h` (unit tests `tests/travel_test.cpp`); evidence and addresses in `docs/d2r-addresses.md` section 18.
+No inline hook: the plugin calls D2R functions whose first bytes it checks with `memcmp` (a mismatch switches that part off and
+the `mxl` line says why).
+
+* **Waypoint auto-activation** (`wpauto`). `TravelGameFrame` runs from the goblins frame hook (`goblins.cpp`, after
+  `HarnessGameFrame`), every 5th server frame. For each player in the game it reads the level (`0x2efc10(0x34b440(player))`), the
+  waypoint number (`mxl_waypoints.h`), and tests the record bit (`0x3d6930`). Unknown, and a waypoint object (the 16 classes of
+  objects.txt OperateFn 23) of the same level within 36 sub-tiles (squared integer distance): `0x3d6890` sets the bit. Median does
+  the same after a walk order (`D2AutoPickup.cpp`, distance below `0x24`). The `goblins` word must be on because it owns the hook.
+* **Map reveal** (`mapreveal`). D2R's debug "Reveal Automap" `0xd42b0` on the UI thread, then the debug flag byte `0x2a2add4` is put back.
+  Starts from the player's room (the rooms joined to it); in game the automap layer list grew from 1 to 25 layers. Median's `0x887c0` walks every
+  level of the act once. Not ported: the once-per-game limit (the reveal can be repeated).
+* **Hotkeys** (`hotkeys`). Three InputService actions (category "Median XL", ids `mxl_pickup_toggle` X, `mxl_map_reveal` R,
+  `mxl_transmute` C, in the Controls menu, rebindable). X flips the switch that gates the auto-activation; R queues the reveal on
+  the UI thread; C queues the cube panel's Transmute `0x2cd720` on the UI thread when a UiMessageListener has seen the Horadric
+  Cube panel open. Counters and the last UI messages are in the `mxl` command (`travel` lines) and the harness verb `travel`.
+* **Stash pages** are not code: `tools/install_mod.py` writes `d2rcore.stash.add_shared_tabs = 7` into the mod's `d2rloader.toml`
+  (3 normal tabs + 7 = Median's 10 pages), only when the key is not set by hand.
+
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints lockout goblins npc reqgates hirelings skilltree runewords xp mapmem`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem mercrevive questxp questrewards`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500
