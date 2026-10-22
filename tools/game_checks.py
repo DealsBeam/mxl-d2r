@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst cainsub lockout cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -689,6 +689,97 @@ def check_lockout():
     add(name, "PASS" if (ok and r1 == (r0 or 0) + 1 and st1["player"]["area"] == 1) else "FAIL",
         "`use b60X` opened the portal (%s); `enter nearest`: %s; counters in `h state`: refused %s -> %s, clocks %s -> %s, "
         "still in area %s" % (ok, l2[0] if l2 else "-", r0, r1, c0, c1, st1["player"]["area"]), [sh("lock_normal")], l + l2)
+
+
+def _qbits(q):
+    """Bits 0-15 of quest q as a string of 0 / 1 (`h quest <q> dump`)."""
+    ok, l = H("quest %d dump" % q)
+    m = re.search(r"bits0-15 ([01]{16})", l[0]) if l else None
+    return m.group(1) if m else None
+
+
+def _qrestore(q, bits):
+    for i, ch in enumerate(bits or ""):
+        H("quest %d %d %s" % (q, i, "set" if ch == "1" else "clear"))
+
+
+def check_lockquest():
+    """Median's quest-table condition of the warp test (D2Sigma 0x5d810; leveldefs QuestFlagEx): level 73 (Duriel's Lair)
+    names quest 13. `h lockcheck` asks the plugin's warp test for the verdict without moving anybody."""
+    name = "Dungeon lockout: quest-table condition (level 73 needs quest 13: any of bits 1, 0, 0xe, 0xf)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    H("difficulty 0")
+    saved = _qbits(13)
+    if saved is None:
+        return add(name, "BLOCKED", "could not read quest 13")
+    notes, ok_all = [], True
+
+    def verdict(level):
+        ok, l = H("lockcheck %d" % level)
+        m = re.search(r"= (\w+)", l[0]) if l else None
+        return m.group(1) if m else "?"
+
+    try:
+        for b in (0, 1, 0xe, 0xf):
+            H("quest 13 %d clear" % b)
+        v0 = verdict(73)
+        ok_all &= v0 == "quest"
+        notes.append("no bits: %s (want quest)" % v0)
+        for b in (1, 0, 0xe, 0xf):
+            H("quest 13 %d set" % b)
+            v = verdict(73)
+            ok_all &= v == "allow"
+            notes.append("bit %#x: %s" % (b, v))
+            H("quest 13 %d clear" % b)
+        v1 = verdict(157)  # butcher_s_lair: names no quest, must never be the quest verdict
+        ok_all &= v1 != "quest"
+        notes.append("level 157 (no quest): %s" % v1)
+    finally:
+        _qrestore(13, saved)
+    add(name, "PASS" if ok_all else "FAIL", "; ".join(notes))
+
+
+def check_tower():
+    """Median's a1q5 guard (D2Sigma 0x9e8b0) on D2R's quest 5 kill handler: for a killer with quest 5 bit 0, 0xe or 0xf set
+    the hook skips the vanilla handler. A Countess spawned by the harness is not on quest 5's unit list (the kill event
+    never reaches the handler), so `h towerprobe` asks the hook's decision directly; the hook itself is only reached by the
+    natural Countess in the Tower Cellar (docs/unported.md)."""
+    name = "Forgotten Tower: quest 5 guard decides skip once quest 5 is done (towerprobe)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    H("difficulty 0")
+    saved = _qbits(5)
+    if saved is None:
+        return add(name, "BLOCKED", "could not read quest 5")
+
+    def probe():
+        ok, l = H("towerprobe")
+        m = re.search(r"skip=(\d)", l[0]) if l else None
+        return int(m.group(1)) if m else None
+
+    notes, ok_all = [], True
+    try:
+        H("spawn 45")
+        for c in (0, 0xe, 0xf):
+            H("quest 5 %d clear" % c)
+        v = probe()
+        ok_all &= v == 0
+        notes.append("quest 5 open: skip=%s (want 0)" % v)
+        for b in (0, 0xe, 0xf):
+            for c in (0, 0xe, 0xf):
+                H("quest 5 %d clear" % c)
+            H("quest 5 %d set" % b)
+            v = probe()
+            ok_all &= v == 1
+            notes.append("bit %#x set: skip=%s (want 1)" % (b, v))
+        H("kill nearest 45")
+    finally:
+        _qrestore(5, saved)
+    add(name, "PASS" if ok_all else "FAIL", "; ".join(notes))
 
 
 def check_lockout_clock():
@@ -1750,7 +1841,7 @@ def check_gameend():
 
 
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
-          ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
+          ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
           ("areacycle", check_areacycle), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai),
@@ -1808,10 +1899,10 @@ def run_all(only=None):
             g.stop()
             time.sleep(2)
         # Quest state of the test character: the kill / dialog checks need quests 4 (Cain rescued, bit 1) and 6 (Andariel)
-        # active when the game is created, and the plugin's catalyst flag (quest 47) clear; the earlier run's rewards
+        # active when the game is created (quest 5 open for the tower check), and the plugin's catalyst flag (quest 47) clear; the earlier run's rewards
         # completed them. Closed save, checksum and sidecar fixed (docs/save-format.md).
         for name in sorted({f[:-4] for f in os.listdir(SAVES) if f.endswith(".d2s")}):
-            patch_quests(name, {(0, 1): 0, (0, 4): 2, (0, 6): 0, (0, 41): 0, (0, 47): 0})
+            patch_quests(name, {(0, 1): 0, (0, 4): 2, (0, 5): 0, (0, 6): 0, (0, 41): 0, (0, 47): 0})
         g.snapshot_marks()
         if not to_menu():
             add("start game", "BLOCKED", "game did not reach the main menu")

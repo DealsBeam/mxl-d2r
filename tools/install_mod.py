@@ -82,6 +82,9 @@ def install_one(game: Path, name: str, savepath: str, copy_data_from: Path = Non
     from ds1_remap import remap_tree
     s = remap_tree(data / "global" / "tiles")
     print("ds1 ids: " + ", ".join(f"{k}={v}" for k, v in sorted(s.items())))
+    # HD scenes for the maps D2R has none for (docs/maps-hd.md): closest vanilla biome, no new art.
+    import maps_hd
+    maps_hd.build(data, game)
     # Median-only missile and overlay animations (.dcc): D2R crashes on a missing classic graphics file. Median-only
     # inventory pictures (items/*.dc6, the invfile/uniqueinvfile/setinvfile names): classic mode (G) draws items from
     # them. Files D2R already has are left alone so its own effects and items keep matching their HD versions.

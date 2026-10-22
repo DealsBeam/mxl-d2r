@@ -45,6 +45,34 @@ int RunDungeonTests() {
 	// rows with nothing set (247 whimsyshire) never refuse
 	Check(MeetsRequirements(*Find(247), {1, 0, 0}), "no requirements");
 
+	// quest-table condition (leveldefs QuestFlagEx): 73 needs quest 13 (any of bits 1, 0, 0xe, 0xf)
+	Check(Find(73) != nullptr && Find(73)->questLock == 13, "73 duriels_lair names quest 13");
+	Check(Find(157) != nullptr && Find(157)->questLock == 0, "157 names no quest");
+	{
+		QuestBits none{true, false, false, false, false};
+		Check(!QuestAllows(*Find(73), none), "quest lock: no bit set refuses");
+		for (int i = 0; i < QuestBitCount; ++i) {
+			QuestBits q = none;
+			q.pending = QuestBitList[i] == 1;
+			q.granted = QuestBitList[i] == 0;
+			q.completedNow = QuestBitList[i] == 0xe;
+			q.completedBefore = QuestBitList[i] == 0xf;
+			Check(QuestAllows(*Find(73), q), "quest lock: any one of the four bits allows");
+		}
+		Check(QuestAllows(*Find(73), QuestBits{}), "quest lock: no record never refuses");
+		Check(QuestAllows(*Find(157), none), "quest lock: level without a quest never refuses");
+		Lockout q0;
+		int gq = 0;
+		q0.Touch(&gq, 1);
+		Check(dungeon::Check(q0, {120, 0, 2}, 73, 0, none) == Verdict::Quest, "Check: quest refusal");
+		Check(dungeon::Check(q0, {120, 0, 2}, 73, 0, QuestBits{true, false, false, true, false}) == Verdict::Allow,
+		      "Check: quest bit set allows");
+		// requirements are reported before the quest
+		Check(dungeon::Check(q0, {100, 0, 2}, 132, 0, none) == Verdict::Requirements, "requirements come before the quest");
+		Check(Find(157)->questLock == 0 && dungeon::Check(q0, {120, 0, 2}, 157, 0, none) == Verdict::Allow,
+		      "default argument: no quest condition");
+	}
+
 	// clock: starts on entering, seals when it runs out, never reopens
 	Lockout l;
 	int g = 0;
