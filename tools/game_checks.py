@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst lockout cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
+catalyst cainsub lockout cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -465,7 +465,7 @@ def check_mxl():
         return add("mxl console command", "BLOCKED", "not in a game")
     txt = mxl_text()
     wanted = ["states fix", "level types", "calc codes", "skill functions", "item spells", "missile hits", "mana costs",
-              "cube conditions", "craft flags", "act 1 quests", "dungeon lockout", "goblins on",
+              "cube conditions", "craft flags", "act 1 quests", "dungeon lockout", "goblins on", "item events on",
               "npc actions on", "skill tree on"]
     missing = [w for w in wanted if w not in txt]
     add("`mxl` console command output", "PASS" if not missing else "FAIL",
@@ -559,6 +559,50 @@ def check_cain():
     add(name, "PASS" if (menu and not full) else "FAIL",
         "menu opened by `h interact 265`: %s; no `menu record is full` log line: %s. Popup text must be read from the "
         "screenshot (cain_menu.png)" % (bool(menu), not full), [s], (menu or []) + lines)
+    close_menu()
+
+
+def check_cain_submenu():
+    """Median's Cain page: a click on 'crafting materials' opens the submenu of the materials whose requirement holds
+    (the server's plugin message 'N' makes the client rebuild the list; plugin/src/npc_actions.cpp)."""
+    name = "Cain crafting materials: the click opens a submenu with the open entries"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    H("stat player 7 set 20000000")
+    H("stat player 6 set 20000000")
+    H("quest 4 0 set")  # Search for Cain done: the cube entry's requirement (the page needs one open entry)
+    H("remove box 10")  # the entry shows only while the player lacks the cube
+    menu = npc_menu(265)
+    if not menu:
+        return add(name, "FAIL", "Cain's menu did not open")
+    # the menu flag is set when the talk starts; the client builds the list (and the plugin adds its line) when the speech ends (a first talk takes up to ~30 s)
+    t0 = time.time()
+    while time.time() - t0 < 240 and not any("handler=plugin" in x for x in menu):
+        time.sleep(1)
+        ok0, again = g.hcmd("menu list", 5)
+        menu = again if ok0 else menu
+    plugin_idx = [int(re.search(r"line (\d+)", x).group(1)) for x in menu if "handler=plugin" in x]
+    if not plugin_idx:
+        return add(name, "FAIL", "no plugin line in Cain's menu after the speech: %s" % menu, [sh("cain_submenu")], menu)
+    before = len([l for l in menu if "line " in l])
+    shot0 = sh("cain_menu_page")
+    ok, l = H("menu %d" % plugin_idx[0])
+    time.sleep(2.5)
+    ok2, after = g.hcmd("menu list", 5)
+    s = sh("cain_submenu")
+    n_after = len([x for x in (after or []) if "line " in x])
+    same = after == menu
+    if ok2 and n_after >= 1 and not same:
+        ok3, l3 = H("menu 0")  # the first entry: the Horadric Cube
+        time.sleep(2)
+        got = len(items(hstate(), "box"))
+        add(name + " (entry gives the item)", "PASS" if got >= 1 else "FAIL",
+            "`menu 0` in the submenu: %s; Horadric Cube (box) items now: %d" % (ok3, got), [sh("cain_entry")], l3 or [])
+    add(name, "PASS" if (ok and ok2 and n_after >= 1 and not same) else "FAIL",
+        "menu lines before %d; click on the plugin line: %s; menu open after: %s with %d lines (the list changed: %s). Entry texts must be "
+        "read from the screenshots (cain_menu_page.png: Talk / crafting materials, cain_submenu.png: the entries)" % (before, ok, ok2, n_after, not same),
+        [shot0, s], (menu or []) + (l or []) + (after or []))
     close_menu()
 
 
@@ -988,37 +1032,92 @@ def check_casts():
     add(nm, "PASS" if good else "FAIL", "; ".join(notes), shots, log)
 
 
-def check_equip_events():
-    nm = "Item events (stat 396 / 397 thorns): equip with the harness and take a monster hit (documents the finding, see items-xp.md 5)"
+def spawn_id(cls=18):
+    """Spawns a monster and returns its unit id (the `spawned class N id=M` line)."""
+    ok, lines = H("spawn %d 1" % cls)
+    m = re.search(r"id=(\d+)", " ".join(lines))
+    return int(m.group(1)) if ok and m else None
+
+
+def check_item_events():
+    nm = "Item events (D2RCore registry): thorns 397, life on kill 265, cast on kill 376, open wounds / crushing blow skip immune monsters"
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
     goto(2)
+    close_menu()
     kill_all_near()
-    H("unequip rhand")
-    ok1, l1 = H("equip 115 397=50 rhand")
-    st = hstate()
-    weapon = [i for i in st["items"] if str(i.get("code")) == "115" and i.get("body") == 4]
-    # a plain stat proves the equip applies item stats to the player: strength (stat 0) +77 on a ring
     H("unequip lring")
-    ok3, l3 = H("equip rin 0=77 lring")
-    ok4, s1 = H("stat player 0")
+    log, notes = [], []
+    H("stat player 6 0 set 700000")  # no god mode: it refills life, which hides the life-on-kill gain; the checks take a second
+
+    def life_of(mid):
+        ok, l = H("stat m%d 6" % mid)
+        log.extend(l)
+        return stat_of(l)
+
+    # thorns: stat 397 (func 11, events 2 / 3): 50 fire damage is taken off the monster per event (life is stat 6, 1/256 points)
+    ok, l = H("equip rin 397=50 lring")
+    mid = spawn_id()
+    log += l
+    if mid is None:
+        return add(nm, "BLOCKED", "no monster could be spawned")
+    a = life_of(mid)
+    H("evtrace fire 3 player m%d" % mid)
+    b = life_of(mid)
+    thorns = ok and a is not None and b is not None and a - b == 50 * 256
+    notes.append("thorns 50: monster life %s -> %s (%s)" % (a, b, "-50 points" if thorns else "WRONG"))
+    H("kill nearest")
+    # life on kill: stat 265 = 50 (D2RCore function 33 -> D2R function 28), +50 points to a character at 100 life
+    # (the character's own gear may heal on a kill too: the gain is measured against a kill without the ring)
     H("unequip lring")
-    ok2, s0 = H("stat player 0")
-    str0, str1 = stat_of(s0), stat_of(s1)
-    equips = ok1 and bool(weapon) and ok3 and str1 == (str0 or 0) + 77
-    # the event itself: monsters melee the player while the 397 weapon is worn; the monster's life is not readable yet
-    H("spawn 18 2")
-    time.sleep(12)
-    st2 = hstate()
-    hit = st2["player"].get("life", 0) < st["player"].get("life", 0)
-    ok5, s397 = H("stat player 397")
-    note = ("equip -> worn item body=%s, strength %s -> %s with a +77 ring; player life %s -> %s (monsters hit: %s); player stat 397 reads %s "
-            "(the item event stat is not aggregated into a player stat; the thorns damage dealt to the monster cannot be read yet, "
-            "see items-xp.md section 5)" % (weapon[0].get("body") if weapon else None, str0, str1, st["player"].get("life"),
-                                           st2["player"].get("life"), hit, stat_of(s397)))
-    add(nm, "PASS" if equips and hit else "FAIL", note, [sh("equip_events")], l1 + l3)
+    mid = spawn_id()
+    H("stat player 6 0 set 25600")
+    H("evtrace fire 9 player m%d" % mid)
+    base = stat_of(H("stat player 6")[1])
+    ok, l = H("equip rin 265=50 lring")
+    H("stat player 6 0 set 25600")
+    ok2, l2 = H("evtrace fire 9 player m%d" % mid)
+    life = stat_of(H("stat player 6")[1])
+    heal = ok and ok2 and base is not None and life is not None and 50 * 256 <= life - base < 50 * 256 + 2000  # plus a little regeneration
+    notes.append("life on kill 50: player life 25600 -> %s without the ring, %s with it (%s)" % (base, life, "+50 points" if heal else "WRONG"))
+    H("kill nearest")
+    # cast on kill: stat 376 layer 36 * 64 + 5 (Fire Bolt level 5, 100 %): a missile (class 58) appears, the skill need not be known
+    H("unequip lring")
+    ok, l = H("equip rin 376:2309=100 lring")
+    mid = spawn_id()
+    time.sleep(2)  # a monster that was just spawned is not a valid target yet
+    H("missiles reset")
+    life0 = life_of(mid)
+    H("evtrace fire 9 player m%d" % mid)
+    ok2, l2 = H("missiles")
+    time.sleep(1.5)
+    life1 = life_of(mid)
+    log += l2 + H("evtrace calls")[1]
+    # the Fire Bolt is a missile (class 58) that may be gone again before `missiles` looks; it burns the monster
+    cast = ok and (any("class 58" in x for x in l2) or (life0 is not None and life1 is not None and life1 < life0))
+    notes.append("cast on kill (Fire Bolt 5): %s; monster life %s -> %s" % (" ".join(x for x in l2 if "missiles live" in x)[:60] or "-", life0, life1))
+    H("kill nearest")
+    # open wounds (135) / crushing blow (136): lose life on a hit; a monster with stat 373 (Median 189) skips them
+    H("unequip lring")
+    ok, l = H("equip rin 135=100 136=100 lring")
+    plain, immune = spawn_id(), spawn_id()
+    H("stat m%d 373 0 set 1" % immune)
+    res = {}
+    for who in (plain, immune):
+        a = life_of(who)
+        H("evtrace fire 5 player m%d" % who)
+        H("evtrace fire 6 player m%d" % who)
+        res[who] = (a, life_of(who))
+    wounds = ok and res[plain][1] < res[plain][0] and res[immune][1] == res[immune][0]
+    notes.append("open wounds / crushing blow: plain monster life %s -> %s, immune (373) %s -> %s" % (
+        res[plain][0], res[plain][1], res[immune][0], res[immune][1]))
+    H("unequip lring")
     kill_all_near()
-    H("unequip rhand")
+    H("stat player 6 0 set 2000000")  # the character is saved with its life: a dark orb is not taken for being in game on the next run
+    txt = mxl_text()
+    on = "item events on" in txt
+    notes.append("`mxl`: %s" % ("item events on" if on else "item events not on"))
+    add(nm, "PASS" if thorns and heal and cast and wounds and on else "FAIL", "; ".join(notes), [sh("item_events")], log)
 
 
 def god(on):
@@ -1628,10 +1727,10 @@ def check_gameend():
 
 
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
-          ("cain", check_cain), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
+          ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle), ("casts", check_casts), ("equipevents", check_equip_events), ("medianai", check_median_ai),
+          ("areacycle", check_areacycle), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),

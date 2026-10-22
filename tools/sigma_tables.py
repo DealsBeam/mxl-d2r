@@ -8,16 +8,22 @@ The schema lives in research/sigma_schema.json and is edited by hand as fields g
   { "<table>": { "rowsize": 44, "rows": 3895, "parallel": "monstats", "array": "0x38", "count": "0xf0",
                  "fields": [ {"off": 6, "type": "i16", "name": "SoundNormal1", "note": "..."}, ... ] } }
 Types: u8 i8 u16 i16 u32 i32 str<N> (zero-terminated text in N bytes), strid (u16 string id:
-table * 10000 + index, 0 = string.tbl, 1 = patchstring, 2 = expansionstring; 5382 = no string). Bytes not covered by a field are
-shown as field_0xNN (u8).
+table * 10000 + index, 0 = string.tbl, 1 = patchstring, 2 = expansionstring; 5382 = no string), u16x<N> (N u16 values in a
+row, printed as a comma list without the zeros). Bytes not covered by a field are shown as field_0xNN (u8).
+The txt column names D2Sigma registers for each table (its field descriptors: name, type, offset, link; recovered in
+mxl_extracted/4_sigma_source/tables) are the names to use; "columns" on a table is its descriptor count, "col" on a field the
+txt column name when the schema name differs.
 
 Commands:
   init      create/refresh the schema skeleton (keeps existing names and notes)
   evidence  write research/sigma_evidence/<table>.md: value statistics + code accesses per field
   decode    write work/sigma/<table>.txt with named columns; parallel tables get the vanilla row's key
             (--out DIR writes somewhere else, e.g. to compare after a schema change)
-Optional field keys: "ref": "<entity>" (value is a row of that entity, printed by name), "formula": "skills2code"
-(value is a byte offset into that formula table, -1 = none; printed as skills2code#<entry> plus the formula text).
+Optional field keys: "ref": "<entity>" (value is a row of that entity, printed by name; a Sigma table with a "key" field,
+e.g. itemclasses, prints that field), "formula": "skills2code" (value is a byte offset into that formula table, -1 = none;
+printed as skills2code#<entry> plus the formula text), "bits": {"<bit>": "<name>"} (flag word: decoded as one 0/1 column per
+bit, named like the txt columns).
+  coverage  named txt columns / all txt columns per table (the numbers of docs/sigma-tables.md)
 """
 import argparse
 import json
@@ -97,15 +103,18 @@ _ref_names: dict[str, list[str]] = {}
 
 def ref_name(entity: str, row: int) -> str:
     """Median row of <entity> -> resolved name: idmap.json (mxl_names.py), else the first column of
-    work/named/<entity>.txt for tables whose names survived (objects, ...)."""
+    work/named/<entity>.txt for tables whose names survived (objects, ...), else the "key" column of a Sigma table."""
     if entity not in _ref_names:
         idmap = json.loads(IDMAP.read_text("utf-8")) if IDMAP.exists() else {}
         if entity in idmap:
             _ref_names[entity] = [e["name"] for e in idmap[entity]]
-        else:
-            path = NAMED / f"{entity}.txt"
-            lines = path.read_text("utf-8").splitlines()[1:] if path.exists() else []
+        elif (NAMED / f"{entity}.txt").exists():
+            lines = (NAMED / f"{entity}.txt").read_text("utf-8").splitlines()[1:]
             _ref_names[entity] = [line.split("\t", 1)[0] for line in lines]
+        else:  # a Sigma table whose schema names a "key" string column (itemclasses: NameStr)
+            entry = json.loads(SCHEMA.read_text("utf-8")).get(entity, {})
+            key = next((f for f in entry.get("fields", []) if f["name"] == entry.get("key")), None)
+            _ref_names[entity] = [string_key(value(r, key)) for r in read_bin(entity)[1]] if key else []
     names = _ref_names[entity]
     return names[row] if 0 <= row < len(names) else ""
 
@@ -114,7 +123,9 @@ def cell(row: bytes, f: dict) -> str:
     """A field's value as text. Fields with "ref": "<entity>" print the referenced row's name
     (negative values and 0xFFFF mean none)."""
     v = value(row, f)
-    if f["type"] == "strid":
+    if isinstance(v, tuple):
+        text = ",".join((ref_name(f["ref"], x) or f"#{x}") if f.get("ref") else str(x) for x in v if x)
+    elif f["type"] == "strid":
         text = string_key(v)
     elif f.get("formula") and isinstance(v, int):
         text = formula_text(f["formula"], v)
@@ -126,6 +137,8 @@ def cell(row: bytes, f: dict) -> str:
 
 
 def size_of(t: str) -> int:
+    if t.startswith("u16x"):
+        return 2 * int(t[4:])
     return struct.calcsize(TYPES[t]) if t in TYPES else int(t[3:])
 
 
@@ -138,6 +151,8 @@ def read_bin(table: str) -> tuple[int, list[bytes]]:
 
 def value(row: bytes, f: dict):
     t, off = f["type"], f["off"]
+    if t.startswith("u16x"):
+        return struct.unpack_from("<%dH" % int(t[4:]), row, off)
     if t not in TYPES:
         raw = row[off: off + size_of(t)]
         return raw.split(b"\0", 1)[0].decode("latin-1")
@@ -248,6 +263,11 @@ def cmd_evidence(args) -> None:
     print(f"evidence -> {EVIDENCE}")
 
 
+def bit_columns(f: dict) -> list[tuple[int, str]]:
+    """(bit, column name) of a flag word's named bits."""
+    return [(int(bit), name) for bit, name in f["bits"].items()]
+
+
 def vanilla_keys(table: str) -> list[str]:
     """Row keys of the vanilla table a Sigma table extends, after name resolution (work/named)."""
     path = NAMED / f"{table}.txt"
@@ -272,14 +292,43 @@ def cmd_decode(args) -> None:
         fields = [f for f in layout(entry["fields"], rowsize)
                   if not (f.get("filler") and all(r[f["off"]] == 0 for r in rows))]
         keys = vanilla_keys(entry["parallel"]) if "parallel" in entry else []
-        header = ["*row"] + ([f"*{entry['parallel']}"] if "parallel" in entry else []) + [f["name"] for f in fields]
+        header = ["*row"] + ([f"*{entry['parallel']}"] if "parallel" in entry else [])
+        for f in fields:
+            header += [b for _, b in sorted(bit_columns(f))] if f.get("bits") else [f["name"]]
         lines = ["\t".join(header)]
         for i, r in enumerate(rows):
             cells = [str(i)] + ([keys[i] if i < len(keys) else ""] if "parallel" in entry else [])
-            cells += [cell(r, f) for f in fields]
+            for f in fields:
+                if f.get("bits"):
+                    v = value(r, f)
+                    cells += [str((v >> bit) & 1) for bit, _ in sorted(bit_columns(f))]
+                else:
+                    cells.append(cell(r, f))
             lines.append("\t".join(cells))
         (out / f"{t}.txt").write_text("\r\n".join(lines) + "\r\n", encoding="utf-8", newline="")
     print(f"{len(schema)} tables -> {out}")
+
+
+def cmd_coverage(_args) -> None:
+    """Named txt columns / all txt columns (the "columns" count of the schema = the field descriptors D2Sigma registers) per
+    table, plus the bytes that are non-zero in some row and not covered by a field (a "done" table has none)."""
+    schema = json.loads(SCHEMA.read_text("utf-8"))
+    total_named = total = 0
+    print("| Table | Rows | Row size | Named | Unnamed non-zero bytes |\n|---|---|---|---|---|")
+    for t, entry in sorted(schema.items(), key=lambda kv: -kv[1]["rows"] * kv[1]["rowsize"]):
+        rowsize, rows = read_bin(t)
+        covered = set()
+        named = 0
+        for f in entry["fields"]:
+            covered.update(range(f["off"], f["off"] + size_of(f["type"])))
+            named += len(f["bits"]) if f.get("bits") else 1
+        columns = entry.get("columns", named)
+        loose = [o for o in range(rowsize) if o not in covered and any(r[o] for r in rows)]
+        total_named += min(named, columns)
+        total += columns
+        print(f"| {t} | {len(rows)} | {rowsize} | {min(named, columns)}/{columns} | "
+              f"{', '.join(f'{o:#04x}' for o in loose) or '-'} |")
+    print(f"\n{total_named}/{total} columns named")
 
 
 def main() -> int:
@@ -288,10 +337,11 @@ def main() -> int:
     sub.add_parser("init")
     e = sub.add_parser("evidence")
     e.add_argument("table", nargs="*")
+    sub.add_parser("coverage")
     d = sub.add_parser("decode")
     d.add_argument("--out", help="directory for the decoded tables (default work/sigma)")
     args = ap.parse_args()
-    {"init": cmd_init, "evidence": cmd_evidence, "decode": cmd_decode}[args.cmd](args)
+    {"init": cmd_init, "evidence": cmd_evidence, "decode": cmd_decode, "coverage": cmd_coverage}[args.cmd](args)
     return 0
 
 

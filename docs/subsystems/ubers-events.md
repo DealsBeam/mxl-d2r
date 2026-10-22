@@ -50,7 +50,7 @@ Format follows [quests-requirements.md](quests-requirements.md) and [npc-hirelin
 | Halloween event | object fns 36 (0x96b40) and 37 (0x969e0), D2SpecialEvents map at game +0x1b2c, currency sync tick 0x5b800 (packet 0x86), HUD `HalloweenCurrencyBalance*` | objects2 `OperateCurrency*` (chest costs 2300 of currency 102024), monstats3 `Currency*` (68 monsters), level 246 | **open / defer** |
 | Join filter ("special events") | D2SpecialEvents.cpp 0xb16a0 (create), 0xb1830 (check), 0xb1a10 (send, packet 0x87), 0xb1940 (free) | none | cut |
 | Achievements | D2Achievements.cpp 0x49c00 / 0x49c40 (counter stat 0x58 on kills) | monstats3 `Achievement` (479 monsters) | cut |
-| Monster sounds on spawn/death, unique mod counter | D2Monsters.cpp 0x8c360 / 0x8c3f0, D2MonUMods.cpp 0x8c580 | monstats3 sound fields | defer (audio / bookkeeping) |
+| Monster sounds on spawn/death, unique mod counter | D2Monsters.cpp 0x8c360 / 0x8c3f0, D2MonUMods.cpp 0x8c580 | monstats3 `Overlay1/2`, `BossOverlay1/2` (spawn overlays, not sounds; see docs/unported.md) | defer (visual / bookkeeping) |
 | Shrines | D2Shrines.cpp 0xa5a30 / 0xa5a90 (restore function, random pick) | shrines.txt | vanilla behaviour, nothing Median-specific found |
 | Town table | D2Town.cpp 0xb6090 (act -> town level 1/40/75/103/109) | levels `+0x14b` town flag (9 rows) | read: vanilla |
 
@@ -178,9 +178,12 @@ Implemented (mxl-core, switch word `lockout`, report on the `mxl` command and th
   (slot 2, Hell rules, level 253: "Closing in: 01:00", then after 68 s "This area is locked / Join another game to enter again").
 
 Left:
-- Live timer and popup art (packet 0x88 DungeonWidget): the clock is a single log line at the start. A running countdown needs the
-  PluginSDK OverlayService (drawText from a frame callback) fed by a NetworkService channel (`sendToClient`, 224 bytes); popup art is
-  custom art (last).
+- Popup art and the DungeonWidget frame (packet 0x88): custom art (last). The live countdown exists since lane approx-items: the
+  server sends the plugin message `T` (u16 level, u32 ms left, 0 = no clock; hidden chat packet, d2r-addresses.md section 13) to
+  everybody when a clock starts and to a player entering a level (a level without a clock clears it), and the client draws
+  "Closing in: mm:ss" and "ONCE YOU EXIT YOU CANNOT GO BACK" with the PluginSDK OverlayService (frame callback AfterGameUi, drawText)
+  at the top of the screen while its local player's level equals the clock's. Status: the callback runs and drawText/measureText return Success (logged), but the harness's PrintWindow captures of the background window did not show the overlay text (only the older chat line), so the on-screen result still has to be looked at in a normal window. Median's widget shows the same two texts and the
+  timer in its own frame; here they are plain orange text. `Lockout::RemainingMs` (dungeon_test.cpp) gives the time left.
 - Quest-table condition (3) and the 0x7fb70 item teleport (clock start only; find the D2R item spell that teleports).
 - Per-game reset: the seals are dropped on the game-end event (`game_end.cpp`, client teardown `0x486be0`; `0x4057c0` itself
   has a rip-relative prologue). The game pointer / frame regress reset stays as a second guard.
@@ -228,13 +231,13 @@ Left:
 - State: last-kill frames per player id (16 slots), reset when the game pointer changes or the frame counter goes backwards (a new game on a
   reused address). The game-end event of `game_end.cpp` (`0x486be0`) is not wired in here yet; `0x4057c0` has a rip-relative
   load inside its first 14 bytes.
-- Not ported: the "goblin sighted" packet. Testing aid: environment variable `MXL_GOBLINS_FORCE=1` (every roll passes) or `=2` (also no
+- The "goblin sighted" packet (0x5a type 0x15) has no D2R counterpart; the notice is a log line "Treasure Goblin appears!" (Median shows unit name + string 12320 " appears!" as a push notification). Not ported as a packet. Testing aid: environment variable `MXL_GOBLINS_FORCE=1` (every roll passes) or `=2` (also no
   last-kill requirement).
 
 ## 5. Halloween event and currency (D2Currency.cpp, object functions 36/37)
 
 - **Currency**: monstats3 gives 68 monsters (zombie, temptress, ravager and forsaken-one families) 1-14 units of
-  currency type 102024 on kill (`CurrencyType/Amount/Unowned`); balances sit in a per-game map (+0x1b34), synced to the
+  currency type 102024 on kill (`KillCurrencyBank/Add/Shared`); balances sit in a per-game map (+0x1b34), synced to the
   client every 5 s (packet 0x86) and shown by the HUD (`HalloweenCurrencyBalance*`). `KillCurrencyBank/Add/Shared` and
   `OperateCurrencyBank/Cost/Shared` are the table headers; D2Currency.cpp is "partial" in the triage (containers only).
 - **halloween_chest (object 587 / D2R 601, fn 36 = 0x96b40)**: costs 2300 units (objects2). Operating it sets the object to

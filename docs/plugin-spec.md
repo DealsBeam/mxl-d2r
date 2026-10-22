@@ -707,7 +707,7 @@ word; its other bits are not understood. Rarity is the row's weight in the draw 
 ## Skill tree pages (`skill_tree.cpp`, off word `skilltree`)
 
 D2R's `SkillsTreePanel` (D2Client SkillsTreePanel.cpp, one class for the HD and the classic panel) handles three pages
-and an item-skills "tab 3"; Median has eight pages per class. Findings (dump RVAs; Ghidra `FUN_1414c4520` etc.):
+and an item-skills "tab 3"; Median has eight pages per class (nine for the Sorceress: Coven and Reward). Findings (dump RVAs; Ghidra `FUN_1414c4520` etc.):
 - Build function `0x14c4520`: walks the pages 3, 2, 1 (`r13d`) and gives page p the widget `Tab<n>` with n counting up from 0
   (`0x14c5f60`), so Tab0 held page 3 and Tab2 page 1, the reverse of the `SkillPage` numbers. It creates a
   `SkillButton<page> <col>,<row>` for every class skill (the class skill list, `0x33cb30` count / `0x33dde0` id) whose
@@ -716,11 +716,17 @@ and an item-skills "tab 3"; Median has eight pages per class. Findings (dump RVA
   all selected tab 4); the current tab is the global `0x3bbd8bc`; controller bumpers `0x14c6810` wrap 0..3; the tab styling
   loop `0x14c789b` covers tabs 0..3; seven `cmp [0x3bbd8bc], 3` mark the item-skills tab (no skill counter, no skill button
   draw hook, `ItemHeader`).
-Patches (13 sites, byte-checked, one mutation transaction): clamp, controller wrap and styling loop 3/4 -> 7/8; the seven
-compares test 127 (no item-skills tab); the build function starts at page 8 and counts the tab widget index down
-(`push 3; pop r14` / `push 8; pop r13` / `mov eax, 7` in place of the loop set-up at `0x14c488a`, 38 bytes, and `inc eax` ->
+Patches (13 sites + 1 inline hook, byte-checked, one mutation transaction): clamp, controller wrap and styling loop 3/4 -> 8/9; the seven
+compares test 127 (no item-skills tab); the build function starts at page 9 and counts the tab widget index down
+(`push 3; pop r14` / `push 9; pop r13` / `mov eax, 8` in place of the loop set-up at `0x14c488a`, 38 bytes, and `inc eax` ->
 `dec eax` at `0x14c531a`), so page p lives in `Tab<p-1>`, which is what `tools/ui_layouts.py` (Tab n, background frame n) and
-`tools/skill_tree_art.py` (frame n = page n+1) always assumed. `mxl` prints `skill tree on: 13 sites, 8 pages ...`.
+`tools/skill_tree_art.py` (frame n = page n+1) always assumed. `mxl` prints `skill tree on: 13 sites + tab setter hook, 9 pages ...`.
+Nine tabs for the Sorceress only: the layout has 9 `Tab<n>` widgets for every class (one JSON shared by all), the art draws the 9th cell
+only for a class with 9 titles (blank otherwise). The tab setter `0x14c3b10` is hooked (entry bytes `48 89 5c 24 08 57 48 83 ec 30`): for
+an index >= 8 it asks the local player's class (`0x8b2d0` local slot -> `0x9a480` player unit -> u32 at +4) for its tab count
+(`mxl_tabs::ClassTabs`, from the highest skilldesc page of the class's skills, at least 8; 8 when the unit is unknown) and ignores
+a mouse click on a tab the class lacks; from the controller bumper (return addresses `0x14c6bd3 / 0x14c6be6 / 0x14c6c07`) it wraps
+instead (last -> first, first -> last). Checked in game 2026-10-22 (HD and G, Sorceress and Barbarian).
 Data side (`tools/skill_icons.py`): a skilldesc row has one IconCel, but Median shares rows between classes (the Mastery
 pages of all classes, many item skills): the row is now split per sheet ("row~class" copies, skills.txt repointed), so every
 tree skill finds its own icon in its class sheet (bug #3b: empty sockets on masteries, wrong icons where a class-less

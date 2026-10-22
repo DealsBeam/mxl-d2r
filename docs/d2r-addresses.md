@@ -1,4 +1,14 @@
-# D2R 3.3 build 93847: addresses for the blocked hooks (lane d2r-addresses, 2026-10-21)
+# D2R 3.3 build 93847: addresses fo
+Item events (lane p4ev, 2026-10-22; docs/subsystems/items-xp.md section 5b):
+
+| What | Address | Notes |
+|---|---|---|
+| unit-event thunks | exe `0x3e2a400` .. `0x3e2a428` | register, unregister, has, clear, dispatch, registerFn: slots into D2RCore |
+| per-unit event list | `unit + 0xe0` | node `0x40` bytes: `+8` `(stat << 32) \| layer`, `+0x28` handler, `+0x38` next |
+| event dispatch wrapper | exe `0x44d570` | `(game, event, unitA, unitB, arg5)`; kill = 9, thorns 2 / 3, open wounds / crushing blow 5 / 6 |
+| core handler table | D2RCore `0x630260` | slot = itemeventfunc; handler `(game, event, unit, other, arg5, code64, a7, a8, a9)`; 15 `0x3d12b0`, 16 `0x3d1310` (a `jmp`), 33 `0x3d19b0` and 34 `0x3d1a20` are forwarders that return 0 |
+| exe handler table | exe `0x238e5c0`, ids 1..40 | 6 `0x582b20` (thorns), 11 `0x582d30`, 12 `0x5828d0`, 15 `0x584170`, 16 `0x583150`, 20 `0x583b30` (cast), 28 `0x583a70` (life), 32 `0x42eea0`, 33 `0x42f300`, 34 `0x51f7b0`; code is `(stat << 16) \| layer` |
+| itemstatcost records | `*(exe + 0x2a9a580 + 16) + 0x1258`, stride `0x144` | event words `+0x44 / +0x46`, function words `+0x48 / +0x4a` |r the blocked hooks (lane d2r-addresses, 2026-10-21)
 
 All addresses are **RVAs** in the D2R image (`D2RLoader_6ab3782c_dump.exe` memory layout; file offset == RVA, base
 `0x140000000`), x64 Microsoft ABI (rcx, rdx, r8, r9, then stack at `[rsp+0x20]...` at the callee's entry).
@@ -558,7 +568,7 @@ craft, catalyst, etc.) and return; otherwise call the original. The "Talk" line 
 
 | What | Address | Notes |
 |---|---|---|
-| Menu builder hook | `0x1147a0` | entry `40 55 53 57 41 54 41 56 48 8d ac 24 10 fc ff ff 48 81 ec f0 04 00 00` (23 bytes, no rip-relative). The loop adds `count - 1` lines; the Identify line (id 0xfb4) overwrites the record's `+4` with 3 or 2 on every build, so lines behind it vanish and a skipped Identify is never retried: the plugin keeps its lines in front of Identify and re-sets the count on each call |
+| Menu builder hook | `0x1147a0` | entry `40 55 53 57 41 54 41 56 48 8d ac 24 10 fc ff ff 48 81 ec f0 04 00 00` (23 bytes, no rip-relative). The loop adds `count - 1` lines; the Identify line (id 0xfb4) overwrites the record's `+4` with 3 or 2 on every build, so lines behind it vanish and a skipped Identify is never retried: the plugin keeps its lines in front of Identify and writes the count back (lines + 1) after the builder returns, so the record shows what the list shows (the lowered count hid the plugin line from the harness `menu list`) and re-sets the count on each call |
 | Menu packet hook | `0x4b0470` | entry `40 55 53 56 57 41 54 41 55 48 8d 6c 24 d1 48 81 ec c8 00 00 00` (21 bytes). Packet: `u8 0x38, u32 kind, u32 npc unit id` (9 bytes). The NPC is found with `0x53b8f0(player, unit id, 0x32)` (distance 50), its class is `[unit+4]` |
 | Packet sender | `0xec730(u8 id, u32 a, u32 b)` | builds the 9-byte packet; `0xec820` is the 0x2e variant |
 | Cancel handler | `0x112c30` | closes the list widget (`0x1e9390`), clears `0x2a486a4`, calls `0x10de80(npc id)` and `0xc7d30(8)`; returns 1 |
@@ -569,7 +579,7 @@ craft, catalyst, etc.) and return; otherwise call the original. The "Talk" line 
 | Service lines (client) | fix table RVA `0x22a70e0`, 9 x 24 bytes (class u32, quest u32, bit u32, condition u32, function), count dword `0x22a71b8`; consumer `0x1141d0` (the NPC menu opener) | Charsi q3 b1 -> `0x109100` (line `0xfb1`), Larzuk q35 b1 -> `0x109300` (`0x58dc`), Anya q38 b1 -> `0x109400` (`0x58dd`), all with handler `0x10dd30`; Warriv q6 b0 and Meshif q14 b0 add the travel lines. Run on the client's own quest record `0x2a48778` |
 | Service confirmation (server) | packet `0x2e`: `0x4ae280` (21 bytes) -> `0x4fc230(game, player, packet, delayed)`; delayed run from the task `0x4b6050` | NPC `0x53b8f0`, NPC table row `0x3971a0` (`+0xb` service 1/2/3, `+0x10` quest + 1), quest bit 1 via `0x325c50`; spends the reward with `0x5da1c0` / `0x548b60` / `0x547c60` (bit 0 set, bit 1 cleared). Server packet table: handler = `0x1d2a790 + id * 8` (0x38 = `0x4b0470`) |
 | Travel | client special line handler `0x1162f0` sends packet 0x37; server `0x4a9880` | NPC table row (static table `0x237ea60`, 0x1c bytes: `+0xb` service, `+0xc` destination s32, `+0x10` gate byte = quest + 1): gated lines test bit 0 of quest `gate - 1`, travel with `0x4f2e40(game, player, level, 0)`, then set the arrival act town's waypoint. D2R grants what Median grants; checked by npc_services.cpp |
-| Waypoint record | `0x3d6670(version, level, u16* wp)` level -> waypoint field (levels row `+0xec`, 0xff = none); `0x3d6930(record, wp)` test; `0x3d6890(record, wp)` set (`*(u16*)(rec + 2 * T[wp].word) \|= T[wp].mask`, tables `0x2389010`, 112 entries); `0x4812c0(client, record)` sends packet 0x63 (record to the client, which also opens its waypoint UI); `0x40b540` sets every waypoint | record = `*(playerData + 0x58 + difficulty * 8)`, playerData = `0x34b240(player)`, difficulty = `game + 0x104`, version = `game + 0x106`. Object operate `0x58fe00` is the in-game touch (set, `0x481030` packet 0x64, `0x4812c0`). Entry bytes: `0x3d6890` `48 89 5c 24 08 57 48 83 ec 20 0f b7 da 48 8b f9`, `0x3d6670` `48 89 5c 24 08 48 89 6c 24 18 56 57 41 56 48 83`. Record = 112 bits (count dword `0x23891d0` = 0x70; number n = word `1 + n / 16`, mask `1 << n % 16`); save "WS" writer `0x52f090` / reader `0x52e910` copy 16 bytes of each 24-byte record (`0x3d6820` / `0x3d67c0`). Panel: `0x1ecbc0` loads the actinfo rows into 0x34-byte entries (vector `0x2a96a28`, 9 levels + 9 numbers each), `0x1ea9b0` fills a tab's 9-entry button table `0x2a969e0` (count `0x2a969d4`), `0x1e9b40` builds the buttons, tab-unlock quest ids at panel `+0x1c8` (5 ints, set at `0x1e9adf`); use-waypoint server handler `0x4b6f10` |
+| Waypoint record | `0x3d6670(version, level, u16* wp)` level -> waypoint field (levels row `+0xec`, 0xff = none); `0x3d6930(record, wp)` test; `0x3d6890(record, wp)` set (`*(u16*)(rec + 2 * T[wp].word) \|= T[wp].mask`, tables `0x2389010`, 112 entries); `0x4812c0(client, record)` sends packet 0x63 (record to the client, which also opens its waypoint UI); `0x40b540` sets every waypoint | record = `*(playerData + 0x58 + difficulty * 8)`, playerData = `0x34b240(player)`, difficulty = `game + 0x104`, version = `game + 0x106`. Object operate `0x58fe00` is the in-game touch (set, `0x481030` packet 0x64, `0x4812c0`). Entry bytes: `0x3d6890` `48 89 5c 24 08 57 48 83 ec 20 0f b7 da 48 8b f9`, `0x3d6670` `48 89 5c 24 08 48 89 6c 24 18 56 57 41 56 48 83`. Record = 112 bits (count dword `0x23891d0` = 0x70; number n = word `1 + n / 16`, mask `1 << n % 16`); save "WS" writer `0x52f090` / reader `0x52e910` copy 16 bytes of each 24-byte record (`0x3d6820` / `0x3d67c0`). Panel: `0x1ecbc0` loads the actinfo rows into 0x34-byte entries (vector `0x2a96a28`, 9 levels + 9 numbers each), `0x1ea9b0` fills a tab's 9-entry button table `0x2a969e0` (count `0x2a969d4`; entry bytes `40 55 53 56 41 55 41 56 48 8d 6c 24 c9`; mxl-core hooks it, see areas-drlg.md 3b), `0x1e9b40` builds the buttons, tab-unlock quest ids at panel `+0x1c8` (5 ints, set at `0x1e9adf`); use-waypoint server handler `0x4b6f10`. Table readers (each a 7-byte `lea reg,[rip+disp32]`, patched by mxl-core to its own table): `0x1ea198` (builder), `0x1ec05a` (click handler `0x1ebf50`), `0x1ec582` (refresh `0x1ec430`); the row vector is `0x2a96a28` data, `0x2a96a30` size, `0x2a96a38` capacity; buttons are `Act%d_Button%d` clones of `UnselectableButtonTemplate`, y = index * layout `buttonOffset` (default 123) + 264 |
 
 ## 10. Gold stat changes and the client
 
@@ -697,13 +707,26 @@ Ready-made path, called not hooked, verified in game (slot 2, background mode):
   the 120 s fallback.
 - Used for: Median's dungeon lockout texts (refusal "(Required Level: N)", "Requires Hell difficulty", "This area is locked / Join
   another game to enter again", clock "Closing in: mm:ss" and "ONCE YOU EXIT YOU CANNOT GO BACK" to every player of the game),
-  the quest reward notices (Akara's Heart, Jerhyn / Cain crystals, Ormus shrines) and the goblin "sighted" line. All shown in
+  the quest reward notices (Akara's Heart, Jerhyn / Cain crystals, Ormus shrines) and the goblin line ("Treasure Goblin appears!": Median's push notification is the unit name + string 12320 " appears!"). All shown in
   the screenshots of the lane report. The plugin counts messages sent / failed on the `mxl` command.
 - Not used: the client packet table also has 0x5a (34 bytes, builder `0x5282b0(unit,type)`, sender `0x480510`; Median's goblin notice
   is type 0x15) and unit message `0x491960(player,msg,subject)` (0x14 = D2R's generic "Impossible." line; Median's 0x13 and 0x88
   have no D2R handler). Several client handlers sit behind protected thunks (`0x3e2b7xx`), so they cannot be read statically.
-- Not done: a real timer widget. D2RLoader's PluginSDK has OverlayService (frame callback, drawText) and NetworkService (plugin
-  channel `sendToClient`, 224-byte payload) for a client-side countdown; the notice is a log line for now (docs/unported.md).
+- **Plugin messages (lane approx-items, 2026-10-22; client_messages.cpp / client_messages_logic.h): a hidden server -> client
+  data channel.** No NetworkService is needed: a chat packet 0x26 of type 0 (shows nothing, does not freeze an NPC's speech)
+  whose text is the marker `\x01MXL`, one kind letter and the payload as lower-case hex (up to 125 bytes). The client's
+  packet-table entry for 0x26 (table `0x22bbc40`, 24-byte entries, original handler `0x12c190`; the entry bytes of the handler
+  are checked: `48 89 5c 24 10 48 89 74 24 18 57 48 81 ec 90`) is replaced by a plugin function that reads the text, hands a
+  message that starts with the marker to the handler registered for the kind letter and passes every other chat packet to the
+  original. Kinds: `N` = an NPC page answer (npc_actions.cpp: u32 page kind, u16 NPC class, u16 mask of open entries), `T` = the
+  dungeon clock (dungeon_lockout.cpp: u16 level, u16 0, u32 ms left, 0 = no clock). Off word `clientmsg` switches it off with the
+  rest of the module.
+- **Dungeon countdown** (dungeon_lockout.cpp): the server sends `T` to everybody when a clock starts and to a player who enters a
+  level (level + ms left; a level without a clock sends 0, which clears the old one). The client keeps the end tick and draws
+  "Closing in: mm:ss" (string 11191) and "ONCE YOU EXIT YOU CANNOT GO BACK" (11193) with D2RLoader's OverlayService text calls from a
+  frame callback (phase AfterGameUi), centred at the top of the screen, while the local player's level
+  (`0x9a480(*(u32*)(image + 0x2a23704))` = the local player's unit, `0x34b440` its room, `0x2efc10` the room's level) equals the
+  clock's level. The chat lines of 3a stay.
 
 ## 14. Player actions (lane harness-cast, 2026-10-22; plugin/src/harness_cmds.cpp)
 

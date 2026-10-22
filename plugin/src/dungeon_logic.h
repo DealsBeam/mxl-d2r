@@ -87,6 +87,16 @@ public:
 		const Slot& s = slots_[static_cast<size_t>(e - std::begin(mxl_dungeons::Entries))];
 		return s.running && now < s.end;
 	}
+	// Milliseconds until the level's clock runs out (D2Sigma packet 0x88 type 2: the time left), 0 when it does not run or
+	// has run out.
+	auto RemainingMs(int32_t level, uint64_t now) const noexcept -> uint64_t {
+		const Entry* e = Find(level);
+		if (e == nullptr) {
+			return 0;
+		}
+		const Slot& s = slots_[static_cast<size_t>(e - std::begin(mxl_dungeons::Entries))];
+		return s.running && now < s.end ? s.end - now : 0;
+	}
 	// D2Sigma 0x5d9d0 / 0x5df20: a player entered `level`. Nothing without a lock time or when the clock already ran
 	// (running or sealed); else it starts on the level, or on every level of its non-zero lock group. True if started.
 	auto Start(int32_t level, uint64_t now) noexcept -> bool {

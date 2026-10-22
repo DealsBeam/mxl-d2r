@@ -13,10 +13,11 @@ two extra pages of stat-screen.dc6, 60+ boxes), page 255 (the prev / next button
           0x10 / 0x11 page buttons, 0x0d... 0x0f are page 0's name, class, vitals
   +5 u16 x, +7 u16 y   classic pixels (512 x 704 sheet) of the text's top-left
   +9 u16 string id (table * 10000 + index; 5382 = none); the label text of a type 1 row
-  +11 u8 font, +12 u8 colour (1 red, 4 gold, 6 white; the dword at +19 is the alignment: 0 right, 1 left, 2 centre)
+  +11 u8 colour (statscreen.txt Color: text colour code), +12 u8 font (Font: D2 font id); the dword at +19 is the
+          alignment: 0 right, 1 left, 2 centre
   +13 u16 stat (Median's itemstatcost row)   +15 u16 layer (the stat's parameter)
   +17 u8  1 = the base value (GetBaseStat) instead of the total   +18 u8 1 = append "%"
-  +19 u32 alignment   +23 u16 tooltip string id of a label row   +29 u32 cap (0 = none; min(value, cap))
+  +19 u32 alignment   +23 u16 tooltip string id of a label row   +25 u32 min (always 0)   +29 u32 max (0 = none; min(value, max))
 """
 import json
 import struct
@@ -57,7 +58,7 @@ def read_rows() -> list[dict]:
         r = d[4 + i * 33: 4 + (i + 1) * 33]
         rows.append(dict(
             i=i, page=r[0], type=struct.unpack_from("<I", r, 1)[0], x=struct.unpack_from("<H", r, 5)[0],
-            y=struct.unpack_from("<H", r, 7)[0], label=struct.unpack_from("<H", r, 9)[0], font=r[11], color=r[12],
+            y=struct.unpack_from("<H", r, 7)[0], label=struct.unpack_from("<H", r, 9)[0], color=r[11], font=r[12],
             stat=struct.unpack_from("<H", r, 13)[0], layer=struct.unpack_from("<H", r, 15)[0], base=r[17], pct=r[18],
             align=struct.unpack_from("<I", r, 19)[0], tip=struct.unpack_from("<H", r, 23)[0],
             cap=struct.unpack_from("<I", r, 29)[0]))
@@ -103,7 +104,7 @@ def markdown() -> str:
             near = [l for l in labels if abs(l["y"] - r["y"]) <= 14 and l["x"] < r["x"]]
             label = max(near, key=lambda l: l["x"]) if near else None
             if label is None:
-                head = [l for l in labels if l["color"] == 1 and abs(l["y"] - r["y"]) <= 40]
+                head = [l for l in labels if l["font"] == 1 and abs(l["y"] - r["y"]) <= 40]
                 label = min(head, key=lambda l: abs(l["y"] - r["y"])) if head else None
             how = TYPE_NAMES.get(r["type"], hex(r["type"]))
             if r["base"]:

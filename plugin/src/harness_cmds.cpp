@@ -15,8 +15,11 @@
 #include "dungeon_lockout.h"
 #include "goblins.h"
 #include "mxl_hirelings.h"
+#include "item_events.h"
 #include "quests_act1.h"
 #include "testharness.h"
+#include "waypoints.h"
+#include "waypoints_logic.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -44,6 +47,11 @@ constexpr uint64_t RvaPlayerData = 0x34b240;    // (player) -> player data; +0x4
 constexpr uint64_t RvaQuestTest = 0x325c50;     // (record, quest, bit)
 constexpr uint64_t RvaQuestSet = 0x325c00;
 constexpr uint64_t RvaQuestClear = 0x325990;
+constexpr uint64_t RvaWaypointSet = 0x3d6890;   // (record, number)
+constexpr uint64_t RvaWaypointTest = 0x3d6930;  // (record, number) -> bit
+constexpr uint64_t RvaWaypointSend = 0x4812c0;  // (client, record): packet 0x63, the client opens its waypoint panel
+constexpr uint64_t RvaWaypointBits = 0x2389010; // 112 x {u16 word, u16 mask}
+constexpr uint64_t RvaClientQuests = 0x10f180;  // () -> the client's quest record (the waypoint panel tests its tab-unlock quests there)
 constexpr uint64_t RvaUnitId = 0x34a330;        // (unit, file, line)
 constexpr uint64_t RvaUnitClass = 0x349860;     // (unit, file, line)
 constexpr uint64_t RvaUnitMode = 0x34ab60;
@@ -128,6 +136,9 @@ using GetStatFn = int32_t (*)(Unit*, int32_t, int32_t);
 using SetStatFn = void (*)(Unit*, int32_t, int32_t, int32_t);
 using PlayerDataFn = uint8_t* (*)(Unit*);
 using QuestFn = int32_t (*)(void*, int32_t, int32_t);
+using ClientQuestsFn = void* (*)();
+using WaypointFn = int32_t (*)(void* record, int32_t number);
+using WaypointSendFn = void (*)(void* client, void* record);
 using UnitIdFn = uint32_t (*)(Unit*, const char*, int32_t);
 using UnitClassFn = int32_t (*)(Unit*, const char*, int32_t);
 using UnitModeFn = int32_t (*)(Unit*);
@@ -254,6 +265,15 @@ auto QuestRecord(Ctx* c) noexcept -> void* {
 		return nullptr;
 	}
 	return d2r::At<void*>(data, 0x40 + static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)) * 8);
+}
+
+// The player's waypoint record of the game's difficulty (playerData + 0x58 + difficulty * 8).
+auto WaypointRecord(Ctx* c) noexcept -> uint8_t* {
+	uint8_t* data = Fn<PlayerDataFn>(RvaPlayerData)(c->player);
+	if (data == nullptr) {
+		return nullptr;
+	}
+	return d2r::At<uint8_t*>(data, 0x58 + static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)) * 8);
 }
 
 auto Stat(Unit* u, int stat, int layer = 0) noexcept -> int32_t { return Fn<GetStatFn>(RvaGetStat)(u, stat, layer); }
@@ -397,8 +417,8 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	EachUnit(c->game, HashMonsters, [&](Unit* u) {
 		if (TypeOf(u) == 1 && IsAlive(u) && DistTo(p, u) < 40 && mons < 12) {
 			++mons;
-			Out("mon id=%u class=%d mode=%d dist=%.0f npc=%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u),
-			    Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(u)) != nullptr ? 1 : 0);
+			Out("mon id=%u class=%d mode=%d dist=%.0f npc=%d life=%d/%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u),
+			    Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(u)) != nullptr ? 1 : 0, Stat(u, StatLife) >> 8, Stat(u, 7) >> 8);
 		}
 	});
 	int objs = 0;
@@ -471,6 +491,107 @@ auto CmdFlag(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `waypoint <level id>|n <number>|all [get|set|clear]`, `waypoint open`, `waypoint tabs`, `waypoint panel`: the player's waypoint bits (the level
+// id goes through Median's levels.txt numbers, mxl_waypoints.h), `open` sends the record to the client as the waypoint object
+// does (packet 0x63: the client opens its waypoint panel), `tabs` sets the client's own copy of the four tab-unlock quests (7, 15,
+// 23, 26: bit 0; the panel shows tab 1 only until the client has them), `panel` prints the plugin's panel table (what the buttons list).
+auto CmdWaypoint(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	const char* usage = "usage: waypoint <level id>|n <number>|all [get|set|clear] | waypoint open | waypoint tabs | waypoint panel";
+	if (t.n < 2) {
+		return Fail(c, usage);
+	}
+	if (hcmd::LowerEq(t.tok[1], "tabs")) {
+		void* quests = Fn<ClientQuestsFn>(RvaClientQuests)();
+		if (quests == nullptr) {
+			return Fail(c, "waypoint: no client quest record");
+		}
+		for (const int q : {7, 15, 23, 26}) {
+			Fn<QuestFn>(RvaQuestSet)(quests, q, 0);
+		}
+		Out("client quests 7, 15, 23, 26 set (reopen the panel)");
+		return true;
+	}
+	if (hcmd::LowerEq(t.tok[1], "panel")) {
+		char stats[160];
+		WaypointPanelStats(stats, sizeof(stats));
+		Out("waypoint %s", stats);
+		int count = 0;
+		const void* entries = nullptr;
+		if (WaypointPanelTable(&count, &entries)) {
+			for (int i = 0; i < count && i < wp::MaxButtons; ++i) {
+				const auto& e = static_cast<const wp::ButtonEntry*>(entries)[i];
+				Out("waypoint button %d: level %u other %d", i, e.level, e.other);
+			}
+		}
+		return true;
+	}
+	uint8_t* rec = WaypointRecord(c);
+	if (rec == nullptr) {
+		return Fail(c, "no waypoint record");
+	}
+	if (hcmd::LowerEq(t.tok[1], "open")) {
+		void* client = Fn<UnitClientFn>(RvaUnitClientOf)(c->player);
+		if (client == nullptr) {
+			return Fail(c, "waypoint: no client for the player");
+		}
+		Fn<WaypointSendFn>(RvaWaypointSend)(client, rec);
+		Out("waypoint record sent to the client (the panel opens)");
+		return true;
+	}
+	int first = 0, last = -1;  // the numbers acted on
+	long long n = 0;
+	int argAt = 2;
+	if (hcmd::LowerEq(t.tok[1], "all")) {
+		last = wp::RecordBits - 1;
+	} else if (hcmd::LowerEq(t.tok[1], "n")) {
+		if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &n) || n < 0 || n >= wp::RecordBits) {
+			return Fail(c, usage);
+		}
+		first = last = static_cast<int>(n);
+		argAt = 3;
+	} else {
+		if (!hcmd::ParseInt(t.tok[1], &n)) {
+			return Fail(c, usage);
+		}
+		int found = -1;
+		for (const mxl_wp::Level& l : mxl_wp::Levels) {
+			if (l.level == n) {
+				found = l.number;
+			}
+		}
+		if (found < 0) {
+			return Fail(c, "waypoint: that level has no waypoint number (levels.txt)");
+		}
+		first = last = found;
+	}
+	int action = 0;  // 0 get, 1 set, 2 clear
+	if (t.n > argAt) {
+		if (hcmd::LowerEq(t.tok[argAt], "set")) {
+			action = 1;
+		} else if (hcmd::LowerEq(t.tok[argAt], "clear")) {
+			action = 2;
+		} else if (!hcmd::LowerEq(t.tok[argAt], "get")) {
+			return Fail(c, usage);
+		}
+	}
+	const auto* bits = reinterpret_cast<const uint16_t*>(g_base + RvaWaypointBits);
+	int setCount = 0;
+	for (int i = first; i <= last; ++i) {
+		if (action == 1) {
+			Fn<WaypointFn>(RvaWaypointSet)(rec, i);
+		} else if (action == 2) {
+			*reinterpret_cast<uint16_t*>(rec + 2 * bits[2 * i]) &= static_cast<uint16_t>(~bits[2 * i + 1]);
+		}
+		setCount += Fn<WaypointFn>(RvaWaypointTest)(rec, i) != 0 ? 1 : 0;
+	}
+	if (first == last) {
+		Out("waypoint number %d = %d", first, setCount);
+	} else {
+		Out("waypoints set: %d of %d", setCount, last - first + 1);
+	}
+	return true;
+}
+
 auto CmdGold(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (t.n >= 4 && hcmd::LowerEq(t.tok[1], "set")) {
 		long long carried = 0, bank = 0;
@@ -490,7 +611,7 @@ auto CmdStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long who = 0, stat = 0, layer = 0, value = 0;
 	int next = 3;
 	if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &stat)) {
-		return Fail(c, "usage: stat player|merc|mon:<id>|<item unit id>|<item code> <stat> [layer] [set <value>]");
+		return Fail(c, "usage: stat player|merc|mon:<id>|m<monster id>|<item unit id>|<item code> <stat> [layer] [set <value>]");
 	}
 	if (t.n > next && !hcmd::LowerEq(t.tok[next], "set")) {
 		if (!hcmd::ParseInt(t.tok[next], &layer)) {
@@ -506,6 +627,8 @@ auto CmdStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	hcmd::UnitRef ref;
 	if (hcmd::ParseUnitRef(t.tok[1], &ref)) {
 		unit = ResolveRef(c, t.tok[1]);
+	} else if ((t.tok[1][0] == 'm' || t.tok[1][0] == 'M') && hcmd::ParseInt(t.tok[1] + 1, &who)) {
+		unit = FindMonsterById(c, static_cast<uint32_t>(who));  // monsters, e.g. stat m1234 6 (life is stat 6, times 256)
 	} else if (hcmd::ParseInt(t.tok[1], &who)) {
 		EachItem(c, [&](Unit* it) {
 			if (unit == nullptr && IdOf(it) == static_cast<uint32_t>(who)) {
@@ -1911,7 +2034,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
 	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
-	    "flag player|game <n> get|set|clear | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
+	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] | avoid <ref> melee|missile|evade [n] | "
@@ -1965,6 +2088,183 @@ auto CmdMenu(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `evtrace on|off|clear|dump [slot name] [n]`: logs D2RLoader's unit-event entry points (register / unregister / has / clear /
+// dispatch / registerFn) with their arguments and return addresses, to find who registers an item's events.
+auto CmdEvTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: evtrace on|off|clear|dump [register|unregister|has|clear|dispatch|registerFn|all] [n]");
+	}
+	if (hcmd::LowerEq(t.tok[1], "on")) {
+		if (!item_events::TraceStart(g_base)) {
+			return Fail(c, "evtrace: the thunk slots are not readable");
+		}
+	} else if (hcmd::LowerEq(t.tok[1], "off")) {
+		item_events::TraceStop();
+	} else if (hcmd::LowerEq(t.tok[1], "clear")) {
+		item_events::TraceClear();
+	} else if (hcmd::LowerEq(t.tok[1], "watch")) {
+		// `evtrace watch <slot 0-3> player|m<id>|<item id>|abs <hex address> <offset hex> [len]`: hardware write watch
+		if (t.n < 5) {
+			return Fail(c, "usage: evtrace watch <slot 0-3> player|m<monster id>|i<item id>|abs <offset or address hex> [len]");
+		}
+		long long slot = 0, len = 8;
+		if (!hcmd::ParseInt(t.tok[2], &slot)) {
+			return Fail(c, "evtrace watch: slot must be a number");
+		}
+		Unit* unit = nullptr;
+		long long id = 0;
+		const char* who = t.tok[3];
+		bool absolute = hcmd::LowerEq(who, "abs");
+		if (hcmd::LowerEq(who, "player")) {
+			unit = c->player;
+		} else if ((who[0] == 'm' || who[0] == 'M') && hcmd::ParseInt(who + 1, &id)) {
+			unit = FindMonsterById(c, static_cast<uint32_t>(id));
+		} else if ((who[0] == 'i' || who[0] == 'I') && hcmd::ParseInt(who + 1, &id)) {
+			EachItem(c, [&](Unit* it) {
+				if (unit == nullptr && IdOf(it) == static_cast<uint32_t>(id)) {
+					unit = it;
+				}
+			});
+		}
+		if (unit == nullptr && !absolute) {
+			return Fail(c, "evtrace watch: no such unit");
+		}
+		const unsigned long long off = std::strtoull(t.tok[4], nullptr, 16);
+		if (t.n > 5) {
+			hcmd::ParseInt(t.tok[5], &len);
+		}
+		const uint64_t addr = absolute ? off : reinterpret_cast<uint64_t>(unit) + off;
+		if (!item_events::WatchSet(static_cast<int>(slot), addr, static_cast<int>(len), g_base)) {
+			return Fail(c, "evtrace watch: could not set the breakpoint");
+		}
+		Out("watching %llx (%lld bytes) in slot %lld", static_cast<unsigned long long>(addr), len, slot);
+	} else if (hcmd::LowerEq(t.tok[1], "rec")) {
+		// `evtrace rec <stat id> [watch <slot>]`: the itemstatcost record (stride 0x144 in the array at manager + 0x1258), its event words,
+		// and optionally a read/write breakpoint on the function word (+0x48)
+		long long statId = 0, slot = -1;
+		if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &statId)) {
+			return Fail(c, "usage: evtrace rec <stat id> [<slot 0-3>]");
+		}
+		if (t.n > 3) {
+			hcmd::ParseInt(t.tok[3], &slot);
+		}
+		const uint8_t* rec = nullptr;
+		for (int idx = 0; idx < 4 && rec == nullptr; ++idx) {  // 0x300a90(idx) returns the pointer at exe + 0x2a9a580 + 16 * idx
+			const uint8_t* mgr = *reinterpret_cast<const uint8_t* const*>(g_base + 0x2a9a580 + idx * 16);
+			const uint8_t* arr = mgr != nullptr ? d2r::At<const uint8_t*>(mgr, 0x1258) : nullptr;
+			const uint8_t* cand = arr != nullptr ? arr + statId * 0x144 : nullptr;
+			Out("mgr[%d]=%llx arr=%llx", idx, static_cast<unsigned long long>(reinterpret_cast<uint64_t>(mgr)), static_cast<unsigned long long>(reinterpret_cast<uint64_t>(arr)));
+			if (cand != nullptr && !IsBadReadPtr(cand, 0x144)) {
+				rec = cand;
+			}
+		}
+		if (rec == nullptr) {
+			return Fail(c, "evtrace rec: no record array");
+		}
+		Out("rec %lld at %llx: event1 %d event2 %d func1 %d func2 %d", statId, static_cast<unsigned long long>(reinterpret_cast<uint64_t>(rec)),
+		    d2r::At<int16_t>(rec, 0x44), d2r::At<int16_t>(rec, 0x46), d2r::At<int16_t>(rec, 0x48), d2r::At<int16_t>(rec, 0x4a));
+		if (slot >= 0) {
+			Out("%s", item_events::WatchSet(static_cast<int>(slot), reinterpret_cast<uint64_t>(rec) + 0x48, 4, g_base, true) ? "read watch set" : "watch failed");
+		}
+	} else if (hcmd::LowerEq(t.tok[1], "peek")) {
+		// `evtrace peek <hex address> [n qwords]`: raw read, for D2RCore's tables
+		long long n = 4;
+		if (t.n < 3) {
+			return Fail(c, "usage: evtrace peek <hex address> [n]");
+		}
+		if (t.n > 3) {
+			hcmd::ParseInt(t.tok[3], &n);
+		}
+		const auto* p = reinterpret_cast<const uint64_t*>(std::strtoull(t.tok[2], nullptr, 16));
+		if (n < 1 || n > 64 || IsBadReadPtr(p, static_cast<UINT_PTR>(n) * 8)) {
+			return Fail(c, "evtrace peek: unreadable");
+		}
+		for (long long i = 0; i < n; ++i) {
+			Out("%llx: %llx", static_cast<unsigned long long>(reinterpret_cast<uint64_t>(p + i)), static_cast<unsigned long long>(p[i]));
+		}
+	} else if (hcmd::LowerEq(t.tok[1], "fire")) {
+		// `evtrace fire <event id> player|m<id> player|m<id>|none`: calls the dispatch wrapper 0x44d570(game, event, unit, other, 0)
+		// the way the damage and kill code do, e.g. event 9 (kill) on the player with a monster
+		long long ev = 0;
+		auto unitOf = [&](const char* s) -> Unit* {
+			long long id = 0;
+			if (hcmd::LowerEq(s, "player")) {
+				return c->player;
+			}
+			if ((s[0] == 'm' || s[0] == 'M') && hcmd::ParseInt(s + 1, &id)) {
+				return FindMonsterById(c, static_cast<uint32_t>(id));
+			}
+			return nullptr;
+		};
+		if (t.n < 5 || !hcmd::ParseInt(t.tok[2], &ev)) {
+			return Fail(c, "usage: evtrace fire <event id> player|m<id> player|m<id>|none");
+		}
+		Unit* a = unitOf(t.tok[3]);
+		Unit* b = unitOf(t.tok[4]);
+		if (a == nullptr || (b == nullptr && !hcmd::LowerEq(t.tok[4], "none"))) {
+			return Fail(c, "evtrace fire: no such unit");
+		}
+		Fn<void (*)(void*, int, Unit*, Unit*, void*)>(0x44d570)(c->game, static_cast<int>(ev), a, b, nullptr);
+		Out("fired event %lld", ev);
+	} else if (hcmd::LowerEq(t.tok[1], "calls")) {
+		// calls seen by the replaced D2RCore handlers 33 / 34 and the arguments of the last 33
+		long heal = 0, cast = 0;
+		uint64_t a[11] = {};
+		item_events::Counters(&heal, &cast, a);
+		Out("handler 33 calls %ld (returned %llx), handler 34 calls %ld (returned %llx)", heal, static_cast<unsigned long long>(a[9]), cast, static_cast<unsigned long long>(a[10]));
+		Out("last 33: game %llx event %lld unit %llx other %llx arg5 %llx code %llx a7 %llx a8 %llx a9 %llx", static_cast<unsigned long long>(a[0]),
+		    static_cast<long long>(a[1]), static_cast<unsigned long long>(a[2]), static_cast<unsigned long long>(a[3]), static_cast<unsigned long long>(a[4]),
+		    static_cast<unsigned long long>(a[5]), static_cast<unsigned long long>(a[6]), static_cast<unsigned long long>(a[7]), static_cast<unsigned long long>(a[8]));
+	} else if (hcmd::LowerEq(t.tok[1], "wtest")) {
+		Out("write watch self test: %s", item_events::WatchSelfTest() ? "hit" : "NO hit");
+	} else if (hcmd::LowerEq(t.tok[1], "wclear")) {
+		item_events::WatchClear();
+	} else if (hcmd::LowerEq(t.tok[1], "wdump")) {
+		item_events::WatchDump([](const char* line) { Out("%s", line); });
+	} else if (hcmd::LowerEq(t.tok[1], "list")) {
+		// the unit's event list (unit + 0xe0, 0x40-byte nodes in D2RCore's registry, next at +0x38): `evtrace list [player|m<id>]`
+		Unit* unit = c->player;
+		long long id = 0;
+		if (t.n >= 3 && (t.tok[2][0] == 'm' || t.tok[2][0] == 'M') && hcmd::ParseInt(t.tok[2] + 1, &id)) {
+			unit = FindMonsterById(c, static_cast<uint32_t>(id));
+		}
+		if (unit == nullptr) {
+			return Fail(c, "evtrace list: no such unit");
+		}
+		int n = 0;
+		for (const uint8_t* node = d2r::At<const uint8_t*>(unit, 0xe0); node != nullptr && n < 80; node = d2r::At<const uint8_t*>(node, 0x38), ++n) {
+			const uint64_t* q = reinterpret_cast<const uint64_t*>(node);
+			const uint64_t handler = q[5];
+			Out("node %d: %02x %02x %04x | +4 %08x +8 %llx +10 %llx +18 %08x %08x +20 %08x %08x handler %llx (%s)", n, node[0], node[1],
+			    d2r::At<uint16_t>(node, 2), d2r::At<uint32_t>(node, 4), static_cast<unsigned long long>(q[1]), static_cast<unsigned long long>(q[2]),
+			    d2r::At<uint32_t>(node, 0x18), d2r::At<uint32_t>(node, 0x1c), d2r::At<uint32_t>(node, 0x20), d2r::At<uint32_t>(node, 0x24),
+			    static_cast<unsigned long long>(handler),
+			    handler >= g_base && handler < g_base + 0x4000000 ? "exe" : "other");
+		}
+		Out("events: %d nodes", n);
+	} else if (hcmd::LowerEq(t.tok[1], "dump")) {
+		static const char* const names[] = {"register", "unregister", "has", "clear", "dispatch", "registerFn"};
+		int slot = -1;
+		long long n = 40;
+		for (int i = 2; i < t.n; ++i) {
+			long long v = 0;
+			if (hcmd::ParseInt(t.tok[i], &v)) {
+				n = v;
+				continue;
+			}
+			for (int k = 0; k < 6; ++k) {
+				if (hcmd::LowerEq(t.tok[i], names[k])) {
+					slot = k;
+				}
+			}
+		}
+		item_events::TraceDump(slot, static_cast<int>(n), [](const char* line) { Out("%s", line); });
+	} else {
+		return Fail(c, "evtrace: on, off, clear or dump");
+	}
+	return true;
+}
+
 using VerbFn = bool (*)(Ctx*, const hcmd::Tokens&) noexcept;
 struct Verb {
 	const char* name;
@@ -1972,14 +2272,14 @@ struct Verb {
 	bool clientSide;
 };
 const Verb Verbs[] = {
-    {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false},
+    {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false}, {"waypoint", CmdWaypoint, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
     {"cstat", CmdClientStat, true},
-    {"dump", CmdDump, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {
