@@ -55,6 +55,14 @@ int RunQuestsTests() {
 	Check(!ShouldReissueCatalyst(0x9b, false, false), "reissue needs the flag");
 	Check(!ShouldReissueCatalyst(0x94, true, false), "reissue only at Warriv");
 
+	// Forgotten Tower guard (D2Sigma 0x9e8b0): the vanilla kill handler is skipped when any of bits 0, 0xe, 0xf is set
+	Check(QuestForgottenTower == 5 && BitTowerGranted == 0 && BitTowerCompletedNow == 0xe && BitTowerCompletedBefore == 0xf,
+	      "tower guard ids");
+	Check(!SkipTowerKill(false, false, false), "tower: a fresh killer finishes the quest");
+	Check(SkipTowerKill(true, false, false) && SkipTowerKill(false, true, false) && SkipTowerKill(false, false, true) &&
+	          SkipTowerKill(true, true, true),
+	      "tower: any done bit skips the handler");
+
 	// the plugin flag must stay inside the 96-byte quest record
 	Check(FlagQuest * 16 + FlagCatalyst < 96 * 8, "flag inside the record");
 	Check(FlagQuest > 41, "flag quest past Median's own ids");

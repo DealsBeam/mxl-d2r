@@ -31,6 +31,7 @@
 #include "dungeon_lockout.h"
 #include "goblins.h"
 #include "monster_ai.h"
+#include "monster_looks.h"
 #include "hirelings.h"
 #include "items_ext.h"
 #include "item_gen.h"
@@ -51,7 +52,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.51.0";
+constexpr const char* PluginVersion = "0.52.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -71,6 +72,7 @@ char g_quests2Report[224] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
 char g_goblinsReport[192] = "off: not the expected game image";
 char g_monsterAiReport[192] = "off: not the expected game image";
+char g_monsterLooksReport[256] = "off: not the expected game image";
 char g_npcReport[256] = "off: not the expected game image";
 char g_hirelingsReport[192] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
@@ -107,7 +109,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai npc reqgates hirelings skilltree combat statcols itemevents props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat statcols itemevents props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -208,6 +210,12 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		char status[256] = "";
 		MonsterAiStatus(status, sizeof(status));
 		std::snprintf(line, sizeof(line), "monster ai %s | %s", g_monsterAiReport, status);
+		Say(command, line);
+	}
+	{
+		char status[224] = "";
+		MonsterLooksStatus(status, sizeof(status));
+		std::snprintf(line, sizeof(line), "monster looks %s | %s", g_monsterLooksReport, status);
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "skill tree %s", g_skillTreeReport);
@@ -401,6 +409,18 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallDungeonLockout(context, g_lockoutReport, sizeof(g_lockoutReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: dungeon lockout %s", g_lockoutReport);
+			context->LogInfo(line);
+		}
+		{
+			const bool names = !Off("namecolors");
+			const bool automap = !Off("monsterautomap");
+			const bool overlays = !Off("spawnoverlays");
+			if (!names && !automap && !overlays) {
+				std::snprintf(g_monsterLooksReport, sizeof(g_monsterLooksReport), "%s", OffNote);
+			} else {
+				InstallMonsterLooks(context, names, automap, overlays, g_monsterLooksReport, sizeof(g_monsterLooksReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: monster looks %s", g_monsterLooksReport);
 			context->LogInfo(line);
 		}
 		{

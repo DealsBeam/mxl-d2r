@@ -3,8 +3,10 @@
   plugin/src/mxl_requirements.h  requirements.bin (33 rows x 44 bytes): the boolean condition trees that gate NPC services
   plugin/src/mxl_dungeons.h      levels.bin extension fields +0x151..+0x15f except the goblin chance: dungeon lockout
                                  (lock time, lock group), entry requirements (minimum difficulty, level per difficulty,
-                                 class lock) and the fields whose meaning is not established (kept raw)
+                                 class lock), the quest each level needs (leveldefs.bin QuestFlagEx) and the fields
+                                 whose meaning is not established (kept raw)
   plugin/src/mxl_goblins.h       GoblinChance per level (levels +0x15c) and the monstats3 treasure goblin rows
+  plugin/src/mxl_monster_looks.h monstats3 rank bits, NameColor, automap fields and spawn overlays per monster
 
 Sources are the compiled tables in extract/mxl (raw bytes: the sigma decode has no names for these fields); ids go
 through work/named/idmap.json: levels and monsters are Median row numbers in the sources and D2R ids in the output.
@@ -24,6 +26,7 @@ SRC = ROOT / "plugin" / "src"
 
 REQ_ROW = 44
 LEVEL_ROW = 0x220
+LEVELDEF_ROW = 0x9c    # leveldefs.bin: QuestFlag (+0) and QuestFlagEx (+4) first; D2Sigma's table at TxtRecords +0xc60
 MONSTATS3_ROW = 44
 GOBLIN_FLAG = 0x400    # monstats3 flag word (+0): goblin candidate (D2Goblins 0x65be0)
 RAINBOW_FLAG = 0x1000  # ... only the Halloween rainbow goblin
@@ -88,6 +91,10 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
     if len(lrows) != len(levels):
         raise SystemExit(f"levels.bin has {len(lrows)} rows, idmap {len(levels)}")
 
+    # D2Sigma's warp test (0x5d810) reads QuestFlagEx (+4) of the destination's leveldefs row; row = Median level row
+    ldefs = table("leveldefs", LEVELDEF_ROW)
+    if len(ldefs) != len(lrows):
+        raise SystemExit(f"leveldefs.bin has {len(ldefs)} rows, levels.bin {len(lrows)}")
     dungeon, chances = [], []
     for row, r in enumerate(lrows):
         lid = levels[row]
@@ -103,8 +110,12 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
         group = r[0x15f]
         if chance:
             chances.append((lid, chance, lnames[row], struct.unpack_from("<HHH", r, 0x16)))
-        if any((min_diff, unk152, lock, unk155, unk156, *req, unk15b, class_lock, group)):
-            dungeon.append((lid, lock, group, min_diff, req, class_lock, unk152, unk155, unk156, unk15b, lnames[row]))
+        quest_lock = struct.unpack_from("<I", ldefs[row], 4)[0]
+        if quest_lock > 255:
+            raise SystemExit(f"leveldefs row {row}: quest id {quest_lock} does not fit a byte")
+        if any((min_diff, unk152, lock, unk155, unk156, *req, unk15b, class_lock, group, quest_lock)):
+            dungeon.append((lid, lock, group, min_diff, req, class_lock, unk152, unk155, unk156, unk15b, quest_lock,
+                            lnames[row]))
 
     out = [HEADER, "#pragma once", "", "#include <cstdint>", "", "namespace mxl_dungeons {", "",
            "// levels.bin extension fields +0x151..+0x15f (D2Dungeon.cpp 0x5cee0 / 0x5d9d0; docs/subsystems/ubers-events.md",
@@ -114,14 +125,16 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
            "// difficulty (+0x158..+0x15a, player level), classLock (+0x15e: 0 none, else only class value - 1 may enter).",
            "// Raw, meaning not established: unk152 (+0x152), unk155 (+0x155: set on harder areas), portalObject",
            "// (+0x156 u16, 585 only on level 247 = the rainbow portal; a Median objects row, not remapped), unk15b",
-           "// (+0x15b). The goblin chance (+0x15c) is in mxl_goblins.h.",
+           "// (+0x15b). questLock is QuestFlagEx of leveldefs.bin (+4; 0 = none): D2Sigma's warp test refuses the level",
+           "// unless the player's record of that quest holds bit 1, 0, 0xe or 0xf. The goblin chance (+0x15c) is in",
+           "// mxl_goblins.h.",
            "struct Entry {", "\tint32_t level;         // D2R level id", "\tuint16_t lockSeconds;", "\tuint8_t lockGroup;",
            "\tuint8_t minDifficulty;", "\tuint8_t levelReq[3];   // Normal, Nightmare, Hell", "\tuint8_t classLock;",
-           "\tuint8_t unk152;", "\tuint8_t unk155;", "\tuint16_t portalObject;", "\tuint8_t unk15b;", "};",
+           "\tuint8_t unk152;", "\tuint8_t unk155;", "\tuint16_t portalObject;", "\tuint8_t unk15b;", "\tuint8_t questLock;", "};",
            f"inline constexpr int32_t EntryCount = {len(dungeon)};", "inline constexpr Entry Entries[EntryCount] = {"]
-    for lid, lock, group, md, req, cl, u152, u155, u156, u15b, name in dungeon:
+    for lid, lock, group, md, req, cl, u152, u155, u156, u15b, ql, name in dungeon:
         out.append(f"    {{{lid}, {lock}, {group}, {md}, {{{req[0]}, {req[1]}, {req[2]}}}, {cl}, {u152}, {u155}, {u156}, "
-                   f"{u15b}}},  // {name}")
+                   f"{u15b}, {ql}}},  // {name}")
     out += ["};", "", "}  // namespace mxl_dungeons", ""]
 
     m3 = table("monstats3", MONSTATS3_ROW)
@@ -174,10 +187,61 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
     return "\n".join(out), "\n".join(g), msg
 
 
+LOOK_RANK = 0xf8     # monstats3 Flags: Elite 0x08, Veteran 0x10, Uber 0x20, Heroic 0x40, Boss 0x80 (name colour ranks)
+LOOK_AUTOMAP = 0x06  # Automap 0x02, AutomapShowName 0x04
+
+
+def monster_looks(idmap: dict) -> tuple[str, str]:
+    """monstats3 name colour, automap and spawn overlay fields of every monster that sets one of them."""
+    mons = ids(idmap, "monstats")
+    mnames = {e["row"]: e["name"] for e in idmap["monstats"]}
+    ovl = ids(idmap, "overlay")
+    rows = []
+    for row, r in enumerate(table("monstats3", MONSTATS3_ROW)):
+        flags = struct.unpack_from("<H", r)[0]
+        name_color, auto_name, auto_vec = r[2], r[3], r[4]
+        overlays = list(struct.unpack_from("<4h", r, 6))  # Overlay1/2, BossOverlay1/2; -1 = none
+        for i, o in enumerate(overlays):
+            if o >= 0:
+                if o not in ovl:
+                    raise SystemExit(f"monstats3 row {row}: overlay {o} is not an overlay row")
+                overlays[i] = ovl[o]
+        otype = r[0x1f]
+        if not (flags & (LOOK_RANK | LOOK_AUTOMAP) or name_color or any(o >= 0 for o in overlays)):
+            continue
+        rows.append((mons[row], flags & (LOOK_RANK | LOOK_AUTOMAP), name_color, auto_name, auto_vec, otype, overlays,
+                     mnames[row]))
+    rows.sort()
+    out = [HEADER, "#pragma once", "", "#include <cstdint>", "", "namespace mxl_looks {", "",
+           "// monstats3 fields that change how a monster looks (FUN_1008b570 name colour, FUN_1004b620 automap marker,",
+           "// FUN_1008c3f0 spawn overlay), one row per monster (D2R id, ascending) that sets any of them.",
+           "// flags: 0x02 Automap, 0x04 AutomapShowName, rank bits 0x08 Elite / 0x10 Veteran / 0x20 Uber / 0x40 Heroic /",
+           "// 0x80 Boss. nameColor / automapNameColor are colour indexes (D2 text colours), automapVectorColor a palette",
+           "// index. overlay[0..1] = Overlay1/2, [2..3] = BossOverlay1/2 (D2R overlay ids, -1 none): a unique or super",
+           "// unique plays the boss pair, any other monster the first pair (FUN_1008c3f0). overlayType is the byte at",
+           "// +0x1f, Median's last argument of its overlay call (2 with Overlay1 only, 3 with front and back); D2R's",
+           "// overlay call has no such argument.",
+           "inline constexpr uint16_t FlagAutomap = 0x02, FlagAutomapName = 0x04;",
+           "inline constexpr uint16_t RankElite = 0x08, RankVeteran = 0x10, RankUber = 0x20, RankHeroic = 0x40, RankBoss = 0x80;",
+           "struct Look {", "\tint32_t monster;", "\tuint16_t flags;", "\tuint8_t nameColor;", "\tuint8_t automapNameColor;",
+           "\tuint8_t automapVectorColor;", "\tuint8_t overlayType;", "\tint16_t overlay[4];", "};",
+           f"inline constexpr int32_t LookCount = {len(rows)};", "inline constexpr Look Looks[LookCount] = {"]
+    for m, f, nc, an, av, ot, ov, n in rows:
+        out.append(f"    {{{m}, 0x{f:x}, {nc}, {an}, {av}, {ot}, {{{ov[0]}, {ov[1]}, {ov[2]}, {ov[3]}}}}},  // {n}")
+    out += ["};", "", "}  // namespace mxl_looks", ""]
+    nover = sum(1 for r in rows if any(o >= 0 for o in r[6]))
+    return "\n".join(out), (f"monster looks: {len(rows)} monsters ({sum(1 for r in rows if r[1] & LOOK_RANK)} ranked, "
+                            f"{sum(1 for r in rows if r[1] & LOOK_AUTOMAP)} automap, {nover} spawn overlays) -> "
+                            f"plugin/src/mxl_monster_looks.h")
+
+
 def main() -> int:
     idmap = json.loads(IDMAP.read_text("utf-8"))
     req, msg = requirements()
     (SRC / "mxl_requirements.h").write_text(req, encoding="utf-8")
+    print(msg)
+    looks, msg = monster_looks(idmap)
+    (SRC / "mxl_monster_looks.h").write_text(looks, encoding="utf-8")
     print(msg)
     dng, gob, msg = levels_and_goblins(idmap)
     (SRC / "mxl_dungeons.h").write_text(dng, encoding="utf-8")

@@ -80,6 +80,21 @@ constexpr auto ShouldReissueCatalyst(int32_t npcClass, bool flagSet, bool hasCat
 	return flagSet && npcClass == NpcWarriv && !hasCatalyst;
 }
 
+// Quest 5 (The Forgotten Tower) event 8, the kill of the Countess. D2Sigma 0x9e8b0 runs in front of the vanilla kill
+// handler and skips it when the killer's record of the game's difficulty already holds quest 5 as done: bit 0 (reward
+// granted), 0xe (completed in this game) or 0xf (completed in an earlier game), the three tests of 0xbec00. The vanilla
+// handler would otherwise run its finish branch again (state 5, bit 0xd cleared, bit 0xd and 0 set for every party member
+// without bit 0) for a killer who is long done.
+constexpr int QuestForgottenTower = 5;
+constexpr int MonsterCountess = 45;  // monstats row of the Countess (the harness counter counts her kills only)
+constexpr int BitTowerGranted = 0;
+constexpr int BitTowerCompletedNow = 0xe;
+constexpr int BitTowerCompletedBefore = 0xf;
+
+constexpr auto SkipTowerKill(bool granted, bool completedNow, bool completedBefore) noexcept -> bool {
+	return granted || completedNow || completedBefore;
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Acts 2-5 (quests_act2_5.cpp). Sources: D2Sigma D2Quests.cpp 0x9ed00 / 0x9ee40 (Summoner), 0x9ef90 (Jerhyn), 0x9f030 /
 // 0x9f110 (Ormus), 0x9f340 (Cain), 0x9f3f0 / 0x9f530 (Izual), 0x9f7c0 (Qual-Kehk), 0x9fa80 / 0x9e580 (Baal), 0x9e600

@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst cainsub lockout cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -524,7 +524,29 @@ def check_respec():
         return add(name, "FAIL", "no plugin line in Akara's menu: %s" % menu, [shot], menu)
     idx = int(re.search(r"line (\d+)", plugin_lines[0]).group(1))
     m = mxl_mark()
+    # npcext PromptConfirm: the click opens D2R's Yes / No page and sends nothing; No ends it with the stats untouched
     ok, ml = H("menu %d" % idx)
+    time.sleep(1.5)
+    _, c1 = H("menu confirm")
+    confirm_shot = sh("respec_confirm")
+    asked = ok and any("open" in ln for ln in c1)
+    _, held0 = H("stat player 0")
+    ok_no, no_out = H("menu no")
+    time.sleep(1)
+    _, held1 = H("stat player 0")
+    declined_lines = [ln for ln in mxl_lines_since(m) if "npc actions" in ln]
+    declined = (ok_no and stat_of(held0) == base0 + 60 and stat_of(held1) == base0 + 60
+                and any("declined" in ln for ln in declined_lines) and not any("done" in ln for ln in declined_lines))
+    menu = npc_menu(148)
+    plugin_lines = [ln for ln in (menu or []) if "handler=plugin" in ln]
+    if not plugin_lines:
+        return add(name, "FAIL", "after No, the menu did not come back with the plugin line: %s" % menu, [shot, confirm_shot], ml + no_out)
+    idx = int(re.search(r"line (\d+)", plugin_lines[0]).group(1))
+    m = mxl_mark()
+    ok, ml2 = H("menu %d" % idx)
+    time.sleep(1.5)
+    _, c2 = H("menu confirm")
+    ok, yes_out = H("menu yes")
     time.sleep(1)
     _, after0 = H("stat player 0")
     _, after4 = H("stat player 4")
@@ -535,12 +557,60 @@ def check_respec():
     done = any("done" in ln for ln in lines)
     # the character's strength goes back to the class start (Barbarian 30) and every point spent comes back as unused points
     refunded = (base0 + 60) - s0 if s0 is not None else None
-    add(name, "PASS" if (ok and done and s0 == 30 and s4 == base4 + refunded) else "FAIL",
-        "menu lines %s; strength %d -> %s (Barbarian start 30), unused stat points %d -> %s (%s refunded); log `%s`; quest 41 %s" % (
-            [ln.strip() for ln in menu[1:]], base0 + 60, s0, base4, s4, refunded, lines[-1][-60:] if lines else "none", q[0]),
-        [shot], menu + ml + lines)
+    asked2 = any("open" in ln for ln in c2)
+    add(name, "PASS" if (asked and declined and asked2 and ok and done and s0 == 30 and s4 == base4 + refunded) else "FAIL",
+        "menu lines %s; the click opens the Yes / No page (%s) and No leaves strength at %d (%s); after Yes strength %d -> %s "
+        "(Barbarian start 30), unused stat points %d -> %s (%s refunded); log `%s`; quest 41 %s" % (
+            [ln.strip() for ln in menu[1:]], asked, base0 + 60, declined, base0 + 60, s0, base4, s4, refunded,
+            lines[-1][-60:] if lines else "none", q[0]),
+        [shot, confirm_shot], menu + ml + c1 + no_out + ml2 + c2 + yes_out + lines)
     close_menu()
     H("stat player 4 set %d" % base4)  # the refund raised the unused points: the saved test character keeps the old number
+
+
+def messages_sent():
+    m = re.search(r"client messages .*\(sent (\d+), failed (\d+)\)", mxl_text())
+    return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+
+
+def check_trophy():
+    """Median's trophies (misc2 InteractString): the tooltip says "Right click to reveal trophy challenge" and the right
+    click prints the challenge as chat lines (plugin/src/item_spells.cpp, mxl_items.h Trophies)."""
+    name = "Trophy items: hover text, right click reveals the challenge (misc2 InteractString)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    H("remove a56 5")
+    ok, made = H("item a56 inv")
+    if not ok:
+        return add(name, "BLOCKED", "could not create the Heart of Azmodan (a56): %s" % made)
+    sent0, failed0 = messages_sent()
+    g.press("i")  # inventory (background key message)
+    time.sleep(1.5)
+    shots = [sh("trophy_inventory")]
+    # the item lands in the first free cell of the 15 x 10 inventory grid (a free cell right of the tall items: the HD panel puts it near 0.841, 0.580): hover it with the plugin's virtual cursor
+    for n, (fx, fy) in enumerate(((0.841, 0.580), (0.841, 0.592))):
+        g.click(fx, fy, move_only=True)
+        time.sleep(1.0)
+        shots.append(sh("trophy_hover%d" % n))
+    g.press("i")
+    time.sleep(0.5)
+    ok, used = H("use a56")
+    time.sleep(1.5)
+    shots.append(sh("trophy_revealed"))
+    sent1, failed1 = messages_sent()
+    ok2, again = H("use a56")  # the trophy is kept: a second reveal works
+    time.sleep(0.5)
+    sent2, failed2 = messages_sent()
+    _, held = H("state")
+    kept = any("a56" in ln for ln in held)
+    lines = [ln for ln in used if "pSpell 17" in ln]
+    add(name, "PASS" if (ok and ok2 and lines and "kept" in lines[0] and sent0 is not None and sent1 - sent0 >= 8
+                        and failed1 == failed0 and sent2 - sent1 >= 8 and kept) else "FAIL",
+        "`use a56`: %s; client messages sent %s -> %s -> %s (failed %s -> %s), the item is kept: %s. Hover text and the "
+        "printed lines are read from the screenshots (trophy_hover*.png, trophy_revealed.png)" % (
+            used[0] if used else "-", sent0, sent1, sent2, failed0, failed2, kept), shots, made + used + again)
+    H("remove a56 5")
 
 
 def check_cain():
@@ -689,6 +759,97 @@ def check_lockout():
     add(name, "PASS" if (ok and r1 == (r0 or 0) + 1 and st1["player"]["area"] == 1) else "FAIL",
         "`use b60X` opened the portal (%s); `enter nearest`: %s; counters in `h state`: refused %s -> %s, clocks %s -> %s, "
         "still in area %s" % (ok, l2[0] if l2 else "-", r0, r1, c0, c1, st1["player"]["area"]), [sh("lock_normal")], l + l2)
+
+
+def _qbits(q):
+    """Bits 0-15 of quest q as a string of 0 / 1 (`h quest <q> dump`)."""
+    ok, l = H("quest %d dump" % q)
+    m = re.search(r"bits0-15 ([01]{16})", l[0]) if l else None
+    return m.group(1) if m else None
+
+
+def _qrestore(q, bits):
+    for i, ch in enumerate(bits or ""):
+        H("quest %d %d %s" % (q, i, "set" if ch == "1" else "clear"))
+
+
+def check_lockquest():
+    """Median's quest-table condition of the warp test (D2Sigma 0x5d810; leveldefs QuestFlagEx): level 73 (Duriel's Lair)
+    names quest 13. `h lockcheck` asks the plugin's warp test for the verdict without moving anybody."""
+    name = "Dungeon lockout: quest-table condition (level 73 needs quest 13: any of bits 1, 0, 0xe, 0xf)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    H("difficulty 0")
+    saved = _qbits(13)
+    if saved is None:
+        return add(name, "BLOCKED", "could not read quest 13")
+    notes, ok_all = [], True
+
+    def verdict(level):
+        ok, l = H("lockcheck %d" % level)
+        m = re.search(r"= (\w+)", l[0]) if l else None
+        return m.group(1) if m else "?"
+
+    try:
+        for b in (0, 1, 0xe, 0xf):
+            H("quest 13 %d clear" % b)
+        v0 = verdict(73)
+        ok_all &= v0 == "quest"
+        notes.append("no bits: %s (want quest)" % v0)
+        for b in (1, 0, 0xe, 0xf):
+            H("quest 13 %d set" % b)
+            v = verdict(73)
+            ok_all &= v == "allow"
+            notes.append("bit %#x: %s" % (b, v))
+            H("quest 13 %d clear" % b)
+        v1 = verdict(157)  # butcher_s_lair: names no quest, must never be the quest verdict
+        ok_all &= v1 != "quest"
+        notes.append("level 157 (no quest): %s" % v1)
+    finally:
+        _qrestore(13, saved)
+    add(name, "PASS" if ok_all else "FAIL", "; ".join(notes))
+
+
+def check_tower():
+    """Median's a1q5 guard (D2Sigma 0x9e8b0) on D2R's quest 5 kill handler: for a killer with quest 5 bit 0, 0xe or 0xf set
+    the hook skips the vanilla handler. A Countess spawned by the harness is not on quest 5's unit list (the kill event
+    never reaches the handler), so `h towerprobe` asks the hook's decision directly; the hook itself is only reached by the
+    natural Countess in the Tower Cellar (docs/unported.md)."""
+    name = "Forgotten Tower: quest 5 guard decides skip once quest 5 is done (towerprobe)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    H("difficulty 0")
+    saved = _qbits(5)
+    if saved is None:
+        return add(name, "BLOCKED", "could not read quest 5")
+
+    def probe():
+        ok, l = H("towerprobe")
+        m = re.search(r"skip=(\d)", l[0]) if l else None
+        return int(m.group(1)) if m else None
+
+    notes, ok_all = [], True
+    try:
+        H("spawn 45")
+        for c in (0, 0xe, 0xf):
+            H("quest 5 %d clear" % c)
+        v = probe()
+        ok_all &= v == 0
+        notes.append("quest 5 open: skip=%s (want 0)" % v)
+        for b in (0, 0xe, 0xf):
+            for c in (0, 0xe, 0xf):
+                H("quest 5 %d clear" % c)
+            H("quest 5 %d set" % b)
+            v = probe()
+            ok_all &= v == 1
+            notes.append("bit %#x set: skip=%s (want 1)" % (b, v))
+        H("kill nearest 45")
+    finally:
+        _qrestore(5, saved)
+    add(name, "PASS" if ok_all else "FAIL", "; ".join(notes))
 
 
 def check_lockout_clock():
@@ -1478,6 +1639,9 @@ def check_hiregates():
         "`req merc as <class>` over the backpack weapons / shields: %s" % ("; ".join(rows) if not bad else "; ".join(bad[:6])), [], rows)
 
 
+ETH_RATE = 0.026  # Median: rand(1000) <= 25
+
+
 def check_itemrolls():
     n1 = "Socket roll (quality 1-3): rand() % 7, clipped to the base"
     n2 = "Ethereal roll: 2.6%, +25% defence, 75% durability"
@@ -1518,8 +1682,9 @@ def check_itemrolls():
     avg_e = se / float(ne) if ne else 0
     ratio = avg_e / avg_n if avg_n else 0
     bad2 = []
-    if not 0.017 <= rate <= 0.036:
-        bad2.append("rate %.2f%% outside 1.7-3.6%% (Median 2.6%%, D2R 5%%)" % (rate * 100))
+    mean, sd = n * ETH_RATE, (n * ETH_RATE * (1 - ETH_RATE)) ** 0.5
+    if abs(eth - mean) > 4 * sd:
+        bad2.append("%d ethereal outside 4 sigma of Median's 2.6%% (%.0f +- %.0f; D2R's own would be 5%%)" % (eth, mean, 4 * sd))
     if ne and not 1.17 <= ratio <= 1.33:
         bad2.append("defence ratio %.2f (want 1.25; D2R 1.5)" % ratio)
     want_dur = dmax * 75 // 100
@@ -1529,6 +1694,25 @@ def check_itemrolls():
         "%d items at item level %s (ethereal count per base tried: %s): %d ethereal (%.2f%%); defence average %.1f -> %.1f (x%.2f); max durability %d -> %d..%d%s"
         % (n, m.group(3), ", ".join(tried), eth, rate * 100, avg_n, avg_e, ratio, dmax, emin, emax, ("; " + "; ".join(bad2)) if bad2 else ""),
         [], [line, d])
+    # quality 1 (low): D2R's own gate never lets it through, Median's roll does (qualities word2 = 25 for quality 1 too)
+    n3 = "Ethereal roll, quality 1 (low): 2.6%, +25%, 75% durability"
+    ok, line, _l = hv("itemroll %s 4000 q=1 ilvl=110" % (tried[-1].split()[0]), "itemroll", 120)
+    m3 = re.search(r"n=(\d+) failed=(\d+) ilvl=(\d+) ethereal=(\d+)", line)
+    d3 = next((l for l in _l if l.startswith("itemroll def")), "")
+    md3 = re.search(r"normal n=(\d+) sum=(\d+), ethereal n=(\d+) sum=(\d+); maxdur normal (\d+)\.\.(\d+), ethereal (\d+)\.\.(-?\d+)", d3)
+    if not (ok and m3 and md3):
+        return add(n3, "BLOCKED", "itemroll answered: %s" % _l[:2])
+    n_, e_ = int(m3.group(1)), int(m3.group(4))
+    mean, sd = n_ * ETH_RATE, (n_ * ETH_RATE * (1 - ETH_RATE)) ** 0.5
+    bad3 = []
+    if abs(e_ - mean) > 4 * sd:
+        bad3.append("%d ethereal outside 4 sigma of 2.6%% (%.0f +- %.0f)" % (e_, mean, 4 * sd))
+    dmax3 = int(md3.group(6))
+    if e_ and (int(md3.group(7)) != dmax3 * 75 // 100 or int(md3.group(8)) != dmax3 * 75 // 100):
+        bad3.append("ethereal max durability %s..%s (want %d)" % (md3.group(7), md3.group(8), dmax3 * 75 // 100))
+    add(n3, "PASS" if not bad3 and e_ >= 40 else "FAIL",
+        "%d items at item level %s: %d ethereal (%.2f%%), max durability %d -> %s..%s%s"
+        % (n_, m3.group(3), e_, 100.0 * e_ / n_, dmax3, md3.group(7), md3.group(8), ("; " + "; ".join(bad3)) if bad3 else ""), [], [line, d3])
 
 
 def check_dye():
@@ -1830,14 +2014,15 @@ def check_statcols():
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
-          ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
+          ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
           ("areacycle", check_areacycle), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
-          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend), ("statcols", check_statcols)]
+          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
+          ("trophy", check_trophy), ("statcols", check_statcols)]
 
 
 def write_report(extra=""):
@@ -1888,10 +2073,10 @@ def run_all(only=None):
             g.stop()
             time.sleep(2)
         # Quest state of the test character: the kill / dialog checks need quests 4 (Cain rescued, bit 1) and 6 (Andariel)
-        # active when the game is created, and the plugin's catalyst flag (quest 47) clear; the earlier run's rewards
+        # active when the game is created (quest 5 open for the tower check), and the plugin's catalyst flag (quest 47) clear; the earlier run's rewards
         # completed them. Closed save, checksum and sidecar fixed (docs/save-format.md).
         for name in sorted({f[:-4] for f in os.listdir(SAVES) if f.endswith(".d2s")}):
-            patch_quests(name, {(0, 1): 0, (0, 4): 2, (0, 6): 0, (0, 41): 0, (0, 47): 0})
+            patch_quests(name, {(0, 1): 0, (0, 4): 2, (0, 5): 0, (0, 6): 0, (0, 41): 0, (0, 47): 0})
         g.snapshot_marks()
         if not to_menu():
             add("start game", "BLOCKED", "game did not reach the main menu")

@@ -37,6 +37,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import palshift  # noqa: E402
 from missile_hd import LOOKALIKE  # noqa: E402
 from txt_migrate import read_tsv  # noqa: E402
 
@@ -88,6 +89,9 @@ SHAPE = {
     "cast": ["cast", "start", "charge", "channel", "ready"],
 }
 FAM_W, SHAPE_W, WORD_W = 1.7, 0.7, 0.4
+# PalShift: a shift that moves the art's colour by more than SHIFT_MIN is honoured (the row is scored by the shifted
+# colour); a best stand-in further than SHIFT_FAR from it has no vanilla effect of that colour (custom art, low).
+SHIFT_MIN, SHIFT_FAR = 0.12, 0.30
 
 
 def norm_key(name: str) -> str:
@@ -182,7 +186,23 @@ class ArtCache:
         self.dirty = True
         return st
 
-    def stats(self, data: bytes) -> dict | None:
+    def get_shifted(self, side: str, kind: str, rel: str, n: int) -> dict | None:
+        """The statistics of the art drawn through PalShift n (palshift.py); the D2R copy when Median has none."""
+        key = f"{side}/{kind}/{rel.lower()}#p{n}"
+        if key not in self.d:
+            import palshift
+            p = self.locate(side, kind, rel) or self.locate("d2r", kind, rel)
+            st = None
+            if p is not None:
+                try:
+                    st = self.stats(p.read_bytes(), palshift.table(n))
+                except Exception as e:
+                    print(f"   art {key}: {e}")
+            self.d[key] = st
+            self.dirty = True
+        return self.d[key]
+
+    def stats(self, data: bytes, remap: bytes | None = None) -> dict | None:
         import dcc
         import skill_icons
         import struct
@@ -206,7 +226,8 @@ class ArtCache:
                 minx, maxx = min(minx, fx + xs.min()), max(maxx, fx + xs.max())
                 miny, maxy = min(miny, fy + ys.min()), max(maxy, fy + ys.max())
             if i in pick and len(xs):
-                rgb = self.pal[a[ys, xs]]
+                idx = a[ys, xs]
+                rgb = self.pal[np.frombuffer(remap, np.uint8)[idx] if remap is not None else idx]
                 w = rgb.max(axis=1) / 255.0
                 sum_rgb += (rgb * w[:, None]).sum(axis=0)
                 sum_w += w.sum()
@@ -254,6 +275,8 @@ class Prof:
         self.kind, self.name, self.art_name, self.row, self.art = kind, name, art_name, row, art
         self.skills: set[str] = set()
         self.hit = self.sub = False
+        self.shift = 0  # missiles2 PalShift (Median rows), 0 = none
+        self.shift_dist = 0.0  # colour distance the shift moves the art by
         self.model = ""  # D2R: the HD model
         self.folder = ""
         self._tags = None
@@ -379,8 +402,8 @@ def cost(m: Prof, c: Prof, same_art: bool) -> tuple[float, list[str]]:
         s += 0.15 * min(4, abs(m.num("Height1") - c.num("Height1")) / 20)
     mf, ms, mw = m.words_tags()
     cf, cs, cw = c.words_tags()
-    if cf:
-        cf = cf | set()
+    if m.shift:  # the name's element (fire, cold...) is the colour before the shift: no family credit
+        mf = set()
     s -= FAM_W * min(3, len(mf & cf)) + SHAPE_W * min(3, len(ms & cs)) + WORD_W * min(3, len(mw & cw))
     if mf and cf and not (mf & cf):
         s += 0.8
@@ -471,6 +494,18 @@ def main() -> int:
     for p in mm.values():
         if p.art is None and p.art_name not in ("", "null"):
             p.art = art.get("d2r", "missiles", p.art_name)
+    # PalShift (missiles2): the HD effects cannot be tinted, so the row is scored by the colour of its art after the
+    # shift. A shift that moves the colour (> SHIFT_MIN) keeps the row off the exact / hand-picked routes: the art's
+    # own D2R effect would be the wrong colour.
+    for name, n in palshift.shifted_rows().items():
+        m = mm.get(name)
+        if m is None or m.art_name in ("", "null"):
+            continue
+        sh = art.get_shifted("mxl", "missiles", m.art_name, n)
+        if sh is not None and m.art is not None:
+            m.shift_dist = colour_dist(m.art, sh)
+            if m.shift_dist > SHIFT_MIN:
+                m.shift, m.art = n, sh
     by_art: dict[str, list[Prof]] = defaultdict(list)
     for p in dm.values():
         if norm_key(p.name) in d2r_hd_m and d2r_hd_m[norm_key(p.name)] != "null":
@@ -487,20 +522,20 @@ def main() -> int:
         if only and name not in only:
             continue
         v = dm.get(name)
-        if v is not None and v.art_name == m.art_name and norm_key(name) in d2r_hd_m:
+        if v is not None and v.art_name == m.art_name and norm_key(name) in d2r_hd_m and not m.shift:
             continue  # D2R's own missile with D2R's art and HD effect
         c = None
         if m.art_name in ("", "null"):
             model, kind, scale, conf, why = "null", "exact", 1.0, "high", "no art (logic missile)"
         else:
-            src = by_art.get(m.art_name)
+            src = None if m.shift else by_art.get(m.art_name)
             if src:
                 c, sc, margin, _ = pick(m, src, True)
                 kind, scale, model = "exact", 1.0, c.model
                 conf = confidence("exact", sc, margin, len({s.model for s in src}), m, c)
                 why = f"D2R {c.name} uses the art" + (f" ({len({s.model for s in src})} models)" if len({s.model for s in src}) > 1 else "")
             else:
-                hand = [p for p in library if p.model == LOOKALIKE.get(m.art_name)]
+                hand = [] if m.shift else [p for p in library if p.model == LOOKALIKE.get(m.art_name)]
                 c, sc, margin, parts = pick(m, hand or library, False)
                 scale = 1.0 if args.no_scale else scale_for(m, c)
                 kind, model = "stand-in", c.model
@@ -509,6 +544,12 @@ def main() -> int:
                 has_d2r_art = m.art_name in d2r_arts
                 why = (f"{'vanilla art without HD effect' if has_d2r_art else 'custom art, last'}; like D2R {c.name} "
                        f"({c.art_name}); score {sc:.1f}, margin {margin:.1f}; " + ", ".join(parts))
+                if m.shift:
+                    cd = colour_dist(m.art, c.art) if c.art else 1.0
+                    far = cd > SHIFT_FAR
+                    conf = "low" if far else conf
+                    why = (f"palette shift {m.shift} (moves the colour by {m.shift_dist:.2f}), chosen by the shifted "
+                           f"colour; " + why + ("; NO vanilla effect of that colour: custom art" if far else ""))
             if scale != 1:
                 vname = f"mxl_{model}_s{round(scale * 100)}"
                 new_models[vname] = (model, scale)
@@ -599,7 +640,13 @@ def main() -> int:
         rep += ["", f"Stand-ins drawn scaled to Median's art size: {scaled}. Custom art (last): {len(custom)} rows on "
                 f"{len({r[1] for r in custom})} animations; the other stand-ins have D2R art but no D2R HD effect.", ""]
         if label == "Missiles":
-            ex = [r for r in rows if r[2] == "exact" and r[8] is not None]
+            shifted = [r for r in rows if r[7].shift]
+            far = [r for r in shifted if "NO vanilla effect" in r[6]]
+            rep += [f"PalShift (missiles2): {len(palshift.shifted_rows())} Median rows have one. {len(shifted)} of them "
+                    f"move the art's colour (> {SHIFT_MIN}) and were scored by the shifted colour; HD effects cannot be "
+                    f"tinted, so each takes the vanilla effect of the nearest colour. {len(far)} have none within "
+                    f"{SHIFT_FAR} and stay custom art: " + (", ".join(r[0] for r in far) or "none") + ".", ""]
+            ex =[r for r in rows if r[2] == "exact" and r[8] is not None]
             diff = Counter()
             for r in ex:
                 m, c = r[7], r[8]

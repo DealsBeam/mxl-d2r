@@ -2,8 +2,9 @@
 
 Sources (extract/mxl, the compiled tables; layout in docs/subsystems/npc-hirelings.md section 1.2):
   npcext.bin      49 rows x 336 bytes; per NPC 16 menu slots of 16 bytes at +0x50: i32 requirement row (-1 = always),
-                  i32 npcactions row, u16 label string id (Median), u16 second string id, u16 sub-entry flag (10 =
-                  an entry of the submenu the preceding top-level slot opens), u16 sort/icon value
+                  i32 npcactions row, u16 label string id (Median), u16 prompt label (the confirmation's text), u16
+                  menu id (10 = an entry of the submenu the preceding top-level slot opens), u8 weight, u8 prompt
+                  confirm (1 = ask first; only Akara's respec line)
   npcactions.bin  31 rows x 52 bytes: i32 type, i32 requirement row, i32 flags, 10 x i32 values
 
 Median string ids become D2R ids through work/mod/strings_idkeys.json (Median id -> key) and the string JSONs in
@@ -83,9 +84,11 @@ def main() -> int:
 
     out += ["// Menu slots of the NPCs that have any. kind = npcRow * 16 + slot is what the client sends (packet 0x38 kind",
             "// 0x10 + kind). label = D2R string id of the entry text (0 = none). sub: 10 = an entry of the submenu opened",
-            "// by the top-level slot before it, 0 = a top-level entry.",
+            "// by the top-level slot before it, 0 = a top-level entry. confirm: the client asks Yes / No first, with the text",
+            "// `prompt` (D2R string id, 0 = none), before it sends the kind.",
             "struct Slot {", "\tint32_t npcRow;", "\tint32_t slot;", "\tuint16_t npcClass;", "\tint32_t requirement;",
-            "\tint32_t action;", "\tuint16_t label;", "\tuint16_t sub;", "};"]
+            "\tint32_t action;", "\tuint16_t label;", "\tuint16_t sub;", "\tuint16_t prompt;",
+            "\tbool confirm;", "};"]
     rows = []
     for n, r in enumerate(npcs):
         cls = struct.unpack_from("<i", r, 0)[0]
@@ -93,13 +96,13 @@ def main() -> int:
             raise SystemExit(f"npcext row {n}: monster {cls} is not in work/named/idmap.json")
         cls = mon[cls]  # vanilla NPCs map to themselves; Median-only ones get a new D2R id
         for s in range(SLOTS):
-            req, act, lab, _lab2, sub, _sort = struct.unpack_from("<iiHHHH", r, SLOT_BASE + s * SLOT_SIZE)
+            req, act, lab, prompt, sub, _weight, confirm = struct.unpack_from("<iiHHHBB", r, SLOT_BASE + s * SLOT_SIZE)
             if act <= 0 or act >= len(actions):
                 continue
-            rows.append((n, s, cls, req, act, d2r_label(lab), sub))
+            rows.append((n, s, cls, req, act, d2r_label(lab), sub, d2r_label(prompt), confirm))
     out += [f"inline constexpr int32_t SlotCount = {len(rows)};", "inline constexpr Slot Slots[SlotCount] = {"]
-    for n, s, cls, req, act, lab, sub in rows:
-        out.append(f"    {{{n}, {s}, {cls}, {req}, {act}, {lab}, {sub}}},")
+    for n, s, cls, req, act, lab, sub, prompt, confirm in rows:
+        out.append(f"    {{{n}, {s}, {cls}, {req}, {act}, {lab}, {sub}, {prompt}, {'true' if confirm else 'false'}}},")
     out += ["};", "", "}  // namespace mxl_npc", ""]
     args.out.write_text("\n".join(out), encoding="utf-8")
     print(f"npc actions: {len(actions)} actions, {len(rows)} menu slots on {len({r[2] for r in rows})} NPCs -> {args.out}")

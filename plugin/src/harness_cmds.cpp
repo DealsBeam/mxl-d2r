@@ -16,6 +16,8 @@
 #include "goblins.h"
 #include "mxl_hirelings.h"
 #include "item_events.h"
+#include "npc_actions.h"
+#include "item_gen.h"
 #include "quests_act1.h"
 #include "stat_columns.h"
 #include "testharness.h"
@@ -435,7 +437,7 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	GoblinsStatus(goblins, sizeof(goblins));
 	int refused = 0, started = 0;
 	DungeonLockoutCounts(&refused, &started);
-	Out("plugin goblins: %s | lockout refused=%d clocks=%d", goblins, refused, started);
+	Out("plugin goblins: %s | lockout refused=%d clocks=%d | tower skips=%d", goblins, refused, started, QuestsTowerSkips());
 	const auto* b = reinterpret_cast<const uint8_t*>(g_base);
 	Out("npcmenu open=%u npc=%u class=%u rows=%u", *reinterpret_cast<const uint32_t*>(b + RvaMenuOpenFlag),
 	    *reinterpret_cast<const uint32_t*>(b + RvaMenuNpcId), static_cast<unsigned>(*reinterpret_cast<const uint16_t*>(b + RvaMenuNpcClass)),
@@ -940,6 +942,29 @@ auto CmdDifficulty(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		*reinterpret_cast<uint8_t*>(reinterpret_cast<uint8_t*>(c->game) + GameDifficulty) = static_cast<uint8_t>(n);
 	}
 	Out("difficulty = %d", static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)));
+	return true;
+}
+
+// `towerprobe`: would the quest 5 kill hook skip the vanilla handler for the nearest Countess (class 45)? Spawn one first.
+auto CmdTowerprobe(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Unit* victim = NearestMonster(c, 45, false);
+	if (victim == nullptr) {
+		return Fail(c, "towerprobe: no Countess (spawn 45) alive");
+	}
+	Out("towerprobe class=45 skip=%d", QuestsTowerProbe(c->game, victim, c->player) ? 1 : 0);
+	return true;
+}
+
+// `lockcheck <level>`: the dungeon warp test's verdict for the player entering the level (dungeon_lockout.cpp).
+auto CmdLockcheck(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &n)) {
+		Out("lockcheck: usage lockcheck <level>");
+		return true;
+	}
+	static const char* const Names[] = {"allow", "requirements", "quest", "sealed"};
+	const int v = DungeonLockoutProbe(c->game, c->player, static_cast<int>(n));
+	Out("lockcheck %lld = %s", n, v >= 0 && v < 4 ? Names[v] : "none");
 	return true;
 }
 
@@ -1723,7 +1748,7 @@ auto ResolveRef(Ctx* c, const char* text) noexcept -> Unit* {
 
 constexpr uint64_t RvaHitUnit = 0x44ce80;      // (game, attacker, target, 1, &damage)
 constexpr uint64_t RvaApplyDamage = 0x44a9b0;  // (game, attacker, target, &damage)
-constexpr uint64_t RvaAvoidCheck = 0x44ef70;   // (game, defender, missile flag) -> 0 / 2 / 4 / 8 / 0x10
+constexpr uint64_t RvaAvoidCheck = 0x44ef70;   // (attacker unit, defender unit, missile flag) -> 0 / 2 / 4 / 8 / 0x10
 constexpr uint64_t RvaAllocator = 0x12063c0;   // -> allocator object; vtable +0x20 frees
 constexpr uint64_t RvaItemColour = 0x3710d0;   // (player, item, &colour byte, mode) -> palette entry
 constexpr uint64_t RvaIsItemType = 0x373890;   // (item, type id) -> nonzero when the item is of that type
@@ -1732,7 +1757,9 @@ constexpr uint32_t ItemFlagEthereal = 0x400000;
 constexpr int StatSockets = 194, StatDefence = 31, StatMaxDurabilityItem = 0x49, StatDye = 368, StatClassLock = 492;
 using HitUnitFn = void (*)(Game*, Unit*, Unit*, int32_t, void*);
 using ApplyDamageFn = void (*)(Game*, Unit*, Unit*, void*);
-using AvoidCheckFn = int32_t (*)(Game*, Unit*, int32_t);
+using AvoidCheckFn = int32_t (*)(Unit* attacker, Unit* defender, int32_t missile);
+constexpr uint64_t RvaUnitDataFlag = 0x34a0e0;  // (unit) -> data bank flag byte
+using UnitDataFlagFn = uint8_t (*)(Unit* unit);
 using AllocatorFn = void** (*)();
 using AllocFreeFn = void (*)(void*, void*);
 using DamageDestroyFn = void (*)(void*, int32_t);
@@ -1862,11 +1889,12 @@ auto CmdAvoid(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	}
 	hcmd::AvoidTally tally;
 	for (long long i = 0; i < n; ++i) {
-		tally.Add(Fn<AvoidCheckFn>(RvaAvoidCheck)(reinterpret_cast<Game*>(c->player), unit, missile ? 1 : 0));
+		tally.Add(Fn<AvoidCheckFn>(RvaAvoidCheck)(c->player, unit, missile ? 1 : 0));
 	}
 	*modeField = savedMode;
-	Out("avoid ref=%s kind=%s n=%d none=%d avoid=%d dodge=%d evade=%d block=%d other=%d success=%d mode=%d", t.tok[1], t.tok[2], tally.n,
-	    tally.none, tally.avoid, tally.dodge, tally.evade, tally.block, tally.other, tally.Successes(), static_cast<int>(savedMode));
+	Out("avoid ref=%s kind=%s n=%d none=%d avoid=%d dodge=%d evade=%d block=%d other=%d success=%d mode=%d dataflag=%d gameflag=%d asgame=%d", t.tok[1], t.tok[2], tally.n,
+	    tally.none, tally.avoid, tally.dodge, tally.evade, tally.block, tally.other, tally.Successes(), static_cast<int>(savedMode), static_cast<int>(Fn<UnitDataFlagFn>(RvaUnitDataFlag)(unit)),
+	    static_cast<int>(c->dataFlag), static_cast<int>(d2r::DataFlag(reinterpret_cast<Game*>(c->player))));
 	return true;
 }
 
@@ -1897,7 +1925,7 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long sumNormal = 0, sumEth = 0;
 	int32_t durNormalMin = 1 << 30, durNormalMax = -1, durEthMin = 1 << 30, durEthMax = -1;
 	for (long long i = 0; i < n; ++i) {
-		Unit* item = Fn<MakeItemFn>(RvaMakeItem)(c->player, classId, c->game, 4, static_cast<int64_t>(quality), 0, 1, static_cast<int32_t>(ilvl), 0, 0, 0);
+		Unit* item = Fn<MakeItemFn>(RvaMakeItem)(c->player, classId, c->game, 4, static_cast<int64_t>(quality), 0, 0, static_cast<int32_t>(ilvl), 0, 0, 0);  // bit B (the 2 in the generator flags) would skip the ethereal gate
 		if (item == nullptr) {
 			++failed;
 			continue;
@@ -1926,6 +1954,9 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d sockets=[%s]", t.tok[1], tally.n, failed, firstLevel, tally.ethereal, sockets);
 	Out("itemroll def normal n=%d sum=%lld, ethereal n=%d sum=%lld; maxdur normal %d..%d, ethereal %d..%d", nNormal, sumNormal, nEth, sumEth,
 	    durNormalMax < 0 ? 0 : durNormalMin, durNormalMax, durEthMax < 0 ? 0 : durEthMin, durEthMax);
+	char gate[256];
+	ItemGenGateText(gate, sizeof(gate));
+	Out("itemroll %s", gate);
 	return true;
 }
 
@@ -2072,7 +2103,7 @@ auto CmdPanelRow(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
-	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel | "
+	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
@@ -2084,6 +2115,18 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 
 // Client side (UI thread): the NPC menu the 0x27 packet opened.
 auto CmdMenu(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "confirm")) {  // the Yes / No page of a respec-style line
+		Out("menu confirm %s", NpcConfirmOpen() ? "open" : "closed");
+		return true;
+	}
+	if (t.n >= 2 && (hcmd::LowerEq(t.tok[1], "yes") || hcmd::LowerEq(t.tok[1], "no"))) {
+		const bool yes = hcmd::LowerEq(t.tok[1], "yes");
+		if (!NpcConfirmAnswer(yes)) {
+			return Fail(c, "menu: no confirmation is open");
+		}
+		Out("menu confirm answered %s", yes ? "yes" : "no");
+		return true;
+	}
 	const auto* b = reinterpret_cast<const uint8_t*>(g_base);
 	if (*reinterpret_cast<const uint32_t*>(b + RvaMenuNpcValid) == 0 || *reinterpret_cast<const uint32_t*>(b + RvaMenuOpenFlag) == 0) {
 		return Fail(c, "menu: no NPC menu is open (interact first, then wait a moment for the client)");
@@ -2098,7 +2141,7 @@ auto CmdMenu(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	const uint8_t* r = table + static_cast<size_t>(row) * 0x48;
 	const int32_t lines = d2r::At<int32_t>(r, 4);  // includes the final Cancel
 	if (t.n < 2) {
-		return Fail(c, "usage: menu list | menu <line index> | menu cancel");
+		return Fail(c, "usage: menu list | menu <line index> | menu cancel | menu confirm | menu yes | menu no");
 	}
 	if (hcmd::LowerEq(t.tok[1], "list")) {
 		Out("menu npc id=%u class=%u row=%d lines=%d (+ Cancel)", *reinterpret_cast<const uint32_t*>(b + RvaMenuNpcId),
@@ -2314,7 +2357,7 @@ struct Verb {
 const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false}, {"waypoint", CmdWaypoint, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
-    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
+    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},

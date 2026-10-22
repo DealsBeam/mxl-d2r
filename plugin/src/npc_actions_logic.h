@@ -211,6 +211,42 @@ inline auto RunSlot(uint32_t kind, int npcClass, const Host& h) noexcept -> Resu
 	return RunAction(s.action, h);
 }
 
+// --- Confirmation (npcext PromptConfirm / PromptLabel) ---------------------------------------------------------------
+// Akara's "Reset Stat/Skill Points" asks first: the client shows a list with the prompt text as its header and the
+// stock Yes / No lines (D2R's own confirmation, the one its Repair All uses), and sends the kind only after Yes.
+inline constexpr uint16_t StringYes = 0xd10;  // "Yes" (D2R string 3344)
+inline constexpr uint16_t StringNo = 0xd11;   // "No" (D2R string 3345)
+
+constexpr auto NeedsConfirm(int slotIndex) noexcept -> bool {
+	return slotIndex >= 0 && slotIndex < mxl_npc::SlotCount && mxl_npc::Slots[slotIndex].confirm;
+}
+
+// The header text of the prompt: the prompt label, else the line's own label.
+constexpr auto ConfirmText(int slotIndex) noexcept -> uint16_t {
+	const mxl_npc::Slot& s = mxl_npc::Slots[slotIndex];
+	return s.prompt != 0 ? s.prompt : s.label;
+}
+
+// The pending confirmation of the client: one at a time, answered once (the list's Yes, No and Escape all end it).
+struct Confirmation {
+	bool open = false;
+	uint32_t kind = 0;
+	uint16_t text = 0;
+
+	void Open(uint32_t k, uint16_t t) noexcept {
+		open = true;
+		kind = k;
+		text = t;
+	}
+	// The kind to send for this answer, or 0 (a No, or an answer with nothing pending).
+	auto Answer(bool yes) noexcept -> uint32_t {
+		const uint32_t send = open && yes ? kind : 0;
+		open = false;
+		kind = 0;
+		return send;
+	}
+};
+
 // --- Page answer: the 'N' plugin message (client_messages_logic.h) -----------------------------------------------
 // 8 bytes: u32 page kind, u16 NPC class, u16 mask of the open sub-entries.
 inline constexpr size_t PagePayloadSize = 8;

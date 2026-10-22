@@ -20,6 +20,7 @@ int RunItemGenTests();  // item_gen_test.cpp
 int RunWaypointsTests();  // waypoints_test.cpp
 int RunMonsterAiTests();  // monster_ai_test.cpp
 int RunItemEventsTests();  // item_events_test.cpp
+int RunMonsterLooksTests();  // monster_looks_test.cpp
 
 namespace {
 
@@ -134,6 +135,7 @@ int main() {
 	failures += RunWaypointsTests();
 	failures += RunMonsterAiTests();
 	failures += RunItemEventsTests();
+	failures += RunMonsterLooksTests();
 	std::printf(failures == 0 ? "requirements: all tests passed\n" : "requirements: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }

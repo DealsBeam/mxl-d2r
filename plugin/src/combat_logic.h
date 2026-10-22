@@ -53,6 +53,13 @@ constexpr auto BlockCap(int32_t maxBlockStat, bool indomitable) noexcept -> int3
 	return indomitable ? std::min(cap, IndomitableBlock) : cap;
 }
 
+// The block cap for a block chance of `value`. The Indomitable lookup (`hasIndomitable`, a skill level read) is only made
+// when the chance is above the Indomitable limit, because below it the limit cannot lower the result.
+template <typename HasIndomitable>
+constexpr auto BlockCapFor(int32_t maxBlockStat, int32_t value, HasIndomitable&& hasIndomitable) -> int32_t {
+	return BlockCap(maxBlockStat, value > IndomitableBlock && hasIndomitable());
+}
+
 // Absorb (D2Sigma 0x10057a20, D2R 0x450670). A hit's elemental damage is first cut by the defender's absorb-percent stat
 // (at most 40%) and then by the flat absorb stat; the cut amount heals the defender (D2R adds it to the damage block's
 // absorbed total at +0x130, which 0x451820 turns into life). D2Sigma does the same cuts but runs each healed amount

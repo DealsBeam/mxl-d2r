@@ -146,6 +146,15 @@ Findings that matter beyond this tool:
   game loads without new error classes (the assert lines seen, `sub.nCelNum`, `ii < NUM_LEVEL_TYPES`, unique item index, were
   also in a run without the files). The look of single stand-ins is not signed off; no Sorceress run.
 
+### PalShift (missiles2, 2026-10-22)
+
+Median stamps a palette shift on 25 missiles. HD effects cannot be tinted, so `tools/palshift.py` reads the PL2 colour
+variation tables (111 x 256, row 1328 + n - 1) and `tools/effects_hd.py` scores such a row on the shifted colour of its art
+instead of the art's own. The exact-art shortcut is skipped (the vanilla effect of the same art has the wrong colour).
+21 rows move the colour by more than 0.12; 8 of them have a vanilla HD effect within 0.3 of the shifted colour and use it
+(the why-text says "palette shift N"); 13 have none and are listed in `work/mod/effects_hd.md` (paragraph PalShift) and
+docs/unported.md as custom art.
+
 ## Rows without art (tools/art_fix.py)
 
 Median's tables name 12 missile and 12 overlay animations that are neither in D2R nor in Median's files (74 rows in both banks), plus two

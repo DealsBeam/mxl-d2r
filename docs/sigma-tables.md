@@ -97,7 +97,8 @@ field; before, 402 of 428 were named and 27 of 37 tables were complete).
   interact mode; set on the 20 trophy items), `Difficulty` (item spell 16 only works on difficulty N-1; the charged
   riftstones) and `Infographic` (the help panel the client opens on item event 13, packet 0x16; only the catalyst of
   disenchantment).
-- **missiles2** `PalShift` (palette shift stamped on the missile at creation, 25 rows), **itemtypesext** `NoShowILvl`
+- **missiles2** `PalShift` (palette shift stamped on the missile at creation, 25 rows; the HD stand-in is chosen by the
+  shifted colour, see hd-effects.md section 6), **itemtypesext** `NoShowILvl`
   (10 types hide the item level line), **propertiesext** `DefaultParam` (see above), **qualities** `Automagics`,
   `Runeword`, `EthChance` (1/1000 ethereal chance, 25 or 0) and `MaxSock` (qualities 5-9 get the most sockets).
 - **hireclasses**, **pettypeext**, **uniqueitems2** (an equip limit per unique group), **charstatsexp**

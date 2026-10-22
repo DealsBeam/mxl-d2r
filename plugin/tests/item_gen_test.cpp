@@ -29,6 +29,13 @@ int RunItemGenTests() {
 	Check(EtherealAcceptOutOf(25) == 26 && EtherealAcceptOutOf(0) == 1 && EtherealAcceptOutOf(49) == 50 && EtherealAcceptOutOf(400) == 50,
 	      "acceptance out of D2R's 50 per mille gate, capped");
 	Check(EtherealAcceptOutOf(-1) == 0, "negative chance accepts nothing");
+	// Median's die for the qualities D2R's gate skips (low quality): rand(1000) <= 25 passes 26 of 1000 rolls
+	int passes = 0;
+	for (int roll = 0; roll < MedianEtherealDie; ++roll) {
+		passes += EtherealRolls(EtherealChancePerMille(1), roll) ? 1 : 0;
+	}
+	Check(passes == 26 && EtherealChancePerMille(1) == 25, "quality 1 is ethereal 26 times in 1000");
+	Check(!EtherealRolls(EtherealChancePerMille(5), 1) && EtherealRolls(EtherealChancePerMille(5), 0), "set items: only the roll 0 passes a chance of 0 (their chance is never asked: D2R skips quality 5)");
 	Check(EtherealStat(100) == 125 && EtherealStat(7) == 8 && EtherealStat(3) == 3 && EtherealStat(0) == 0, "+25 percent, truncated");
 	Check(EtherealStat(1000000000) == 1250000000, "no 32-bit overflow in the product");
 	Check(EtherealDurability(100) == 75 && EtherealDurability(1) == 1 && EtherealDurability(2) == 1 && EtherealDurability(3) == 2,
