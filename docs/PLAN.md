@@ -172,6 +172,24 @@ model). Draft plan, edit before starting: [realm-plan.md](realm-plan.md).
 
 Rule for Phases 4-6 meanwhile: Median logic stays server-side in the plugins, and Median's state lives in the save files.
 
+## Progress estimate (2026-10-22, plugin 0.53.0)
+
+Judgement estimates, not measurements. Same method as the tables below. Game checks on 0.53.0: 31 of 33 pass, tooltip
+needs a human to read the screenshots, bonusdrops fails for the Summoner (lane summoner-catalyst).
+
+| Phase | Share of total work | Phase done | Adds to overall |
+|---|---|---|---|
+| 0 Setup | 2% | 100% | 2.0% |
+| 1 Tools (extract, decode, convert) | 12% | 100% | 12.0% |
+| 2 Data port (tables, strings, install, booting) | 10% | 99% | 9.9% |
+| 3 Triage of Median's engine code | 8% | 99% | 7.9% |
+| 4 Plugins (engine behaviour) | 30% | 93% | 27.9% |
+| 5 Graphics | 28% | 42% | 11.8% |
+| 6 Test and release | 10% | 33% | 3.3% |
+| **Total** | **100%** | **74.8%** | **74.8%** |
+
+Phase 7 (private realm) is outside this estimate.
+
 ## Progress estimate (2026-10-21)
 
 Judgement estimates, not measurements. Same method as the 2026-10-14 table below.
