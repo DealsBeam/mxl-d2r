@@ -28,6 +28,7 @@
 #include "missile_hits.h"
 #include "mana_costs.h"
 #include "item_rules.h"
+#include "stat_rules.h"
 #include "skill_damage.h"
 #include "heat.h"
 #include "trophy_timer.h"
@@ -42,6 +43,8 @@
 #include "quests_act2_5.h"
 #include "quests_rewards.h"
 #include "dungeon_lockout.h"
+#include "engine_gaps.h"
+#include "gamble.h"
 #include "goblins.h"
 #include "monster_ai.h"
 #include "monster_looks.h"
@@ -80,7 +83,8 @@ char g_manaCostsReport[160] = "off: not the expected game image";
 char g_itemRulesReport[320] = "off: not the expected game image";
 char g_skillDamageReport[160] = "off: not the expected game image";
 char g_skillRestrictReport[160] = "off: not the expected game image";
-char g_heatReport[160] = "off: not the expected game image";
+char g_heatReport[200] = "off: not the expected game image";
+char g_statRulesReport[320] = "off: not the expected game image";
 char g_trophyReport[200] = "off: not the expected game image";
 char g_missileHitsReport[1024] = "";
 char g_cubeReport[192] = "off: not the expected game image";
@@ -107,6 +111,8 @@ char g_reqGatesReport[256] = "off: not the expected game image";
 char g_combatReport[256] = "off: not the expected game image";
 char g_statColumnsReport[256] = "off: not the expected game image";
 char g_infoPanelsReport[256] = "off: not the expected game image";
+char g_gambleReport[192] = "off: not the expected game image";
+char g_engineGapsReport[256] = "off: not the expected game image";
 char g_itemEventsReport[448] = "off: not the expected game image";
 char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
@@ -138,7 +144,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability quantity autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
+// items missiles mana townmana durability quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels gamble hitfloor recast slowfloor
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -221,6 +227,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "heat %s", g_heatReport);
 	Say(command, line);
+	std::snprintf(line, sizeof(line), "stat rules %s", g_statRulesReport);
+	Say(command, line);
 	{
 		char status[96];
 		TrophyTimerStatus(status, sizeof(status));
@@ -249,14 +257,15 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		Say(command, line);
 	}
 	{
-		long starts = 0, reduced = 0, shared = 0, dropped = 0;
-		char report[320];
-		if (CooldownCounts(&starts, &reduced, &shared, &dropped)) {
+		long starts = 0, reduced = 0, shared = 0, dropped = 0, monsters = 0;
+		char report[360];
+		if (CooldownCounts(&starts, &reduced, &shared, &dropped, &monsters)) {
 			cooldowns::Counters c;
 			c.starts = starts;
 			c.reduced = reduced;
 			c.shared = shared;
 			c.dropped = dropped;
+			c.monsters = monsters;
 			cooldowns::FormatReport(report, sizeof(report), CooldownMemberCount(), CooldownGroupCount(), c);
 		} else {
 			std::snprintf(report, sizeof(report), "%s", g_cooldownsReport);
@@ -333,6 +342,10 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "combat %s", g_combatReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "gamble %s", g_gambleReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "engine gaps %s", g_engineGapsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "stat columns %s", g_statColumnsReport);
 	Say(command, line);
@@ -472,10 +485,20 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		if (Off("heat")) {
 			std::snprintf(g_heatReport, sizeof(g_heatReport), "%s", OffNote);
 		} else {
-			InstallHeat(context, g_heatReport, sizeof(g_heatReport));
+			InstallHeat(context, !Off("manaregen"), g_heatReport, sizeof(g_heatReport));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: heat %s", g_heatReport);
 		context->LogInfo(line);
+		{
+			const StatRulesParts parts{!Off("potionamounts"), !Off("stamina")};
+			if (!parts.potionAmounts && !parts.stamina) {
+				std::snprintf(g_statRulesReport, sizeof(g_statRulesReport), "%s", OffNote);
+			} else {
+				InstallStatRules(context, parts, g_statRulesReport, sizeof(g_statRulesReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: stat rules %s", g_statRulesReport);
+			context->LogInfo(line);
+		}
 		if (Off("trophy")) {
 			std::snprintf(g_trophyReport, sizeof(g_trophyReport), "%s", OffNote);
 		} else {
@@ -706,6 +729,25 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallCombat(context, !Off("damagered"), g_combatReport, sizeof(g_combatReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: combat %s", g_combatReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("gamble")) {
+				std::snprintf(g_gambleReport, sizeof(g_gambleReport), "%s", OffNote);
+			} else {
+				InstallGamble(context, g_gambleReport, sizeof(g_gambleReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: gamble %s", g_gambleReport);
+			context->LogInfo(line);
+		}
+		{
+			const bool hit = !Off("hitfloor"), rc = !Off("recast"), sl = !Off("slowfloor");
+			if (!hit && !rc && !sl) {
+				std::snprintf(g_engineGapsReport, sizeof(g_engineGapsReport), "%s", OffNote);
+			} else {
+				InstallEngineGaps(context, hit, rc, sl, g_engineGapsReport, sizeof(g_engineGapsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: engine gaps %s", g_engineGapsReport);
 			context->LogInfo(line);
 		}
 		{

@@ -5,4 +5,4 @@
 
 #include <cstddef>
 
-auto InstallHeat(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;
+auto InstallHeat(const D2RL::PluginContext* context, bool medianBase, char* report, size_t reportSize) noexcept -> bool;

@@ -9,10 +9,16 @@
 // D2R's per-tick regeneration is 0x42e350 (game, unit) -> 1 when the mana stat changed. The hook lets D2R run it for every
 // unit without stat 297 and runs D2Sigma's drain (heat_logic.h) for the others. The charstats record (regeneration
 // seconds at +0x36) comes from 0xfcfc0 (dataFlag, class), as in D2R's own function.
+//
+// The same formula serves the plain recovery (stat 297 = 0), where it differs from D2R's in one point: D2R raises a
+// regeneration base of 0 to 1 per frame, D2Sigma's does not (stat_rules_logic.h `ManaBase`, audit item 15). A pool below
+// the frame count (a few points of mana against 25 x seconds) regenerates nothing in Median. With a base of at least 1
+// (or the no-regeneration state) D2R's own step runs unchanged; off word `manaregen` leaves the floor of 1 to D2R.
 #include "heat.h"
 
 #include "d2r.h"
 #include "heat_logic.h"
+#include "stat_rules_logic.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -58,17 +64,18 @@ UnitClassFn g_unitClass = nullptr;
 CharStatsFn g_charStats = nullptr;
 UnitRoomFn g_unitRoom = nullptr;
 RoomInTownFn g_roomInTown = nullptr;
+bool g_medianBase = true;  // a regeneration base below 1 stays 0 (D2Sigma's formula), where D2R raises it to 1
 
 auto Regen(d2r::Game* game, Unit* unit) noexcept -> uint64_t {
 	if (unit == nullptr || game == nullptr) {
 		return g_original(game, unit);
 	}
 	const int32_t rate = g_getStat(unit, StatHeatRate, 0);
-	if (rate == 0) {
+	if (rate == 0 && !g_medianBase) {
 		return g_original(game, unit);
 	}
 	void* room = g_unitRoom(unit);
-	if (room != nullptr && g_roomInTown(room) != 0) {
+	if (rate != 0 && room != nullptr && g_roomInTown(room) != 0) {
 		return 0;  // no heat loss in a town (and no regeneration)
 	}
 	heat::Regen r;
@@ -84,6 +91,19 @@ auto Regen(d2r::Game* game, Unit* unit) noexcept -> uint64_t {
 		r.base = r.maxMana / heat::RegenFrames(d2r::At<uint8_t>(chars, CharStatsRegenSeconds));
 		r.bonus = g_getStat(unit, StatManaRecoveryBonus, 0);
 	}
+	if (rate == 0) {
+		// no heat: D2R's own step gives the same as long as the base is at least 1 (it also drops a finished mana potion
+		// state, which stays D2R's); a base of 0 is where Median's formula differs
+		if (r.base >= 1 || g_hasState(unit, StateNoRegen) != 0) {
+			return g_original(game, unit);
+		}
+		const int32_t plain = statrules::ManaDelta(r.mana, r.maxMana, r.base, r.bonus, r.recovery);
+		if (plain == 0) {
+			return 0;
+		}
+		g_addStat(unit, StatMana, plain, 0);
+		return 1;
+	}
 	const int32_t delta = heat::HeatDelta(r);
 	if (delta == 0) {
 		return 0;
@@ -94,8 +114,9 @@ auto Regen(d2r::Game* game, Unit* unit) noexcept -> uint64_t {
 
 }  // namespace
 
-auto InstallHeat(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+auto InstallHeat(const D2RL::PluginContext* context, bool medianBase, char* report, size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;
+	g_medianBase = medianBase;
 	g_getStat = reinterpret_cast<GetStatFn>(base + GetStatRva);
 	g_maxMana = reinterpret_cast<MaxManaFn>(base + MaxManaRva);
 	g_addStat = reinterpret_cast<AddStatFn>(base + AddStatRva);
@@ -106,7 +127,8 @@ auto InstallHeat(const D2RL::PluginContext* context, char* report, size_t report
 	g_roomInTown = reinterpret_cast<RoomInTownFn>(base + RoomInTownRva);
 	const bool ok = context->InstallInlineHook(RegenRva, RegenEntry, sizeof(RegenEntry), Regen,
 	                                           reinterpret_cast<void**>(&g_original));
-	std::snprintf(report, reportSize, ok ? "on: stat 297 turns mana regeneration into a heat drain (none in town)"
-	                                     : "off: mana regeneration hook failed");
+	std::snprintf(report, reportSize, ok ? "on: stat 297 turns mana regeneration into a heat drain (none in town); base below 1 stays %s"
+	                                     : "off: mana regeneration hook failed",
+	              medianBase ? "0 (Median)" : "1 (D2R)");
 	return ok;
 }

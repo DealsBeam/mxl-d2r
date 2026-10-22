@@ -14,7 +14,10 @@
 // (unit, delay, skill), called by its skill use (0x2170d4) and 0x215fc0 (0x21604c), which sets the same state on the client's
 // copy of the unit. Both are detoured here: the delay loses stat 309 and the start is repeated for every skill of the group
 // with the same delay, which is exactly Median's single group timer (cooldowns_logic.h proves it against a model of Median's
-// tables). Only player units are touched (Median's start and ready test skip every other unit type).
+// tables). Median's start and ready test skip every other unit type (0x100b0a40+0x70: `if (*unit != 0) return 1`; the start
+// stores into the player's own table only), so a non-player's start is not passed on: a monster, pet or hireling has no cooldown
+// and can use a skill with a delay again at once. That also leaves the monster's state 0xb9 / stat 359 unset, which D2R's ready
+// test 0x340540 reads.
 // Both starts are called only with a delay above zero; a reduced delay of zero or less starts nothing, as Median's does.
 //
 // Entry bytes of build 93847 (timestamp 0x6ab3782c), whole instructions, no rip-relative operand in the first 20 bytes:
@@ -41,7 +44,6 @@ constexpr uint8_t ServerEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6
 constexpr uint8_t ClientEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10,
                                    0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x20};
 constexpr int UnitTypeOffset = 0x00;
-constexpr int32_t UnitTypePlayer = 0;
 constexpr size_t MaxGroup = 64;
 
 using ServerStartFn = void (*)(void* game, void* unit, int32_t delay, int32_t skill);
@@ -57,7 +59,7 @@ bool g_installed = false;
 constexpr size_t MemberCount = sizeof(mxl_cooldowns::Members) / sizeof(mxl_cooldowns::Members[0]);
 
 auto IsPlayer(void* unit) noexcept -> bool {
-	return unit != nullptr && d2r::At<int32_t>(unit, UnitTypeOffset) == UnitTypePlayer;
+	return unit != nullptr && cooldowns::HasCooldowns(d2r::At<int32_t>(unit, UnitTypeOffset));
 }
 
 // The reduced delay for a used skill and the list of skills to start; false when nothing starts.
@@ -85,7 +87,7 @@ void StartAll(void* unit, int32_t delay, int32_t skill, Start&& start) noexcept 
 
 void ServerHook(void* game, void* unit, int32_t delay, int32_t skill) {
 	if (!IsPlayer(unit)) {
-		g_serverOriginal(game, unit, delay, skill);
+		InterlockedIncrement(&g_counts.monsters);  // Median: a non-player is always ready, nothing is stored
 		return;
 	}
 	StartAll(unit, delay, skill, [&](int32_t d, int32_t s) { g_serverOriginal(game, unit, d, s); });
@@ -93,7 +95,7 @@ void ServerHook(void* game, void* unit, int32_t delay, int32_t skill) {
 
 void ClientHook(void* unit, int32_t delay, int32_t skill) {
 	if (!IsPlayer(unit)) {
-		g_clientOriginal(unit, delay, skill);
+		InterlockedIncrement(&g_counts.monsters);
 		return;
 	}
 	StartAll(unit, delay, skill, [&](int32_t d, int32_t s) { g_clientOriginal(unit, d, s); });
@@ -101,11 +103,12 @@ void ClientHook(void* unit, int32_t delay, int32_t skill) {
 
 }  // namespace
 
-auto CooldownCounts(long* starts, long* reduced, long* shared, long* dropped) noexcept -> bool {
+auto CooldownCounts(long* starts, long* reduced, long* shared, long* dropped, long* monsters) noexcept -> bool {
 	*starts = g_counts.starts;
 	*reduced = g_counts.reduced;
 	*shared = g_counts.shared;
 	*dropped = g_counts.dropped;
+	*monsters = g_counts.monsters;
 	return g_installed;
 }
 

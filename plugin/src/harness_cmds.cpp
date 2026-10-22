@@ -13,6 +13,9 @@
 #include "craft_flags.h"
 #include "d2r.h"
 #include "dungeon_lockout.h"
+#include "engine_gaps.h"
+#include "engine_gaps_logic.h"
+#include "gamble_logic.h"
 #include "goblins.h"
 #include "hirelings.h"
 #include "hirelings_logic.h"
@@ -144,6 +147,8 @@ constexpr uint64_t RvaDeadCheck = 0x34c2c0;     // (unit) -> 1 dead / dying
 constexpr uint64_t RvaPosCheck = 0x4fe1f0;      // (unit, x, y, tolerance) -> 0 when the unit is within the tolerance of x,y
 constexpr uint64_t RvaPathDistance = 0x325370;  // (unit, x, y) -> distance used by the walk packet check (<= 15 accepted)
 constexpr uint64_t RvaUnitClientOf = 0x48fde0;  // (unit) -> client
+constexpr uint64_t RvaMonsterUseSkill = 0x4a7bc0;  // (game, monster, mode < 0x10, skill id, target unit, x, y, 0): the AI's skill use -> 1 started
+constexpr uint64_t RvaUnitHasState = 0x3351b0;     // (unit, state) -> non-zero when set
 // client
 constexpr uint64_t RvaClientFind = 0x9a5d0;     // (id, type) -> client unit
 constexpr uint64_t RvaMenuRecord = 0x113990;    // (npc unit) -> row index in the NPC menu table
@@ -227,6 +232,8 @@ using DeadCheckFn = int32_t (*)(Unit*);
 using PosCheckFn = int32_t (*)(Unit*, uint32_t, uint32_t, int32_t);
 using PathDistanceFn = int32_t (*)(Unit*, int32_t, int32_t);
 using UnitClientFn = void* (*)(Unit*);
+using MonsterUseSkillFn = int64_t (*)(Game*, Unit*, uint32_t, int32_t, Unit*, int32_t, int32_t, uint8_t);
+using UnitHasStateFn = uint64_t (*)(Unit*, int32_t);
 using ClientFindFn = Unit* (*)(uint32_t, int32_t);
 using MenuRecordFn = int32_t (*)(Unit*);
 using MenuHandlerFn = uint8_t (*)(uint8_t);
@@ -455,9 +462,10 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Out("corpses %d players=%d self=%d | no corpse %s: skipped corpse calls=%ld penalty calls=%ld respawns held=%ld let=%ld xp=%u", corpses,
 	    players, self ? 1 : 0, noCorpseOn ? "on" : "off", skippedCorpses, skippedPenalties, respawnsHeld, respawns,
 	    static_cast<uint32_t>(Stat(p, 13)));
-	long cdStarts = 0, cdReduced = 0, cdShared = 0, cdDropped = 0;
-	const bool cooldownsOn = CooldownCounts(&cdStarts, &cdReduced, &cdShared, &cdDropped);
-	Out("cooldowns %s: starts=%ld reduced=%ld shared=%ld dropped=%ld", cooldownsOn ? "on" : "off", cdStarts, cdReduced, cdShared, cdDropped);
+	long cdStarts = 0, cdReduced = 0, cdShared = 0, cdDropped = 0, cdMonsters = 0;
+	const bool cooldownsOn = CooldownCounts(&cdStarts, &cdReduced, &cdShared, &cdDropped, &cdMonsters);
+	Out("cooldowns %s: starts=%ld reduced=%ld shared=%ld dropped=%ld monsters=%ld", cooldownsOn ? "on" : "off", cdStarts, cdReduced, cdShared, cdDropped,
+	    cdMonsters);
 	Out("skills left=%d right=%d", SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(p)), SkillIdOf(Fn<ActiveSkillFn>(RvaRightSkill)(p)));
 	PrintMissiles(c);
 	int mons = 0;
@@ -1879,6 +1887,30 @@ auto CmdCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return rc == 0 ? true : Fail(c, "cast: the game refused the skill use (code %d; town, no mana, cooldown or busy?)", rc);
 }
 
+// `mcast <skill id> <mode> unit <id> | nearest [class]`: the monster uses the skill on the player through the AI's skill use
+// (0x4a7bc0, mode as monstats Sk<n>mode: 6 = A1, 7 = A2, 9 = SC, 10 = S1). The monster must own the skill (its monstats row
+// lists it). Prints the call's answer, the monster's mode and, for the cooldown check, its stat 359 at layer = skill (the end frame
+// of D2R's cooldown timer) and the states 0xb9 / 0x79 the cooldown starts set; poll `state` or repeat the command.
+auto CmdMonsterCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long skill = 0, mode = 0;
+	hcmd::CastTarget tg;
+	if (t.n < 4 || !hcmd::ParseInt(t.tok[1], &skill) || !hcmd::ParseInt(t.tok[2], &mode) || skill < 0 || skill > 0xffff || mode < 0 || mode > 15 ||
+	    !hcmd::ParseCastTarget(t, 3, &tg) || (tg.kind != hcmd::CastTarget::Unit && tg.kind != hcmd::CastTarget::Nearest)) {
+		return Fail(c, "usage: mcast <skill id> <mode 0-15> unit <id> | nearest [class]");
+	}
+	Unit* mon = tg.kind == hcmd::CastTarget::Unit ? FindMonsterById(c, static_cast<uint32_t>(tg.id)) : NearestMonster(c, tg.cls, false);
+	if (mon == nullptr) {
+		return Fail(c, "mcast: no such live monster");
+	}
+	const int modeBefore = ModeOf(mon);
+	const int64_t rc = Fn<MonsterUseSkillFn>(RvaMonsterUseSkill)(c->game, mon, static_cast<uint32_t>(mode), static_cast<int32_t>(skill), c->player, 0, 0, 0);
+	const auto hasState = Fn<UnitHasStateFn>(RvaUnitHasState);
+	Out("mcast monster id=%u class=%d skill %lld mode %lld: returned %lld, unit mode %d -> %d, stat359[%lld]=%d state 0xb9=%d state 0x79=%d", IdOf(mon),
+	    ClassOf(mon), skill, mode, static_cast<long long>(rc), modeBefore, ModeOf(mon), skill, Stat(mon, 359, static_cast<int>(skill)),
+	    hasState(mon, 0xb9) != 0 ? 1 : 0, hasState(mon, 0x79) != 0 ? 1 : 0);
+	return rc != 0 ? true : Fail(c, "mcast: the monster did not start the skill (not its skill, or the mode is not allowed)");
+}
+
 // --- missiles ---------------------------------------------------------------------------------------------------------
 hcmd::SeenUnits g_missileSeen;
 volatile LONG g_trackMissiles = 0;
@@ -2355,6 +2387,78 @@ auto CmdWear(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		Fn<MeleeWearFn>(RvaMeleeWear)(c->game, attacker, defender);
 	}
 	Out("wear %s -> %s n=%lld durability worn before=%lld after=%lld", t.tok[1], t.tok[2], n, before, durability());
+	return true;
+}
+
+constexpr uint64_t RvaPotionOfLifeStep = 0x580680;  // (game, unit): the Potion of Life's grant; max life (stat 7) += 0x1400 (Median 0x3200)
+constexpr uint64_t RvaLamEsenStep = 0x5ed6d0;       // (game, unit): Lam Esen's Tome reward, once per quest bit; unspent stat points (stat 4) += 5 (Median 10)
+constexpr uint64_t RvaSetState = 0x3355a0;          // (unit, state, on): needs the unit's state stat list
+constexpr uint64_t RvaClearState = 0x3354c0;        // (unit, state, 0)
+constexpr uint64_t RvaStateList = 0x2f5940;         // (unit, state) -> the unit's stat list for that state
+constexpr uint64_t RvaCreateStateList = 0x433d20;   // (&params) -> list (D2R's self buffs, srvdofunc 18, 0x553e60)
+constexpr uint64_t RvaBuffExpired = 0x5551f0;       // the self buffs' expiry callback
+constexpr uint64_t RvaDetachList = 0x2f7920;        // (unit, list)
+constexpr uint64_t RvaFreeList = 0x2f4180;          // (dataFlag, list)
+using RewardStepFn = int (*)(Game*, Unit*);
+using SetStateFn = void (*)(Unit*, int32_t, int32_t);
+using StateListFn = void* (*)(Unit*, int32_t);
+using CreateStateListFn = void* (*)(void* params);
+using DetachListFn = void (*)(Unit*, void*);
+using FreeListFn = void (*)(uint32_t, void*);
+
+// `rewardstep potion|tome`: runs the game's own grant step of the Potion of Life or of Lam Esen's Tome on the player and prints
+// the stat it changes (max life raw and in points; unspent stat points) before and after, so the amounts can be compared with
+// Median's (+50 life, 10 stat points). The Tome step grants only while quest 17 has bit 1 set (`quest 17 1 set`) and clears it.
+auto CmdRewardStep(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: rewardstep potion|tome");
+	}
+	const bool potion = hcmd::LowerEq(t.tok[1], "potion");
+	if (!potion && !hcmd::LowerEq(t.tok[1], "tome")) {
+		return Fail(c, "usage: rewardstep potion|tome");
+	}
+	const int stat = potion ? 7 : 4;
+	const int32_t before = Stat(c->player, stat);
+	Fn<RewardStepFn>(potion ? RvaPotionOfLifeStep : RvaLamEsenStep)(c->game, c->player);
+	const int32_t after = Stat(c->player, stat);
+	Out("rewardstep %s stat=%d before=%d after=%d gained=%d points=%d", t.tok[1], stat, before, after, after - before,
+	    potion ? (after - before) >> 8 : after - before);
+	return true;
+}
+
+// `setstate <ref> <state> <0|1>`: puts a state on a unit or takes it off, the way D2R's self buffs do (srvdofunc 18: a state
+// stat list from 0x433d20, then the set-state call); on lasts 10 minutes. Prints whether the unit has the state afterwards.
+// Gives the player the Stamina Shrine's state 136 without a shrine.
+auto CmdSetState(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long state = 0, on = 0;
+	if (t.n < 4 || !hcmd::ParseInt(t.tok[2], &state) || !hcmd::ParseInt(t.tok[3], &on) || state < 1 || state > 1023) {
+		return Fail(c, "usage: setstate <player|merc|mon:id> <state> <0|1>");
+	}
+	Unit* unit = ResolveRef(c, t.tok[1]);
+	if (unit == nullptr) {
+		return Fail(c, "setstate: unit not found (%s)", t.tok[1]);
+	}
+	const int32_t st = static_cast<int32_t>(state);
+	void* list = Fn<StateListFn>(RvaStateList)(unit, st);
+	if (on != 0 && list == nullptr) {
+		struct Params {  // the request of srvdofunc 18 (see missile_hits.cpp)
+			Unit* caster;
+			Unit* target;
+			int32_t skill, level, duration, minus1, zero, state;
+			void* expired;
+		} params{unit, unit, 0, 1, 25 * 600, -1, 0, st, reinterpret_cast<void*>(g_base + RvaBuffExpired)};
+		static_assert(sizeof(Params) == 0x30);
+		list = Fn<CreateStateListFn>(RvaCreateStateList)(&params);
+		if (list == nullptr) {
+			return Fail(c, "setstate: no state list could be created");
+		}
+		Fn<SetStateFn>(RvaSetState)(unit, st, 1);
+	} else if (on == 0 && list != nullptr) {
+		Fn<SetStateFn>(RvaClearState)(unit, st, 0);
+		Fn<DetachListFn>(RvaDetachList)(unit, list);
+		Fn<FreeListFn>(RvaFreeList)(c->dataFlag, list);
+	}
+	Out("setstate %s state=%lld on=%lld has=%d", t.tok[1], state, on, Fn<UnitHasStateFn>(RvaUnitHasState)(unit, st) != 0 ? 1 : 0);
 	return true;
 }
 
@@ -2843,6 +2947,52 @@ auto CmdShop(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `gamble`: the player's gamble offers (the server builds the list on every gamble request: `interact <Gheed>`, then `menu <Gamble
+// line>`), read from the player data (+0x108); same item lines as `shop`, then `gamble offers N`. tools/game_checks.py check_gamble.
+auto CmdGamble(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const uint8_t* data = Fn<PlayerDataFn>(RvaPlayerData)(c->player);
+	void* list = data != nullptr ? d2r::At<void*>(data, 0x108) : nullptr;
+	int offers = 0;
+	if (list != nullptr) {
+		int guard = 0;
+		Unit* item = Fn<InvFirstFn>(RvaInvFirst)(list);
+		while (item != nullptr && guard++ < 200) {
+			Unit* next = Fn<InvNextFn>(RvaInvNext)(item);
+			if (TypeOf(item) == 4) {
+				++offers;
+				if (offers <= 60) {
+					DescribeItem(c, item);
+				}
+			}
+			item = next;
+		}
+	}
+	Out("gamble offers %d (expected %d, list %s) difficulty=%d", offers, gamble::MedianOffers, list != nullptr ? "present" : "none",
+	    static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)));
+	return list != nullptr;
+}
+
+// `gaps`: the small engine rules (engine_gaps_logic.h): the bytes at the three patched places and the player's slow floor as the
+// hooked function 0x449f40 returns it. tools/game_checks.py check_engine_gaps.
+auto CmdGaps(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	auto hex = [](uint64_t rva, size_t n, char* out) {
+		const uint8_t* p = reinterpret_cast<const uint8_t*>(g_base + rva);
+		for (size_t i = 0; i < n; ++i) {
+			std::snprintf(out + i * 2, 3, "%02x", p[i]);
+		}
+	};
+	char hit[32] = "", recast[40] = "";
+	hex(gaps::Hit20FloorRva, sizeof(gaps::Hit20FloorPatched), hit);
+	hex(gaps::RecastGuardRva, sizeof(gaps::RecastGuardPatched), recast);
+	const bool hitOn = gaps::SameBytes(reinterpret_cast<const uint8_t*>(g_base + gaps::Hit20FloorRva), gaps::Hit20FloorPatched, sizeof(gaps::Hit20FloorPatched));
+	const bool recastOn =
+	    gaps::SameBytes(reinterpret_cast<const uint8_t*>(g_base + gaps::RecastGuardRva), gaps::RecastGuardPatched, sizeof(gaps::RecastGuardPatched));
+	const int difficulty = static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty));
+	Out("gaps hit20=%s hit20_patched=%d recast=%s recast_patched=%d slowfloor=%d expected_slowfloor=%d difficulty=%d", hit, hitOn ? 1 : 0, recast,
+	    recastOn ? 1 : 0, EngineGapsSlowFloor(c->game, c->player), gaps::PlayerSlowFloor(difficulty), difficulty);
+	return true;
+}
+
 // Client side: the plugin's own string ids (strings.h). `mstr <full key>` reads the key through the localization service,
 // takes (or finds) the plugin id for it and reads the text back through D2R's numeric lookup, the way the NPC menu does.
 auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
@@ -2867,7 +3017,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
-	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | levelact <id>..");
+	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | gamble | gaps | levelact <id>..");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
 	Out("backlog verbs: stat <ref> <stat> scan [max layer] | cubeslots <first> <count> | cubeout <recipe> [slot] (portal outputs) | state (portal dest=)");
@@ -3479,10 +3629,10 @@ const Verb Verbs[] = {
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
-    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
-    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
+    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false},
+    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
-    {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
+    {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
 };
