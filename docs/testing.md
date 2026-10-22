@@ -443,13 +443,13 @@ Also found: the avoid hook's first parameter is the attacker unit, not the game 
 
 ### Hunter Steady Aim, Fire Sorceress Heat, trophy windows (2026-10-22, lane gap-classres, background mode, slot 3, plugin 0.54.0 + the lane's parts)
 
-`py -3 tools/game_checks.py --slot 3 all steadyaim heat trophytimer`. All three drive the plugin through the harness (no input).
+`py -3 tools/game_checks.py --slot 3 all steadyaim heat trophytimer` (evidence `checks-20261022-215233-s3`, data and DLL installed together with `install_mod.py --slot 3`; the merge of main had changed the data, a run with the old data under the new DLL read the counter 6, 6, 6, 6). All three drive the plugin through the harness (no input).
 
 | Check | Result |
 |---|---|
-| `steadyaim` | RESULT_STEADYAIM |
-| `heat` | RESULT_HEAT |
-| `trophytimer` | RESULT_TROPHY |
+| `steadyaim` | PASS: 4 Steady Shots read the counter (stat 220 layer 5) 1, 2, 3, 4; Heartseeker is refused (4, restricted) with no counter and usable with it; one Heartseeker leaves 3, the spend runs the counter to 0 and the skill is refused again |
+| `heat` | PASS: Molten Core gives stat 297 = 107 at level 21; mana x256 from full 25284 -> 20228 (2.5 s) -> 15093 (5 s) -> 0 (floor 0); Flamefront at empty: peak 1106 and stat 297 goes negative; in the Rogue Encampment a set 12800 is still 12800 3 s later |
+| `trophytimer` | PASS: Heart of Sin (stat 378 = 167166, assassin recipe 6377): in time the recipe matches; 12 s later, after Blood Moor and back, and after dying (spawned attacker, 2e9 hit) it does not, with the stat still 167166 each time |
 
 How they work and what is not tested: `docs/plugin-spec.md` "Skill restrictions", "Steady Aim", "Heat", "Trophy timer". The trophy check
 sets stat 378 to the Heart of Sin code (167166) with the harness: nothing in the data names the skill a boss kill casts, so the

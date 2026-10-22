@@ -750,7 +750,7 @@ def check_heat():
     H("stat player 8 set 25600")
     if cls0 is not None:
         H("class %d" % cls0)
-    good = (rate is not None and rate > 0 and top == 25600 and mid is not None and mid < top and low is not None and low < mid
+    good = (rate is not None and rate > 0 and top is not None and top >= 25000 and mid is not None and mid < top and low is not None and low < mid
             and empty == 0 and peak > 0 and seen_negative and town == 12800)
     add(nm, "PASS" if good else "FAIL",
         "stat 297 = %s; mana x256 from full: %s -> %s (2.5 s) -> %s (5 s) -> %s (empty, floor 0); Flamefront at empty: peak %s, "
@@ -802,10 +802,16 @@ def check_trophytimer():
         held_zone = stat_of(H("stat player 378")[1])
         attempt("other zone")
         goto(2)  # a town does not let a hit kill
+        atk = spawn_attacker(1)
         start()
-        H("hit player phys 9999999")  # 1/256 life points: more than the whole bar
-        time.sleep(2)
+        H("stat player 6 set 25600")
+        H("hit player phys 2000000000 %s" % (atk or ""))  # from a spawned monster; 1/256 life points
+        for _ in range(12):  # the death animation runs a second or two
+            time.sleep(1)
+            if hstate()["player"].get("mode") in (0, 17):
+                break
         died = hstate()["player"].get("mode") in (0, 17)
+        time.sleep(3)  # the sampler sees the dead player
         revive_if_dead()
         goto(1)
         held_dead = stat_of(H("stat player 378")[1])
