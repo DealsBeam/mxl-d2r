@@ -119,8 +119,9 @@ class Validator:
         self.examples = examples
         self.findings: dict[tuple, list] = defaultdict(list)
         # string keys: D2R's (group 1, cells stay unqualified) and Median-only (group 2, cells are medianxl:<key>)
-        self.d2r_keys = strings_ns.load_d2r_keys()
+        self.d2r_keys = strings_ns.d2r_keys()
         self.group2 = strings_ns.load_group2()
+        self.native = strings_ns.native_exceptions()
         self.strings = set(self.d2r_keys) | self.group2
         for p in (MOD / "local" / "lng" / "strings").rglob("*.json"):
             self.strings |= {e["Key"].split(":", 1)[-1] if e["Key"].startswith(strings_ns.PREFIX) else e["Key"]
@@ -241,11 +242,11 @@ class Validator:
         elif v in self.group2:
             self.add("error", table, col, "unqualified cell names a Median-only (group 2) string; it must be "
                      f"{strings_ns.PREFIX}<key>", row, v)
-        elif v not in self.d2r_keys and v not in strings_ns.NATIVE_EXCEPTIONS:
+        elif v not in self.d2r_keys and v not in self.native:
             self.add("warn", table, col, "cell names no known string (not in D2R's, not in the namespace list)", row, v)
         if limit and len(v) > limit:
             self.add("error", table, col, f"longer than {limit} characters (the whole {strings_ns.PREFIX}<key> must fit "
-                     "the field; a key that cannot goes into strings_ns.NATIVE_EXCEPTIONS)", row, v)
+                     "the field; a key that cannot goes into tools/strings_native.json)", row, v)
 
     # ---- columns ----------------------------------------------------------------------------------------
     def check_table(self, table: str) -> None:
@@ -332,8 +333,8 @@ class Validator:
         native = set()
         for p in (MOD / "local" / "lng" / "strings").glob("*.json"):  # not the namespace folder
             native |= {e["Key"] for e in json.loads(p.read_text("utf-8-sig")) if isinstance(e, dict) and "Key" in e}
-        for k in sorted(strings_ns.NATIVE_EXCEPTIONS - native):
-            self.add("error", "strings", "Key", "native exception (strings_ns.NATIVE_EXCEPTIONS) is not in the native "
+        for k in sorted(self.native - native):
+            self.add("error", "strings", "Key", "native exception (tools/strings_native.json) is not in the native "
                      "string files", "-", k)
 
     def engine_rules(self) -> None:

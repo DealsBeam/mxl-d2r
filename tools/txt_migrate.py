@@ -648,7 +648,7 @@ class Migrator:
         wanted = set(stat_screen.advanced_stat_rows())
         always = set(stat_screen.ALWAYS_LISTED)
         texts: dict[str, str] = {}  # string key -> enUS, from the files tbl2json.py wrote
-        for f in (OUT / "data" / "local" / "lng" / "strings").glob("*.json"):
+        for f in (OUT / "data" / "local" / "lng" / "strings").rglob("*.json"):  # incl. medianxl/median.json
             for e in json.loads(f.read_text("utf-8-sig")):
                 texts[e.get("Key", "")] = e.get("enUS", "")
         found: set[str] = set()
@@ -953,7 +953,7 @@ class Migrator:
         lead = re.compile(r"^\s*\d+\s*\n")
         n = 0
         for folder in ("strings", "strings-legacy"):
-            for p in sorted((OUT / "data" / "local" / "lng" / folder).glob("*.json")):
+            for p in sorted((OUT / "data" / "local" / "lng" / folder).rglob("*.json")):  # incl. medianxl/median.json
                 recs = json.loads(p.read_text("utf-8-sig"))
                 changed = False
                 for e in recs:
@@ -1287,7 +1287,7 @@ class Migrator:
         # Trophy challenges: the help text each trophy replaced in its tooltip, one C string per item (UTF-8 as octal
         # escapes: the colour code byte 0xC3 0xBF must not run into a following hex digit)
         texts: dict[str, str] = {}
-        for f in sorted((OUT / "data" / "local" / "lng" / "strings").glob("*.json")):
+        for f in sorted((OUT / "data" / "local" / "lng" / "strings").rglob("*.json")):  # incl. medianxl/median.json
             for e in json.loads(f.read_text("utf-8-sig")):
                 if isinstance(e.get("enUS"), str):
                     texts.setdefault(e["Key"], e["enUS"])
@@ -1835,7 +1835,9 @@ class Migrator:
     def idkeys(self) -> dict[str, str]:
         if not hasattr(self, "_idkeys"):
             p = OUT / "strings_idkeys.json"
-            self._idkeys = {k: v for k, v in json.loads(p.read_text("utf-8")).items() if v.startswith("mxl_")} if p.exists() else {}
+            # group 2 keys are listed as medianxl:<key> (tbl2json), so the placeholder keys are medianxl:mxl_<id>
+            self._idkeys = {k: v for k, v in json.loads(p.read_text("utf-8")).items()
+                            if strings_ns.bare(v).startswith("mxl_")} if p.exists() else {}
         return self._idkeys
 
     def column_map(self, table: str, mh: list[str], dh: list[str]) -> dict[str, str]:
@@ -1873,7 +1875,8 @@ class Migrator:
                     continue
                 lines = path.read_bytes().decode("utf-8").split("\r\n")
                 header = lines[0].split("\t")
-                cols = [i for i, c in enumerate(header) if strings_ns.is_localization(table, c)]
+                cols = [i for i, c in enumerate(header)
+                        if strings_ns.is_localization(table, c) and not strings_ns.is_range_column(table, c)]
                 changed = False
                 for n in range(1, len(lines)):
                     cells = lines[n].split("\t")
@@ -1937,7 +1940,8 @@ class Migrator:
             def median_value(dc: str, v: str) -> str:
                 # string keys Median only had as numbers are mxl_<id> after tools/tbl2json.py
                 if dc in string_cols and v.isdigit() and v in self.idkeys:
-                    return self.idkeys[v]
+                    # the bare key: every pass below sees plain keys, namespace_cells() qualifies the cells at the end
+                    return strings_ns.bare(self.idkeys[v])
                 # the first decoder wrote a few small numbers as raw control characters ("")
                 if v and dc in self._int_cols.get(table, ()) and len(v) == 1 and ord(v) < 32:
                     return str(ord(v))

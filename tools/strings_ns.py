@@ -1,28 +1,31 @@
-"""The `medianxl` string namespace, as seen by the table tools (docs/strings-namespace.md).
+"""The `medianxl` string namespace for the table and layout tools (docs/strings-namespace.md).
 
-Group 1: keys that exist in D2R's own string files; cells naming them stay unqualified (unqualified means `d2r:`).
-Group 2: Median-only keys; cells naming them are written `medianxl:<key>` in the localization columns.
+Group 1 = keys D2R's own string files have (native, unqualified, = `d2r:`); group 2 = Median-only keys (namespaced,
+`medianxl:<key>` in table cells, `@medianxl:<key>` in HD layouts). A key is group 2 when it is not in D2R's string files
+(extract/d2r/93847/data/local/lng/{strings,strings-legacy}/*.json) and not a native exception (tools/strings_native.json:
+Median-only keys that stay native with a fixed ID, e.g. because their cell is a fixed-size field that cannot hold
+`medianxl:<key>`).
 
-Shared by tools/txt_migrate.py (writes the prefix), tools/validate.py (checks it) and any tool that reads
-localization cells or layouts:
-
-  load_group2()          -> set of group 2 keys (work/mod/strings_namespace.json, else computed the same way)
-  load_d2r_keys()        -> set of every key in D2R's own string files
-  is_localization(t, c)  -> True if column c of table t holds a string key
-  qualify(cell, group2)  -> the cell as it must be written
-  split_key(cell)        -> (namespace or None, key)
+  d2r_keys()             every key of D2R's own string files (the group 1 set)
+  load_group2()          group 2 keys: work/mod/strings_namespace.json (tbl2json) when it exists, else computed the same way
+  native_exceptions()    the keys of tools/strings_native.json
+  is_localization(t, c)  True if column c of table t holds a string key (LOCALIZATION below)
+  qualify(ref, group2)   table / JSON reference as written: `medianxl:<key>` for group 2, anything else unchanged
+  split_key(ref)         ('medianxl', key) / (None, ref)
+  bare(ref)              `medianxl:<key>` -> `<key>`
+  qualify_layout(...)    every `@key` of a layout
 """
 import json
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-D2R_LNG = ROOT / "extract" / "d2r" / "93847" / "data" / "local" / "lng"
-MOD_LNG = ROOT / "work" / "mod" / "data" / "local" / "lng" / "strings"
-NAMESPACE_FILE = ROOT / "work" / "mod" / "strings_namespace.json"
-
 NAMESPACE = "medianxl"
 PREFIX = NAMESPACE + ":"
+D2R_LNG = ROOT / "extract" / "d2r" / "93847" / "data" / "local" / "lng"
+NAMESPACE_FILE = ROOT / "work" / "mod" / "strings_namespace.json"
+EXCEPTIONS_FILE = ROOT / "tools" / "strings_native.json"
+MOD_STRINGS = ROOT / "work" / "mod" / "data" / "local" / "lng" / "strings"
 
 NUMERIC = re.compile(r"-?\d+(\.\d+)?")
 
@@ -30,12 +33,8 @@ NUMERIC = re.compile(r"-?\d+(\.\d+)?")
 # `string`, plus the text fields whose description says "string key" (hireling, lowqualityitems, objects, rareprefix,
 # raresuffix, runes, setitems, uniqueitems), the affix names (magicprefix/magicsuffix/automagic/unique*, stored in a
 # fixed-size field, LOCALIZATION.md) and levels LevelName / LevelWarp / LevelEntry (the guide types them `text`
-# but describe them as string fields). armor / weapons / misc share namestr through shareditems. Median's levels
+# but describes them as string fields). armor / weapons / misc share namestr through shareditems. Median's levels
 # column EntryFile (leftover bytes of the .bin) is not mapped to LevelEntry, so it never reaches the output.
-_NUMBERED = {
-    "skilldesc": [f"{p}{c}{n}" for p, rng in (("desctext", 6), ("dsc2text", 5), ("dsc3text", 7)) for c in "ab"
-                  for n in range(1, rng + 1)],
-}
 LOCALIZATION = {
     "armor": {"namestr"},
     "weapons": {"namestr"},
@@ -54,7 +53,7 @@ LOCALIZATION = {
     "runes": {"name"},
     "lowqualityitems": {"name"},
     "charstats": {"strallskills", "strskilltab1", "strskilltab2", "strskilltab3", "strclassonly"},
-    "hireling": {"hiredesc"},
+    "hireling": {"hiredesc", "namefirst", "namelast"},
     "itemstatcost": {"descstrpos", "descstrneg", "descstr2", "dgrpstrpos", "dgrpstrneg", "dgrpstr2"},
     "levelgroups": {"namestring"},
     "levels": {"levelname", "levelwarp", "levelentry"},
@@ -63,40 +62,15 @@ LOCALIZATION = {
     "objects": {"name"},
     "pettype": {"name", "overridename1", "overridename2", "overridename3", "overridename4"},
     "shrines": {"stringname", "stringphrase"},
-    "skilldesc": {"str name", "str short", "str long", "str alt", "item proc text", *_NUMBERED["skilldesc"]},
+    "skilldesc": {"str name", "str short", "str long", "str alt", "item proc text",
+                  *(f"{p}{c}{n}" for p, rng in (("desctext", 6), ("dsc2text", 5), ("dsc3text", 7)) for c in "ab"
+                    for n in range(1, rng + 1))},
     "superuniques": {"name"},
 }
 # Columns that name a string key but are read as a numeric range (hireling NameFirst..NameLast: every ID from the first
 # to the last is a name). A qualified key gets a loader-assigned number, so the range could not follow it: these stay
-# native (group 1); validate.py fails if one names a group 2 key.
+# native (group 1); txt_migrate skips them and validate.py fails if one names a group 2 key.
 RANGE_COLUMNS = {"hireling": {"namefirst", "namelast"}}
-
-# Median-only keys that must stay native (group 1 style: unqualified cell, fixed ID in the string files) because their
-# cell is a fixed-size text field that cannot hold `medianxl:<key>`: levels.LevelWarp (39 characters),
-# uniqueitems.index and setitems.index (31). validate.py fails when another key overflows its field, so a new one
-# must be added here; tools/tbl2json.py keeps these keys (and their IDs) in the native files, load_group2() never
-# returns them. Listed in docs/strings-namespace.md under "Exceptions".
-NATIVE_EXCEPTIONS = frozenset({
-    "To The Dimensional Labyrinth 10",
-    "To The Island of the Sunless Sea",
-    "MRAchilios' Sledgehammer",
-    "MRHunter's Trackless Step",
-    "MRImperius' Winged Feet",
-    "MRVasily's Falling Star",
-    "MRVasily's Shepherd Moon",
-    "MRWarmage's Flameshroud",
-    "MRWitchhunter's Crucifix",
-    "MRZann Esu's Binding Circle",
-    "Armor of the Old Religion",
-    "Body of the Forbidden One",
-    "Claw of the Spirit Wolf",
-    "DurandaltheBlazingSword",
-    "Gift of the Spiritbeast",
-    "Spirit Teacher's Headdress",
-    "Staff of Herding Design",
-    "Sunstone of the Twin Seas",
-    "UpgradedBossSummonerRing",
-})
 
 
 def is_localization(table: str, column: str) -> bool:
@@ -107,40 +81,62 @@ def is_range_column(table: str, column: str) -> bool:
     return column.lower() in RANGE_COLUMNS.get(table.lower(), ())
 
 
-def _keys(paths) -> set[str]:
-    keys = set()
-    for p in paths:
-        keys |= {e["Key"] for e in json.loads(p.read_text("utf-8-sig"))}
-    return keys
+def d2r_keys() -> set[str]:
+    return {e["Key"] for f in ("strings", "strings-legacy") if (D2R_LNG / f).exists()
+            for p in (D2R_LNG / f).glob("*.json") for e in json.loads(p.read_text("utf-8-sig"))}
 
 
-def load_d2r_keys() -> set[str]:
-    """Every key in D2R's own string files (the group 1 set)."""
-    return _keys(p for f in ("strings", "strings-legacy") for p in sorted((D2R_LNG / f).glob("*.json")))
+def native_exceptions() -> set[str]:
+    return set(json.loads(EXCEPTIONS_FILE.read_text("utf-8"))["keys"]) if EXCEPTIONS_FILE.exists() else set()
 
 
 def load_group2() -> set[str]:
-    """The Median-only keys. work/mod/strings_namespace.json (written by tools/tbl2json.py) when it exists; until
-    then the same rule: a key of Median's string files that D2R's own string files do not have."""
+    """Median-only keys that need the `medianxl:` prefix."""
     if NAMESPACE_FILE.exists():
-        d = json.loads(NAMESPACE_FILE.read_text("utf-8-sig"))
-        return set(d["keys"]) - NATIVE_EXCEPTIONS
-    return _keys(sorted(MOD_LNG.glob("*.json"))) - load_d2r_keys() - NATIVE_EXCEPTIONS
+        return set(json.loads(NAMESPACE_FILE.read_text("utf-8"))["keys"])
+    # Not written yet: every key of the namespace file's folder is group 2 once tbl2json ran; without it the
+    # keys are the ones in the old native Median file that D2R does not have.
+    native = d2r_keys()
+    p = MOD_STRINGS / "medianxl" / "median.json"
+    if p.exists():
+        return {e["Key"] for e in json.loads(p.read_text("utf-8-sig"))} - native
+    p = MOD_STRINGS / "item-modifiers.json"
+    return ({e["Key"] for e in json.loads(p.read_text("utf-8-sig"))} - native - native_exceptions()) if p.exists() else set()
 
 
-def split_key(cell: str) -> tuple[str | None, str]:
-    """('medianxl', 'Key') for 'medianxl:Key', (None, cell) for an unqualified cell. Other namespaces (d2r:,
+def qualify(ref: str, group2: set[str]) -> str:
+    """Table / JSON reference to a key: `medianxl:<key>` for group 2; empty cells, numbers, group 1 keys, native
+    exceptions and already qualified references stay as they are."""
+    if not ref or NUMERIC.fullmatch(ref) or ref.startswith(PREFIX) or ref not in group2:
+        return ref
+    return PREFIX + ref
+
+
+def split_key(ref: str) -> tuple[str | None, str]:
+    """('medianxl', 'Key') for 'medianxl:Key', (None, ref) for an unqualified cell. Other namespaces (d2r:,
     d2rloader:) are returned as written."""
-    if ":" in cell:
-        ns, key = cell.split(":", 1)
+    if ":" in ref:
+        ns, key = ref.split(":", 1)
         if ns and re.fullmatch(r"[A-Za-z0-9_.-]+", ns):
             return ns, key
-    return None, cell
+    return None, ref
 
 
-def qualify(cell: str, group2: set[str]) -> str:
-    """The cell as a localization column must hold it: `medianxl:<key>` for a group 2 key, everything else (group 1
-    keys, empty cells, numbers, already qualified cells) unchanged."""
-    if not cell or NUMERIC.fullmatch(cell) or cell.startswith(PREFIX) or cell not in group2:
-        return cell
-    return PREFIX + cell
+def bare(ref: str) -> str:
+    """`medianxl:<key>` -> `<key>` (lookups in median.json); other values unchanged."""
+    return ref[len(PREFIX):] if ref.startswith(PREFIX) else ref
+
+
+_REF = re.compile(r"@(?![A-Za-z0-9_]+:[A-Za-z0-9_])([A-Za-z0-9_]+)")
+
+
+def qualify_layout(text: str, group2: set[str], native: set[str]) -> str:
+    """Qualify every `@key` of a layout (JSON text): `@medianxl:<key>` for group 2, `@d2r:<key>` for D2R's own keys.
+    With the mod's namespace active an unqualified `@key` means the mod's own strings (LOCALIZATION.md: copied native
+    layouts must qualify the native text they retain with `d2r:`). Already qualified references and unknown keys stay."""
+    def sub(m: re.Match) -> str:
+        k = m.group(1)
+        if k in group2:
+            return f"@{PREFIX}{k}"
+        return f"@d2r:{k}" if k in native else m.group(0)
+    return _REF.sub(sub, text)

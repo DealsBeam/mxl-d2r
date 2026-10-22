@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from txt_migrate import read_tsv, is_record  # noqa: E402
+from strings_ns import bare  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 D2R = ROOT / "extract" / "d2r" / "93847"
@@ -204,6 +205,11 @@ def read_names(root: Path) -> dict[str, str]:
         if p.exists():
             for e in load_json(p):
                 names[e["Key"]] = e["enUS"]
+    # Median-only names live in the `medianxl` namespace file; NameStr cells say `medianxl:<key>` (strings_ns.py)
+    ns = root / "data" / "local" / "lng" / "strings" / "medianxl" / "median.json"
+    if ns.exists():
+        for e in load_json(ns):
+            names.setdefault(e["Key"], e["enUS"])
     return names
 
 
@@ -653,7 +659,7 @@ def build_donors(ms, ms2, names, art: Art, cache: ArtCache, mj: dict) -> dict[st
         col = art_colour(art, "d2r", code, cache.get("d2r", code, r2), int(r["TransLvl"] or 0))
         if not col or col["h"] < 20 or col["w"] < 8:
             continue
-        out[u] = Donor(u, i, r, r2, names.get(r["NameStr"], r["NameStr"]), info, col)
+        out[u] = Donor(u, i, r, r2, names.get(bare(r["NameStr"]), bare(r["NameStr"])), info, col)
     return out
 
 
@@ -668,7 +674,7 @@ class Subject:
         self.modes = modes_of(ms2_row)
         self.slots = slots_of(ms2_row)
         root = re.sub(r"_\d+$", "", mid)
-        self.text = text_of(root, ms_row["NameStr"], name if name != ms_row["NameStr"] else "")
+        self.text = text_of(root, bare(ms_row["NameStr"]), name if name != bare(ms_row["NameStr"]) else "")
         self.tags = tags_of(self.text)
         self.type_tags = tags_of(text_of(ms_row["MonType"]))
         self.ai_tags = tags_of(text_of(ms_row["AI"]))
@@ -865,12 +871,12 @@ def main() -> int:
             continue
         if mid in mod_ms and mod_ms[mid]["Code"] != r["Code"]:
             kept["borrows a D2R monster's graphics completely (gfx_placeholders)"] += 1
-            rows.append((mid, mnames.get(r["NameStr"], r["NameStr"]), r["Code"], hd.get(mid, ""), "-", "-", "kept", "graphics borrowed from "
+            rows.append((mid, mnames.get(bare(r["NameStr"]), bare(r["NameStr"])), r["Code"], hd.get(mid, ""), "-", "-", "kept", "graphics borrowed from "
                          + mod_ms[mid]["Code"]))
             continue
         code = r["Code"]
         vanilla = not missing_cofs(code, r2, cofs)
-        name = mnames.get(r["NameStr"], r["NameStr"])
+        name = mnames.get(bare(r["NameStr"]), bare(r["NameStr"]))
         side = "d2r" if vanilla else "mxl"
         stats = cache.get(side, code.lower(), r2)
         col = art_colour(art, side, code.lower(), stats, int(r["TransLvl"] or 0))
