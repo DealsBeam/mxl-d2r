@@ -441,7 +441,7 @@ Twelve new checks in `tools/game_checks.py` (`py -3 tools/game_checks.py --slot 
 
 Also found: the avoid hook's first parameter is the attacker unit, not the game (docs/bugs.md #26).
 
-### Hunter Steady Aim, Fire Sorceress Heat, trophy windows (2026-10-22, lane gap-classres, background mode, slot 3, plugin 0.53.0 + the lane's parts)
+### Hunter Steady Aim, Fire Sorceress Heat, trophy windows (2026-10-22, lane gap-classres, background mode, slot 3, plugin 0.54.0 + the lane's parts)
 
 `py -3 tools/game_checks.py --slot 3 all steadyaim heat trophytimer`. All three drive the plugin through the harness (no input).
 
