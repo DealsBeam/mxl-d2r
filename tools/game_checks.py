@@ -2296,9 +2296,9 @@ def check_strings():
             if ref is not None:
                 break
         if ref is None or exp is None:
-            record("native exceptions", key, False, exp, None, "no row in the built table" if ref is None else "no text in Median's .tbl")
+            record("long keys", key, False, exp, None, "no row in the built table" if ref is None else "no text in Median's .tbl")
             continue
-        pending.append(("native exceptions", table, "%s.%s:%s %s" % (table, col, key, ref), key, ref, exp))
+        pending.append(("long keys", table, "%s.%s:%s %s" % (table, col, key, ref), key, ref, exp))
         cellof[pending[-1][2]] = col
     for cat, table, label, key, ref, exp in pending:
         if table == "levels":
@@ -2382,7 +2382,7 @@ def check_strings():
         exp = src.expected(key)
         tries = [_text_key(f + ":" + key) for f in ("d2r", STR_NS)]
         kg = next((t for t in tries if t is not None and t.result == 0 and t.same(exp)), tries[0])
-        record("native exceptions (key)", key, kg is not None and kg.result == 0 and kg.same(exp), exp, kg.show() if kg else None,
+        record("long keys (key)", key, kg is not None and kg.result == 0 and kg.same(exp), exp, kg.show() if kg else None,
                "d2r: result %s, %s: result %s" % (tries[0].result, STR_NS, tries[1].result))
 
     # ---- D2R keys Median overrides: D2R's numeric id (native, fixed) and the key
