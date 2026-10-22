@@ -81,6 +81,9 @@ MAX_ITEMS_PER_SET = 6  # D2R and D2RLoader
 # table (0x236fe30) has slots 0-19 and 16-19 are empty, so 16 is usable but does nothing without mxl-core.
 SIGMA_ITEM_SPELLS = set(range(12, 22))
 SIGMA_TARGETED_SPELLS = {14, 20}  # dyes, mystic orbs: applied to a clicked item
+# Stats D2R's timed potion handler (0x57ecb0) scales itself for the duration (stat 74 hpregen, 26 manarecovery, 6 hitpoints,
+# 8 mana: the calc is the total amount); it stores every other stat as calc / len.
+TIMED_POTION_TOTAL_STATS = {"hpregen", "manarecovery", "hitpoints", "mana"}
 SIGMA_HELP_SPELLS = {13, 21}  # right-click shows the item's help text (help_tooltips)
 SIGMA_KEPT_SPELLS = {13, 18, 21}  # not used up (also keys with calc3 set)
 PLUGIN_SPELL = 16
@@ -911,6 +914,8 @@ class Migrator:
             h, rows = read_tsv(p)
             ps, ic, cc, ci = h.index("pSpell"), h.index("spellicon"), h.index("code"), h.index("calc1")
             sd, sdm, c3 = h.index("spelldescstr"), h.index("spelldesc"), h.index("calc3")
+            ln = h.index("len")
+            stats = [(h.index(f"stat{k}"), h.index(f"calc{k}")) for k in (1, 2, 3)]
             n = 0
             for r in rows:
                 if not is_record(r):
@@ -918,6 +923,13 @@ class Migrator:
                 if r[ps] in to_d2r:
                     r[ps] = to_d2r[r[ps]]
                     n += 1
+                    # D2R's timed potion (0x57ecb0) treats a stat's calc as the TOTAL over the potion's duration and stores
+                    # calc / len (hp and mana, stat 74, 26, 6, 8, are scaled for it), where D2Sigma's potion 22 adds the calc
+                    # as it is while the state lasts: Median's manarecoverybonus 100 / 200 would end as 100 / 175 = 0 and
+                    # 200 / 175 = 1. Multiplied by len (a second potion within the duration averages the stat, so it stays).
+                    for sc, cc_ in stats:
+                        if r[sc] and r[sc] not in TIMED_POTION_TOTAL_STATS and r[cc_] and r[ln]:
+                            r[cc_] = f"({r[cc_]})*({r[ln]})"
                 elif r[ps].isdigit() and int(r[ps]) in SIGMA_ITEM_SPELLS:
                     if bank == "base":
                         self.sigma_items.append((r[cc], int(r[ps]), r[ci]))
