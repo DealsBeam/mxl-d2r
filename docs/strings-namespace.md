@@ -47,6 +47,12 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
     `ItemN`) becomes the bare alias, which is what a unique / set item's `index` now reads as. The pictures
     (`item_hd.py`: `uniques.json` / `sets.json` keyed on the plain index) therefore use `mxlname_<n>` too. Median's
     text is not touched: the displayed name is the alias record's text.
+  - In game (slot 3, background mode, `py -3 tools/game_checks.py --slot 3 all nslong`, run
+    `checks-20261022-155629-s3` / `-155847-s3`): `h str key medianxl:mxlname_16` / `_9` / `_18` return Median's text
+    (colour code, "Vasily's Falling Star", the warp's "Difficulty: ..." text), and the unique created with `uniq=9`
+    (index cell `medianxl:mxlname_16`) shows **"SUNSTONE OF THE TWIN SEAS"** as its ground label (Alt held through the
+    plugin's virtual modifier block). Not read in game: the set item (the harness cannot create a set quality item, `uniq=`
+    forces unique) and the level warp text on screen; no tooltip is drawn in background mode.
   - validate.py fails when any cell is longer than its field (with the prefix), when a plain reference still names a
     long key that has an alias, and when an alias is missing from the namespace list. `tools/strings_native.json` is
     empty again; add a key there only for a string the plugin must give D2R as a fixed numeric ID.
