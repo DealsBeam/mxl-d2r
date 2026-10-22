@@ -2153,7 +2153,8 @@ def run_all(only=None):
         # active when the game is created (quest 5 open for the tower check), and the plugin's catalyst flag (quest 47) clear; the earlier run's rewards
         # completed them. Closed save, checksum and sidecar fixed (docs/save-format.md).
         for name in sorted({f[:-4] for f in os.listdir(SAVES) if f.endswith(".d2s")}):
-            patch_quests(name, {(0, 1): 0, (0, 4): 2, (0, 5): 0, (0, 6): 0, (0, 41): 0, (0, 47): 0})
+            patch_quests(name, {(0, 1): 0, (0, 4): 2, (0, 5): 0, (0, 6): 0, (0, 41): 0, (0, 47): 0,
+                                (0, 13): 0, (1, 13): 0, (0, 25): 0, (1, 25): 0})
         g.snapshot_marks()
         if not to_menu():
             add("start game", "BLOCKED", "game did not reach the main menu")
