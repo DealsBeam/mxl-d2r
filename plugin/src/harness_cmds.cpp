@@ -2489,6 +2489,25 @@ auto CmdHire(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 // --- verify verbs (docs/testing.md "Verify checks"): hit, avoid, itemroll, colour, req, cstat; unit references --------------
 // A unit reference is "player", "merc" (the player's mercenary) or "mon:<unit id>" (hcmd::ParseUnitRef).
+// The nearest live monster that can fight the player: not a town NPC (an NPC as the attacker of a hit does no damage: the hit step
+// ends with result 0, see CmdHit) and not the player's own mercenary. `kill nearest` and the others keep using NearestMonster.
+auto NearestFighter(Ctx* c) noexcept -> Unit* {
+	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+	Unit* best = nullptr;
+	double bestD = 1e18;
+	EachUnit(c->game, HashMonsters, [&](Unit* u) {
+		if (TypeOf(u) != 1 || !IsAlive(u) || u == merc || Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(u)) != nullptr) {
+			return;
+		}
+		const double d = DistTo(c->player, u);
+		if (d < bestD) {
+			bestD = d;
+			best = u;
+		}
+	});
+	return best;
+}
+
 auto ResolveRef(Ctx* c, const char* text) noexcept -> Unit* {
 	hcmd::UnitRef ref;
 	if (!hcmd::ParseUnitRef(text, &ref)) {
@@ -2575,7 +2594,7 @@ auto FlagsOf(Unit* item) noexcept -> uint32_t {
 // `hit <target ref> phys|fire|ltng|magic|cold|pois|life|mana|stam|clen|flen|plen <amount> [attacker ref] [stagger]`: one hit of that damage through D2R's hit and apply
 // steps (0x44ce80, 0x44a9b0; the same pair the area damage hook uses), so the resist step 0x4523e0 and the absorb step
 // 0x450670 run. The amount goes into the damage block's field as is. Attacker: the player; for the player as target the
-// nearest live monster (else the player itself). `stagger` sets the result flag 4 (hit recovery) between the two steps, so the
+// nearest live monster that can fight (not a town NPC, not the mercenary: their hits do no damage; else the player itself). `stagger` sets the result flag 4 (hit recovery) between the two steps, so the
 // target enters its GetHit mode even when its hit recovery would not (bosses): the monster's last-mode field then reads 3 after it.
 // `field=` is the element's field right after the hit step (what is left of `amount` after resist, absorb and Median's stats
 // 184 / 189 / 417); for clen / flen / plen (cold, freeze and poison length) it is the shortened duration.
@@ -2612,7 +2631,7 @@ auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (n > 4) {
 		attacker = ResolveRef(c, t.tok[4]);
 	} else if (target == c->player) {
-		attacker = NearestMonster(c, -1, false);
+		attacker = NearestFighter(c);
 		if (attacker == nullptr) {
 			attacker = target;
 		}

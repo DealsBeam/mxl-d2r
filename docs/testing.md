@@ -695,3 +695,20 @@ Results of the final full run on both slots (the code of this commit, merged wit
 Run folders `checks-20261023-044022-s1` and `checks-20261023-044022-s3` (both 0 new crash files). Before the fix of bug #33, four of the long chains on slot 3 ended in the goblin crash; afterwards 120 goblin kills in a row on slot 1 and both final chains ran through.
 
 Fixed: the intermittent client crash after a goblin kill, docs/bugs.md #33.
+
+### Release 0.55.0 suite: the 9 FAIL and 4 BLOCKED rows (lane release-055-fixes, 2026-10-23, slots 1 and 3, background mode)
+
+Cause of every non-pass of the first 0.55.0 run (88 checks; 94 PASS / 9 FAIL / 4 BLOCKED):
+
+| Check | Cause | Kind | Fix |
+|---|---|---|---|
+| damagered, steadyaim, trophytimer, restrictitems, funcslots, nodurability (slot 1) | One shared cause: the emptied field leaves a **town NPC as the nearest monster**. `hit`'s default attacker and `kill` / `cast ... nearest` took the NPC (Warriv, Gheed), so no hit landed; a full backpack made the equips fail; the Steady Aim counter leaked from steadyaim into restrictitems; feral_strike needs an axe or a sword in hand and the melee target wandered off between cast and hit frame; Normal-difficulty level 1 monsters almost never hit a level 150 character (0 - 1 life points in 20 s, 13,000 in Hell) | game harness (the hit verb) and checks | plugin `h hit` default attacker is now the nearest live monster that is neither the mercenary nor an NPC (`NearestFighter`); the checks clear the pack first, clean the Steady Aim counter and state (`aim_clean`), use `tough_target`, wield an axe or sword, freeze the melee target (state 1) and spawn the get-hit attackers under `h difficulty 2` |
+| levelcap | Not a game bug. The check piled up 2327 stat / 567 skill points of earlier checks; Median's own save fields are 11 bits (2047) and 9 bits (511) and D2RLoader's extended mode follows CSvBits and saturates | check | realistic totals (a level 150 character earns 745 / 149); the check reads and reports the widths ([save-format.md](save-format.md), [unported.md](unported.md)) |
+| itemrolls, allqualsockets (BLOCKED) | `itemroll` gained `identified=`, `qualities=`, `automagic=` fields; the regexes did not allow them | check | regexes accept extra `name=value` fields |
+| restrictitems | Behaviour is Median's (cast refused without Steady Aim code 4, allowed with counter 1 code 0, item cast on kill fires both times); the pass condition compared the wrong counters | check | pass condition |
+| absorb | The first probe read 0 healed before the damage reduction settled | check | probe retries up to 5 times like `hit()` |
+| craftflags (slot 3) | The check switched the character to an assassin (`class 6`); with any class other than its own the harness cannot place an item in the cube ("placing failed"), so no recipe matched | check | the setter row of the character's own class is used (6369 + 19 per class: ass, pal, dru, nec, sor, bar, ama) |
+| gamble, vendors ("Gheed's menu did not open") | NPC interaction depended on the arrival position | check | `npc_menu_near`: walk next to the NPC, retry, then spawn a copy, three rounds |
+| heat, sprint (slot 1, found in the full run) | heat: the drain per tick is a share of the **maximum** mana, so a fixed 100-point bar was gone in one tick on the 6300-mana character; sprint: the slowest walk leg read 0.52 against 0.62 units per frame | check | heat sets the full bar; sprint repeats a walk leg that does not give the expected ratio |
+
+Final runs (same code, the two check edits for heat and sprint re-run on both slots afterwards): slot 1 (level 150) 106 PASS / 0 FAIL, slot 3 (level 34) 108 PASS / 0 FAIL of 111 rows each; the other rows are the standing REVIEW (short aliases, tooltip: screenshots to read by hand) and PARTIAL (map reveal: the level is already drawn whole on arrival) rows. Run folders `checks-20261023-062317-s1`, `-064559-s1`, `-071122-s1` and `checks-20261023-062317-s3`, `-064419-s3`, `-070748-s3`.

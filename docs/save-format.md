@@ -23,6 +23,13 @@ sidecar does not carry them. Bit 0 (Rogue Encampment) is set on every load.
 16-bit stat id, then the value in itemstatcost **CSvBits** (Median: strength-statpts 11, newskills 9, level 8,
 experience 32, ...); the list ends with 0xffff.
 
+**Widths cap the unspent points (checked 2026-10-23, lane release-055-fixes).** D2RLoader's extended save mode follows
+CSvBits and does not narrow it: `statpts` (stat 4, unused stat points) is 11 bits (max 2047) and `newskills` (stat 5, unused skill
+points) is 9 bits (max 511), the same as Median's own `itemstatcost.txt`. A value above the maximum is saturated on Save and Exit
+(2327 stat points came back as 2047, 567 skill points as 511). A level 150 character earns 745 stat points (5 per level) and 149
+skill points, so the widths hold everything a character can earn; only a test that piles on leftover points reaches the cap.
+D2RLoader would take wider fields (the width is read from the column), but the port keeps Median's, so nothing is widened.
+
 ## Stats in practice (2026-10-14)
 The "gf" list in these saves uses 16-bit stat ids (tools/save/d2s_stats.py still reads 9 bits and fails on them).
 Barbarian growth (charstats): LifePerLevel 120 and ManaPerLevel 20 (quarter points), ManaPerMagic 6, StatPerLevel 5;
