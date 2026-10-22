@@ -346,6 +346,35 @@ the generator returned, for qualities 4-7. The harness `item` and `itemroll` cre
 which sets 0x10 itself at its end, so only real drops (`dump ground`, `identified=`) show the part. Pure rules live in
 `item_rules_logic.h` (`DropsIdentified`, `QuantityUseResult`, `ManaCharge`), unit tests in `item_rules_test.cpp`.
 
+## Skill damage scaling (`skill_damage.cpp`, `skill_damage_logic.h`, `mxl_skill_flags.h`, off word `skilldmg`)
+
+D2Sigma replaces the four D2Common damage functions of a skill (`D2SkillCalc` `0x100a5d00` elemental max, `0x100a5de0`
+elemental min, `0x100a5f40` physical max, `0x100a60a0` physical min; addresses in the 32-bit DLL). Each is D2's
+`(per-level steps + base) << shift`, then `+ that * DmgSymPerCalc% / 100`, then `+ that * mastery% / 100`, with three
+Median changes. D2R's four equivalents `(dataFlag, unit, skill, level, mastery flag)` are detoured the same way (inline
+hooks, entry bytes recorded in `skill_damage.cpp`, none with a rip-relative operand): elemental min `0x3387d0` (record
+base +0x288, steps +0x290), elemental max `0x338340` (+0x28c, +0x2a4), physical min `0x3385b0` (+0x250, +0x258), physical
+max `0x338160` (+0x254, +0x26c); shift +0x24c, weapon share (`SrcDam`) +0x24d, damage type +0x284, calc rows +0x2b8
+(elemental) and +0x280 (physical).
+
+* **BaseSynergy** (skills2 byte `+0x2d`, 164 skills, 152 of them class-less item / monster / pet spells): the calc
+  percent gets `((energy + 20) * 130 / (energy + 500) + 50 + min(stat 485 / 10, 100)) * (min(clvl, 120) + 5) * 10 / 100 - 75`
+  added. -42% at level 1 with no energy, +996% at level 100 with 300 energy. Median's stat 485 is D2R 514.
+* **StaticDamage** (skills2 byte `+0x2e`, 423 skills): no mastery bonus, elemental or physical.
+* **Physical mastery:** physical damage also takes stat 357 (`passive_mag_mastery`), added to the skill's own part only (not
+  to the weapon part); the elemental mastery stats of the damage type (0x149 fire, 0x14a lightning, 0x14b cold, 0x14c
+  poison, 0x165 magic) work as D2R's `0x337f40` already maps them.
+* The percent applies to the skill's own part and, separately, to the weapon part (`SrcDam * weapon damage >> 7`, only
+  when `SrcDam` is set and the call's mastery flag is non-zero); every product is 64-bit and truncated toward zero.
+  D2Sigma always evaluates the calc; D2R's versions skipped it for small damage without level steps, so the port
+  evaluates it always (`-1` = no calc = 0).
+* D2R's own functions answer the cases D2Sigma does not touch: no unit, level < 1, no record, and (physical) skills whose
+  `passive` flag meets the global mask byte `0x1d996d4`.
+
+`tools/sigma_data.py` writes `mxl_skill_flags.h` (the two flag bytes per skill by D2R id, stat 514) from `skills2.bin`.
+`harness_cmds.cpp` has `skilldmg <skill> [level] [nomastery]`: the damage through the hooks and through D2R's own
+functions, with the inputs of the formula. Checked by `game_checks skillscaling`.
+
 ## Skill restrictions (`skill_restrict.cpp`, off word `restrict`)
 
 Median's skills.txt has a `restrict` column (0-7) with `State1`-`State3`; D2Sigma's usability check
@@ -818,6 +847,15 @@ pages of all classes, many item skills): the row is now split per sheet ("row~cl
 tree skill finds its own icon in its class sheet (bug #3b: empty sockets on masteries, wrong icons where a class-less
 skill came first). Classes with more than 62 tree icons get smaller HD frames (Amazon 113 px, Barbarian 116 px).
 
+## Cooldowns (`cooldowns.cpp`, off word `cooldowns`)
+
+Median's skill cooldown: delay = skill delay formula - stat 309 (layer = skill id), started only for a player when the delay is above 0, and skills of one
+skills2 cooldown group share one timer (D2Sigma `0x100b0f40` / `0x100b1140` / `0x100b0ab0`; details in d2r-addresses.md section 17). The plugin hooks D2R's two
+cooldown starts (server `0x439500`, client `0x217b90`; entry bytes are verified before the hook is installed): for a player it subtracts stat 309 and starts the D2R timer
+(state `0xb9`, stat 359 at layer = skill id) of every member of the skill's group with the same delay; other units keep D2R's behaviour. The group table is generated
+(`mxl_cooldowns.h`, `txt_migrate cooldown_tables`); the pure rules and a model of Median's tables are in `cooldowns_logic.h` (`cooldown_tests`). `mxl` prints the line
+`cooldowns` with the counters starts / reduced / shared / dropped (also in `h state`). Median's removal of monster cooldowns and the client packet `0x2b` are not ported.
+
 ## Runewords and kill experience (`items_ext.cpp`, off words `runewords`, `xp`)
 
 Details, addresses and evidence in [subsystems/items-xp.md](subsystems/items-xp.md). Three hooks, each checked against
@@ -862,10 +900,31 @@ handler (`0x12c870`) plays Median's sounds at the player's unit (217 item_gem, 4
 2608 as stand-in, 230 item_lightarmor); the chat line is the fallback when the hook is off. Harness verbs `rewardmsg`,
 `rewardsnd`, `goblinsay` (the goblin line with the variant's own monstats name).
 
+## Travel: waypoint auto-activation, map reveal, hotkeys (`travel.cpp`, off words `wpauto`, `mapreveal`, `hotkeys`)
+
+Pure rules in `travel_logic.h` (unit tests `tests/travel_test.cpp`); evidence and addresses in `docs/d2r-addresses.md` section 18.
+No inline hook: the plugin calls D2R functions whose first bytes it checks with `memcmp` (a mismatch switches that part off and
+the `mxl` line says why).
+
+* **Waypoint auto-activation** (`wpauto`). `TravelGameFrame` runs from the goblins frame hook (`goblins.cpp`, after
+  `HarnessGameFrame`), every 5th server frame. For each player in the game it reads the level (`0x2efc10(0x34b440(player))`), the
+  waypoint number (`mxl_waypoints.h`), and tests the record bit (`0x3d6930`). Unknown, and a waypoint object (the 16 classes of
+  objects.txt OperateFn 23) of the same level within 36 sub-tiles (squared integer distance): `0x3d6890` sets the bit. Median does
+  the same after a walk order (`D2AutoPickup.cpp`, distance below `0x24`). The `goblins` word must be on because it owns the hook.
+* **Map reveal** (`mapreveal`). D2R's debug "Reveal Automap" `0xd42b0` on the UI thread, then the debug flag byte `0x2a2add4` is put back.
+  Starts from the player's room (the rooms joined to it); in game the automap layer list grew from 1 to 25 layers. Median's `0x887c0` walks every
+  level of the act once. Not ported: the once-per-game limit (the reveal can be repeated).
+* **Hotkeys** (`hotkeys`). Three InputService actions (category "Median XL", ids `mxl_pickup_toggle` X, `mxl_map_reveal` R,
+  `mxl_transmute` C, in the Controls menu, rebindable). X flips the switch that gates the auto-activation; R queues the reveal on
+  the UI thread; C queues the cube panel's Transmute `0x2cd720` on the UI thread when a UiMessageListener has seen the Horadric
+  Cube panel open. Counters and the last UI messages are in the `mxl` command (`travel` lines) and the harness verb `travel`.
+* **Stash pages** are not code: `tools/install_mod.py` writes `d2rcore.stash.add_shared_tabs = 7` into the mod's `d2rloader.toml`
+  (3 normal tabs + 7 = Median's 10 pages), only when the key is not set by hand.
+
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints lockout goblins npc reqgates hirelings skilltree runewords xp mapmem`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500

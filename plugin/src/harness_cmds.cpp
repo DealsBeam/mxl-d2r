@@ -16,6 +16,7 @@
 #include "goblins.h"
 #include "info_panels.h"
 #include "mxl_hirelings.h"
+#include "cooldowns.h"
 #include "no_corpse.h"
 #include "item_events.h"
 #include "npc_actions.h"
@@ -24,12 +25,16 @@
 #include "map_memory.h"
 #include "level_types.h"
 #include "monster_looks.h"
+#include "skill_damage.h"
 #include "skill_tree.h"
+#include "mxl_skill_flags.h"
 #include "quests_act1.h"
 #include "stat_columns.h"
 #include "strings.h"
 #include "strings_probe.h"
 #include "testharness.h"
+#include "travel.h"
+#include "travel_logic.h"
 #include "waypoints.h"
 #include "waypoints_logic.h"
 
@@ -448,6 +453,9 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Out("corpses %d players=%d self=%d | no corpse %s: skipped corpse calls=%ld penalty calls=%ld respawns held=%ld let=%ld xp=%u", corpses,
 	    players, self ? 1 : 0, noCorpseOn ? "on" : "off", skippedCorpses, skippedPenalties, respawnsHeld, respawns,
 	    static_cast<uint32_t>(Stat(p, 13)));
+	long cdStarts = 0, cdReduced = 0, cdShared = 0, cdDropped = 0;
+	const bool cooldownsOn = CooldownCounts(&cdStarts, &cdReduced, &cdShared, &cdDropped);
+	Out("cooldowns %s: starts=%ld reduced=%ld shared=%ld dropped=%ld", cooldownsOn ? "on" : "off", cdStarts, cdReduced, cdShared, cdDropped);
 	Out("skills left=%d right=%d", SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(p)), SkillIdOf(Fn<ActiveSkillFn>(RvaRightSkill)(p)));
 	PrintMissiles(c);
 	int mons = 0;
@@ -1713,6 +1721,29 @@ auto CmdSkills(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
+// `skilldmg <skill id> [level] [nomastery]`: the skill's damage at that level for the player, through the damage hooks
+// and through D2R's own functions (elemental and physical, min and max), with the inputs of Median's formula
+// (docs/plugin-spec.md, "Skill damage scaling"): flags (1 BaseSynergy, 2 StaticDamage), the player's level, energy and
+// stat 514 (Median 485), the synergy percent columns evaluated for the player, the BaseSynergy percent, the mastery stats.
+auto CmdSkillDmg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0, level = 1;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id) || id < 0 || id > 0xffff || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &level)) ||
+	    level < 1 || level > 255) {
+		return Fail(c, "usage: skilldmg <skill id> [level 1-255] [nomastery]");
+	}
+	const bool mastery = !(t.n > 3 && hcmd::LowerEq(t.tok[3], "nomastery"));
+	SkillDamageSample s;
+	if (!SampleSkillDamage(c->player, c->dataFlag, static_cast<int32_t>(id), static_cast<int32_t>(level), mastery ? 1 : 0, &s)) {
+		return Fail(c, "skilldmg: no skill record %lld (or the skill damage hooks are off)", id);
+	}
+	Out("skilldmg skill=%lld level=%lld mastery=%d flags=%d clvl=%d energy=%d stat%d=%d calcElem=%d calcPhys=%d baseSyn=%d masteryElem=%d "
+	    "masteryMagic=%d ele=%d-%d phys=%d-%d orig_ele=%d-%d orig_phys=%d-%d",
+	    id, level, mastery ? 1 : 0, s.flags, Stat(c->player, StatLevel), Stat(c->player, 1), mxl_skill_flags::StatBaseSynergy,
+	    Stat(c->player, mxl_skill_flags::StatBaseSynergy), s.calcElem, s.calcPhys, s.baseSynergy, s.masteryElem, s.masteryMagic, s.eleMin,
+	    s.eleMax, s.physMin, s.physMax, s.origEleMin, s.origEleMax, s.origPhysMin, s.origPhysMax);
+	return true;
+}
+
 // `cast <skill id> [x y | unit <id> | nearest [class] | self]`: uses the skill the way the cast packets do (location: 0x4fdb40,
 // unit: 0x4f8de0), from the player's own skill list. No target = the player's own position. The action runs over the
 // next frames: poll `state` (mode, mana) and `missiles`.
@@ -2716,7 +2747,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
-	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
+	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | levelact <id>..");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
@@ -3245,6 +3276,79 @@ auto CmdEvTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// Client side (UI thread): the automap (layers, cells, the debug reveal flag) and the travel counters (waypoint auto-activation,
+// hotkeys, map reveal). `mapcells` is what the mapreveal check compares before and after a reveal.
+auto CmdMapCells(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	uint64_t cells = 0;
+	int layer = -1, flag = 0, layers = 0;
+	if (!TravelAutomap(&cells, &layer, &flag, &layers)) {
+		return Fail(c, "mapcells: not available (no game yet)");
+	}
+	Out("mapcells cells=%llu layer=%d layers=%d debugflag=%d", static_cast<unsigned long long>(cells), layer, layers, flag);
+	return true;
+}
+
+auto CmdTravel(Ctx*, const hcmd::Tokens&) noexcept -> bool {
+	char text[960];
+	TravelHotkeyReport(text, sizeof(text));
+	Out("travel %s", text);
+	char msgs[900];
+	TravelUiMessages("Panel", msgs, sizeof(msgs));
+	Out("uimsgs %s", msgs);
+	return true;
+}
+
+// stashprobe <page>: create a rune in shared stash tab <page> on the game thread, then delete it; stashprobe result: what happened.
+auto CmdStashProbe(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	char text[200];
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "result")) {
+		const int rc = TravelStashResult(text, sizeof(text));
+		Out("stashprobe result %d %s", rc, text);
+		return true;
+	}
+	long long page = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &page) || page < 0 || page > 998) {
+		return Fail(c, "usage: stashprobe <tab 0..998> | stashprobe result");
+	}
+	if (TravelStashProbe(static_cast<int>(page), text, sizeof(text)) == 0) {
+		return Fail(c, text);
+	}
+	Out("stashprobe tab %lld %s", page, text);
+	return true;
+}
+
+// wpobj: every waypoint object of the game with its position and its distance to the player (the wpauto check walks to one).
+auto CmdWpObj(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	int32_t px = 0, py = 0;
+	PlayerPos(c, &px, &py);
+	void* room = Fn<UnitRoomFn>(RvaUnitRoom)(c->player);
+	const int32_t level = room != nullptr ? Fn<RoomLevelFn>(RvaRoomLevel)(room) : -1;
+	int found = 0;
+	EachUnit(c->game, HashObjects, [&](Unit* u) {
+		if (TypeOf(u) != 2 || !travel::IsWaypointObject(ClassOf(u))) {
+			return;
+		}
+		int32_t ox = 0, oy = 0;
+		d2r::UnitXY(u, &ox, &oy);
+		void* oroom = Fn<UnitRoomFn>(RvaUnitRoom)(u);
+		++found;
+		Out("wpobj id=%u class=%d at %d,%d dist=%.0f level=%d inrange=%d", IdOf(u), ClassOf(u), ox, oy, DistTo(c->player, u),
+		    oroom != nullptr ? Fn<RoomLevelFn>(RvaRoomLevel)(oroom) : -1, travel::InPickupRange(px, py, ox, oy) ? 1 : 0);
+	});
+	Out("wpobj player at %d,%d level=%d number=%d objects=%d", px, py, level, travel::WaypointNumberOfLevel(level), found);
+	return true;
+}
+
+// Client side (UI thread): the map reveal the R hotkey runs, without the key.
+auto CmdReveal(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const int rc = TravelRevealNow();
+	if (rc < 0) {
+		return Fail(c, "reveal: not available (off, or no local player)");
+	}
+	Out("reveal done");
+	return true;
+}
+
 using VerbFn = bool (*)(Ctx*, const hcmd::Tokens&) noexcept;
 struct Verb {
 	const char* name;
@@ -3256,11 +3360,12 @@ const Verb Verbs[] = {
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
-    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
-    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"wear", CmdWear, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
+    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
+    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {
