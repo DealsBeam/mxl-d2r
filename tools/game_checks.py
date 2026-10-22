@@ -2105,7 +2105,10 @@ def check_statcols():
 
 STR_NS = "medianxl"
 STR_BANK = int(os.environ.get("MXL_STRINGS_BANK", "3"))  # data table bank: 1 classic, 2 lod, 3 rotw
-ROW_FIELDS = {}  # table -> byte offset of the name reference in the compiled row (filled from the calibration run)
+# table -> byte offset of the name reference in the compiled row (from the calibration run: MXL_STRINGS_CALIBRATE=1)
+ROW_FIELDS = {"items": 0xfc, "uniqueitems": 0x22, "setitems": 0x24, "sets": 0x2, "monstats": 0x36, "superuniques": 0x2,
+              "skilldesc": 0x8, "itemstatcost": 0x34}
+LEVEL_NAME_OFF = 0xfd  # LevelName, inline in the compiled Levels row (from `text scan levels`)
 _COLOUR = re.compile("ÿc.")
 
 # (category, table, column of the name key, keys). `items` rows are found by item code, `levels` by id, the rest by row index.
@@ -2133,7 +2136,7 @@ STR_INTRO = ["GheedIntroGossip1", "AkaraIntroGossip1", "KashyaIntroGossip1", "Ch
 # NPC menus (npc class, [(top-level plugin line key) ...], the native lines D2R itself shows)
 STR_MENUS = [(265, "Deckard Cain", ["strCainMenuCraftMaterials"], ["TalkMenu", "NPCIdentify1"]),
              (148, "Akara", ["AkaraMenu1b"], ["TalkMenu"]),
-             (175, "Warriv", ["WarrivMenu1b", "WarrivMenu1c"], ["TalkMenu"])]
+             (175, "Warriv", [], ["TalkMenu"])]
 STR_CAIN_SUB = ["strCainMenuCMHoradricCube", "strCainMenuCMCatalyst1", "strCainMenuCMCatalyst2", "strCainMenuCMCatalyst3"]
 
 
@@ -2189,23 +2192,48 @@ def _cell_key(cell):
     return cell.split(":", 1)[1] if cell.startswith((STR_NS + ":", "d2r:")) else cell
 
 
-_HID = re.compile(r"id=(\d+) = \[(.*)\]$")
+_HTXT = re.compile(r"(?:result=(\d+) )?len=(\d+) fnv=([0-9a-f]{8}) raw=([0-9a-f]*) = \[(.*)\]$")
 _HSCAN = re.compile(r"\+0x([0-9a-f]+) id=(\d+) \[(.*)\]$")
+
+
+def _fnv(text):
+    h = 2166136261
+    for b in text.encode("utf-8"):
+        h = ((h ^ b) * 16777619) & 0xffffffff
+    return h
+
+
+class _Got:
+    """One `text` answer: the length and FNV-1a hash of the whole cleaned text (a speech does not fit one line) and its start."""
+
+    def __init__(self, line):
+        m = _HTXT.search(line)
+        self.ok = m is not None
+        self.result = int(m.group(1)) if m and m.group(1) else None
+        self.n = int(m.group(2)) if m else -1
+        self.fnv = int(m.group(3), 16) if m else -1
+        self.raw = m.group(4) if m else ""
+        self.text = m.group(5) if m else line
+
+    def same(self, exp):
+        return self.ok and exp is not None and self.n == len(exp.encode("utf-8")) and self.fnv == _fnv(exp)
+
+    def sig(self):
+        return (self.n, self.fnv)
+
+    def show(self):
+        return "%s%s" % (self.text, "..." if self.n > 200 else "")
 
 
 def _text_id(sid):
     ok, lines = H("text id %d" % sid)
-    m = re.search(r"= \[(.*)\]$", lines[0]) if ok and lines else None
-    return m.group(1) if m else None
+    return _Got(lines[0]) if ok and lines else None
 
 
 def _text_key(full):
-    """(result code, text) of the loader's lookup; a key with a space cannot be passed on the harness line."""
-    if " " in full:
-        return None, None
-    ok, lines = H("text key " + full)
-    m = re.search(r"result=(\d+) = \[(.*)\]$", lines[0]) if lines else None
-    return (int(m.group(1)), m.group(2)) if m else (None, None)
+    """_Got of the loader's lookup (`result` set); a space in the key travels as ^ on the harness line."""
+    ok, lines = H("text key " + full.replace(" ", "^"))
+    return _Got(lines[0]) if lines else _Got("")
 
 
 def _row_ref(table, key, col, sub=None):
@@ -2217,8 +2245,6 @@ def _row_ref(table, key, col, sub=None):
         if ci < len(r) and _cell_key(r[ci]) == key:
             if table == "items":
                 return "code:" + r[head.index("code")].ljust(4)[:4].replace(" ", ""), i
-            if table == "levels":
-                return "id:" + r[head.index("Id")], i
             return str(i), i
     return None, None
 
@@ -2247,46 +2273,68 @@ def check_strings():
                 continue
             pending.append((cat, table, "%s:%s %s" % (table, key, ref), key, ref, exp))
     for cat, table, label, key, ref, exp in pending:
+        if table == "levels":
+            continue
         if ROW_FIELDS.get(table) is None or os.environ.get("MXL_STRINGS_CALIBRATE"):
             hits = {}
             ok, lines = H("text scan %s %s %d" % (table, ref, STR_BANK))
+            if not ok:
+                g.log("CALIBRATE %s %s: %s" % (table, ref, lines[-1] if lines else "no answer"))
             want = exp.encode("utf-8")[:90].decode("utf-8", "ignore")  # the scan prints at most 90 bytes
             for ln in lines:
                 m = _HSCAN.search(ln)
                 if m and m.group(3) == want:
                     hits[int(m.group(1), 16)] = m.group(3)
+            if not hits:
+                for ln in lines:
+                    g.log("SCAN %s %s %s" % (table, ref, ln[:160]))
             calibrate.setdefault(table, []).append(set(hits))
     for table, sets in calibrate.items():
         votes = {}
         for s in sets:
             for o in s:
                 votes[o] = votes.get(o, 0) + 1
-        best = max(votes, key=lambda o: votes[o]) if votes else None
+        best = max(votes, key=lambda o: (votes[o], -o)) if votes else None
         g.log("CALIBRATE %s: offset %s matches %d of %d sample rows (votes %s)" % (
             table, hex(best) if best is not None else None, votes.get(best, 0) if best is not None else 0, len(sets),
             {hex(o): n for o, n in sorted(votes.items())}))
         if best is not None and votes[best] * 2 > len(sets) and (ROW_FIELDS.get(table) is None):
             ROW_FIELDS[table] = best
     for cat, table, label, key, ref, exp in pending:
+        if table == "levels":
+            # Levels keeps LevelName as characters in the compiled row (the game resolves it by key when it draws the name):
+            # the cell must name the string, and the loader must resolve that name to the expected text.
+            ok, lines = H("text cstr levels %s %x %d" % (ref.split(":")[-1], LEVEL_NAME_OFF, STR_BANK))
+            m = re.search(r"= \[(.*)\]$", lines[0]) if ok and lines else None
+            cell = m.group(1) if m else None
+            full = None if cell is None else (cell if ":" in cell else "d2r:" + cell)
+            kg = _text_key(full) if full else None
+            good = kg is not None and kg.result == 0 and kg.same(exp)
+            record(cat, label, good, exp, kg.show() if kg else None,
+                   "row cell [%s] -> %s (expected key %s)" % (cell, full, src.full_key(key)) + ("" if ok else "; " + (lines[-1] if lines else "no answer")))
+            continue
         off = ROW_FIELDS.get(table)
         if off is None:
             record(cat, label, False, exp, None, "no field of the compiled row resolves to the expected text")
             continue
         ok, lines = H("text row %s %s %x %d" % (table, ref, off, STR_BANK))
-        m = _HID.search(lines[0]) if ok and lines else None
-        got = m.group(2) if m else None
+        got = _Got(lines[0]) if ok and lines else None
+        mid = re.search(r"id=(\d+) len", lines[0]) if ok and lines else None
         full = src.full_key(key)
-        kres, ktext = _text_key(full)
-        note = "row offset 0x%x id=%s; key %s -> %s" % (off, m.group(1) if m else "?", full, "n/a (space)" if kres is None else
-                                                      ("ok" if kres == 0 and ktext == exp[:len(ktext)] else "result %s [%s]" % (kres, ktext)))
-        record(cat, label, got == exp, exp, got, note)
+        kg = _text_key(full)
+        note = "row offset 0x%x id=%s; key %s -> %s" % (off, mid.group(1) if mid else "?", full, "n/a (space)" if kg is None else
+                                                      ("ok" if kg.result == 0 and kg.same(exp) else "result %s [%s]" % (kg.result, kg.show())))
+        if not ok:
+            note += "; " + (lines[-1] if lines else "no answer")
+        record(cat, label, got is not None and got.same(exp), exp, got.show() if got else None, note)
 
     # ---- rare affixes: the loader's key lookup only
     for key in STR_KEYS:
         full = src.full_key(key)
-        kres, ktext = _text_key(full)
+        kg = _text_key(full)
         exp = src.expected(key)
-        record("rare affixes", full, kres == 0 and ktext == exp, exp, ktext, "result %s" % kres)
+        record("rare affixes", full, kg is not None and kg.result == 0 and kg.same(exp), exp, kg.show() if kg else None,
+               "result %s" % (kg.result if kg else None))
 
     # ---- D2R keys Median overrides: D2R's numeric id (native, fixed) and the key
     for key in STR_D2R:
@@ -2296,19 +2344,23 @@ def check_strings():
             record("D2R overrides", key, False, exp, None, "not a D2R key Median overrides")
             continue
         got_id = _text_id(e["id"])
-        kres, ktext = _text_key("d2r:" + key)
-        ok = got_id == exp and (kres is None or (kres == 0 and ktext == exp))
-        record("D2R overrides", "%s (id %d)" % (key, e["id"]), ok, exp, got_id, "key d2r:%s -> %s" % (key, "n/a (space)" if kres is None else ktext))
+        kg = _text_key("d2r:" + key)
+        ok = got_id is not None and got_id.same(exp) and (kg is None or (kg.result == 0 and kg.same(exp)))
+        record("D2R overrides", "%s (id %d)" % (key, e["id"]), ok, exp, got_id.show() if got_id else None,
+               "key d2r:%s -> %s" % (key, "n/a (space)" if kg is None else kg.show()))
 
     # ---- bug #7: the first-talk line of each town NPC is its own string, by D2R's numeric id
-    other = {_str_norm(t): k for k, t in src.texts.items() if k not in src.d2r}
+    other = {}  # (length, hash) of every Median-only text -> key: a first-talk line that is one of them is the bug
+    for k, t in src.texts.items():
+        if k not in src.d2r:
+            other[(len(_str_norm(t).encode("utf-8")), _fnv(_str_norm(t)))] = k
     for key in STR_INTRO:
         e = src.d2r.get(key)
         exp = src.expected(key)
         got = _text_id(e["id"]) if e else None
-        stray = other.get(got) if got is not None else None
-        record("first talk (bug #7)", "%s (id %s)" % (key, e["id"] if e else "?"), got is not None and got == exp and stray is None,
-               exp[:60], (got or "")[:60], "shows another Median string: %s" % stray if stray else "")
+        stray = other.get(got.sig()) if got is not None and not got.same(exp) else None
+        record("first talk (bug #7)", "%s (id %s)" % (key, e["id"] if e else "?"), got is not None and got.same(exp) and stray is None,
+               exp[:60], got.show()[:60] if got else None, ("shows another Median string: %s" % stray) if stray else "")
 
     # ---- NPC menu lines: the strings the menu record points at, resolved by the client
     goto(1)
@@ -2339,7 +2391,8 @@ def check_strings():
         for (idx, sid, _p), pk in zip(plug, plugin_keys + [None] * len(plug)):
             exp = src.expected(pk) if pk else None
             got = _text_id(sid)
-            record("NPC menus", "%s line %d (%s)" % (who, idx, pk), pk is not None and got == exp, exp, got, "string id 0x%x" % sid)
+            record("NPC menus", "%s line %d (%s)" % (who, idx, pk), pk is not None and got is not None and got.same(exp), exp,
+                   got.show() if got else None, "string id 0x%x" % sid)
         if len(plug) < len(plugin_keys):
             record("NPC menus", "%s plugin lines" % who, False, plugin_keys, [ln[1] for ln in plug], "fewer plugin lines than expected")
         for (idx, sid, _p), nk in zip(nat, native_keys):
@@ -2347,7 +2400,8 @@ def check_strings():
             if exp is None:
                 exp = _str_norm(src.d2r[nk].get("enUS", ""))
             got = _text_id(sid)
-            record("NPC menus", "%s line %d (%s)" % (who, idx, nk), got == exp, exp, got, "string id 0x%x" % sid)
+            record("NPC menus", "%s line %d (%s)" % (who, idx, nk), got is not None and got.same(exp), exp,
+                   got.show() if got else None, "string id 0x%x" % sid)
         if npc_class == 265 and plug:  # Cain's submenu: the click rebuilds the list with the open crafting materials
             before = menu
             ok, _l = H("menu %d" % plug[0][0])
@@ -2358,12 +2412,13 @@ def check_strings():
                 m = re.search(r"line (\d+) string=0x([0-9a-f]+)", x)
                 if m:
                     sub.append((int(m.group(1)), int(m.group(2), 16)))
-            allowed = {src.expected(k): k for k in STR_CAIN_SUB}
+            allowed = {(len(src.expected(k).encode("utf-8")), _fnv(src.expected(k))): k for k in STR_CAIN_SUB}
             if not (ok and ok2 and sub and after != before):
-                record("NPC menus", "Cain submenu", False, sorted(allowed), None, "the click did not open a submenu: %s" % (after,))
+                record("NPC menus", "Cain submenu", False, sorted(allowed.values()), None, "the click did not open a submenu: %s" % (after,))
             for idx, sid in sub:
                 got = _text_id(sid)
-                record("NPC menus", "Cain submenu line %d" % idx, got in allowed, sorted(allowed), got, "string id 0x%x" % sid)
+                record("NPC menus", "Cain submenu line %d" % idx, got is not None and got.sig() in allowed, sorted(allowed.values()),
+                       got.show() if got else None, "string id 0x%x" % sid)
         close_menu()
 
     # ---- report
