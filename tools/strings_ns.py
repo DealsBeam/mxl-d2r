@@ -13,7 +13,7 @@ record in `strings/medianxl/overrides.json`); group 2 = Median-only keys (namesp
   native_exceptions()    the keys of tools/strings_native.json (must be empty)
   is_localization(t, c)  True if column c of table t holds a string key (LOCALIZATION below)
   qualify(ref, group2)   table / JSON reference as written: `medianxl:<key>` for group 2, anything else unchanged
-  plan_aliases / load_aliases / write_aliases / retarget
+  plan_aliases / load_aliases / write_aliases / qualify_reference / is_reference
                          short aliases `mxlname_<n>` for keys that do not fit a fixed-size cell (see below)
   split_key(ref)         ('medianxl', key) / (None, ref)
   bare(ref)              `medianxl:<key>` -> `<key>`
@@ -159,9 +159,10 @@ def load_group2() -> set[str]:
 
 def qualify(ref: str, group2: set[str], aliases: dict[str, str] | None = None) -> str:
     """Table / JSON reference to a key: `medianxl:<key>` for group 2 (`medianxl:<alias>` for a key with a short alias,
-    see load_aliases); empty cells, numbers, group 1 keys, native exceptions and already qualified references stay
-    as they are."""
-    if not ref or NUMERIC.fullmatch(ref) or ref.startswith(PREFIX) or ref not in group2:
+    see load_aliases); empty cells, group 1 keys, native exceptions and already qualified references stay as they
+    are. A number is a key like any other: Median's item names are keys such as `704` (group 2), and an unqualified
+    `704` would name `d2r:704`, which does not exist (the item shows "an evil force")."""
+    if not ref or ref.startswith(PREFIX) or ref not in group2:
         return ref
     return PREFIX + (aliases if aliases is not None else load_aliases()).get(ref, ref)
 
@@ -171,8 +172,7 @@ def qualify(ref: str, group2: set[str], aliases: dict[str, str] | None = None) -
 # the whole `medianxl:<key>` must fit. A Median-only key that does not ("Sunstone of the Twin Seas") gets a short
 # alias `mxlname_<n>`: txt_migrate decides which keys (plan_aliases), writes the alias map (work/mod/strings_alias.json),
 # adds an alias record with the same 13 texts to the namespace files (write_aliases) and writes the alias in every
-# cell that names the key (localization cells as `medianxl:<alias>`, reference cells such as cubemain inputs and
-# treasure class items as the bare alias). The long key stays defined as well (the plugin and idkeys use it).
+# cell that names the key (localization and reference cells alike, as `medianxl:<alias>`). The long key stays defined as well (the plugin and idkeys use it).
 
 def plan_aliases(keys) -> dict[str, str]:
     """key -> alias for the given keys, numbered 1.. in key order (deterministic for the same set)."""
@@ -184,15 +184,33 @@ def load_aliases() -> dict[str, str]:
     return json.loads(ALIAS_FILE.read_text("utf-8"))["aliases"] if ALIAS_FILE.exists() else {}
 
 
-def retarget(cell: str, aliases: dict[str, str]) -> str:
-    """A cell that refers to an aliased key by name (cubemain input / output, treasure class item, with optional
-    quotes and a `,qty=2` suffix) names the bare alias instead."""
+# Columns that name a unique / set item by its index (cubemain input / output, treasureclassex Item#). The engine
+# matches the name against the item's index cell, which reads `medianxl:<key>` for a Median-only name, so the
+# reference must read the same (an unqualified `HotTJ` names no unique item: the recipe's input matches anything and
+# the wrong recipe fires, a treasure class entry drops nothing).
+REFERENCE_COLUMNS = {"cubemain": re.compile(r"input \d|output( [bc])?"), "treasureclassex": re.compile(r"Item\d+")}
+
+
+def is_reference(table: str, column: str) -> bool:
+    rx = REFERENCE_COLUMNS.get(table.lower())
+    return bool(rx and rx.fullmatch(column))
+
+
+def qualify_reference(cell: str, names: set[str], aliases: dict[str, str]) -> str:
+    """A cell that names a unique / set item by index (cubemain input / output, treasure class item, with optional
+    quotes and a `,qty=2` suffix): `medianxl:<key>` (`medianxl:<alias>` for a key with a short alias) when the name is
+    one of `names` (the Median-only indexes of uniqueitems / setitems), else unchanged."""
     quoted = len(cell) > 1 and cell[0] == cell[-1] == '"'
     name, sep, rest = (cell[1:-1] if quoted else cell).partition(",")
-    if name not in aliases:
+    if name not in names:
         return cell
-    body = aliases[name] + sep + rest
+    body = PREFIX + aliases.get(name, name) + sep + rest
     return f'"{body}"' if quoted else body
+
+
+def reference_name(cell: str) -> str:
+    """The item name of a reference cell (quotes and `,modifier` suffix removed)."""
+    return cell.strip().strip('"').partition(",")[0]
 
 
 def write_aliases(aliases: dict[str, str]) -> None:
