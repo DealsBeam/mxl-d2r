@@ -17,6 +17,7 @@
 #include "mxl_hirelings.h"
 #include "item_events.h"
 #include "quests_act1.h"
+#include "stat_columns.h"
 #include "testharness.h"
 #include "waypoints.h"
 #include "waypoints_logic.h"
@@ -2030,6 +2031,45 @@ auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `panelrow <stat>` runs the Advanced Stats panel's row functions (0x14eb1b0, 0x14eb250 - hooked by stat_columns.cpp) for a D2R
+// stat id on the server's player unit (the harness equips and sets stats there; the client's copy only learns of them through
+// packets): the displayed value and the row text (D2R colour codes removed), then the Strength / Dexterity bonus of the wielded
+// weapon. The panel reads the same unit functions on the client's copy in play.
+auto CmdPanelRow(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long stat = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &stat)) {
+		return Fail(c, "usage: panelrow <stat id>");
+	}
+	Unit* unit = c->player;
+	if (unit == nullptr) {
+		return Fail(c, "panelrow: no player");
+	}
+	int64_t value = 0;
+	char raw[256] = "";
+	if (!StatColumnsProbe(unit, static_cast<int32_t>(stat), &value, raw, sizeof(raw))) {
+		return Fail(c, "panelrow: stat %lld has no record, or the stat columns hooks are off", stat);
+	}
+	char text[256];
+	size_t n = 0;
+	for (size_t i = 0; raw[i] != '\0' && n + 1 < sizeof(text); ++i) {
+		const size_t lead = static_cast<unsigned char>(raw[i]) == 0xff ? 1 : (static_cast<unsigned char>(raw[i]) == 0xc3 && static_cast<unsigned char>(raw[i + 1]) == 0xbf ? 2 : 0);
+		if (lead != 0 && raw[i + lead] == 'c' && raw[i + lead + 1] != '\0') {  // colour code: 0xff (UTF-8: c3 bf) 'c' <digit>
+			i += lead + 1;
+			continue;
+		}
+		text[n++] = raw[i];
+	}
+	text[n] = '\0';
+	Out("panelrow %lld value=%lld text=[%s]", stat, static_cast<long long>(value), text);
+	int32_t strBonus = 0, dexBonus = 0;
+	if (StatColumnsWeapon(unit, &strBonus, &dexBonus)) {
+		Out("panelrow weapon strbonus=%d dexbonus=%d", strBonus, dexBonus);
+	} else {
+		Out("panelrow weapon none");
+	}
+	return true;
+}
+
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
 	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel | "
@@ -2038,7 +2078,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] | avoid <ref> melee|missile|evade [n] | "
-	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | stat merc|mon:<id> <stat>");
+	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | stat merc|mon:<id> <stat>");
 	return true;
 }
 
@@ -2278,7 +2318,7 @@ const Verb Verbs[] = {
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
-    {"cstat", CmdClientStat, true},
+    {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 
