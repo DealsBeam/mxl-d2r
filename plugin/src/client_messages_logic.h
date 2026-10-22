@@ -162,9 +162,24 @@ inline void ClosingLine(uint32_t seconds, char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize, "Closing in: %s", clock);
 }
 
-// Quest reward notice (D2Sigma client messages 0x5f-0x61): the client text is not a string of the D2Sigma tables (searched
-// the client handler and every string table for the 0x5f-0x61 path: nothing fits; the pending message 0x61 of
-// D2Game 0xb15d0 may open an item popup, whose only text is the item's name), so the wording stays neutral.
+// Quest reward notice (D2Sigma client messages 0x5f-0x61). Median's replacement of the client's unit-message handler
+// (D2Sigma 0xb13a0, jump table 0xb13f8..) plays a sound on the player's unit and shows nothing else: 0x5f item_gem (sounds
+// row 217; the Arcane Crystal of Jerhyn / Cain), 0x60 shrine_boink (row 4715; Ormus's shrine items), 0x61 item_lightarmor
+// (row 230; Griswold's Heart). The messages ride D2R's unit-message packet 0x2c (server 0x491960, client handler 0x12c870),
+// so only the player they are sent to hears them. D2R knows 0x61 as the Ancients' reward voice (sound 4379) and nothing
+// for 0x5f / 0x60; the client hook plays Median's sounds instead. shrine_boink is a custom sound file (the final art pass),
+// D2R's holy shrine sound (row 2608) stands in. The text line below is only the fallback when the client hook is off.
+inline constexpr uint32_t MsgRewardGem = 0x5f;
+inline constexpr uint32_t MsgRewardShrine = 0x60;
+inline constexpr uint32_t MsgRewardArmor = 0x61;
+inline constexpr int SoundItemGem = 217;
+inline constexpr int SoundShrineStandIn = 2608;
+inline constexpr int SoundItemLightArmor = 230;
+// The sound row of a reward message, 0 for any other message.
+constexpr auto RewardSound(uint32_t message) noexcept -> int {
+	return message == MsgRewardGem ? SoundItemGem
+	                               : (message == MsgRewardShrine ? SoundShrineStandIn : (message == MsgRewardArmor ? SoundItemLightArmor : 0));
+}
 // `count` > 1 prefixes the number.
 inline void RewardLine(const char* what, int count, char* out, size_t outSize) noexcept {
 	if (count > 1) {

@@ -792,6 +792,47 @@ auto CmdSysmsg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `rewardmsg <0x5f|0x60|0x61>`: the quest reward client message to the player through D2R's unit message (0x491960), the
+// path Jerhyn / Cain / Ormus / Akara use. The client plays Median's sound (`rewardsnd`).
+auto CmdRewardMsg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long msg = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &msg)) {
+		return Fail(c, "usage: rewardmsg <95|96|97 or 0x5f|0x60|0x61>");
+	}
+	if (!RewardSoundsOn()) {
+		return Fail(c, "rewardmsg: the client hook for packet 0x2c is off");
+	}
+	if (!SendRewardMessage(c->player, static_cast<uint32_t>(msg), "Reward", 1)) {
+		return Fail(c, "rewardmsg: not sent (no such reward message or no client)");
+	}
+	Out("rewardmsg 0x%llx sent", msg);
+	return true;
+}
+
+// Client side: `rewardsnd` prints how many reward sounds (messages 0x5f-0x61) the client has played, the last message and
+// the sound row it played (217 gem, 2608 shrine stand-in, 230 armor).
+auto CmdRewardSound(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	int played = 0, message = 0, sound = 0;
+	RewardSoundStats(&played, &message, &sound);
+	Out("rewardsnd hook=%d played=%d last message=0x%x sound=%d", RewardSoundsOn() ? 1 : 0, played, message, sound);
+	(void)c;
+	return true;
+}
+
+// `goblinsay <monster class>`: the goblin "<name> appears!" line for that variant to the player (the line a spawn sends).
+auto CmdGoblinSay(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long cls = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &cls)) {
+		return Fail(c, "usage: goblinsay <monster class>");
+	}
+	char text[96];
+	if (!GoblinAnnounce(c->player, static_cast<int>(cls), text, sizeof(text))) {
+		return Fail(c, "goblinsay: not sent (messages off or no client)");
+	}
+	Out("goblinsay %lld: %s", cls, text);
+	return true;
+}
+
 auto CmdTile(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Unit* tile = nullptr;
 	double best = 1e18;
@@ -2362,7 +2403,7 @@ const Verb Verbs[] = {
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
-    {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
+    {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 

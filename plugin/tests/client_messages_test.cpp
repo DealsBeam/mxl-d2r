@@ -73,6 +73,11 @@ int main() {
 	RewardLine("Shrine", 3, out, sizeof(out));
 	Check(std::strcmp(out, "You have received: 3 x Shrine") == 0, "reward count");
 
+	// reward messages: Median's sounds, nothing for any other message (0x5e and 0x62 stay D2R's)
+	Check(RewardSound(0x5f) == 217 && RewardSound(0x60) == 2608 && RewardSound(0x61) == 230, "reward sounds");
+	Check(RewardSound(0x5e) == 0 && RewardSound(0x62) == 0 && RewardSound(0x15) == 0 && RewardSound(0) == 0, "other messages: no sound");
+	Check(MsgRewardGem == 0x5f && MsgRewardShrine == 0x60 && MsgRewardArmor == 0x61, "reward message ids");
+
 	// goblin notice: Median's StrPushNotifGoblinAppear, " appears!", after the monster's name
 	GoblinAppears(nullptr, out, sizeof(out));
 	Check(std::strcmp(out, "Treasure Goblin appears!") == 0, "goblin notice, no name: the generic one");

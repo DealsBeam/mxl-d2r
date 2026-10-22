@@ -526,6 +526,55 @@ def check_goblins():
     kill_all_near()
 
 
+def check_goblinname():
+    name = "Goblin notice names the variant (monstats NameStr, not the generic goblin)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    want = {2791: "Treasure Goblin", 2792: "Shiny Hoarder", 2793: "Voided Horror", 2799: "Relic Thief", 2802: "Rift Inspector"}
+    got, bad = [], []
+    for cls, text in want.items():
+        ok, first, lines = hv("goblinsay %d" % cls)
+        got.append("%d: %s" % (cls, first))
+        if not ok or (text + " appears!") not in first:
+            bad.append("class %d wanted '%s appears!', got %s" % (cls, text, lines[:2]))
+    add(name, "PASS" if not bad else "FAIL",
+        "`h goblinsay <class>` (the line a spawn sends): %s" % "; ".join(got) if not bad else "; ".join(bad), [], got)
+
+
+def reward_stats():
+    """`h rewardsnd` (client side): (hook on, sounds played, last message, last sound row)."""
+    ok, first, _l = hv("rewardsnd")
+    m = re.search(r"hook=(\d) played=(\d+) last message=0x([0-9a-f]+) sound=(\d+)", first)
+    return (int(m.group(1)) == 1, int(m.group(2)), int(m.group(3), 16), int(m.group(4))) if m else None
+
+
+def check_rewardsound():
+    name = "Quest reward messages 0x5f-0x61: the client plays Median's sound (item_gem / shrine stand-in / item_lightarmor)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    s0 = reward_stats()
+    if s0 is None or not s0[0]:
+        return add(name, "FAIL", "client hook for packet 0x2c is off: %s" % (s0,))
+    rows, bad = [], []
+    played = s0[1]
+    for msg, sound in ((0x5f, 217), (0x60, 2608), (0x61, 230)):
+        ok, first, _l = hv("rewardmsg 0x%x" % msg)
+        s1 = None
+        for _ in range(12):  # the pending message goes out at the unit's next update
+            time.sleep(0.5)
+            s1 = reward_stats()
+            if s1 and s1[1] > played:
+                break
+        rows.append("0x%x -> %s" % (msg, s1))
+        if not ok or not s1 or s1[1] != played + 1 or s1[2] != msg or s1[3] != sound:
+            bad.append("message 0x%x wanted sound %d with one more sound than %d, got %s (%s)" % (msg, sound, played, s1, first))
+        elif s1:
+            played = s1[1]
+    add(name, "PASS" if not bad else "FAIL",
+        "`h rewardmsg` through D2R's unit message, `h rewardsnd` on the client (hook, played, last message, sound row): %s"
+        % ("; ".join(rows) if not bad else "; ".join(bad)), [], rows)
+
+
 def check_respec():
     name = "Akara respec after Den of Evil (Reset Stat/Skill Points)"
     if not need_game():
@@ -722,9 +771,13 @@ def check_heart():
     new = [i for i in items(st1, "600") if i["id"] not in [j["id"] for j in items(st0, "600")]]
     ring = [i for i in items(st1, "rin") if i["id"] not in [j["id"] for j in items(st0, "rin")]]
     _, q = H("quest 4 dump")
-    add(name, "PASS" if (new and new[0].get("unique") == 69) else "FAIL",
+    snd = reward_stats()  # Akara's reward message 0x61 plays item_lightarmor (230) on the client
+    if not (snd and snd[3] == 230):
+        time.sleep(2)
+        snd = reward_stats()
+    add(name, "PASS" if (new and new[0].get("unique") == 69 and snd and snd[0] and snd[2] == 0x61 and snd[3] == 230) else "FAIL",
         "after `h msg 148 0x76`: new item(s) with base code 600: %s (unique index %s, Griswold's Heart = 69), vanilla ring "
-        "reward: %s; quest 4 bits %s" % (len(new), new[0].get("unique") if new else "-", bool(ring), q[0]),
+        "reward: %s; quest 4 bits %s; client reward sound (hook, played, message, row) %s" % (len(new), new[0].get("unique") if new else "-", bool(ring), q[0], snd),
         [sh("heart")], ["before: %s" % [(i["id"], i["page"], i.get("unique")) for i in items(st0, "600")], "after: %s" % [(i["id"], i["page"], i.get("unique")) for i in items(st1, "600")]] + ml + [x for x in mxl_lines_since(0)[-6:]])
     close_menu()
 
@@ -2090,7 +2143,7 @@ def check_statcols():
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
-CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
+CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
