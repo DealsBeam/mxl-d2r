@@ -538,11 +538,13 @@ auto InstallNpcActions(const D2RL::PluginContext* context, char* report, size_t 
 	                                 reinterpret_cast<void**>(&g_builderOriginal)) ? 1 : 0;
 	if (ok == 2) {
 		SetPluginMessageHandler(clientmsg::PluginKindNpcPage, &OnPageMessage);
+		const int travelGates = FixTravelGates(context);
 		char native[160];
 		VerifyNativeServices(g_base, native, sizeof(native));
-		std::snprintf(report, reportSize, "on: %d menu lines (Akara, Cain; Cain's page is a submenu%s; respec confirm %s); %d slots are D2R's own, %s",
+		std::snprintf(report, reportSize,
+		              "on: %d menu lines (Akara, Cain; Cain's page is a submenu%s; respec confirm %s); %d slots are D2R's own, %s; travel gates moved %d",
 		              g_lineCount, PluginMessagesOn() ? "" : ", answer unreadable: plugin messages off",
-		              g_confirmOk ? "on" : "off: image mismatch", g_nativeSlots, native);
+		              g_confirmOk ? "on" : "off: image mismatch", g_nativeSlots, native, travelGates);
 	} else {
 		std::snprintf(report, reportSize, "partial: %d of 2 hooks installed (menu packet 0x4b0470, menu builder 0x1147a0)", ok);
 	}
