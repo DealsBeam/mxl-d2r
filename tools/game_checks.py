@@ -5797,6 +5797,32 @@ def check_nodurability():
     good = good and dur_ok
     notes.append("durability weapon %s -> %s, armour %s -> %s after 600 wear steps" % (
         w0["durability"], w1 and w1["durability"], a0["durability"], a1 and a1["durability"]))
+    # get-hit: real monsters (SUnitDmg 0x44b2b0 -> 0x4526c0 -> the dispatcher 0x441b10) hit the armed character for a while.
+    # The life lost shows that hits landed; the worn armour must keep its durability. This leg alone does not tell the part from
+    # D2R: with the part off (control run) the armour did not wear down in 25 s of real hits either (613 life lost), the `wear`
+    # step above (the same call SUnitDmg makes, 0x4526c0) is what shows the part (off: armour 48 -> 20).
+    setstat("player", 7, BIG_LIFE)
+    setstat("player", 6, BIG_LIFE)
+    for _ in range(3):
+        spawn_attacker(1)
+    time.sleep(2)
+    life0 = rd("player", 6) or 0
+    a2, t_end, lost = _iflags(armour), time.time() + 25, 0
+    while time.time() < t_end:
+        time.sleep(2.5)
+        now = rd("player", 6) or 0
+        lost += max(0, life0 - now)
+        life0 = now
+        if now < BIG_LIFE // 2:
+            setstat("player", 6, BIG_LIFE)
+            life0 = BIG_LIFE
+    a3 = _iflags(armour)
+    kill_all_near()
+    log.append("get-hit: armour %s -> %s, life lost %d raw in 25 s" % (a2, a3, lost))
+    hit_ok = bool(a2 and a3) and a3["durability"] == a2["durability"] and lost >= 256 * 20
+    good = good and hit_ok
+    notes.append("real monster hits: armour %s -> %s, %d life lost%s" % (
+        a2 and a2["durability"], a3 and a3["durability"], lost >> 8, "" if lost >= 256 * 20 else " (too few hits landed to judge)"))
     # quantity: real throws
     H("unequip rhand")
     ok, l5 = H("equip tax q=2 rhand")
@@ -5836,6 +5862,131 @@ def check_nodurability():
     for slot in ("rhand", "torso"):
         H("unequip " + slot)
     add(nm, "PASS" if good else "FAIL", "; ".join(notes), [], log)
+
+
+def _quest_bit(q, bit):
+    ok, lines = H("quest %d %d get" % (q, bit))
+    return ok and any(re.search(r"= 1\b", l) for l in lines if l.startswith("quest"))
+
+
+def check_potionamounts():
+    """Audit item 11 (Median patches the Potion of Life to +50 life, was +20, and Lam Esen's Tome to 10 stat points, was 5): the
+    game's own grant steps (harness `rewardstep`) run on the player; the plugin part `potionamounts` patches the two immediates."""
+    nm = "Potion of Life +50 life, Lam Esen's Tome 10 stat points (audit item 11; plugin part potionamounts)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    log, notes, good = [], [], True
+    life7, pts4 = rd("player", 7), rd("player", 4)
+    ok, l1 = H("rewardstep potion")
+    log += l1
+    m = re.search(r"gained=(-?\d+) points=(-?\d+)", " ".join(l1))
+    potion = int(m.group(2)) if m else None
+    notes.append("Potion of Life: +%s max life (Median 50, D2R 20)" % potion)
+    good = good and ok and potion == 50
+    if life7 is not None:
+        setstat("player", 7, life7)
+    had = _quest_bit(17, 1)
+    H("quest 17 1 set")
+    ok, l2 = H("rewardstep tome")
+    log += l2
+    m = re.search(r"gained=(-?\d+)", " ".join(l2))
+    tome = int(m.group(1)) if m else None
+    notes.append("Lam Esen's Tome: +%s stat points (Median 10, D2R 5)" % tome)
+    good = good and ok and tome == 10
+    if pts4 is not None:
+        setstat("player", 4, pts4)
+    if not had:
+        H("quest 17 1 clear")
+    add(nm, "PASS" if good else "FAIL", "; ".join(notes), [], log)
+
+
+def check_manarules():
+    """Audit item 15 (Median's stamina and mana recovery, D2Sigma 0x100a1f90 / 0x100a1b50; plugin parts stamina + manaregen):
+    stamina per frame standing 100%, walking 75% (D2R 50%); state 136 (Stamina Shrine, "infinite stamina") fills the bar; a run
+    in the Rogue Encampment costs no stamina (vanilla's town rule); a mana pool smaller than the frame count regenerates
+    nothing (D2R raises the base to 1)."""
+    nm = "Stamina and mana recovery rules (audit item 15; plugin parts stamina + manaregen)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    fight_ready()
+    log, notes, bad = [], [], []
+    full = rd("player", 11) or 0
+    bonus = rd("player", 28) or 0
+    point = full >> 8
+    step = point + point * bonus // 100
+
+    def per_frame(rows, mode):
+        pr = [(a, b) for a, b in _pairs(rows, mode) if a[4] + step * 4 < full]
+        frames = sum(b[0] - a[0] for a, b in pr)
+        gain = sum(b[4] - a[4] for a, b in pr)
+        return (gain / frames if frames else None), frames
+
+    # 1. standing in the field: max/256 raw per frame (x (100 + stat 28)%); walking 75% of it
+    setstat("player", 10, 0)
+    stand = []
+    t0 = time.time()
+    while time.time() - t0 < 4:
+        stand.append(_sample())
+        time.sleep(0.2)
+    log += ["stand " + " ".join(map(str, r)) for r in stand]
+    rate, frames = per_frame(stand, 1)
+    notes.append("standing: %s raw/frame over %d frames (Median %d = max %d / 256 x (100+%d)%%)" % (
+        ("%.1f" % rate) if rate is not None else "?", frames, step, point, bonus))
+    if rate is None or abs(rate - step) > 0.05 * step:
+        bad.append("standing recovery %s raw/frame, Median %d" % (rate, step))
+    walk = _sprint_leg(0, True, 4)
+    log += ["walk " + " ".join(map(str, r)) for r in walk]
+    rate, frames = per_frame(walk, 2)
+    want = step * 75 // 100
+    notes.append("walking: %s raw/frame over %d frames (Median 75%% = %d, D2R 50%% = %d)" % (
+        ("%.1f" % rate) if rate is not None else "?", frames, want, step // 2))
+    if rate is None or frames < 10 or abs(rate - want) > 0.15 * want:  # a sample pair can straddle a standing frame (100%)
+        bad.append("walking recovery %s raw/frame over %d frames, Median %d" % (rate, frames, want))
+
+    # 2. state 136 fills the bar at once, whatever the mode
+    H("move %d %d" % (walk[-1][1], walk[-1][2]))
+    setstat("player", 10, 0)
+    ok, ls = H("setstate player 136 1")
+    log += ls
+    time.sleep(1.0)
+    filled = rd("player", 10) or 0
+    H("setstate player 136 0")
+    notes.append("state 136: stamina 0 -> %d of %d after 1 s" % (filled >> 8, point))
+    if not ok or filled < full:
+        bad.append("state 136 left the stamina at %d of %d" % (filled, full))
+
+    # 3. a run in a town costs no stamina (infinite stamina in the Rogue Encampment)
+    goto(1)
+    close_menu()
+    run = _sprint_leg(full, False, 5)
+    log += ["town run " + " ".join(map(str, r)) for r in run]
+    ran = [r for r in run if r[3] == 3]
+    lowest = min((r[4] for r in run), default=0)
+    notes.append("run in town: %d samples running, stamina lowest %d of %d" % (len(ran), lowest >> 8, point))
+    if len(ran) < 3:
+        notes.append("(too few running samples to judge the town drain)")
+        bad.append("no run in the town to measure")
+    elif lowest < full - 4 * step:
+        bad.append("a run in town drained the stamina to %d of %d" % (lowest >> 8, point))
+
+    # 4. a mana pool below the frame count regenerates nothing (Median's base has no floor of 1)
+    fight_ready()
+    saved = {s_: rd("player", s_) for s_ in (8, 9, 26, 27)}
+    try:
+        setstat("player", 9, 40)
+        setstat("player", 8, 0)
+        setstat("player", 26, 0)
+        setstat("player", 27, 0)
+        time.sleep(2.5)
+        mana = rd("player", 8) or 0
+        notes.append("mana pool 40 raw, bonuses off: %d raw after 2.5 s (Median 0, D2R +1 per frame)" % mana)
+        if mana > 2:
+            bad.append("a pool of 40 raw regenerated to %d (D2R's floor of 1 per frame)" % mana)
+    finally:
+        for s_, v in saved.items():
+            if v is not None:
+                setstat("player", s_, v)
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(notes) + ("; BAD: " + " | ".join(bad) if bad else ""), [], log)
 
 
 def check_autoid():
@@ -6260,7 +6411,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("trophytimer", check_trophytimer),
           ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages),
           ("skillscaling", check_skillscaling),
-          ("nodurability", check_nodurability), ("autoid", check_autoid), ("townmana", check_townmana),
+          ("nodurability", check_nodurability), ("autoid", check_autoid), ("townmana", check_townmana), ("potionamounts", check_potionamounts), ("manarules", check_manarules),
           ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards)]
 
 

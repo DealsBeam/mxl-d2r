@@ -127,11 +127,11 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 | 8 | [Mercenary revive price](#m8) | high | common1-019, game4-024, game4-026, game5-026 | overlap audit-rules (hirelings) |
 | 9 | [Act 5 quest experience](#m9) | high | game3-004, game3-005, game3-009 | overlap audit-rules (XP, rewards) |
 | 10 | [Quest rewards that differ from Median](#m10) | medium | game3-006, game3-010, game3-011, game3-012, game3-014, game2-008 | overlap audit-rules (quest rewards) |
-| 11 | [Potion of Life and Lam Esen's Tome amounts](#m11) | medium | game6-003, game6-026 | overlap audit-rules |
-| 12 | [Durability is not lost when the character is hit](#m12) | medium | game6-016 | overlap audit-rules: row "Item durability (audit IT1)" (durability removed in Median); this audit shows the mechanism, the hit-damage call is nopped |
+| 11 | [Potion of Life and Lam Esen's Tome amounts](#m11) (**ported**, lane pa2-stats) | medium | game6-003, game6-026 | overlap audit-rules |
+| 12 | [Durability is not lost when the character is hit](#m12) (**covered** by the `durability` part, lane pa2-stats) | medium | game6-016 | overlap audit-rules: row "Item durability (audit IT1)" (durability removed in Median); this audit shows the mechanism, the hit-damage call is nopped |
 | 13 | [Activation frequency (stat 427) on periodic skills](#m13) | medium | game2-021 | overlap audit-rules |
 | 14 | [Missile CollideType 9 and 10](#m14) | medium | game2-017, client5-032, client5-035 | overlap audit-rules (missiles) |
-| 15 | [Mana recovery, mana drain and infinite stamina](#m15) | medium | game3-043 | overlap audit-rules (stats) |
+| 15 | [Mana recovery, mana drain and infinite stamina](#m15) (**ported**, lane pa2-stats) | medium | game3-043 | overlap audit-rules (stats) |
 | 16 | [Gamble window offers](#m16) | medium | game5-022 | - |
 | 17 | [Monster level and players-count scaling](#m17) | medium | game5-007, game5-004, game5-006 | overlap audit-rules: row "Players X (audit DF7, MP3)" for the count table |
 | 18 | [Normal-difficulty drops use the level-upgraded treasure class](#m18) | medium | game1-012 | overlap audit-rules (drops) |
@@ -235,18 +235,18 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 <a id="m11"></a>
 ### 11. Potion of Life and Lam Esen's Tome amounts
 
-* **Median** (game6-003, game6-026): Potion of Life gives +50 life (`push 0x3200`, was +20) and Lam Esen's Tome gives 10 stat points (byte `0xa`, was 5).
-* **Port now:** No hook; D2R's amounts apply.
-* **To do:** Hook the two grants, or set the amount in data if D2R reads it from a column.
+* **Median** (game6-003, game6-026): the Potion of Life gives +50 life (D2Game `0xd9eea`, ItemMode `6fcf9bf0`: `push 0x1400` becomes `push 0x3200`; 0x3200 / 256 = 50, was 20 life, added to the maximum life stat 7) and Lam Esen's Tome gives 10 unspent stat points (D2Game `0xe6496`, `6fd06420`: the byte of the grant becomes `0xa`, was 5; stat 4).
+* **Port now (lane pa2-stats, off word `potionamounts`, verified in game by check `potionamounts`):** `stat_rules.cpp` patches the two immediates of D2R's twins in place, with the expected bytes checked first: `0x5806b5` `41 b8 00 14 00 00` (`mov r8d,0x1400`) to `0x3200` in the potion's step `0x580680` (game, unit), and `0x5ed70d` `8d 50 03 44 8d 40 04` (`lea edx,[rax+3]`, `lea r8d,[rax+4]`; rax is 1 after the quest bit test) to `...8d 40 09`, i.e. 10 points, in the Tome's step `0x5ed6d0`. Entry bytes taken from the build 93847 dump with `d2r_find.py bytes`. The check runs both steps through the harness verb `rewardstep` and reads +50 life and +10 points (D2R: 20 and 5).
+* **To do:** Nothing. Not run in game: the grants through the real item use and the real tome object (the steps are D2R's own and unchanged except for the amount).
 * **Overlap:** overlap audit-rules
 * **Impact:** medium
 
 <a id="m12"></a>
 ### 12. Durability is not lost when the character is hit
 
-* **Median** (game6-016): D2Game `0xdee28`: the call that damages the defender's worn items is nopped (8 bytes).
-* **Port now:** Not found in docs or plugin; D2R armour loses durability when hit.
-* **To do:** Return early from D2R's armour-durability-on-hit function.
+* **Median** (game6-016): D2Game `0xdee28`: in SUnitDmg (`6fcfed30`) the call `6fcfeba0` that damages the worn items (the attacker's weapon and one armour piece of the defender) is NOPed (8 bytes).
+* **Port now (lane pa2-stats, covered by gap-items' `durability` part, PR #114; verified in game by check `nodurability`):** D2R's twin is the wear step `0x4526c0` (game, attacker, defender), called by SUnitDmg `0x44b2b0` at `0x44b44b` and by nothing else. It calls the wear dispatcher `0x441b10` at `0x45270c` (the attacker's weapon) and, through `0x4527a0`, at `0x4528cd` (one random piece of the defender's armour). The dispatcher has exactly these two callers (`d2r_find.py callers`), and `item_rules.cpp` makes it a no-op (and the skill-use wear `0x5590c0`, whose one caller is `0x558682`), so no further hook is needed. The other writers of the durability stat 0x48 (item generator `0x442d60` and its helpers, repair, cube) set a new item's durability and are not wear. The check runs `wear` (the step `0x4526c0` with a monster as attacker and the player as defender, 300 times, and the other way) and then lets three real monsters hit the armed character for 25 s. With the part on, weapon and armour keep their durability (70 -> 70, 48 -> 48 after 600 wear steps; 850 life lost to real hits, armour unchanged). Control with off word `durability`: the wear steps take the weapon 70 -> 63 and the armour 48 -> 20; the real-hit leg did not wear the armour even then (613 life lost in 25 s), so it only shows that nothing breaks, the wear step is the evidence.
+* **To do:** Nothing.
 * **Overlap:** overlap audit-rules: row "Item durability (audit IT1)" (durability removed in Median); this audit shows the mechanism, the hit-damage call is nopped
 * **Impact:** medium
 
@@ -271,10 +271,13 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 <a id="m15"></a>
 ### 15. Mana recovery, mana drain and infinite stamina
 
-* **Median** (game3-043): D2Game `0x79b77`: natural regeneration goes through `D2Resource_100a1f60` (mana: flat stat 26 plus percent stat 27; a negative regeneration stat 297 drains mana) and `100a1f90` (stamina: an infinite-stamina state 136).
-* **Port now:** No regeneration code in `plugin/src`.
-* **To do:** Compare Median's formula with D2R's regeneration in game; implement the drain and state 136 if items use them.
-* **Overlap:** overlap audit-rules (stats)
+* **Median** (game3-043): D2Game `0x79b77` / `0x79b7c`: the mana and stamina steps of a player's per-frame regeneration go to `D2Resource_100a1f60` (formula `100a1b50`) and `100a1f90`.
+  * **Stamina** (`100a1f90`): state 136 (`shrine_stamina`, the Stamina Shrine, shrines.txt "Gain infinite Stamina", 4800 frames) fills the bar whatever the mode. Otherwise a unit in mode 1 (standing) or 5 (standing in a town) gets max / 256 raw per frame times (100 + stat 28)%, running (mode 3) gets nothing and every other mode (walking, attacking, casting, being hit, dead) gets 75% of the standing step; the result stops at the maximum. There is no "full" or "under one point" test.
+  * **Mana** (`100a1b50`): base = max mana / (the class's regeneration seconds x 25 frames, 7500 without one), scaled by (100 + stat 27)%, plus stat 26, kept inside [-mana, max - mana]. Differences from D2R (and 1.13c): the base is not raised to 1 when it comes out 0, so a pool smaller than the frame count regenerates nothing, and a non-zero stat 297 (heat) turns the whole recovery into a drain by that percent, zero in a town (this part was ported by lane gap-classres as the `heat` part).
+  * **"Infinite stamina"** is the Stamina Shrine's state 136 (a timed state, 4800 frames) and nothing else: no stat, no item property. A run costs nothing in a town in both games: the vanilla drain (1.13c `6fc97bb0`) returns "no drain" for a unit whose room is a town. Median's 5 s sprint (audit SK7, PR #101) is data (50 stamina, RunDrain 60).
+* **Port now (lane pa2-stats, off words `stamina` and `manaregen`, verified in game by check `manarules`):** `stat_rules.cpp` replaces D2R's stamina step `0x42e850` (game, unit; called from the regeneration `0x42e73c` before the mana step `0x42e350`) with the rule above (`stat_rules_logic.h`); the hook gets whole instructions (23 bytes, no rip-relative operand) and does not call the original. `heat.cpp`'s detour of `0x42e350` now also handles stat 297 = 0: with a base of at least 1 or the no-regeneration state (0x55) D2R's own step runs, and with a base of 0 `ManaDelta` applies Median's formula. Game check, the three parts on / off (control): standing 50.0 / 50.6 raw per frame (Median = D2R: max 50 / 256), walking 37 / 25.8 (Median 75% = 37, D2R 50% = 25), state 136 (set with the harness `setstate`) stamina 0 -> 50 of 50 in 1 s / 6 of 50, a mana pool of 40 raw with the bonuses off stays 0 / stays 40 in 2.5 s (D2R's floor of 1 per frame lifts it to 40), a run in the Rogue Encampment from full costs nothing in both builds (6 / 5 samples running, lowest 50 of 50). The checks `heat`, `townmana` and `nodurability` still pass.
+* **To do:** Nothing for the rules. Not run: the real Stamina Shrine object (the state is set by the harness, not by touching a shrine) and a class other than the test character.
+* **Overlap:** overlap audit-rules (stats); `heat` (stat 297 drain), `townmana` (skill costs in a town) and `sprint` are separate parts and unchanged
 * **Impact:** medium
 
 <a id="m16"></a>

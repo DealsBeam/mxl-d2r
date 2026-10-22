@@ -27,6 +27,7 @@ int RunItemEventsTests();  // item_events_test.cpp
 int RunMonsterLooksTests();  // monster_looks_test.cpp
 int RunSkillRestrictTests();  // skill_restrict_test.cpp
 int RunHeatTests();  // heat_test.cpp
+int RunStatRulesTests();  // stat_rules_test.cpp
 int RunTrophyTimerTests();  // trophy_timer_test.cpp
 
 namespace {
@@ -149,6 +150,7 @@ int main() {
 	failures += RunMonsterLooksTests();
 	failures += RunSkillRestrictTests();
 	failures += RunHeatTests();
+	failures += RunStatRulesTests();
 	failures += RunTrophyTimerTests();
 	std::printf(failures == 0 ? "requirements: all tests passed\n" : "requirements: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
