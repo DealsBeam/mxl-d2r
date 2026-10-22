@@ -20,6 +20,7 @@
 #include "item_gen.h"
 #include "quests_act1.h"
 #include "stat_columns.h"
+#include "strings_probe.h"
 #include "testharness.h"
 #include "waypoints.h"
 #include "waypoints_logic.h"
@@ -2113,6 +2114,61 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
+// Client side: strings through D2RLoader's localization service and D2R's own numeric lookup (docs/strings-namespace-research.md).
+//   str key <full key>      getStringByKey ("medianxl:Key", "d2r:strCancel"; a bare key searches the plugin's own "mxl-core")
+//   str id <n>              getStringById (original game IDs only)
+//   str native <n>          D2R's numeric lookup (the thunk the NPC menu uses) for id n (0..65535)
+//   str find <text>         every id 0..65535 whose native text contains <text> (case-insensitive, at most 40 listed)
+auto CmdStr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 3) {
+		return Fail(c, "usage: str key <full key> | id <n> | native <n> | find <text>");
+	}
+	char text[1024];
+	if (hcmd::LowerEq(t.tok[1], "key")) {
+		const int rc = StringsProbeKey(t.tok[2], text, sizeof(text));
+		Out("str key %s result=%d text=\"%s\"", t.tok[2], rc, text);
+		return rc == 0;
+	}
+	long long id = 0;
+	if (hcmd::LowerEq(t.tok[1], "id") || hcmd::LowerEq(t.tok[1], "native")) {
+		if (!hcmd::ParseInt(t.tok[2], &id) || id < 0 || id > 0xffffffffLL) {
+			return Fail(c, "str: bad id");
+		}
+		if (hcmd::LowerEq(t.tok[1], "id")) {
+			const int rc = StringsProbeId(static_cast<uint32_t>(id), text, sizeof(text));
+			Out("str id %lld result=%d text=\"%s\"", id, rc, text);
+			return rc == 0;
+		}
+		const bool ok = StringsProbeNative(static_cast<uint32_t>(id), text, sizeof(text));
+		Out("str native %lld %s text=\"%s\"", id, ok ? "ok" : "unreadable", text);
+		return ok;
+	}
+	if (hcmd::LowerEq(t.tok[1], "find")) {
+		char needle[128];
+		std::snprintf(needle, sizeof(needle), "%s", t.tok[2]);
+		for (char* p = needle; *p != '\0'; ++p) {
+			if (*p >= 'A' && *p <= 'Z') *p = static_cast<char>(*p + 32);
+		}
+		int hits = 0;
+		for (uint32_t i = 0; i <= 0xffff; ++i) {
+			if (!StringsProbeNative(i, text, sizeof(text)) || text[0] == '\0') {
+				continue;
+			}
+			char original[1024];
+			std::snprintf(original, sizeof(original), "%s", text);
+			for (char* p = text; *p != '\0'; ++p) {
+				if (*p >= 'A' && *p <= 'Z') *p = static_cast<char>(*p + 32);
+			}
+			if (std::strstr(text, needle) != nullptr && ++hits <= 40) {
+				Out("str find %u (0x%x) text=\"%s\"", i, i, original);
+			}
+		}
+		Out("str find \"%s\": %d hits", needle, hits);
+		return hits > 0;
+	}
+	return Fail(c, "usage: str key <full key> | id <n> | native <n> | find <text>");
+}
+
 // Client side (UI thread): the NPC menu the 0x27 packet opened.
 auto CmdMenu(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "confirm")) {  // the Yes / No page of a respec-style line
@@ -2363,7 +2419,7 @@ const Verb Verbs[] = {
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"str", CmdStr, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {
