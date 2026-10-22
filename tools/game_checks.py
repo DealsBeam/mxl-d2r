@@ -10,11 +10,11 @@ aborts the run when the real cursor enters the game window or the game window be
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
 Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
-craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps classlock
-hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols skilltree keybinds npcstrings
-automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills cowportals deathcrash nocorpse
-cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
-heat trophytimer.
+craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
+classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
+skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
+cowportals deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
+heat trophytimer mapreveal wpauto hotkeys stashpages.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -5044,6 +5044,271 @@ def check_sprint():
         [sh("sprint")], log)
 
 
+
+def mapcells():
+    """`h mapcells` (client): dict cells / layer / layers / debugflag, or None."""
+    ok, lines = H("mapcells")
+    for ln in lines:
+        if ln.startswith("mapcells "):
+            return {k: int(v) for k, v in kv(ln).items() if re.fullmatch(r"-?\d+", v)}
+    return None
+
+
+def check_mapreveal():
+    name = "Map reveal: the automap of a fresh level has more cells after the reveal"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    # `cheat goto` (needs debug mode) arrives in a level whose automap is already drawn whole (the pictures show it), and the game's
+    # town map is whole from the start, so the cell count and the picture cannot show a reveal on a level reached this way; what
+    # the call does is measured in the layers: it adds the layers of the act's levels
+    st = goto(3)  # Cold Plains
+    if st["player"].get("area") != 3:
+        return add(name, "BLOCKED", "could not go to area 3")
+    time.sleep(2)
+    g.press("tab")  # automap overlay on (D2R's default key)
+    time.sleep(1.5)
+    a0 = mapcells()
+    p0 = g.shot("mapreveal_before")
+    ok, lines = H("reveal")
+    time.sleep(2.5)
+    a1 = mapcells()
+    p1 = g.shot("mapreveal")
+    ok2, lines2 = H("reveal")  # a second reveal finds nothing new
+    time.sleep(1)
+    a2 = mapcells()
+    g.press("tab")
+    log = ["before %s" % a0, "after %s" % a1, "again %s" % a2] + lines + lines2
+    if not a0 or not a1:
+        return add(name, "BLOCKED", "no automap data: %s" % lines[:2], [], log)
+    flag_kept = a1["debugflag"] == a0["debugflag"] == (a2 or a1)["debugflag"]
+    cells_grew = a1["cells"] > a0["cells"]
+    layers_grew = a1["layers"] > a0["layers"]
+    again = (a2 or a1)["layers"] == a1["layers"] and (a2 or a1)["cells"] == a1["cells"]
+    status = "PASS" if ok and ok2 and cells_grew and flag_kept and again else              "PARTIAL" if ok and ok2 and layers_grew and flag_kept and again else "FAIL"
+    add(name, status,
+        "harness `reveal` (the R hotkey's call of the debug menu's Reveal Automap) in Cold Plains: automap cells %d -> %d (%+d), layers %d -> %d, "
+        "a second reveal %+d cells %+d layers; debug flag byte %d -> %d (kept: %s)%s" % (
+            a0["cells"], a1["cells"], a1["cells"] - a0["cells"], a0["layers"], a1["layers"], (a2 or a1)["cells"] - a1["cells"],
+            (a2 or a1)["layers"] - a1["layers"], a0["debugflag"], a1["debugflag"], flag_kept,
+            "" if status == "PASS" else "; PARTIAL: the level was already drawn whole on arrival (mapreveal_before.png = mapreveal.png), only the layers grew"),
+        [os.path.basename(p0), os.path.basename(p1)], log)
+
+
+def wpbit(number):
+    ok, lines = H("waypoint n %d get" % number)
+    for ln in lines:
+        m = re.match(r"waypoint number %d = (\d)" % number, ln)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def wpobjs():
+    """`h wpobj`: (player dict, [object dicts])."""
+    ok, lines = H("wpobj")
+    player, objs = {}, []
+    for ln in lines:
+        if ln.startswith("wpobj player"):
+            m = re.search(r"at (\d+),(\d+) level=(-?\d+) number=(-?\d+)", ln)
+            if m:
+                player = dict(x=int(m.group(1)), y=int(m.group(2)), level=int(m.group(3)), number=int(m.group(4)))
+        elif ln.startswith("wpobj id="):
+            m = re.search(r"id=(\d+) class=(\d+) at (\d+),(\d+) dist=(\d+) level=(-?\d+) inrange=(\d)", ln)
+            if m:
+                objs.append(dict(id=int(m.group(1)), cls=int(m.group(2)), x=int(m.group(3)), y=int(m.group(4)), dist=int(m.group(5)),
+                                 level=int(m.group(6)), inrange=int(m.group(7))))
+    return player, objs
+
+
+def check_wpauto():
+    name = "Waypoint auto-activation: walking up to a waypoint (distance < 36) activates it, standing away does not"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    st = goto(3)
+    if st["player"].get("area") != 3:
+        return add(name, "BLOCKED", "could not go to area 3")
+    time.sleep(2)
+    player, objs = wpobjs()
+    here = [o for o in objs if o["level"] == player.get("level")]
+    log = ["player %s" % player] + ["obj %s" % o for o in here]
+    if not here or player.get("number", -1) < 0:
+        return add(name, "BLOCKED", "no waypoint object of this level is loaded yet (%s)" % log[:2], [], log)
+    num = player["number"]
+    wp = min(here, key=lambda o: o["dist"])
+    res = []
+    # A. wherever the character stands: clear the bit and see whether the rule re-sets it, by distance.
+    H("waypoint n %d clear" % num)
+    time.sleep(1.5)
+    bit_a = wpbit(num)
+    res.append("A: distance %d, bit after 1.5 s: %s" % (wp["dist"], bit_a))
+    near_ok = (bit_a == 1) if wp["dist"] < 36 else (bit_a == 0)
+    # B. walk to the waypoint from outside the radius: clear first, expect the bit to come on within the walk.
+    far = None
+    if wp["dist"] >= 36 and bit_a == 0:
+        far = wp["dist"]
+    else:
+        # step away: try points 55 sub-tiles from the object in eight directions until the character is out of range
+        for ox, oy in ((55, 0), (-55, 0), (0, 55), (0, -55), (40, 40), (-40, -40), (40, -40), (-40, 40)):
+            H("move %d %d" % (wp["x"] + ox, wp["y"] + oy))
+            t0 = time.time()
+            while time.time() - t0 < 9:
+                time.sleep(1)
+                p2, o2 = wpobjs()
+                w2 = [o for o in o2 if o["id"] == wp["id"]]
+                if w2 and w2[0]["dist"] >= 40:
+                    far = w2[0]["dist"]
+                    break
+            if far is not None:
+                break
+        H("waypoint n %d clear" % num)
+        time.sleep(1.5)
+    bit_far = wpbit(num)
+    res.append("B: left to distance %s, bit cleared and still %s after 1.5 s (rule must not fire)" % (far, bit_far))
+    walked_ok = None
+    if far is not None and bit_far == 0:
+        H("move %d %d" % (wp["x"], wp["y"]))
+        t0 = time.time()
+        d_at = None
+        while time.time() - t0 < 30:
+            time.sleep(1)
+            if wpbit(num) == 1:
+                p3, o3 = wpobjs()
+                w3 = [o for o in o3 if o["id"] == wp["id"]]
+                d_at = w3[0]["dist"] if w3 else None
+                break
+        walked_ok = d_at is not None
+        res.append("C: walking to the object set the bit at distance %s" % d_at)
+    status = [l for l in H("travel")[1] if l.startswith("travel ")]
+    log += res + status
+    if far is None or bit_far != 0:
+        return add(name, "PARTIAL" if near_ok else "FAIL", "; ".join(res) + " (could not get out of range for the negative control)", [], log)
+    add(name, "PASS" if (near_ok and walked_ok) else "FAIL", "waypoint number %d of level %d: %s" % (num, player["level"], "; ".join(res)), [sh("wpauto")], log)
+
+
+def travel_counts():
+    """`h travel` -> dict: x r c presses, reveals, transmutes, blocked, registered bindings text, pickup state, cube state."""
+    ok, lines = H("travel")
+    line = next((l for l in lines if l.startswith("travel ")), "")
+    d = {"line": line}
+    m = re.search(r"keys X (\d+) R (\d+) C (\d+)", line)
+    if m:
+        d.update(x=int(m.group(1)), r=int(m.group(2)), c=int(m.group(3)))
+    m = re.search(r"reveals (\d+)", line)
+    d["reveals"] = int(m.group(1)) if m else None
+    m = re.search(r"transmutes (\d+) \(blocked (\d+), cube (\w+)\)", line)
+    if m:
+        d.update(transmutes=int(m.group(1)), blocked=int(m.group(2)), cube=m.group(3))
+    m = re.search(r"pickup (on|off)", line)
+    d["pickup"] = m.group(1) if m else None
+    d["bindings"] = line.split("||")[0]
+    return d
+
+
+def check_hotkeys():
+    name = "Hotkeys X / R / C: window-message key presses reach the plugin's actions"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(3)
+    time.sleep(2)
+    t0 = travel_counts()
+    if "x" not in t0:
+        return add(name, "BLOCKED", "no travel status line: %s" % t0["line"][:100], [], [t0["line"]])
+    log = [t0["line"]]
+    res, bad = [], []
+    # X toggles auto pickup
+    g.press("x")
+    time.sleep(0.6)
+    t1 = travel_counts()
+    g.press("x")
+    time.sleep(0.6)
+    t2 = travel_counts()
+    x_ok = t1.get("x") == t0["x"] + 1 and t1["pickup"] != t0["pickup"] and t2.get("x") == t0["x"] + 2 and t2["pickup"] == t0["pickup"]
+    res.append("X: presses %s->%s->%s, pickup %s->%s->%s" % (t0.get("x"), t1.get("x"), t2.get("x"), t0["pickup"], t1["pickup"], t2["pickup"]))
+    if not x_ok:
+        bad.append("X")
+    # R reveals the map
+    a0 = mapcells()
+    g.press("r")
+    time.sleep(1.5)
+    t3 = travel_counts()
+    a1 = mapcells()
+    r_ok = t3.get("r") == t2.get("r") + 1 and t3["reveals"] == t2["reveals"] + 1
+    res.append("R: presses %s->%s, reveals %s->%s, cells %s->%s" % (t2.get("r"), t3.get("r"), t2["reveals"], t3["reveals"],
+                                                                    a0 and a0["cells"], a1 and a1["cells"]))
+    if not r_ok:
+        bad.append("R")
+    # the cube item lies in the inventory; shots of the inventory show where its cell is (for opening the panel)
+    okb, lb = H("item box inv")
+    log += lb
+    mark = mxl_mark()
+    g.press("i")
+    time.sleep(1.2)
+    inv_shot = sh("hotkeys_inventory")
+    g.click(0.711, 0.453, "right")  # the cube item's cell in the 1600 x 900 inventory (hotkeys_inventory.png)
+    time.sleep(1.5)
+    cube_shot = sh("hotkeys_cube")
+    msgs = [l for l in mxl_lines_since(mark) if "cube ui message" in l]
+    log += msgs[:12]
+    t_open = travel_counts()
+    g.press("esc")  # one Esc closes the cube panel and the inventory with it (a second one would open the game menu)
+    time.sleep(0.6)
+    # C with no cube open: counted, not transmuted
+    g.press("c")
+    time.sleep(0.8)
+    t4 = travel_counts()
+    c_closed = t4.get("c") == t3.get("c") + 1 and t4["transmutes"] == t3["transmutes"]
+    res.append("C (cube closed): presses %s->%s, transmutes %s->%s (blocked %s)" % (t3.get("c"), t4.get("c"), t3["transmutes"], t4["transmutes"], t4.get("blocked")))
+    if not c_closed:
+        bad.append("C closed")
+    log += [t1["line"], t2["line"], t3["line"], t4["line"], t0["bindings"]]
+    open_note = "C with the cube open: not driven (the plugin did not see the cube panel open; ui messages: %s)" % (msgs[:3] or "none")
+    if t_open.get("cube") == "open":
+        g.press("i")  # open it again for the key
+        time.sleep(1.0)
+        g.click(0.711, 0.453, "right")
+        time.sleep(1.2)
+        t5 = travel_counts()
+        g.press("c")
+        time.sleep(1.0)
+        t6 = travel_counts()
+        c_open = t6.get("transmutes") == t5.get("transmutes", 0) + 1 and t6.get("c") == t5.get("c") + 1
+        log += [t_open["line"], t5["line"], t6["line"]]
+        open_note = "C with the cube open: presses %s->%s, transmutes %s->%s (cube %s; ui message %s)" % (
+            t5.get("c"), t6.get("c"), t5.get("transmutes"), t6.get("transmutes"), t5.get("cube"), msgs[:1])
+        if not c_open:
+            bad.append("C open")
+        g.press("esc")
+        time.sleep(0.5)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(res) + "; " + open_note + ("; failed: %s" % bad if bad else ""), [sh("hotkeys"), inv_shot, cube_shot], log)
+
+
+def check_stashpages():
+    name = "Stash pages: ten shared stash tabs exist (d2rloader.toml add_shared_tabs)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    res, log, wrong = [], [], []
+    for tab in list(range(0, 11)) + [12]:
+        ok, lines = H("stashprobe %d" % tab)
+        if not ok:
+            return add(name, "BLOCKED", "stashprobe refused: %s" % lines[:2], [], lines)
+        out = ""
+        for _ in range(20):
+            time.sleep(0.4)
+            ok2, l2 = H("stashprobe result")
+            out = next((l for l in l2 if l.startswith("stashprobe result")), "")
+            if " -1 " not in out:
+                break
+        log.append("tab %d: %s" % (tab, out))
+        made = " 1 page=" in out
+        should = tab < 10
+        res.append("%d%s" % (tab, "+" if made else "-"))
+        if made != should:
+            wrong.append("tab %d %s" % (tab, "accepted an item" if made else "refused (%s)" % out[:60]))
+    add(name, "PASS" if not wrong else "FAIL",
+        "an item created in shared stash tab n through ItemService (+ accepted, - refused): %s; expected tabs 0-9 accepted and 10, 12 refused%s"
+        % (" ".join(res), ("; wrong: " + "; ".join(wrong)) if wrong else ""), [], log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -5070,7 +5335,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("strings", check_strings),
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
           ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("heat", check_heat),
-          ("trophytimer", check_trophytimer)]
+          ("trophytimer", check_trophytimer),
+          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages)]
 
 
 def write_report(extra=""):

@@ -841,10 +841,31 @@ handler (`0x12c870`) plays Median's sounds at the player's unit (217 item_gem, 4
 2608 as stand-in, 230 item_lightarmor); the chat line is the fallback when the hook is off. Harness verbs `rewardmsg`,
 `rewardsnd`, `goblinsay` (the goblin line with the variant's own monstats name).
 
+## Travel: waypoint auto-activation, map reveal, hotkeys (`travel.cpp`, off words `wpauto`, `mapreveal`, `hotkeys`)
+
+Pure rules in `travel_logic.h` (unit tests `tests/travel_test.cpp`); evidence and addresses in `docs/d2r-addresses.md` section 18.
+No inline hook: the plugin calls D2R functions whose first bytes it checks with `memcmp` (a mismatch switches that part off and
+the `mxl` line says why).
+
+* **Waypoint auto-activation** (`wpauto`). `TravelGameFrame` runs from the goblins frame hook (`goblins.cpp`, after
+  `HarnessGameFrame`), every 5th server frame. For each player in the game it reads the level (`0x2efc10(0x34b440(player))`), the
+  waypoint number (`mxl_waypoints.h`), and tests the record bit (`0x3d6930`). Unknown, and a waypoint object (the 16 classes of
+  objects.txt OperateFn 23) of the same level within 36 sub-tiles (squared integer distance): `0x3d6890` sets the bit. Median does
+  the same after a walk order (`D2AutoPickup.cpp`, distance below `0x24`). The `goblins` word must be on because it owns the hook.
+* **Map reveal** (`mapreveal`). D2R's debug "Reveal Automap" `0xd42b0` on the UI thread, then the debug flag byte `0x2a2add4` is put back.
+  Starts from the player's room (the rooms joined to it); in game the automap layer list grew from 1 to 25 layers. Median's `0x887c0` walks every
+  level of the act once. Not ported: the once-per-game limit (the reveal can be repeated).
+* **Hotkeys** (`hotkeys`). Three InputService actions (category "Median XL", ids `mxl_pickup_toggle` X, `mxl_map_reveal` R,
+  `mxl_transmute` C, in the Controls menu, rebindable). X flips the switch that gates the auto-activation; R queues the reveal on
+  the UI thread; C queues the cube panel's Transmute `0x2cd720` on the UI thread when a UiMessageListener has seen the Horadric
+  Cube panel open. Counters and the last UI messages are in the `mxl` command (`travel` lines) and the harness verb `travel`.
+* **Stash pages** are not code: `tools/install_mod.py` writes `d2rcore.stash.add_shared_tabs = 7` into the mod's `d2rloader.toml`
+  (3 normal tabs + 7 = Median's 10 pages), only when the key is not set by hand.
+
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints lockout goblins npc reqgates hirelings skilltree runewords xp mapmem`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500

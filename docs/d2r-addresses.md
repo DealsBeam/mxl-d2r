@@ -806,6 +806,31 @@ Design: D2R has one timer per skill, Median one per group, so a hooked start for
 (`cooldowns_logic.h` StartList, proved equal to Median's bookkeeping by `cooldown_tests`). The group table comes from skills2 `CooldownGroup` through
 `txt_migrate cooldown_tables`. Skill ids >= 357 are renumbered +72 from Median. Non-player units go straight to D2R's start.
 
+## 18. Travel: waypoint auto-activation, map reveal, hotkeys, stash pages (lane gap-travel, 2026-10-22; plugin/src/travel.cpp)
+
+How Median does it (D2Sigma.dll 1.13c, 32-bit, RVAs of the dump in `ghidra\D2Sigma.dll`):
+
+| What | Median | Port |
+|---|---|---|
+| Waypoint activation | `D2AutoPickup.cpp` `0x4c7e0`, called after a walk order from `0xada40`: gold and waypoint objects are used when the distance to the unit is `< 0x24` (36 sub-tiles); the waypoint branch tests the player's record with `0xbffa0` and sets the bit when it is not known. A proximity rule after a walk, not "entering the area" | server scan, every 5th frame, `< 36` |
+| Hotkey table | `0x1d9110 + 15 * index`: X (`0x68cf0`, toggles the no-pickup flag `*[0x101f1058]`), C (`0x69820`, transmute while the cube panel is open), R (`0x887c0`, reveals the whole act once per game: it walks every level of the act and calls the level initialiser) | InputService actions `mxl_pickup_toggle`, `mxl_transmute`, `mxl_map_reveal` |
+| Stash pages | stash panel `0x113cf0` (`StashPanel:MainPanel`), page text `0x1130a0` prints `n / 10` in both modes (constant 10); buttons Prev / Next wrap modulo the page count, Sort and Mode | `add_shared_tabs = 7` in `d2rloader.toml` (3 normal tabs + 7 = 10) |
+
+D2R side (RVA = address - `0x140000000`, build 93847; all first bytes read from the dump, plugin checks them with `memcmp` before calling; nothing here is hooked):
+
+| What | RVA | Signature | Entry bytes | Use |
+|---|---|---|---|---|
+| waypoint set / test | `0x3d6890` / `0x3d6930` | (record, number u16) / -> nonzero | `48 89 5c 24 08 57 48 83 ec 20 0f b7 da 48 8b f9` (both) | the 112-bit record of section 11; the plugin sets the bit the way the object's operate function `0x58fe00` does |
+| player data / room / level | `0x34b240` / `0x34b440` / `0x2efc10` | (unit) / (unit) / (room) | not hooked | record = `data + 0x58 + difficulty * 8`; the level of a player or object = `0x2efc10(0x34b440(unit))` |
+| debug "Reveal Automap" | `0xd42b0` | () | `48 83 ec 58 48 8d 4c 24 20 48 c7 44 24 20 01 00` | breadth-first walk over the rooms joined to the player's room, visitor `0xd2240` adds each room's tiles and preset objects to the automap layer; then it flips the debug flag byte `0x2a2add4`, which the plugin writes back |
+| automap layers | list head `0x2a2cf60` (next at `+0xa8`), current `0x2a2cf68` (first int = layer number) | | | cell count of a layer = sum of the four element counts at `+0x28 / 0x50 / 0x78 / 0xa0` |
+| cube panel Transmute | `0x2cd720` | () | `4c 8b dc 55 53 48 8d 6c 24 88 48 81 ec 78 01 00` | the panel's own button handler: gathers the cube items and sends packet 0x20 (server `0x4c1590` -> `0x4f2490`) |
+| local player | `0x8b2d0` / `0x9a480` | () -> id / (id) -> client unit or null | `8b 05 2e 84 99 02 c3` / `48 89 5c 24 08 57 48 83 ec 20 83 f9 08` | the reveal and transmute run on the UI thread only when this finds a player |
+
+Waypoint object classes (`objects.txt` OperateFn 23, the same 16 rows in Median and vanilla): 119 145 156 157 237 238 288 323 324 398 402 429 494 496 511 539; waypoint numbers from `mxl_waypoints.h` (levels.txt Waypoint column).
+
+Checked in game (slot 1, 2026-10-22, `py -3 tools/game_checks.py --slot 1 all mapreveal wpauto hotkeys stashpages`): the waypoint of Cold Plains (number 1) is set within 1.5 s when its bit is cleared at distance 3, stays clear at distance 47, and a `move` to it sets it at distance 25; the reveal call returns, the automap layer list grows from 1 to 25 layers (the act's levels), a second reveal adds nothing and the debug flag is as it was (the cell count stays 8878: `cheat goto` and the town arrive with the automap already drawn whole, so no picture shows the difference; an earlier run that sampled a Cold Plains still streaming in saw 965 -> 8663 cells, which is the streaming, not proof); X / R / C pressed as window messages reach the actions (X toggles, R reveals, C with the cube closed is counted and ignored); an item created through ItemService lands in shared stash tabs 0-9 and tab 10 is refused.
+
 ## Appendix A. Quest descriptor table (D2R, verified)
 
 `0x239c5c0`, 36 entries of 0x20 bytes: `+0` init function VA, `+8` u32 act (0-4), `+0xc` u32 (`0x64` or 0), `+0x10`
