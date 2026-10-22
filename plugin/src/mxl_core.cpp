@@ -25,6 +25,7 @@
 #include "craft_flags.h"
 #include "client_messages.h"
 #include "game_end.h"
+#include "map_memory.h"
 #include "cube_conditions.h"
 #include "quests_act1.h"
 #include "quests_act2_5.h"
@@ -67,6 +68,7 @@ char g_missileHitsReport[1024] = "";
 char g_cubeReport[192] = "off: not the expected game image";
 char g_craftReport[96] = "off: not the expected game image";
 char g_gameEndReport[96] = "off: not the expected game image";
+char g_mapMemoryReport[128] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
 char g_quests2Report[224] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
@@ -109,7 +111,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat statcols itemevents props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat statcols itemevents props runewords xp partyxp classlock ethereal sockets dyes mapmem; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -189,6 +191,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "craft flags %s", g_craftReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "game end %s (games ended %d)", g_gameEndReport, GameEndCount());
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "map memory %s", g_mapMemoryReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "act 1 quests %s", g_questsReport);
 	Say(command, line);
@@ -371,6 +375,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallGameEnd(context, g_gameEndReport, sizeof(g_gameEndReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: game end %s", g_gameEndReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("mapmem")) {
+				std::snprintf(g_mapMemoryReport, sizeof(g_mapMemoryReport), "%s", OffNote);
+			} else {
+				InstallMapMemory(context, g_mapMemoryReport, sizeof(g_mapMemoryReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: map memory %s", g_mapMemoryReport);
 			context->LogInfo(line);
 		}
 		{

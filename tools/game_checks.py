@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy. What a click in the world cannot do in background mode (kill a
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle mapmem trophy. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -1153,6 +1153,84 @@ def check_areacycle():
         reached, len(areas), n_cache, n_biome, "; ".join(notes)))
 
 
+def mapmem_probe():
+    """`h mapmem` (client verb) -> dict of the numbers, or None."""
+    ok, lines = H("mapmem")
+    ln = next((x for x in lines if x.startswith("mapmem ")), "")
+    d = kv(ln)
+    if not ok or "layer" not in d:
+        return None
+    cells = [int(x) for x in d.get("cells", "0").split(",")]
+    return {"layer": int(d["layer"]), "bucket": int(d["bucket"]), "cells": sum(cells), "file": d.get("file") == "read",
+            "nodes": int(d.get("nodes", 0)), "foreign": int(d.get("foreign", 0)), "clean": d.get("clean") == "1",
+            "loads": int(d.get("loads", 0)), "saves": int(d.get("saves", 0)), "views": int(d.get("views", 0)),
+            "resets": int(d.get("resets", 0))}
+
+
+def check_mapmem():
+    """Per-level map memory of Levels.txt layers above 99 (docs/subsystems/areas-drlg.md section 6, bug #24). D2R's map file
+    has 100 chains indexed by the layer; the plugin indexes it by layer % 100 and shows the loader only the nodes of the
+    layer it loads. MXL_MAPMEM (comma list; default 134,147,184,12,139: layers 101, 110, 140, 5 and 105, the last two share
+    chain 5) is visited in order (walking a little in each level to explore it), then again in reverse order. Every visit
+    must reach the level in a living game; every return must find a clean chain holding saved nodes of the level's own layer,
+    room sets not smaller than when the level was left, and (layer 100 or more) a view counter that says the loader was served
+    a filtered file."""
+    name = "Map memory of levels with Layer above 99 (bug #24: 100-chain table, per-level rooms kept)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    areas = [int(x) for x in os.environ.get("MXL_MAPMEM", "134,147,184,12,139").split(",")]
+    off = g._size(g.LOADER_LOG)
+    notes, shots, bad = [], [], []
+    left = {}
+    shared_seen = False
+    plan = [(a, "first") for a in areas] + [(a, "back") for a in reversed(areas)]
+    for a, phase in plan:
+        guard()
+        st = goto(a)
+        at = st["player"].get("area")
+        if not g.game_pids():
+            bad.append("%d %s: the game is gone" % (a, phase))
+            break
+        if at != a:
+            bad.append("%d %s: stayed in %s" % (a, phase, at))
+            continue
+        time.sleep(2)
+        arrive = mapmem_probe()
+        if arrive is None:
+            bad.append("%d %s: no mapmem line" % (a, phase))
+            continue
+        p = st["player"]
+        for dx, dy in ((14, 0), (0, 14), (-14, 0), (0, -14)):  # a short walk reveals the rooms around the arrival
+            H("move %d %d" % (int(p.get("x", 0)) + dx, int(p.get("y", 0)) + dy))
+            time.sleep(1.5)
+        now = mapmem_probe() or arrive
+        notes.append("%s %d: layer %d cells %d -> %d nodes %d foreign %d clean %d views %d saves %d" % (
+            phase, a, now["layer"], arrive["cells"], now["cells"], now["nodes"], now["foreign"], now["clean"], now["views"], now["saves"]))
+        if phase == "first":
+            left[a] = max(arrive["cells"], now["cells"])
+            if a == areas[0]:
+                shots.append(sh("mapmem_%d" % a))
+        else:
+            if not arrive["clean"] or not now["clean"]:
+                bad.append("%d back: the chain of bucket %d is not clean" % (a, now["bucket"]))
+            if now["layer"] >= 100 and now["views"] == 0:
+                bad.append("%d back: layer %d never got a view" % (a, now["layer"]))
+            if not arrive["file"] or arrive["nodes"] < 1:
+                bad.append("%d back: no saved node of layer %d in the map file (file read %s, nodes %d)" % (a, now["layer"], arrive["file"], arrive["nodes"]))
+            if arrive["cells"] < left[a]:
+                bad.append("%d back: %d rooms on arrival, %d when it was left" % (a, arrive["cells"], left[a]))
+        if now["foreign"] > 0:
+            shared_seen = True
+    txt = g._read_from(g.LOADER_LOG, off)
+    reads = txt.count("Reading From")  # a few lines per level change; thousands of them is the loop of bug #24
+    alive = bool(g.game_pids())
+    if reads > 2000:
+        bad.append("%d 'Reading From' lines in the loader log (a self-loop in the chain?)" % reads)
+    nodes_back = [n for n in notes if n.startswith("back")]
+    add(name, "PASS" if alive and not bad and len(nodes_back) == len(areas) else "FAIL",
+        "%s%s; %s" % ("; ".join(bad) + "; " if bad else "", "chain of two layers shared %s" % ("seen" if shared_seen else "not seen"), " | ".join(notes)), shots)
+
+
 def cast_and_watch(skill, level, target, tries=6, shot=None, approach=False):
     """setskill, then cast up to `tries` times and watch the missiles the server frames saw. A melee cast walks the player
     up to the monster first, and the Fallen of the Blood Moor wander and flee, so a cast at a monster 5-8 sub-tiles away only
@@ -2094,7 +2172,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai),
+          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
