@@ -21,6 +21,7 @@
 #include "item_events.h"
 #include "npc_actions.h"
 #include "item_gen.h"
+#include "mana_costs.h"
 #include "map_memory.h"
 #include "level_types.h"
 #include "monster_looks.h"
@@ -1766,8 +1767,9 @@ auto CmdCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	const int manaBefore = Stat(c->player, StatMana) >> 8;
 	int32_t px = 0, py = 0;
 	PlayerPos(c, &px, &py);
-	Out("cast checks: usable=%d (0 ok) busy=%d skill mode=%d unit mode=%d", Fn<SkillUsableFn>(RvaSkillUsable)(c->player, sk),
-	    Fn<PlayerBusyFn>(RvaPlayerBusy)(c->player), d2r::At<int32_t>(sk, 0x10), ModeOf(c->player));
+	Out("cast checks: usable=%d (0 ok) busy=%d (unit +0xa8 %d, +0xac %d, +0xb0 %d) skill mode=%d unit mode=%d", Fn<SkillUsableFn>(RvaSkillUsable)(c->player, sk),
+	    Fn<PlayerBusyFn>(RvaPlayerBusy)(c->player), d2r::At<int32_t>(c->player, 0xa8), d2r::At<int32_t>(c->player, 0xac),
+	    d2r::At<uint8_t>(c->player, 0xb0), d2r::At<int32_t>(sk, 0x10), ModeOf(c->player));
 	if (tg.kind == hcmd::CastTarget::Unit || tg.kind == hcmd::CastTarget::Nearest) {
 		Unit* target = tg.kind == hcmd::CastTarget::Unit ? FindMonsterById(c, static_cast<uint32_t>(tg.id)) : NearestMonster(c, tg.cls, false);
 		if (target == nullptr) {
@@ -1880,7 +1882,7 @@ auto CmdDump(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (hcmd::LowerEq(t.tok[1], "ground")) {
 		int n = 0;
 		EachUnit(c->game, HashItems, [&](Unit* it) {
-			if (TypeOf(it) != 4 || n >= 40) {
+			if (TypeOf(it) != 4 || n >= 60 || (ModeOf(it) != 3 && ModeOf(it) != 5)) {  // the character's own items are not "ground"
 				return;
 			}
 			int32_t x = 0, y = 0;
@@ -1889,8 +1891,9 @@ auto CmdDump(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 			ItemCode(c, it, code);
 			const auto* data = Fn<ItemDataFn>(0x34a500)(it);
 			++n;
-			Out("ground id=%u code=%s class=%d mode=%d at %d,%d ilvl=%d quality=%d", IdOf(it), code, ClassOf(it), ModeOf(it), x, y,
-			    static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(it)), data != nullptr ? d2r::At<int32_t>(data, 0) : -1);
+			const uint32_t flags = data != nullptr ? d2r::At<uint32_t>(data, 0x18) : 0;
+			Out("ground id=%u code=%s class=%d mode=%d at %d,%d ilvl=%d quality=%d identified=%d", IdOf(it), code, ClassOf(it), ModeOf(it), x, y,
+			    static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(it)), data != nullptr ? d2r::At<int32_t>(data, 0) : -1, (flags & 0x10) != 0 ? 1 : 0);
 		});
 		Out("ground items %d (mode 3 or 5 = on the ground)", n);
 		return true;
@@ -2202,6 +2205,130 @@ auto CmdAvoid(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+constexpr uint64_t RvaMeleeWear = 0x4526c0;  // (game, attacker, defender): wear of the attacker's weapon and one of the defender's armour pieces
+using MeleeWearFn = void (*)(Game*, Unit*, Unit*);
+
+// `wear <attacker ref> <defender ref> [n]`: n times (default 100) the wear step of a melee hit, `0x4526c0`, the function
+// that calls the wear dispatcher `0x441b10` (weapon of the attacker, an armour piece of a player defender, 4 to 10 percent
+// each). Prints the durability sum of both units' worn items before and after (item stat 0x48), so the item rules check
+// (mxl-core "durability") can tell a worn-down item from one that stayed whole.
+auto CmdWear(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 100;
+	if (t.n < 3 || (t.n > 3 && !hcmd::ParseInt(t.tok[3], &n)) || n < 1 || n > 20000) {
+		return Fail(c, "usage: wear <player|merc|mon:id> <player|merc|mon:id> [n]");
+	}
+	Unit* attacker = ResolveRef(c, t.tok[1]);
+	Unit* defender = ResolveRef(c, t.tok[2]);
+	if (attacker == nullptr || defender == nullptr) {
+		return Fail(c, "wear: unit not found");
+	}
+	auto durability = [&]() {
+		long long sum = 0;
+		EachItemOf(c->player, [&](Unit* item) {
+			if (Fn<ItemByteFn>(RvaItemPage)(item) == 0xff) {  // worn
+				sum += Stat(item, StatDurability);
+			}
+		});
+		return sum;
+	};
+	const long long before = durability();
+	for (long long i = 0; i < n; ++i) {
+		Fn<MeleeWearFn>(RvaMeleeWear)(c->game, attacker, defender);
+	}
+	Out("wear %s -> %s n=%lld durability worn before=%lld after=%lld", t.tok[1], t.tok[2], n, before, durability());
+	return true;
+}
+
+// `manamin [reset]`: the lowest mana the player had on any server frame since `manamin reset` (a skill's mana is charged
+// when its action starts, a frame or more after `cast` returns, and regeneration refills it within a few frames, so a
+// single read after the cast sees nothing; every frame is sampled here).
+Unit* volatile g_manaWatch = nullptr;
+volatile LONG g_manaMin = 0;
+volatile LONG g_manaMax = 0;
+
+void TrackMana() noexcept {
+	Unit* p = g_manaWatch;
+	if (p != nullptr) {
+		const LONG now = Stat(p, StatMana);
+		if (now < g_manaMin) {
+			InterlockedExchange(&g_manaMin, now);
+		}
+		if (now > g_manaMax) {
+			InterlockedExchange(&g_manaMax, now);
+		}
+	}
+}
+
+auto CmdManaMin(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 2) {
+		if (!hcmd::LowerEq(t.tok[1], "reset")) {
+			return Fail(c, "usage: manamin [reset]");
+		}
+		const LONG now = Stat(c->player, StatMana);
+		InterlockedExchange(&g_manaMin, now);
+		InterlockedExchange(&g_manaMax, now);
+		g_manaWatch = c->player;
+	}
+	Out("manamin min=%d max=%d now=%d tracking=%s", g_manaMin >> 8, g_manaMax >> 8, Stat(c->player, StatMana) >> 8,
+	    g_manaWatch != nullptr ? "on" : "off (manamin reset starts it)");
+	return true;
+}
+
+// `manacharge`: what the mana cost hook (mana_costs.cpp) decided at the last charge site: its calls, the caster's room and the
+// town test, the cost and the charge in mana points, and the site (1 server, 2 client).
+auto CmdManaCharge(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const ManaChargeLog l = LastManaCharge();
+	Out("manacharge calls=%u room=%p town=%d cost=%d charged=%d site=%d other=%u from=0x%llx skill=%d", l.calls, l.room, l.roomIsTown, l.cost,
+	    l.charged, l.site, l.otherCalls, static_cast<unsigned long long>(l.otherFrom), l.otherSkill);
+	(void)c;
+	return true;
+}
+
+// `cursor`: the item on the player's cursor (inventory +0x40, the one 0x4249f0 reports as "busy": no skill can be used while
+// it is held): id and code, or "empty". Drop it with the client packet 0x17 + id (u32).
+auto CmdCursor(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	uint8_t* inv = static_cast<uint8_t*>(Fn<InventoryFn>(RvaInventory)(c->player, "harness", 0));
+	Unit* item = inv != nullptr && d2r::At<uint32_t>(inv, 0) == 0x1020304 ? d2r::At<Unit*>(inv, 0x40) : nullptr;
+	if (item == nullptr) {
+		Out("cursor empty");
+		return true;
+	}
+	char code[5] = {};
+	ItemCode(c, item, code);
+	Out("cursor id=%u code=%s", IdOf(item), code);
+	return true;
+}
+
+// `iflags <item id> [unid]`: flags (0x10 identified), mode, quantity (stat 0x46), durability (0x48) and maximum (0x49) of any
+// item unit in the game, on the ground too (`stat` only sees the player's items), and its position (the pick-up packet 0x16
+// carries it: id, x, y, to-inventory flag, 17 bytes); `unid` first clears the identified flag
+// (the generator may make the item identified already).
+auto CmdItemFlags(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id)) {
+		return Fail(c, "usage: iflags <item unit id>");
+	}
+	Unit* found = nullptr;
+	EachUnit(c->game, HashItems, [&](Unit* it) {
+		if (found == nullptr && TypeOf(it) == 4 && IdOf(it) == static_cast<uint32_t>(id)) {
+			found = it;
+		}
+	});
+	if (found == nullptr) {
+		return Fail(c, "iflags: no such item unit");
+	}
+	if (t.n > 2 && hcmd::LowerEq(t.tok[2], "unid")) {
+		Fn<DropFlagsFn>(RvaDropFlags)(found, 0x10, 0);
+	}
+	const auto* data = Fn<ItemDataFn>(RvaItemData)(found);
+	const uint32_t flags = data != nullptr ? d2r::At<uint32_t>(data, ItemFlagsOffset) : 0;
+	int32_t x = 0, y = 0;
+	d2r::UnitXY(found, &x, &y);
+	Out("iflags id=%u flags=0x%x identified=%d mode=%d quantity=%d durability=%d maxdurability=%d x=%d y=%d", IdOf(found), flags,
+	    (flags & 0x10) != 0 ? 1 : 0, ModeOf(found), Stat(found, 0x46), Stat(found, StatDurability), Stat(found, StatMaxDurabilityItem), x, y);
+	return true;
+}
+
 // `itemroll <code> <n> [q=quality] [ilvl=level]`: makes n items the way `item` does (the generator, quality default 2, item
 // level default 110 so the ethereal gate and the automagic roll are open), reads sockets, the ethereal flag, the quality the
 // generator gave, the automagic affix id, defence and maximum durability and frees them again. Prints the socket histogram,
@@ -2226,7 +2353,7 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		return Fail(c, "itemroll: unknown code");
 	}
 	hcmd::RollTally tally;
-	int failed = 0, nNormal = 0, nEth = 0, firstLevel = -1;
+	int failed = 0, nNormal = 0, nEth = 0, firstLevel = -1, nIdentified = 0;
 	long long sumNormal = 0, sumEth = 0;
 	int32_t durNormalMin = 1 << 30, durNormalMax = -1, durEthMin = 1 << 30, durEthMax = -1;
 	for (long long i = 0; i < n; ++i) {
@@ -2240,6 +2367,7 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		}
 		const bool eth = (FlagsOf(item) & ItemFlagEthereal) != 0;
 		const int32_t def = Stat(item, StatDefence), dur = Stat(item, StatMaxDurabilityItem);
+		nIdentified += (FlagsOf(item) & 0x10) != 0 ? 1 : 0;
 		tally.Add(Stat(item, StatSockets), eth);
 		tally.AddQuality(Fn<ItemQualityFn>(RvaItemQuality)(item), Fn<ItemAutomagicFn>(RvaItemAutomagic)(item) != 0);
 		if (eth) {
@@ -2258,8 +2386,8 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	char sockets[96], qualities[96];
 	tally.Sockets(sockets, sizeof(sockets));
 	tally.Qualities(qualities, sizeof(qualities));
-	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d sockets=[%s] qualities=[%s] automagic=%d", t.tok[1], tally.n, failed, firstLevel,
-	    tally.ethereal, sockets, qualities, tally.automagic);
+	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d identified=%d sockets=[%s] qualities=[%s] automagic=%d", t.tok[1], tally.n, failed, firstLevel,
+	    tally.ethereal, nIdentified, sockets, qualities, tally.automagic);
 	Out("itemroll def normal n=%d sum=%lld, ethereal n=%d sum=%lld; maxdur normal %d..%d, ethereal %d..%d", nNormal, sumNormal, nEth, sumEth,
 	    durNormalMax < 0 ? 0 : durNormalMin, durNormalMax, durEthMax < 0 ? 0 : durEthMin, durEthMax);
 	char gate[512];
@@ -2621,7 +2749,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | levelact <id>..");
-	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | "
+	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
 	Out("backlog verbs: stat <ref> <stat> scan [max layer] | cubeslots <first> <count> | cubeout <recipe> [slot] (portal outputs) | state (portal dest=)");
 	return true;
@@ -3233,7 +3361,7 @@ const Verb Verbs[] = {
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
-    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
+    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
@@ -3293,6 +3421,13 @@ void HarnessCmdsInit(uint64_t exeBase) noexcept {
 void HarnessGameFrame(void* gamePtr) noexcept {
 	InterlockedIncrement(&g_frames);
 	g_lastGame = gamePtr != nullptr;
+	if (g_ready != 0 && g_manaWatch != nullptr && gamePtr != nullptr) {
+		__try {
+			TrackMana();
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			g_manaWatch = nullptr;
+		}
+	}
 	if (g_ready != 0 && g_trackMissiles != 0 && gamePtr != nullptr) {
 		__try {
 			TrackMissiles(static_cast<Game*>(gamePtr));
