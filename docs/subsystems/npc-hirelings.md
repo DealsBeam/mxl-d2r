@@ -164,7 +164,7 @@ entries of the submenu that the top-level slot before them opens.
 | Warriv act 2 (175) | 3383 "go west" | none | 4 (8) | travel to level 1 | **D2R native** (1.6) |
 | Meshif act 2 (210) | 3384 "sail east" | 12 (quest 14 bit 0) | 24 (1) = rows 6 (level 75) + 2 + 10 (waypoint 75) | Kurast Docks + waypoint | **D2R native** (1.6) |
 | Meshif act 3 (264) | 3385 "sail west" | none | 5 (8) | travel to level 40 | **D2R native** (1.6) |
-| Tyrael act 4 (367) | 22738 "travel to harrogath" | 13 (quest 28 bit 0) | 25 (1) = rows 8 (level 109) + 3 + 12 (waypoint 109) | Harrogath + waypoint | **D2R native** (1.6) |
+| Tyrael act 4 (367) | 22738 "travel to harrogath" | 13 (quest 28 bit 0) | 25 (1) = rows 8 (level 109) + 3 + 12 (waypoint 109) | Harrogath + waypoint | **D2R native** (1.6), gate byte moved to quest 28 by the plugin (`FixTravelGates`) |
 
 Everything else in npcactions is client-side confirmation: rows 13 (type 18, string 321) and 14 (type 20, string 3650) sit
 in front of every Cain item row and only show a client message; types 4-7, 9, 10, 21 are used by no slot. Charsi's
@@ -196,6 +196,10 @@ lines are not repeatable (the reward is spent, see 1.6) and the conditions are D
   string id into the next free id slot, a handler pointer into the next free handler slot (at most five lines), before
   "Identify" (0xfb4) when the record has it, count = lines + 1 on every call. The Identify branch of the builder writes the
   count (2 or 3) back into the record, which would drop lines behind it, hence the re-set on every call and the position.
+  D2R also re-initialises the Cain records on its own (function `0x115d00`, found with a hardware write watch on the record,
+  2026-10-22): Identify over line 1, handler `0x114000`, count 3 - after a menu closes, e.g. Akara's respec confirmation. That
+  overwrote the plugin line and left the old Identify one line behind; each reset added a copy until the record was full
+  (`respec` then `cain cainsub`: Talk + four Identify lines). `AddMenuLines` drops repeated Identify lines first.
   Handlers are 16 thunks (`LineHandler<I>`), each sends `0x38 (kind, current NPC id)` through `0xec730`, then calls the
   Cancel handler `0x112c30` to close the menu. Only the lines the server can run are drawn.
 - Server (hook `0x4b0470`, the packet 0x38 handler): size 9 and kind >= 0x10 are Median's; the NPC unit must be within 50
@@ -247,10 +251,11 @@ waypoint of the arrival town (type 15, `0x94ab0`: level to waypoint number, then
 **Result.** For the quest-gated lines D2R's condition is Median's requirement row, and the waypoint grant is the same as Median's
 (Lut Gholein 40 for Warriv, Kurast Docks 75 for Meshif, Harrogath 109 for Tyrael; the "west" trips are ungated and grant none,
 as in Median). `npc_services.cpp` reads the NPC table (`0x237ea60`: `+0xb`, `+0xc`, `+0x10`) and the fix table and reports
-`N of 8 D2R-native services match Median's rows` in the `npc actions` line; it writes nothing. On build 93847 seven of eight
-match. The exception is Tyrael: D2R gates on quest 26 (gate byte 27, "Terror's End" done) and Median's row 13 reads quest 28
-(set by the first walk through Tyrael's portal), so D2R lets the first trip happen earlier. It is left as it is (D2R's is the
-looser and the first trip is the portal anyway); `Judge` reports it as `quest gate differs`.
+`N of 8 D2R-native services match Median's rows` in the `npc actions` line; its only write is Tyrael's gate byte below. On build 93847 seven of eight
+match before that write. The exception was Tyrael: D2R gates on quest 26 (gate byte 27, "Terror's End" done) and Median's row 13 reads quest 28 (set by the first walk through Tyrael's portal, `0x5e57e0`). The
+fix is one byte: the packet handler `0x4a9880` and the client read the gate from the same NPC table entry, so `FixTravelGates` (`npc_services.cpp`, pure rule `npcsvc::TravelGateFix`) writes 29 (quest 28 + 1) into
+`+0x10` of Tyrael's entry (class 367) at load, expected-byte checked (`PatchWriteU8`). It touches only a travel line that D2R already gates (so the waypoint grant stays) with the same destination, and only moves it to the
+quest bit 0 of Median's row; Warriv act 1 and Meshif act 2 already agree and are not written. `mxl` ends the npc actions line with `travel gates moved 1` and `Judge` now reports 8 of 8. Side effect: the same byte gates Tyrael's mercenary-resurrect line in D2R's client menu (seen in game: with quest 28 clear his menu has Talk only, with it set Talk, travel and resurrect), so that line now opens with quest 28 too; Median's rule for Tyrael's resurrect entry was not found to name a quest.
 
 Not done, and why: no hook, no menu line, no copy of the panel. A Median line would only duplicate the D2R line under the same
 bit. Costs and item filters are D2R's vanilla ones; if Median's item types need a different filter (e.g. more bases accept
@@ -462,7 +467,7 @@ or harmful, take it out of `hireling_tables` (the only line that writes it).
    Cain has the same monster ids (monstats rows 244-246, 265, 520 in the converted data).
 9. 0x10067e20 (stat layer scaling by count): which minions it applies to.
 10. A real Cain submenu (one entry per missing material, as Median draws it) needs a second menu page; D2R has no such widget in the NPC menu. Worth it only if the one-line "give what I am owed" feels wrong.
-11. Imbue / sockets / personalize: answered in 1.6. D2R shows its own lines under the same quest bits and spends the reward itself; nothing to replace. Open: whether Median's item types pass the D2R item filters (`0x36aed0`, `0x36b410`, `0x36b1d0`) as Median intends (an in-game test with new base items), and the Tyrael gate (D2R quest 26, Median quest 28).
+11. Imbue / sockets / personalize: answered in 1.6. D2R shows its own lines under the same quest bits and spends the reward itself; nothing to replace. Open: whether Median's item types pass the D2R item filters (`0x36aed0`, `0x36b410`, `0x36b1d0`) as Median intends (an in-game test with new base items), (the Tyrael gate is moved to Median's quest 28 by `FixTravelGates`, 1.6).
 
 ## Hireling data check (2026-10-21)
 

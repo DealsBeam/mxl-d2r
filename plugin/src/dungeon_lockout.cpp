@@ -28,6 +28,7 @@
 #include "dungeon_logic.h"
 #include "game_end.h"
 #include "quests_common.h"
+#include "strings.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -109,6 +110,13 @@ auto LevelOf(Unit* unit) noexcept -> int32_t {
 	return room != nullptr ? g_roomLevel(room) : 0;
 }
 
+// "Closing in: mm:ss" (Median string 11191) in the active language.
+void ClosingLineText(uint32_t seconds, char* out, size_t outSize) noexcept {
+	char tmpl[64];
+	StringText(mxlstr::KeyClosingIn, clientmsg::ClosingText, tmpl, sizeof(tmpl));
+	clientmsg::ClosingLine(seconds, out, outSize, tmpl);
+}
+
 void Log(const char* what, int32_t a, int32_t b) noexcept {
 	if (g_context != nullptr) {
 		char line[160];
@@ -125,13 +133,18 @@ void TellRefusal(Unit* player, const dungeon::Entry& e, const dungeon::Who& who,
 		return;
 	}
 	if (v == dungeon::Verdict::Sealed) {
-		SendClientMessage(player, clientmsg::SealedLine1, clientmsg::Red);
-		SendClientMessage(player, clientmsg::SealedLine2, clientmsg::Red);
+		char sealed[256];
+		StringText(mxlstr::KeySealed, clientmsg::SealedText, sealed, sizeof(sealed));
+		mxlstr::ForEachLine(sealed, clientmsg::ChatTextMax, [player](const char* line, int) {
+			SendClientMessage(player, line, clientmsg::Red);
+		});
 		return;
 	}
 	char lines[3][64];
+	char levelTmpl[64];
+	StringText(mxlstr::KeyRequiredLevel, clientmsg::RequiredLevelText, levelTmpl, sizeof(levelTmpl));
 	const int n = clientmsg::RequirementLines(e.levelReq[who.difficulty < 3 ? who.difficulty : 2], e.minDifficulty,
-	                                          e.classLock, who.level, who.difficulty, who.cls, lines);
+	                                          e.classLock, who.level, who.difficulty, who.cls, lines, levelTmpl);
 	for (int i = 0; i < n; ++i) {
 		SendClientMessage(player, lines[i], clientmsg::Red);
 	}
@@ -220,9 +233,10 @@ void Entered(Game* game, Unit* player, int32_t src) noexcept {
 		// instead ("Closing in: mm:ss", string 11191) and the warning of string 11193.
 		const dungeon::Entry* entry = dungeon::Find(now);
 		char line[64];
-		clientmsg::ClosingLine(entry->lockSeconds, line, sizeof(line));
+		ClosingLineText(entry->lockSeconds, line, sizeof(line));
+		char warning[96];
 		SendGameMessage(game, line, clientmsg::Orange);
-		SendGameMessage(game, clientmsg::ExitWarning, clientmsg::Orange);
+		SendGameMessage(game, StringText(mxlstr::KeyExitWarning, clientmsg::ExitWarning, warning, sizeof(warning)), clientmsg::Orange);
 	}
 }
 
@@ -296,12 +310,14 @@ void __cdecl DrawTimer(const D2RL::PluginContext* context, const D2RL::Overlay::
 		return;  // another level (or no game): the clock belongs to the level it was started for
 	}
 	char line[64];
-	clientmsg::ClosingLine(clientmsg::SecondsLeft(end - now), line, sizeof(line));
+	ClosingLineText(clientmsg::SecondsLeft(end - now), line, sizeof(line));
 	const float size = frame->defaultTextSize * 1.4F;
 	const float x = frame->screenWidth / 2.0F;
 	const float y = frame->screenHeight * 0.09F;
 	DrawCentred(context, frame, line, x, y, size);
-	DrawCentred(context, frame, clientmsg::ExitWarning, x, y + size * 1.3F, frame->defaultTextSize);
+	char warning[96];
+	DrawCentred(context, frame, StringText(mxlstr::KeyExitWarning, clientmsg::ExitWarning, warning, sizeof(warning)), x,
+	            y + size * 1.3F, frame->defaultTextSize);
 }
 
 auto InstallTimerOverlay(const D2RL::PluginContext* context) noexcept -> bool {

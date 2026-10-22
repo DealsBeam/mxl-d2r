@@ -115,10 +115,10 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 
 | # | Item | Impact | Ids | Overlap |
 |---:|---|---|---|---|
-| 1 | [Magic, rare, unique and set items drop identified](#m1) | high | game1-003, game1-008, game1-013, game1-014 | overlap audit-rules (drops) |
+| 1 | [Magic, rare, unique and set items drop identified](#m1) | high | game1-003, game1-008, game1-013, game1-014 | same gap as the unported.md row Auto-identify (audit IT3) of audit-rules; this audit pins the mechanism: the flag is pushed at generation |
 | 2 | [Sockets and automagic for every quality](#m2) | high | game1-009, game1-010 | overlap audit-rules (drops) |
-| 3 | [Player corpse on death](#m3) | high | game3-041 | **lane no-corpse** owns it (branches `lane/no-corpse`, `t3/disable-player-corpses`); listed here for completeness. Also uncertain: the death penalty (game4-001) and the client respawn request (client3-035). |
-| 4 | [Cooldown reduction (stat 309) and shared cooldown groups](#m4) | high | client5-011, common2-015, common2-016, game4-039, game4-042 | overlap audit-rules |
+| 3 | [Player corpse on death](#m3) | high | game3-041 | row Player corpse (audit DC1) in unported.md; **lane no-corpse** owns it (branches `lane/no-corpse`, `t3/disable-player-corpses`); listed here for completeness. Also uncertain: the death penalty (game4-001) and the client respawn request (client3-035). |
+| 4 | [Cooldown reduction (stat 309) and shared cooldown groups](#m4) | high | client5-011, common2-015, common2-016, game4-039, game4-042 | overlap audit-rules: row "Skill cooldown groups (audit SK6)" (verify) covers the groups only; stat 309 is not in it |
 | 5 | [Damage-reduction stats 184 / 189 / 417 on incoming damage](#m5) | high | game6-009 | overlap audit-rules (stats) |
 | 6 | [Skill damage: level / energy bonus, static damage, mastery](#m6) | high | common2-003, common2-004, common2-013, common2-014 | overlap audit-rules (skills) |
 | 7 | [Skill usability: restrict modes 3-7](#m7) | high | common2-016 | overlap audit-rules (skills) |
@@ -126,12 +126,12 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 | 9 | [Act 5 quest experience](#m9) | high | game3-004, game3-005, game3-009 | overlap audit-rules (XP, rewards) |
 | 10 | [Quest rewards that differ from Median](#m10) | medium | game3-006, game3-010, game3-011, game3-012, game3-014, game2-008 | overlap audit-rules (quest rewards) |
 | 11 | [Potion of Life and Lam Esen's Tome amounts](#m11) | medium | game6-003, game6-026 | overlap audit-rules |
-| 12 | [Durability is not lost when the character is hit](#m12) | medium | game6-016 | overlap audit-rules |
+| 12 | [Durability is not lost when the character is hit](#m12) | medium | game6-016 | overlap audit-rules: row "Item durability (audit IT1)" (durability removed in Median); this audit shows the mechanism, the hit-damage call is nopped |
 | 13 | [Activation frequency (stat 427) on periodic skills](#m13) | medium | game2-021 | overlap audit-rules |
 | 14 | [Missile CollideType 9 and 10](#m14) | medium | game2-017, client5-032, client5-035 | overlap audit-rules (missiles) |
 | 15 | [Mana recovery, mana drain and infinite stamina](#m15) | medium | game3-043 | overlap audit-rules (stats) |
 | 16 | [Gamble window offers](#m16) | medium | game5-022 | - |
-| 17 | [Monster level and players-count scaling](#m17) | medium | game5-007, game5-004, game5-006 | - |
+| 17 | [Monster level and players-count scaling](#m17) | medium | game5-007, game5-004, game5-006 | overlap audit-rules: row "Players X (audit DF7, MP3)" for the count table |
 | 18 | [Normal-difficulty drops use the level-upgraded treasure class](#m18) | medium | game1-012 | overlap audit-rules (drops) |
 | 19 | [Summon and hireling leash](#m19) | low | game5-001, game5-002, game5-003, game1-018, game1-019, game1-020 | - |
 | 20 | [D2Sigma's own skill start functions](#m20) | medium | game4-038 | overlap audit-rules (skills) |
@@ -144,7 +144,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Median** (game1-003, game1-008, game1-013, game1-014): D2Game `0x104c1` (magic), `0x15443` (rare), `0x13daa` (set) and the unique picker push `1` instead of `0` into `SetItemFlag(item, 0x10 identified)`. Every non-normal drop is born identified: no Identify scroll, no Cain trip, names and mods readable on the ground.
 * **Port now:** `item_gen.cpp` has the flag setter (`0x36d8f0`, item / mask / on) but nothing sets the identified bit; items drop unidentified as in D2R.
 * **To do:** In the item-create hook that already sets ethereal / sockets, call the setter for qualities 4-8 (read D2R's identified bit from the dump; 1.13c uses `0x10`).
-* **Overlap:** overlap audit-rules (drops)
+* **Overlap:** same gap as the unported.md row Auto-identify (audit IT3) of audit-rules; this audit pins the mechanism: the flag is pushed at generation
 * **Impact:** high
 
 <a id="m2"></a>
@@ -162,7 +162,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Median** (game3-041): D2Game `0x79790`: the call that creates the corpse is nopped (16 bytes). Dying leaves no corpse to walk back to.
 * **Port now:** D2R creates the corpse; nothing in `plugin/src` at this commit.
 * **To do:** Skip D2R's corpse creation; handle items as Median does.
-* **Overlap:** **lane no-corpse** owns it (branches `lane/no-corpse`, `t3/disable-player-corpses`); listed here for completeness. Also uncertain: the death penalty (game4-001) and the client respawn request (client3-035).
+* **Overlap:** row Player corpse (audit DC1) in unported.md; **lane no-corpse** owns it (branches `lane/no-corpse`, `t3/disable-player-corpses`); listed here for completeness. Also uncertain: the death penalty (game4-001) and the client respawn request (client3-035).
 * **Impact:** high
 
 <a id="m4"></a>
@@ -171,7 +171,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Median** (client5-011, common2-015, common2-016, game4-039, game4-042): The skill delay is `delay formula - stat 309` (item mod `ModitemReduceCooldown`; 20 uniques, runewords, a prefix) in three places: client skill use (`0xa2e06`), D2Common ready test (`0x52279`) and the server skill finish (`0xa09d5`, `0xa1aed`). The cooldown start is replaced by `D2SkillValidation_100b1140`: per-skill and per-group timers (unit `+0xf4`) and a client packet `0x2b`; skills in one cooldown group share their wait.
 * **Port now:** `calc_codes.cpp` (`skcd`) subtracts stat 309 for tooltips only; D2R runs its own `localdelay`, so the real wait is the full delay and no group is shared.
 * **To do:** Hook where D2R evaluates `localdelay` (skill record `+0x238`) on the server and the client and subtract stat 309; use D2R's `globaldelay` for the groups if its semantics match (unverified).
-* **Overlap:** overlap audit-rules
+* **Overlap:** overlap audit-rules: row "Skill cooldown groups (audit SK6)" (verify) covers the groups only; stat 309 is not in it
 * **Impact:** high
 
 <a id="m5"></a>
@@ -243,7 +243,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Median** (game6-016): D2Game `0xdee28`: the call that damages the defender's worn items is nopped (8 bytes).
 * **Port now:** Not found in docs or plugin; D2R armour loses durability when hit.
 * **To do:** Return early from D2R's armour-durability-on-hit function.
-* **Overlap:** overlap audit-rules
+* **Overlap:** overlap audit-rules: row "Item durability (audit IT1)" (durability removed in Median); this audit shows the mechanism, the hit-damage call is nopped
 * **Impact:** medium
 
 <a id="m13"></a>
@@ -287,6 +287,7 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 * **Median** (game5-007, game5-004, game5-006): Monster creation always takes the area level (two conditions nopped, `0xafee6`, `0xafef9`); the players-count percent table (`6fccf5f0`) is replaced by Median's own table (`0x1008f880`).
 * **Port now:** No hook. If `txt_migrate` already writes the area level into monstats the first is closed by data; D2R has its own players-X scaling.
 * **To do:** Compare a Normal-difficulty monster level and the 2-8 player life / damage scaling between D2R and Median.
+* **Overlap:** overlap audit-rules: row "Players X (audit DF7, MP3)" for the count table
 * **Impact:** medium
 
 <a id="m18"></a>
