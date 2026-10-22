@@ -196,6 +196,10 @@ lines are not repeatable (the reward is spent, see 1.6) and the conditions are D
   string id into the next free id slot, a handler pointer into the next free handler slot (at most five lines), before
   "Identify" (0xfb4) when the record has it, count = lines + 1 on every call. The Identify branch of the builder writes the
   count (2 or 3) back into the record, which would drop lines behind it, hence the re-set on every call and the position.
+  D2R also re-initialises the Cain records on its own (function `0x115d00`, found with a hardware write watch on the record,
+  2026-10-22): Identify over line 1, handler `0x114000`, count 3 - after a menu closes, e.g. Akara's respec confirmation. That
+  overwrote the plugin line and left the old Identify one line behind; each reset added a copy until the record was full
+  (`respec` then `cain cainsub`: Talk + four Identify lines). `AddMenuLines` drops repeated Identify lines first.
   Handlers are 16 thunks (`LineHandler<I>`), each sends `0x38 (kind, current NPC id)` through `0xec730`, then calls the
   Cancel handler `0x112c30` to close the menu. Only the lines the server can run are drawn.
 - Server (hook `0x4b0470`, the packet 0x38 handler): size 9 and kind >= 0x10 are Median's; the NPC unit must be within 50
