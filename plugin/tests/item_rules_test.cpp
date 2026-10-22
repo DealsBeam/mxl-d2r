@@ -16,9 +16,11 @@ void Check(bool ok, const char* what) {
 int RunItemRulesTests() {
 	using namespace itemrules;
 
-	// IT3: identify only what is not identified yet
-	Check(NeedsIdentify(0) && NeedsIdentify(0x4000000) && !NeedsIdentify(0x10) && !NeedsIdentify(0x4000010), "identified flag 0x10");
-	Check(PickupSucceeded(1) && PickupSucceeded(0xffffff01) && !PickupSucceeded(0) && !PickupSucceeded(0x100), "pickup result is the low byte");
+	// IT3: magic, set, rare and unique items are born identified, the other qualities are not touched
+	Check(!DropsIdentified(0) && !DropsIdentified(1) && !DropsIdentified(2) && !DropsIdentified(3), "low, normal, superior: as generated");
+	Check(DropsIdentified(4) && DropsIdentified(5) && DropsIdentified(6) && DropsIdentified(7), "magic, set, rare, unique: identified");
+	Check(!DropsIdentified(8) && !DropsIdentified(-1) && !DropsIdentified(9), "crafted and invalid: as generated");
+	Check(ItemFlagIdentified == 0x10, "identified flag 0x10");
 
 	// IT2: the stack is not used up; the call still reports a use for a non-empty stack
 	Check(QuantityUseResult(60) == 60 && QuantityUseResult(1) == 1, "stack stays and reports a use");

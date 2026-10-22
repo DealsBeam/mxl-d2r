@@ -389,8 +389,8 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		std::snprintf(line, sizeof(line), "mxl-core: mana costs %s", g_manaCostsReport);
 		context->LogInfo(line);
 		{
-			const ItemRulesParts parts{!Off("durability"), !Off("quantity"), !Off("autoid")};
-			if (!parts.durability && !parts.quantity && !parts.autoId) {
+			const ItemRulesParts parts{!Off("durability"), !Off("quantity")};
+			if (!parts.durability && !parts.quantity) {
 				std::snprintf(g_itemRulesReport, sizeof(g_itemRulesReport), "%s", OffNote);
 			} else {
 				InstallItemRules(context, parts, g_itemRulesReport, sizeof(g_itemRulesReport));
@@ -621,11 +621,11 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: items %s", g_itemsExtReport);
 			context->LogInfo(line);
-			const bool cl = !Off("classlock"), et = !Off("ethereal"), so = !Off("sockets"), dy = !Off("dyes");
-			if (!cl && !et && !so && !dy) {
+			const bool cl = !Off("classlock"), et = !Off("ethereal"), so = !Off("sockets"), dy = !Off("dyes"), id = !Off("autoid");
+			if (!cl && !et && !so && !dy && !id) {
 				std::snprintf(g_itemGenReport, sizeof(g_itemGenReport), "%s", OffNote);
 			} else {
-				InstallItemGen(context, cl, et, so, dy, g_itemGenReport, sizeof(g_itemGenReport));
+				InstallItemGen(context, cl, et, so, dy, id, g_itemGenReport, sizeof(g_itemGenReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: item generation %s", g_itemGenReport);
 			context->LogInfo(line);

@@ -2479,41 +2479,49 @@ def check_nodurability():
     add(nm, "PASS" if good else "FAIL", "; ".join(notes), [], log)
 
 
-def _pickup_packet(item):
-    """Client packet 0x16 (handler 0x4b9df0): id, item id, the item's x and y (the handler compares them with the unit's
-    position), to-inventory flag; 17 bytes."""
-    return "16 " + " ".join("%02x" % b for b in struct.pack("<IIII", item["id"], item["x"], item["y"], 0))
-
-
 def check_autoid():
-    """Audit IT3: an unidentified item lying on the ground is identified (flag 0x10) once the player picks it up, through the
-    client's pick-up packet 0x16 into the server handler."""
-    nm = "Auto-identify on pickup (audit IT3; plugin part autoid)"
+    """Audit IT3 (Median: the magic, rare, set and unique generators push 1 into SetItemFlag(0x10 identified), D2Game 0x104c1,
+    0x15443, 0x13daa and the unique picker): monster drops of those qualities lie on the ground identified. Real drops: the
+    harness `item` / `itemroll` go through MakeItem (0x43d530), which identifies its item itself, so only monster kills show
+    what the generator does. Andariel (class 156) drops magic and rare items; `dump ground` prints quality and the flag."""
+    nm = "Items drop identified (audit IT3; plugin part autoid in item_gen.cpp)"
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
     fight_ready()
-    log, notes = [], []
-    ok, l1 = H("item rin q=6 ground")
-    log += l1
-    iid = _item_id(l1)
-    if not ok or iid is None:
-        return add(nm, "BLOCKED", "could not drop a rare ring: %s" % " | ".join(l1[-2:]), [], log)
-    f0 = _iflags(iid, unid=True)
-    log.append("on the ground, flag cleared: %s" % f0)
-    if not f0 or f0["identified"] != 0:
-        return add(nm, "BLOCKED", "the dropped ring is not unidentified (%s)" % f0, [], log)
-    ok, l2 = H("pkt " + _pickup_packet(f0))
-    log += l2
-    time.sleep(1.0)
-    f1 = _iflags(iid)
-    log.append("after the pick-up packet: %s" % f1)
-    picked = bool(f1) and f1.get("mode") not in (3, 5)  # mode 3 / 5 = on the ground
-    id_ok = bool(f1) and f1["identified"] == 1
-    notes.append("picked up %s, identified %s (flags 0x%x -> 0x%x, mode %s)" % (
-        picked, id_ok, f0["flags"], f1["flags"] if f1 else -1, f1["mode"] if f1 else "?"))
-    drop_cursor_item(log)  # the pick-up lands on the cursor, which blocks every skill use afterwards
-    H("remove rin 5")
-    add(nm, "PASS" if picked and id_ok else "FAIL", "; ".join(notes), [], log)
+    log, seen = [], set()
+
+    def ground():
+        out = []
+        for l in H("dump ground")[1]:
+            if l.startswith("ground ") and re.search(r"mode=[35] ", l):
+                d = {k: v for k, v in re.findall(r"(\w+)=(-?\d+)", l)}
+                if int(d["id"]) not in seen:
+                    out.append(d)
+        return out
+
+    seen.update(int(d["id"]) for d in ground())
+    drops = []
+    for _ in range(14):
+        H("spawn 156")
+        ok, l = H("kill nearest 156")
+        log += l
+        time.sleep(1.5)
+        for d in ground():
+            seen.add(int(d["id"]))
+            drops.append(d)
+        if len([d for d in drops if 4 <= int(d["quality"]) <= 7]) >= 6:
+            break
+    kill_all_near()
+    fancy = [d for d in drops if 4 <= int(d["quality"]) <= 7]
+    ident = [d for d in fancy if d["identified"] == "1"]
+    plain = [d for d in drops if int(d["quality"]) in (1, 2, 3)]
+    pident = [d for d in plain if d["identified"] == "1"]
+    note = "%d drops: %d magic/set/rare/unique, %d of them identified; %d low/normal/superior, %d identified" % (
+        len(drops), len(fancy), len(ident), len(plain), len(pident))
+    log.append(note)
+    if len(fancy) < 3:
+        return add(nm, "BLOCKED", "too few magic or better drops to judge (%s)" % note, [], log)
+    add(nm, "PASS" if len(ident) == len(fancy) else "FAIL", note, [], log)
 
 
 def _intown_skills(limit=60):

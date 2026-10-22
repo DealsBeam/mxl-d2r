@@ -1851,7 +1851,7 @@ auto CmdDump(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (hcmd::LowerEq(t.tok[1], "ground")) {
 		int n = 0;
 		EachUnit(c->game, HashItems, [&](Unit* it) {
-			if (TypeOf(it) != 4 || n >= 40) {
+			if (TypeOf(it) != 4 || n >= 60 || (ModeOf(it) != 3 && ModeOf(it) != 5)) {  // the character's own items are not "ground"
 				return;
 			}
 			int32_t x = 0, y = 0;
@@ -1860,8 +1860,9 @@ auto CmdDump(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 			ItemCode(c, it, code);
 			const auto* data = Fn<ItemDataFn>(0x34a500)(it);
 			++n;
-			Out("ground id=%u code=%s class=%d mode=%d at %d,%d ilvl=%d quality=%d", IdOf(it), code, ClassOf(it), ModeOf(it), x, y,
-			    static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(it)), data != nullptr ? d2r::At<int32_t>(data, 0) : -1);
+			const uint32_t flags = data != nullptr ? d2r::At<uint32_t>(data, 0x18) : 0;
+			Out("ground id=%u code=%s class=%d mode=%d at %d,%d ilvl=%d quality=%d identified=%d", IdOf(it), code, ClassOf(it), ModeOf(it), x, y,
+			    static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(it)), data != nullptr ? d2r::At<int32_t>(data, 0) : -1, (flags & 0x10) != 0 ? 1 : 0);
 		});
 		Out("ground items %d (mode 3 or 5 = on the ground)", n);
 		return true;
@@ -2311,7 +2312,7 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		return Fail(c, "itemroll: unknown code");
 	}
 	hcmd::RollTally tally;
-	int failed = 0, nNormal = 0, nEth = 0, firstLevel = -1;
+	int failed = 0, nNormal = 0, nEth = 0, firstLevel = -1, nIdentified = 0;
 	long long sumNormal = 0, sumEth = 0;
 	int32_t durNormalMin = 1 << 30, durNormalMax = -1, durEthMin = 1 << 30, durEthMax = -1;
 	for (long long i = 0; i < n; ++i) {
@@ -2325,6 +2326,7 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		}
 		const bool eth = (FlagsOf(item) & ItemFlagEthereal) != 0;
 		const int32_t def = Stat(item, StatDefence), dur = Stat(item, StatMaxDurabilityItem);
+		nIdentified += (FlagsOf(item) & 0x10) != 0 ? 1 : 0;
 		tally.Add(Stat(item, StatSockets), eth);
 		if (eth) {
 			++nEth;
@@ -2341,7 +2343,7 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	}
 	char sockets[96];
 	tally.Sockets(sockets, sizeof(sockets));
-	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d sockets=[%s]", t.tok[1], tally.n, failed, firstLevel, tally.ethereal, sockets);
+	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d identified=%d sockets=[%s]", t.tok[1], tally.n, failed, firstLevel, tally.ethereal, nIdentified, sockets);
 	Out("itemroll def normal n=%d sum=%lld, ethereal n=%d sum=%lld; maxdur normal %d..%d, ethereal %d..%d", nNormal, sumNormal, nEth, sumEth,
 	    durNormalMax < 0 ? 0 : durNormalMin, durNormalMax, durEthMax < 0 ? 0 : durEthMin, durEthMax);
 	char gate[256];

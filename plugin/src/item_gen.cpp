@@ -31,6 +31,7 @@
 #include "d2r.h"
 #include "hirelings_logic.h"
 #include "item_gen_logic.h"
+#include "item_rules_logic.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -108,6 +109,8 @@ using ItemLevelFn = uint16_t (*)(Unit* item);
 
 RequirementFn g_originalRequirement = nullptr;
 GenerateFn g_originalGenerate = nullptr;
+bool g_etherealOn = false;   // Median's ethereal roll in the generator hook
+bool g_identifyDrops = false;  // magic, set, rare and unique items are born identified
 EtherealFn g_originalEthereal = nullptr;
 SocketRollFn g_originalSocketRoll = nullptr;
 ColourFn g_originalColour = nullptr;
@@ -282,8 +285,21 @@ void RollLowQualityEthereal(Unit* item, const uint8_t* gen) {
 	}
 }
 
+// Audit IT3: Median patches the magic, rare, set and unique generators (D2Game 0x104c1, 0x15443, 0x13daa and the unique
+// picker) to push 1 instead of 0 into SetItemFlag(item, 0x10 identified): those items are born identified.
+void IdentifyDrop(Unit** item, uint64_t result) {
+	if (g_identifyDrops && result != 0 && item != nullptr && *item != nullptr && itemrules::DropsIdentified(g_quality(*item))) {
+		g_setFlag(*item, itemrules::ItemFlagIdentified, 1);
+	}
+}
+
 // Hook A.
 uint64_t GenerateHook(void* game, Unit** item, uint8_t* gen) {
+	if (!g_etherealOn) {
+		const uint64_t plain = g_originalGenerate(game, item, gen);
+		IdentifyDrop(item, plain);
+		return plain;
+	}
 	if (item != nullptr && *item != nullptr) {
 		g_levelIn = g_itemLevel(*item);
 		g_qualityIn = g_quality(*item);
@@ -308,6 +324,7 @@ uint64_t GenerateHook(void* game, Unit** item, uint8_t* gen) {
 		g_setStat(*item, StatMaxDurability, value, 0);
 		g_setStat(*item, StatDurability, value, 0);
 	}
+	IdentifyDrop(item, result);
 	return result;
 }
 
@@ -400,13 +417,16 @@ int64_t ColourHook(Unit* player, Unit* item, uint8_t* colour, int32_t mode) {
 
 }  // namespace
 
-auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool ethereal, bool sockets, bool dyes, char* report,
+auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool ethereal, bool sockets, bool dyes, bool identify, char* report,
                     size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;
 	const char* lock = "left out";
 	const char* eth = "left out";
 	const char* sock = "left out";
 	const char* dye = "left out";
+	const char* ident = "left out";
+	g_etherealOn = ethereal;
+	g_identifyDrops = identify;
 	bool ok = true;
 	g_unitType = reinterpret_cast<UnitTypeFn>(base + UnitTypeRva);
 	g_unitClass = reinterpret_cast<UnitClassFn>(base + UnitClassRva);
@@ -441,19 +461,25 @@ auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool eth
 			ok = ok && hooked;
 		}
 	}
-	if (ethereal) {
+	if (ethereal || identify) {
 		if (!Matches(base, GenerateRva, GenerateEntry, sizeof(GenerateEntry)) ||
-		    !Matches(base, MakeEtherealRva, EtherealEntry, sizeof(EtherealEntry))) {
+		    (ethereal && !Matches(base, MakeEtherealRva, EtherealEntry, sizeof(EtherealEntry)))) {
 			eth = "off: entry bytes of 0x442d60 / 0x3d3510 differ";
+			ident = eth;
 			ok = false;
 		} else {
 			const bool a = context->InstallInlineHook(GenerateRva, GenerateEntry, sizeof(GenerateEntry),
 			                                          reinterpret_cast<void*>(&GenerateHook),
 			                                          reinterpret_cast<void**>(&g_originalGenerate));
-			const bool b = context->InstallInlineHook(MakeEtherealRva, EtherealEntry, sizeof(EtherealEntry),
-			                                          reinterpret_cast<void*>(&EtherealHook),
-			                                          reinterpret_cast<void**>(&g_originalEthereal));
-			eth = a && b ? "hooked" : "NOT hooked";
+			const bool b = !ethereal || context->InstallInlineHook(MakeEtherealRva, EtherealEntry, sizeof(EtherealEntry),
+			                                                       reinterpret_cast<void*>(&EtherealHook),
+			                                                       reinterpret_cast<void**>(&g_originalEthereal));
+			if (ethereal) {
+				eth = a && b ? "hooked" : "NOT hooked";
+			}
+			if (identify) {
+				ident = a ? "hooked" : "NOT hooked";
+			}
 			ok = ok && a && b;
 		}
 	}
@@ -481,8 +507,8 @@ auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool eth
 			ok = ok && hooked;
 		}
 	}
-	std::snprintf(report, reportSize, "%s: class lock (0x36bc50) %s, ethereal (0x442d60, 0x3d3510) %s, sockets (0x441fc0) %s, dyes (0x3710d0) %s",
-	              ok ? "on" : "partial", lock, eth, sock, dye);
+	std::snprintf(report, reportSize, "%s: class lock (0x36bc50) %s, ethereal (0x442d60, 0x3d3510) %s, sockets (0x441fc0) %s, dyes (0x3710d0) %s, identified drops (0x442d60) %s",
+	              ok ? "on" : "partial", lock, eth, sock, dye, ident);
 	return ok;
 }
 

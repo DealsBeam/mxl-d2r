@@ -327,7 +327,7 @@ caster comes from a second hook, on the skill use function `0x43acb0` (entry `48
 (unit type 0) counts. The Sigma formulas therefore also reach the server charge now (before, only the client charge site
 matched). The harness verb `manacharge` shows the last decision (calls, room, town test, cost, charge, site).
 
-## Item rules (`item_rules.cpp`, audit IT1, IT2, IT3; off words `durability`, `quantity`, `autoid`)
+## Item rules (`item_rules.cpp`, `item_gen.cpp`, audit IT1, IT2, IT3; off words `durability`, `quantity`, `autoid`)
 
 Median keeps the durability and quantity columns and removes the behaviour from D2Game.dll with binary patches (D2Sigma's
 patch table: the call to the wear dispatcher at D2Game+0xdee28 is NOPed, the `dec ebp` of the quantity use at D2Game+0xa16be
@@ -337,12 +337,14 @@ is NOPed). D2R's counterparts, hooked with whole-instruction entries (recorded i
 |---|---|---|
 | IT1 durability | `0x441b10` wear dispatcher (game, unit, item), a 4-10% proc per hit; `0x5590c0` skill-use wear / stack chance | no-ops (the dispatcher is the only writer of stat 0x48 on a hit; stat 0x49 stays) |
 | IT2 quantity | `0x439130` quantity use (game, unit, item, flag), callers `0x439320` from `0x432f90`, `0x4333f0`, `0x43acb0`, `0x55906e` | returns the stack's quantity and leaves it alone |
-| IT3 auto-identify | `0x471950` pick-up (player, item id, to inventory, distance, f5, f6), 1 on success, called by the packet 0x16 handler `0x4b9df0` | calls the original; on success `0x46e8c0(game, player, item, 0)`, D2R's own identify (sets flag 0x10 at item data +0x18, recalculates, sends the item to the client) |
+| IT3 drops identified | generator `0x442d60` `(game, &item, genRecord)`, the hook that also rolls ethereal (`item_gen.cpp`; off word `autoid`) | after the original: for quality 4 (magic), 5 (set), 6 (rare), 7 (unique) `SetItemFlag 0x36d8f0 (item, 0x10, 1)`; low, normal, superior and crafted items stay as generated |
 
-How Median does identify on pickup is not in D2Sigma's patch tables or functions (it has no identify function and no
-pick-up hook there), so the mechanism is D2R's own identify at the moment of the pick-up. Pure rules live in
-`item_rules_logic.h` (`NeedsIdentify`, `PickupSucceeded`, `QuantityUseResult`, `ManaCharge`), unit tests in
-`item_rules_test.cpp`.
+Median does IT3 in its generators: the magic (D2Game `0x104c1`), rare (`0x15443`), set (`0x13daa`) and unique item pickers push 1
+instead of 0 as the third argument of `SetItemFlag(item, 0x10 identified)` (docs/sigma-patch-audit.md item 1). D2R's
+generator dispatches on the quality at `0x442d60`; its sub-generators set the flag with 0, so the plugin sets it with 1 once
+the generator returned, for qualities 4-7. The harness `item` and `itemroll` create items through `MakeItem` `0x43d530`,
+which sets 0x10 itself at its end, so only real drops (`dump ground`, `identified=`) show the part. Pure rules live in
+`item_rules_logic.h` (`DropsIdentified`, `QuantityUseResult`, `ManaCharge`), unit tests in `item_rules_test.cpp`.
 
 ## Item spells (misc.txt `pSpell`)
 

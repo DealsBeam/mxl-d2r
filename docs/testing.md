@@ -328,7 +328,7 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `hit <player\|merc\|mon:id> phys\|fire\|ltng\|magic\|cold <amount> [attacker ref] [stagger]` | one hit through the game's own damage path: a damage block with the elemental field set (result flags bit 0), `0x44ce80` (resist, absorb) then `0x44a9b0` (life); the amount is in 1/256 life points. Prints life before -> after, the absorbed total (block `+0x130`) and the result flags. The player cannot hurt its own mercenary: give an attacker (`mon:<id>` of a spawned monster). `stagger` (last word) sets the result flag 4 (hit recovery) between the two steps: the target enters GetHit even when it has no hit recovery (bosses), and its last-mode field (monster data +0x68) reads 3 when it leaves it, which is the gate of `andariel_ai`'s controlled branch. Nothing happens in town |
 | `avoid <ref> melee\|missile\|evade [n]` | runs the game's avoid check `0x44ef70` n times (default 200, the hooked one with Median's caps; its first argument is the attacker unit, the player here) against the unit and tallies none / avoid (2) / dodge (4) / evade (8) / block (0x10); `evade` puts the unit into walk mode for the loop |
 | `wear <attacker ref> <defender ref> [n]` | n melee wear steps (`0x4526c0`, the function every hit runs; it calls the wear dispatcher `0x441b10`) and the summed durability of the player's worn items before and after |
-| `iflags <item unit id> [unid]` | flag word (0x10 identified), mode, quantity (stat 0x46), durability (0x48) and maximum (0x49) and position of any item unit, on the ground too; `unid` clears the identified flag first (the generator may make the item identified already) |
+| `iflags <item unit id> [unid]` | flag word (0x10 identified), mode, quantity (stat 0x46), durability (0x48) and maximum (0x49) and position of any item unit, on the ground too; `unid` clears the identified flag first |
 | `cursor` | the item on the player's cursor (id, code) or `empty`; a held item makes `0x4249f0` report "busy" and refuses every skill use (drop it with the client packet `17 <id u32>`) |
 | `manamin [reset]` | the lowest and highest mana of the player on any server frame since `manamin reset` (a skill's mana is charged a frame or more after `cast` returns and regenerates within a few frames, so one read afterwards sees nothing) |
 | `manacharge` | what the mana cost hook decided at the last charge site: calls, room, town test, cost, charge, site (1 server, 2 client, 3 the loader's server copy), and the return address of the last other caller |
@@ -366,7 +366,7 @@ Notes for whoever extends this: `cast` needs the skill to be the active left ski
 harness selects it; a melee skill cast at a unit makes the player run to it first and the class 18 monsters wander off, so the check
 repeats the cast; the mana cost cannot be read from `state` after the fact (regeneration refills in a few frames), only at the call.
 
-### Item rules and free mana in town (lane gap-items, 2026-10-22, background mode, slot 1, plugin 0.48.0 + item rules)
+### Item rules and free mana in town (lane gap-items, 2026-10-22, background mode, slot 1, plugin 0.54.0 + item rules)
 
 `py -3 tools/game_checks.py all nodurability autoid townmana`, the plugin with and without the off words
 `durability quantity autoid townmana` in `mxl-core-off.txt`.
@@ -374,7 +374,7 @@ repeats the cast; the mana cost cannot be read from `state` after the fact (rege
 | Check | With the parts | Off words | Evidence |
 |---|---|---|---|
 | `nodurability` (audit IT1, IT2) | PASS | FAIL | hfh weapon 110 -> 110 and fld armour 48 -> 48 after 600 `wear` steps (off: 110 -> 101, 48 -> 16); a tax stack, 4 accepted Throws (`cast 2 nearest`), quantity 58 -> 58 (off: 110 -> 109) |
-| `autoid` (audit IT3) | PASS | FAIL | a rare ring dropped unidentified (`item rin q=6 ground`, `iflags <id> unid`), the pick-up packet 0x16 (`16 <id> <x> <y> <to inventory>`, 17 bytes; the handler `0x4b9df0` compares x and y with the item's position and walks when far): flags 0x82000 -> 0x82010, mode 4 (off: 0x82000 -> 0x82000) |
+| `autoid` (audit IT3) | PASS | FAIL | 14 Andariel kills (`spawn 156`, `kill nearest 156`), `dump ground` (now prints `quality=` and `identified=`, ground items only): 6 magic / set / rare / unique drops, 6 identified (off word: 0 of 6); the low / normal / superior drops are identified either way (D2R sets the flag on non-magic items itself). `itemroll` and `item` cannot show it: `MakeItem` `0x43d530` sets 0x10 at its end |
 | `townmana` (audit SK3) | PASS | FAIL | skill 1558 (`sk1486`, InTown, level 5) cast at the player: Rogue Encampment, lowest mana 5000 of 5000 (cost 16 by the plugin, charged 0, `manacharge` site 3); Blood Moor, lowest 4993 (off: 4993 in town too) |
 
 What the checks needed to learn (so the next check does not lose time on it):
