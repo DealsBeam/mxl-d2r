@@ -147,11 +147,14 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
     ml = mod_ms.read_text("utf-8").splitlines()
     mh = ml[0].split("	")
     i_id, i_name = mh.index("Id"), mh.index("NameStr")
+    import strings_ns  # NameStr is a string key (`medianxl:<key>` for Median-only names): the client shows its text
+    texts = strings_ns.effective_texts()
     name_of = {}
     for line in ml[1:]:
         c = line.split("	")
         if len(c) > i_name:
-            name_of[c[i_id]] = c[i_name]
+            key = strings_ns.bare(c[i_name])
+            name_of[c[i_id]] = texts.get(key, key)
     gob = []
     for row, r in enumerate(m3):
         flags = struct.unpack_from("<I", r)[0]

@@ -1353,11 +1353,8 @@ class Migrator:
         blocks) as D2R panel layouts for the plugin's PanelService (tools/infographics.py), and the items that open
         them (misc2 `Infographic`: the index of the infographics row, -1 none; the catalyst of disenchantment)."""
         import infographics
-        texts: dict[str, str] = {}
-        for f in sorted((OUT / "data" / "local" / "lng" / "strings").glob("*.json")):
-            for e in json.loads(f.read_text("utf-8-sig")):
-                if isinstance(e.get("enUS"), str):
-                    texts.setdefault(e["Key"], e["enUS"])
+        import strings_ns
+        texts = strings_ns.effective_texts()  # what the player reads: D2R's text, Median's overrides, medianxl keys
         ih, irows = read_tsv(ROOT / "work" / "sigma" / "infographics.txt")
         panels = []
         for i, r in enumerate(irows):

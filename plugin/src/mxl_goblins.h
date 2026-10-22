@@ -202,7 +202,7 @@ inline constexpr Goblin Goblins[GoblinCount] = {
     {2793, 0x4030406, 184, 100, 0, -1, "Voided Horror"},  // voided_horror
     {2794, 0x4030406, 0, 0, 0, -1, "Voided Spawn"},  // voided_spawn
     {2796, 0x4020406, 300, 0, 0, -1, "Arcane Collector"},  // arcane_collector
-    {2797, 0x4001406, 0, 0, 0, -1, "Rainbow Goblin"},  // rainbow_goblin
+    {2797, 0x4001406, 0, 0, 0, -1, "\u00ffc9R\u00ffc8a\u00ffc1i\u00ffc;n\u00ffc3b\u00ffc:o\u00ffc2w \u00ffc9G\u00ffc8o\u00ffc1b\u00ffc;l\u00ffc3i\u00ffc:n"},  // rainbow_goblin
     {2798, 0x4020406, 553, 0, 99, -1, "Glowing Baron"},  // glowing_baron
     {2799, 0x400, 4, 100, 119, -1, "Relic Thief"},  // relic_thief
     {2800, 0x400, 10, 120, 0, -1, "Relic Thief"},  // relic_thief_2
