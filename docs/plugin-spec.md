@@ -780,7 +780,7 @@ handler (`0x12c870`) plays Median's sounds at the player's unit (217 item_gem, 4
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints lockout goblins npc reqgates hirelings skilltree runewords xp mapmem`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints lockout goblins npc reqgates hirelings skilltree runewords xp mapmem mercrevive questxp questrewards`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500

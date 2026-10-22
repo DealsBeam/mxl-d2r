@@ -13,7 +13,7 @@ Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout l
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb avoidcaps classlock
 hiregates itemrolls dye goldclient bonusdrops summoner tooltip gameend trophy statcols skilltree keybinds npcstrings
 automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills cowportals deathcrash nocorpse
-nslong strings goblinname rewardsound statorder infopanel sprint.
+nslong strings goblinname rewardsound statorder infopanel sprint mercrevive questxp questrewards.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -4490,6 +4490,259 @@ def check_sprint():
         [sh("sprint")], log)
 
 
+def merc_dead():
+    """True when the mercenary is dead (`h merc`: mode 0 / 8, or no life), None when there is none."""
+    _, lines = H("merc")
+    for l in lines:
+        m = re.match(r"merc id=\d+ .*mode=(\d+) life=(-?\d+)/", l)
+        if m:
+            return int(m.group(1)) in (0, 8) or int(m.group(2)) <= 0
+    return None
+
+
+def revive_price_expected(level):
+    """Median's mercenary revive price (D2Hirelings 0x10067450): 100 gold a level up to 105, then 250 * (level - 90)^1.5."""
+    return level * 100 if level <= 105 else int(((level - 90) ** 1.5) * 250)
+
+
+def check_mercrevive():
+    name = "Mercenary revive price (Median: level x 100 to 105, 250 x (level - 90)^1.5 above)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    fight_ready()  # first: it kills everything near, the mercenary too
+    if not ensure_merc():
+        return add(name, "BLOCKED", "no mercenary could be hired")
+    saved = rd("merc", 12)
+    rows, bad, log = [], [], []
+    txt = mxl_text()
+    if "merc revive price on" not in txt:
+        bad.append("`mxl` does not say `merc revive price on`: %s" % next((l for l in txt.splitlines() if "merc revive" in l), "-"))
+    for level in (1, 80, 105, 106, 126, 150):
+        ok, line, _l = hv("mercprice %d" % level, "mercprice")
+        want = revive_price_expected(level)
+        m = re.search(r"price=(-?\d+) median=(-?\d+)", line)
+        got = int(m.group(1)) if m else None
+        rows.append("level %d: D2R's price function says %s (want %d)" % (level, got, want))
+        log.append(line)
+        if not ok or got != want:
+            bad.append(rows[-1])
+    setstat("merc", 12, saved or 1)
+    # the price the death computes (0x4ffb90 asks the price function at the moment the mercenary dies)
+    priced0 = None
+    mm = re.search(r"merc revive price .*\((\d+) priced", mxl_text())
+    priced0 = int(mm.group(1)) if mm else None
+    for level in (126,):  # one death: the dead mercenary cannot be killed twice; 126 differs from the sweep's last level 150
+        if not ensure_merc():
+            bad.append("no mercenary for the death test at level %d" % level)
+            continue
+        setstat("merc", 12, level)
+        setstat("merc", 6, 256)  # one life point left, then one ordinary hit (a huge one is ignored by the engine)
+        r = None
+        for _ in range(4):
+            ok, line, _l = hv("hit merc phys 100000", "hit")
+            r = line[:100]
+            if merc_dead() is not False:
+                break
+            time.sleep(1)
+        if merc_dead() is False:
+            H("kill nearest")  # the harness' own kill of the nearest monster, which is the mercenary
+        time.sleep(1)
+        txt = mxl_text()
+        m = re.search(r"merc revive price .*\((\d+) priced, last (-?\d+) gold for level (\d+)\)", txt)
+        last = (int(m.group(2)), int(m.group(3))) if m else None
+        priced1 = int(m.group(1)) if m else None
+        if priced0 is not None and priced1 == priced0:
+            bad.append("death at level %d: the price function was not called (priced count stays %s)" % (level, priced1))
+        priced0 = priced1
+        dead = merc_dead()
+        rows.append("merc of level %d killed (hit %s; merc afterwards: %s): last price %s" % (level, r, {True: "dead", False: "alive", None: "gone"}[dead], last))
+        log.append(rows[-1])
+        if last is None or last != (revive_price_expected(level), level):
+            bad.append("death at level %d: last price %s, want %s" % (level, last, (revive_price_expected(level), level)))
+    # at the NPC: the menu of Kashya with the mercenary dead (the price the dialog shows and charges is the same function)
+    menu = None
+    try:
+        goto(1)
+        close_menu()
+        menu = npc_menu(150)
+    except Exception as e:  # the dialog is the part most likely to differ; report it, do not fail on it
+        log.append("npc menu: %s" % e)
+    if menu:
+        log += menu
+        rows.append("Kashya's menu opened with the mercenary dead (%d lines listed; the revive line is the client's own, not clicked)" % len(menu))
+    close_menu()
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]), [sh("mercrevive")], log)
+
+
+def check_questxp():
+    name = "Act 5 quest experience (Rite of Passage): a flat 50,000 in every difficulty, none above level 129"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    st = goto(109)
+    if st["player"].get("area") != 109:
+        return add(name, "BLOCKED", "could not reach Harrogath (area %s)" % st["player"].get("area"))
+    close_menu()
+    god(False)
+    lvl0, xp0 = rd("player", 12), rd("player", 13)
+    d0 = st["player"].get("difficulty", 0)
+    rows, bad, log = [], [], []
+    txt = mxl_text()
+    if "quest experience on" not in txt:
+        bad.append("`mxl` does not say `quest experience on`: %s" % next((l for l in txt.splitlines() if "quest experience" in l), "-"))
+    cases = ((0, 25, 50000), (1, 45, 50000), (2, 65, 50000), (2, 130, 0), (2, 150, 0))  # difficulty, level, wanted gain
+    for diff, level, want in cases:
+        H("difficulty %d" % diff)
+        setstat("player", 12, level)
+        setstat("player", 13, 1000)
+        H("quest 39 0 clear")
+        H("quest 39 13 clear")
+        ok, line, lines = hv("a5done", "a5done")
+        log += lines
+        m = re.search(r"level (\d+)->(\d+) xp (-?\d+)->(-?\d+) gained=(-?\d+)", line)
+        gained = int(m.group(5)) if m else None
+        rows.append("difficulty %d level %d: gained %s (want %d)" % (diff, level, gained, want))
+        if not ok or gained != want:
+            bad.append(rows[-1] + " [%s]" % line)
+    txt = mxl_text()
+    log += [l for l in txt.splitlines() if "quest experience" in l]
+    H("difficulty %d" % d0)
+    setstat("player", 12, lvl0 or 1)
+    setstat("player", 13, xp0 or 0)
+    H("quest 39 0 clear")
+    add(name, "PASS" if not bad else "FAIL", "`h a5done` (D2R's own Rite of Passage completion): %s" % ("; ".join(rows) if not bad else "; ".join(bad[:6])),
+        [sh("questxp")], log)
+
+
+def check_questrewards():
+    name = "Quest rewards D2Sigma removes: Qual-Kehk runes, Akara ring, Andariel chipped gems, Hellforge and Countess classes"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    rows, bad, log = [], [], []
+    m0 = mxl_mark()
+    txt = mxl_text()
+    qr = next((l for l in txt.splitlines() if "quest rewards" in l), "")
+    log.append(qr)
+    if "quest rewards on" not in qr:
+        bad.append("`mxl`: %s" % (qr or "no quest rewards line"))
+    runes = ("r07", "r08", "r09", "r10")
+
+    def count(code):
+        return len(items(hstate(), code)) + ground_count(code)
+
+    def ground_total():
+        for l in H("dump ground")[1]:
+            m = re.match(r"ground items (\d+)", l)
+            if m:
+                return int(m.group(1))
+        return 0
+
+    # Qual-Kehk (Normal): Median's r08 r09 r10 only; D2R would add r07 r08 r09 (r07 absent, r08 / r09 once)
+    st = goto(109)
+    if st["player"].get("area") == 109:
+        close_menu()
+        H("difficulty 0")
+        H("packclear")
+        for r in runes:
+            H("remove %s 6" % r)
+        H("quest 36 0 clear")
+        H("quest 36 1 set")
+        H("quest 36 6 clear")
+        H("quest 36 7 clear")
+        before = {r: count(r) for r in runes}
+        if not H("interact 515")[0]:  # the message packet is handled for the NPC the player is talking to
+            H("spawn 515")
+            H("interact 515")
+        time.sleep(3)
+        ok, ml = H("msg 515 0x4e8e")
+        time.sleep(3)
+        got = {r: count(r) - before[r] for r in runes}
+        rows.append("Qual-Kehk gave %s" % " ".join("%s x%d" % (r, got[r]) for r in runes))
+        log += ml
+        if not ok:
+            bad.append("Qual-Kehk could not be reached (msg 515)")
+        elif got != {"r07": 0, "r08": 1, "r09": 1, "r10": 1}:
+            bad.append("Qual-Kehk runes %s (want r08 r09 r10 once each, no r07)" % got)
+    else:
+        bad.append("could not reach Harrogath")
+
+    # Akara: no ring (the Heart is the reward)
+    goto(1)
+    close_menu()
+    H("quest 4 1 set")
+    H("packclear")
+    H("remove 600 6")
+    H("remove rin 6")
+    before = count("rin")
+    if not H("interact 148")[0]:
+        H("spawn 148")
+    ok, ml = H("msg 148 0x76")
+    time.sleep(3)
+    ring, heart = count("rin") - before, count("600")
+    rows.append("Akara gave %d rings and %d hearts" % (ring, heart))
+    log += ml
+    if ring != 0:
+        bad.append("Akara still gave a ring")
+    close_menu()
+
+    # Andariel: the two chipped gems of the vanilla quest drop are gone (three kills would leave 6 or more of them)
+    gems = ("gcv", "gcy", "gcb", "gcg", "gcr", "skc")
+    H("difficulty 0")
+    H("quest 47 0 clear")
+    n0 = sum(count(c) for c in gems)
+    for _ in range(3):
+        H("spawn 156")
+        H("kill nearest 156")
+        time.sleep(1)
+    n1 = sum(count(c) for c in gems) - n0
+    rows.append("three Andariel kills dropped %d chipped gems (vanilla: at least 6, two a kill; the standard roll can add a few)" % n1)
+    if n1 >= 6:
+        bad.append("Andariel dropped %d chipped gems in three kills" % n1)
+
+    # Hellforge (Hephasto 376) and the Countess (45): the plugin rolls Median's classes (counters in `mxl`)
+    def counters():
+        t = mxl_text()
+        m = re.search(r"quest rewards .*\(hellforge (\d+), countess (\d+), prison of ice (\d+)\)", t)
+        return tuple(int(x) for x in m.groups()) if m else None
+
+    c0 = counters()
+    g0 = ground_total()
+    # the forge is an object (class 376) that the harness cannot spawn: the reward function runs on a monster standing in for it
+    H("spawn 1")
+    okh, lh = H("hellforgereward 1")
+    time.sleep(1)
+    c1 = counters()
+    g1 = ground_total()
+    rows.append("Hellforge reward function run (%s): hellforge counter %s -> %s, ground items %d -> %d" % ("ok" if okh else "failed", c0, c1, g0, g1))
+    log += lh
+    if not (c0 and c1 and c1[0] == c0[0] + 1 and g1 > g0):
+        bad.append("Hellforge class not rolled: counters %s -> %s, ground items %d -> %d" % (c0, c1, g0, g1))
+    # Anya's Prison of Ice reward task: D2R builds a ring request, the hook makes it an amulet
+    H("packclear")
+    a0 = count("amu")
+    okp, lp = H("prisonreward")
+    time.sleep(1)
+    a1 = count("amu")
+    c3 = counters()
+    rows.append("Prison of Ice reward task run (%s): amulets %d -> %d, rewritten counter %s" % ("code rewritten" if okp else "code NOT rewritten", a0, a1, c3[2] if c3 else None))
+    log += lp
+    if not okp or a1 != a0 + 1:
+        bad.append("Prison of Ice reward: amulets %d -> %d (%s)" % (a0, a1, lp[:1]))
+    # a Countess spawned by the harness is not on quest 5's unit list (see check_tower): the kill never reaches the quest
+    # handler, so the reward function runs on its own with the kill context set by hand
+    c1, g1 = counters(), ground_total()
+    H("spawn 45")
+    okc, lc = H("countessreward")
+    time.sleep(1)
+    c2 = counters()
+    g2 = ground_total()
+    rows.append("Countess reward: counters %s -> %s, ground items %d -> %d" % (c1, c2, g1, g2))
+    log += lc
+    if not (c1 and c2 and c2[1] == c1[1] + 1 and g2 > g1):
+        bad.append("Countess class not rolled: counters %s -> %s, ground items %d -> %d" % (c1, c2, g1, g2))
+    log += [l for l in mxl_lines_since(m0) if re.search(r"hellforge|countess|qual-kehk|quest exp", l)]
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]) + " | " + "; ".join(rows), [sh("questrewards")], log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -4514,7 +4767,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("nslong", check_nslong),
           ("strings", check_strings),
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
-          ("sprint", check_sprint)]
+          ("sprint", check_sprint), ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards)]
 
 
 def write_report(extra=""):

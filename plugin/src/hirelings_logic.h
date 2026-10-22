@@ -8,6 +8,7 @@
 
 #include "mxl_hirelings.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -179,6 +180,23 @@ inline auto ClearLevelGate(uint8_t* table, size_t entries, int16_t npcClass, uin
 		return true;
 	}
 	return false;
+}
+
+// Median's mercenary revive price (D2Hirelings 0x10067450, the one price function behind every revive;
+// docs/sigma-patch-audit.md section 8): 100 gold per level up to level 105, above it 250 * (level - 90)^1.5, truncated.
+// D2R's own price is a hireling.txt formula, so the hook returns this instead, for the server's charge and the price the
+// client shows alike.
+constexpr int32_t ReviveFlatLevels = 105;
+constexpr int32_t ReviveFlatPerLevel = 100;
+constexpr int32_t ReviveCurveBase = 90;
+constexpr double ReviveCurveExponent = 1.5;
+constexpr double ReviveCurveScale = 250.0;
+
+inline auto RevivePrice(int32_t level) noexcept -> int32_t {
+	if (level <= ReviveFlatLevels) {
+		return level * ReviveFlatPerLevel;
+	}
+	return static_cast<int32_t>(std::pow(static_cast<double>(level - ReviveCurveBase), ReviveCurveExponent) * ReviveCurveScale);
 }
 
 }  // namespace hire

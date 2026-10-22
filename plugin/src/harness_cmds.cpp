@@ -14,6 +14,8 @@
 #include "d2r.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
+#include "hirelings.h"
+#include "hirelings_logic.h"
 #include "info_panels.h"
 #include "mxl_hirelings.h"
 #include "no_corpse.h"
@@ -1135,6 +1137,95 @@ auto CmdTowerprobe(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
+// `a5done`: D2R's own Act 5 quest completion for quest 39 (Rite of Passage, 0x54af20(game, player)): with the quest not done,
+// the player in Act 5 and a level of 20 / 40 / 60 or more by difficulty it sets the quest's bits and pays the quest experience
+// (0x550c20). Prints the experience stat (13) and the level before and after.
+constexpr uint64_t RvaRiteOfPassage = 0x54af20;
+using RiteFn = void (*)(Game*, Unit*);
+
+auto CmdA5Done(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const int32_t xp0 = Stat(c->player, 13), lvl0 = Stat(c->player, StatLevel);
+	Fn<RiteFn>(RvaRiteOfPassage)(c->game, c->player);
+	const int32_t xp1 = Stat(c->player, 13), lvl1 = Stat(c->player, StatLevel);
+	void* rec = QuestRecord(c);
+	Out("a5done level %d->%d xp %d->%d gained=%d quest39bit0=%d", lvl0, lvl1, xp0, xp1, xp1 - xp0,
+	    rec != nullptr ? Fn<QuestFn>(RvaQuestTest)(rec, 39, 0) : -1);
+	return true;
+}
+
+// `countessreward`: the Countess reward function 0x5e3010 (quest 5, its data block at +0x20) run on its own for the nearest
+// Countess (spawn 45 first), as if she had just died to the player: the data block's "dead" byte (+0x118) is set and the
+// "handed out" byte (+0x119) cleared first, the quest 5 kill context is set by hand. Prints the byte afterwards.
+constexpr uint64_t RvaFindQuest = 0x518220;     // (game, quest id) -> quest object
+constexpr uint64_t RvaCountessReward = 0x5e3010;  // (quest 5, quest 5 + 0x20)
+using FindQuestFn = uint8_t* (*)(Game*, int32_t);
+using CountessRewardFn = void (*)(uint8_t*, uint8_t*);
+
+auto CmdCountessReward(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Unit* victim = NearestMonster(c, 45, false);
+	if (victim == nullptr) {
+		return Fail(c, "countessreward: no Countess (spawn 45) alive");
+	}
+	uint8_t* quest = Fn<FindQuestFn>(RvaFindQuest)(c->game, 5);
+	if (quest == nullptr) {
+		return Fail(c, "countessreward: no quest 5 object");
+	}
+	uint8_t* data = quest + 0x20;
+	data[0x118] = 1;
+	data[0x119] = 0;
+	QuestsTowerKillSet(victim, c->player);
+	Fn<CountessRewardFn>(RvaCountessReward)(quest, data);
+	QuestsTowerKillSet(nullptr, nullptr);
+	Out("countessreward done=%d", static_cast<int>(data[0x119]));
+	return data[0x119] != 0;
+}
+
+// `hellforgereward [monster class]`: the Hellforge reward function 0x5e4540 (quest 27, called by the quest dispatcher 0x516370
+// when the player smashes the Mephisto soulstone on the forge object, class 376) run on its own, with the nearest monster of
+// the class (default 1: spawn one first) standing in for the forge: the quest's active byte (+0x23) is set first. Prints the
+// byte afterwards (the plugin's hook clears it when it rolled Median's class; D2R's runes would clear it too, see the item count).
+constexpr uint64_t RvaHellforgeReward = 0x5e4540;  // (quest 27, forge unit)
+using HellforgeRewardFn = void (*)(uint8_t*, Unit*);
+
+auto CmdHellforgeReward(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long cls = 1;
+	if (t.n >= 2 && !hcmd::ParseInt(t.tok[1], &cls)) {
+		return Fail(c, "usage: hellforgereward [monster class]");
+	}
+	Unit* stand = NearestMonster(c, static_cast<int>(cls), false);
+	if (stand == nullptr) {
+		return Fail(c, "hellforgereward: no such monster alive (spawn it first)");
+	}
+	uint8_t* quest = Fn<FindQuestFn>(RvaFindQuest)(c->game, 27);
+	if (quest == nullptr) {
+		return Fail(c, "hellforgereward: no quest 27 object");
+	}
+	quest[0x23] = 1;
+	Fn<HellforgeRewardFn>(RvaHellforgeReward)(quest, stand);
+	Out("hellforgereward active=%d", static_cast<int>(quest[0x23]));
+	return quest[0x23] == 0;
+}
+
+// `prisonreward`: Anya's Prison of Ice reward task 0x546cc0 (a5q3.cpp) run on its own with a task node built by hand:
+// +8 the player's unit id, +0x10 the game, +0x18 the item code, here D2R's own ring ("rin "). The plugin's hook rewrites the
+// code to Median's amulet ("amu "); the item is created rare for the player (inventory, or the ground when full).
+constexpr uint64_t RvaPrisonReward = 0x546cc0;  // (task node, ctx)
+using PrisonRewardFn = void (*)(uint8_t*, void*);
+
+auto CmdPrisonReward(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	uint8_t node[0x40] = {};
+	const uint32_t id = IdOf(c->player);
+	const uint32_t code = 0x206e6972;  // "rin "
+	std::memcpy(node + 8, &id, 4);
+	std::memcpy(node + 0x10, &c->game, 8);
+	std::memcpy(node + 0x18, &code, 4);
+	Fn<PrisonRewardFn>(RvaPrisonReward)(node, nullptr);
+	uint32_t after = 0;
+	std::memcpy(&after, node + 0x18, 4);
+	Out("prisonreward code now %.4s", reinterpret_cast<const char*>(&after));
+	return after == 0x20756d61;  // "amu "
+}
+
 // `lockcheck <level>`: the dungeon warp test's verdict for the player entering the level (dungeon_lockout.cpp).
 auto CmdLockcheck(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long n = 0;
@@ -1847,17 +1938,21 @@ auto CmdDump(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		return true;
 	}
 	if (hcmd::LowerEq(t.tok[1], "ground")) {
-		int n = 0;
+		int n = 0, listed = 0;
 		EachUnit(c->game, HashItems, [&](Unit* it) {
-			if (TypeOf(it) != 4 || n >= 40) {
+			if (TypeOf(it) != 4) {
 				return;
 			}
+			++n;
+			if (listed >= 400) {
+				return;
+			}
+			++listed;
 			int32_t x = 0, y = 0;
 			d2r::UnitXY(it, &x, &y);
 			char code[5];
 			ItemCode(c, it, code);
 			const auto* data = Fn<ItemDataFn>(0x34a500)(it);
-			++n;
 			Out("ground id=%u code=%s class=%d mode=%d at %d,%d ilvl=%d quality=%d", IdOf(it), code, ClassOf(it), ModeOf(it), x, y,
 			    static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(it)), data != nullptr ? d2r::At<int32_t>(data, 0) : -1);
 		});
@@ -1876,6 +1971,29 @@ constexpr uint64_t RvaHireCost = 0x3c17b0;     // (expansion, player, hireling i
 using FindMercFn = Unit* (*)(Game*, Unit*, int32_t, int32_t);
 using MercListFn = uint8_t* (*)(Game*, Unit*, void*);
 using HireCostFn = int32_t (*)(int32_t, Unit*, uint32_t, uint8_t, uint32_t, uint32_t*);
+
+// `mercprice [level]`: the revive price of the player's mercenary from D2R's price function 0x3c1ad0 (the one the NPC dialog
+// and the charge call), at the level given (the mercenary's level stat is put back afterwards), next to Median's formula.
+constexpr uint64_t RvaRevivePrice = 0x3c1ad0;  // (merc, not classic, hireling id) -> gold
+using RevivePriceFn = int32_t (*)(Unit*, int32_t, int32_t);
+
+auto CmdMercPrice(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+	if (merc == nullptr) {
+		return Fail(c, "mercprice: the player has no mercenary");
+	}
+	const int32_t was = Stat(merc, StatLevel);
+	long long level = was;
+	if (t.n >= 2 && !hcmd::ParseInt(t.tok[1], &level)) {
+		return Fail(c, "usage: mercprice [level]");
+	}
+	Fn<SetStatFn>(RvaSetStat)(merc, StatLevel, static_cast<int32_t>(level), 0);
+	const int32_t price = Fn<RevivePriceFn>(RvaRevivePrice)(merc, 1, 0);
+	Fn<SetStatFn>(RvaSetStat)(merc, StatLevel, was, 0);
+	const int32_t expected = hire::RevivePrice(static_cast<int32_t>(level));
+	Out("mercprice level=%lld price=%d median=%d", level, price, expected);
+	return price == expected;
+}
 
 auto CmdMerc(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
@@ -2569,7 +2687,7 @@ auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
-	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
+	Out("verbs: state | merc | mercreq | mercprice [level] | a5done | countessreward | hellforgereward [class] | prisonreward | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
@@ -3117,7 +3235,7 @@ const Verb Verbs[] = {
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

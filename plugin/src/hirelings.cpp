@@ -172,3 +172,62 @@ auto InstallHirelings(const D2RL::PluginContext* context, char* report, size_t r
 	              hooked ? "on" : "partial", hooked ? "hooked" : "NOT hooked", gate ? "cleared" : "left (not D2R's value)");
 	return hooked;
 }
+
+// ---- revive price ----------------------------------------------------------------------------------------------------
+//
+// 0x3c1ad0 (merc unit, not classic, hireling id) is the one price function behind every revive: the server charges it when the
+// NPC revives the mercenary and the client shows it in the revive dialog (callers 0x4ffcb6, 0x5012ce, 0x53effb). D2R
+// derives the price from the hireling.txt row (level squared, divisor, multiplier, cap); Median's is D2Hirelings
+// 0x10067450 (hire::RevivePrice). The hook replaces the whole result, so server and client agree.
+namespace {
+
+constexpr uint64_t RevivePriceRva = 0x3c1ad0;
+// 0x3c1ad0: mov [rsp+8],rbx / mov [rsp+0x10],rbp / mov [rsp+0x18],rsi / push rdi / sub rsp,0x20 / mov edi,r8d
+constexpr uint8_t RevivePriceEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89,
+                                        0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x20, 0x41, 0x8b, 0xf8};
+
+using RevivePriceFn = int32_t (*)(Unit* unit, int32_t notClassic, int32_t hirelingId);
+RevivePriceFn g_revivePriceOriginal = nullptr;
+int g_revivePrices = 0;
+int32_t g_lastPrice = 0;
+int32_t g_lastLevel = 0;
+
+int32_t RevivePriceHook(Unit* unit, int32_t notClassic, int32_t hirelingId) {
+	if (unit == nullptr) {
+		return g_revivePriceOriginal(unit, notClassic, hirelingId);
+	}
+	const int32_t level = g_getStat(unit, StatLevel, 0);
+	const int32_t price = hire::RevivePrice(level);
+	++g_revivePrices;
+	g_lastPrice = price;
+	g_lastLevel = level;
+	return price;
+}
+
+}  // namespace
+
+auto MercRevivePrices() noexcept -> int {
+	return g_revivePrices;
+}
+
+auto MercReviveLast(int32_t* level) noexcept -> int32_t {
+	if (level != nullptr) {
+		*level = g_lastLevel;
+	}
+	return g_lastPrice;
+}
+
+auto InstallMercRevive(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+	const uint64_t base = context->exeBase;
+	if (!Matches(base, RevivePriceRva, RevivePriceEntry, sizeof(RevivePriceEntry))) {
+		std::snprintf(report, reportSize, "off: entry bytes of 0x3c1ad0 differ");
+		return false;
+	}
+	g_getStat = reinterpret_cast<GetStatFn>(base + GetStatRva);
+	const bool hooked = context->InstallInlineHook(RevivePriceRva, RevivePriceEntry, sizeof(RevivePriceEntry),
+	                                               reinterpret_cast<void*>(&RevivePriceHook),
+	                                               reinterpret_cast<void**>(&g_revivePriceOriginal));
+	std::snprintf(report, reportSize, hooked ? "on: revive price 100/level to 105, 250*(level-90)^1.5 above (0x3c1ad0)"
+	                                         : "off: hook on 0x3c1ad0 failed");
+	return hooked;
+}
