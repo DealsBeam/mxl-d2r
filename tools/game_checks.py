@@ -8,16 +8,13 @@ uses ImageGrab. A watchdog thread samples GetCursorPos and GetForegroundWindow e
 aborts the run when the real cursor enters the game window or the game window becomes the foreground window.
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
-%USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle mapmem trophy; the old "fix to test" rows of docs/bugs.md: skilltree (#3, #9) keybinds (#5)
-strings (#7) automap (#15) scrollportals (#17) vendors (#18) monhover (#22). What a click in the world cannot do in background mode (kill a
-
-catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy levelcap nocorpse. What a click in the world cannot do in background mode (kill a
-
-catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy skillcaps
-townportal potions itemskills cowportals deathcrash (bugs.md rows 4, 6, 10, 16, 19, 12). What a click in the world cannot do in background mode (kill a
-
-catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy strings. What a click in the world cannot do in background mode (kill a
+%USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
+Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
+craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb avoidcaps classlock
+hiregates itemrolls dye goldclient bonusdrops summoner tooltip gameend trophy statcols skilltree keybinds
+npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills cowportals
+deathcrash nocorpse nslong strings goblinname rewardsound statorder infopanel.
+What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
