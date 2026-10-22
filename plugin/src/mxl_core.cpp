@@ -19,6 +19,8 @@
 #include "info_panels.h"
 #include "stat_columns.h"
 #include "item_events.h"
+#include "cooldowns.h"
+#include "cooldowns_logic.h"
 #include "no_corpse.h"
 #include "no_corpse_logic.h"
 #include "properties_ext.h"
@@ -75,6 +77,7 @@ char g_gameEndReport[96] = "off: not the expected game image";
 char g_mapMemoryReport[128] = "off: not the expected game image";
 char g_noCorpseReport[160] = "off: not the expected game image";
 char g_respawnWaitReport[160] = "off: not the expected game image";
+char g_cooldownsReport[320] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
 char g_quests2Report[224] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
@@ -119,7 +122,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat statcols itemevents nocorpse respawnwait props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
+// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -213,6 +216,22 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		std::snprintf(line, sizeof(line), "no corpse %s", report);
 		Say(command, line);
 		std::snprintf(line, sizeof(line), "respawn wait %s (held %ld, let through %ld)", g_respawnWaitReport, held, respawns);
+		Say(command, line);
+	}
+	{
+		long starts = 0, reduced = 0, shared = 0, dropped = 0;
+		char report[320];
+		if (CooldownCounts(&starts, &reduced, &shared, &dropped)) {
+			cooldowns::Counters c;
+			c.starts = starts;
+			c.reduced = reduced;
+			c.shared = shared;
+			c.dropped = dropped;
+			cooldowns::FormatReport(report, sizeof(report), CooldownMemberCount(), CooldownGroupCount(), c);
+		} else {
+			std::snprintf(report, sizeof(report), "%s", g_cooldownsReport);
+		}
+		std::snprintf(line, sizeof(line), "cooldowns %s", report);
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "act 1 quests %s", g_questsReport);
@@ -435,6 +454,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallRespawnWait(context, g_respawnWaitReport, sizeof(g_respawnWaitReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: respawn wait %s", g_respawnWaitReport);
+			context->LogInfo(line);
+			if (Off("cooldowns")) {
+				std::snprintf(g_cooldownsReport, sizeof(g_cooldownsReport), "%s", OffNote);
+			} else {
+				InstallCooldowns(context, g_cooldownsReport, sizeof(g_cooldownsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: cooldowns %s", g_cooldownsReport);
 			context->LogInfo(line);
 		}
 		{

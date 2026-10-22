@@ -73,6 +73,7 @@ Use [test-sessions.md](test-sessions.md) to run these checks by character.
 | 0.10.0 | Missile formulas (msyn, blvl) | A skill whose missile damage/size scales with the skill's points or synergy items (32 missiles use blvl) | Missile effect grows with points spent |
 | 0.9.0 | "Maxed skill" effects (bmax/maxe) | Skills whose tooltip/bonus changes when maxed (e.g. "max this skill ... to remove cooldown") | The bonus appears once the skill reaches its current cap |
 | 0.9.0 | Cooldown in skill tooltips (skcd) | Tooltip of a skill with a cooldown | Shows the cooldown (not 0) |
+| 0.54.x | Cooldown reduction and shared groups (`cooldowns`) | Item with stat 309 (reduces cooldown of a skill); cast a skill of a group (Deep Freeze, Thunderstorm, Purifying Flame) | The wait is shorter by the stat; the other skills of the group are on cooldown until the same moment (game check `cooldowns`) |
 | 0.9.0 | Area-dependent skills (area) | The class "slow missiles" passives (paragon_of_sanc...) in their level range | Active only in the areas their Param7..Param8 range covers |
 | data | Formulas with other Median codes (aura, area, bl12...) | Skills whose tooltips previously showed odd or zero values | Values show (codes not yet implemented count as 0) |
 | 0.6.0 | States fix (bug #14) | Play a while with buffs, auras, curses, summons; enter/leave towns and areas | No crashes; buffs show and expire normally |
