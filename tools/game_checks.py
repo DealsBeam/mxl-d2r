@@ -13,7 +13,7 @@ Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout l
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
 classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
-cowportals deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
+cowportals cubeoutputs deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
 heat trophytimer mapreveal wpauto hotkeys stashpages.
 """
 import ctypes
@@ -3807,17 +3807,72 @@ def check_cowportals():
             if c < len(r) and r[c].strip():
                 m |= 1 << i
         want_mask.append(m)
-    got = ""
+    # The reply is one line per 50 recipes. The plugin used to drop a line now and then (about 7% of the replies: the
+    # console file was opened with fopen_s while the harness polled it; fixed in HarnessEcho by lane cube-outputs). A lost
+    # line shifted every later recipe by 50 and the check failed with differences that were no cube output at all (run
+    # checks-20261022-212141-s1: rows 4950-4962, 5083-5100, 5133-...). Each chunk is read by its line labels and asked
+    # again until complete.
+    got, lost = "", []
     for first in range(0, len(want_mask), 2500):
-        ok, lines = H("cubeslots %d %d" % (first, min(2500, len(want_mask) - first)), 60)
-        got += "".join(m.group(2) for m in (re.match(r"cubeslots (\d+) (\d+)$", l.strip()) for l in lines) if m)
+        count = min(2500, len(want_mask) - first)
+        wanted = list(range(first, first + count, 50))
+        for attempt in range(4):
+            ok, lines = H("cubeslots %d %d" % (first, count), 60)
+            by_first = {int(m.group(1)): m.group(2) for m in (re.match(r"cubeslots (\d+) (\d+)$", l.strip()) for l in lines) if m}
+            if all(w in by_first and len(by_first[w]) == min(50, first + count - w) for w in wanted):
+                break
+        else:
+            lost.append("recipes %d..%d: lines missing at %s" % (first, first + count - 1, [w for w in wanted if w not in by_first]))
+        got += "".join(by_first.get(w, "9" * min(50, first + count - w)) for w in wanted)   # 9: unread, shows as a difference
     diffs = [(i, want_mask[i], int(got[i])) for i in range(min(len(got), len(want_mask))) if want_mask[i] != int(got[i])]
-    add(n2, "PASS" if quotes == 0 and len(got) == len(want_mask) and not diffs else "FAIL",
+    add(n2, "PASS" if quotes == 0 and len(got) == len(want_mask) and not diffs and not lost else "FAIL",
         "%d recipes: %d output cells with a quote in the built cubemain.txt; D2R's records (slot +0x5a/0x5b/0x5b) hold %d of %d "
         "slots the txt names and %d empty ones; differences (row, txt mask, D2R mask): %s" % (
             len(want_mask), quotes, sum(bin(m).count("1") for m in want_mask), len(want_mask) * 3,
             len(want_mask) * 3 - sum(bin(m).count("1") for m in want_mask), diffs[:12]), [],
         ["recipe %d: txt %d D2R %d" % d for d in diffs[:40]])
+
+
+def _unique_of(key):
+    """(base code, unique index) of a Median-only unique in the built uniqueitems.txt: the index is the data row (`item ... uniq=`)."""
+    t = _tsv(os.path.join(BUILT_EXCEL, "uniqueitems.txt"))
+    h = t[0]
+    for row, r in enumerate(t[1:]):
+        if r and r[0] == "medianxl:" + key:
+            return r[h.index("code")], row
+    raise KeyError(key)
+
+
+def check_cubeoutputs():
+    """Cube OUTPUT cells that name an item. Row 4950 (the Dulra catalyst unique + a perfect gem, op 18 on stat 520 = 1): both
+    outputs (`useitem` and `gpw`, output b) come out. Row 26 (outputs a Median-only unique named `medianxl:SunstoneOfTheGods`): the
+    item has that unique's base, quality unique and index. The qualified form is what D2R resolves in an output (the inputs
+    take it too, docs/strings-namespace.md "Item references"); the empty-slot audit is `cowportals`."""
+    nm = "Cube outputs craft (rows 4950, 26): both outputs of 4950 come out, row 26's medianxl: unique is created"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(1)
+    ensure_cube()
+    cube = lambda: [i for i in hstate()["items"] if i.get("page") == 3]
+    dul_code, dul_row = _unique_of("DulraCatalyst")
+    sun_code, sun_row = _unique_of("SunstoneOfTheGods")
+    H("cubeclear")
+    H("item %s cube uniq=%d 520=1" % (dul_code, dul_row))   # row 4950: the catalyst's stat 520 is 1 (op 18, param 520, value 1)
+    H("item gpw cube")
+    ok1, l1 = H("cubecraft")
+    out1 = sorted((i.get("code"), i.get("quality"), i.get("unique")) for i in cube())
+    H("cubeclear")
+    for code in ("x5x", "x6x", "x7x"):   # row 26's inputs
+        H("item %s cube" % code)
+    ok2, l2 = H("cubecraft")
+    out2 = sorted((i.get("code"), i.get("quality"), i.get("unique")) for i in cube())
+    H("cubeclear")
+    want1 = sorted([(dul_code, 7, dul_row), ("gpw", 2, 0)])
+    want2 = [(sun_code, 7, sun_row)]
+    good = ok1 and ok2 and "recipe 4950 " in l1[0] and "recipe 26 " in l2[0] and out1 == want1 and out2 == want2
+    add(nm, "PASS" if good else "FAIL",
+        "row 4950: %s, cube holds (code, quality, unique index) %s, wanted %s; row 26: %s, cube holds %s, wanted %s" % (
+            l1[0][:50], out1, want1, l2[0][:50], out2, want2), [], l1 + l2)
 
 
 def _caps_sources():
@@ -5328,6 +5383,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("potions", check_potions),
           ("itemskills", check_itemskills),
           ("cowportals", check_cowportals),
+          ("cubeoutputs", check_cubeoutputs),
           ("deathcrash", check_deathcrash),
           ("nocorpse", check_nocorpse),
           ("cooldowns", check_cooldowns),

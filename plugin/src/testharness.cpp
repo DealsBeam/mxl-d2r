@@ -937,10 +937,25 @@ void HarnessEcho(const char* line) noexcept {
 	}
 	char path[MAX_PATH];
 	std::snprintf(path, sizeof(path), "%smxl-testharness-console.txt", g_dir);
-	FILE* f = nullptr;
-	if (fopen_s(&f, path, "ab") == 0 && f != nullptr) {
-		std::fprintf(f, "%s\n", line);
-		std::fclose(f);
+	// One append per line, the open retried: tools/game_ctl.py hcmd polls this file every 100 ms (and a scanner may read it),
+	// and a failed fopen_s used to drop the line silently - about 7% of the 50-line replies of `cubeslots` lost a line
+	// (docs/testing.md, harness). Full sharing, the line and its newline in one WriteFile.
+	char buf[512];
+	const int len = std::snprintf(buf, sizeof(buf), "%s\n", line);
+	if (len <= 0) {
+		return;
+	}
+	const DWORD size = static_cast<DWORD>(len < static_cast<int>(sizeof(buf)) ? len : static_cast<int>(sizeof(buf)) - 1);
+	for (int attempt = 0; attempt < 500; ++attempt) {
+		HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
+		                       FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (h != INVALID_HANDLE_VALUE) {
+			DWORD written = 0;
+			WriteFile(h, buf, size, &written, nullptr);
+			CloseHandle(h);
+			return;
+		}
+		Sleep(1);
 	}
 }
 
