@@ -483,3 +483,23 @@ Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261022-101244-s3\` (not committe
 | Spawn overlay | PARTIAL | counter "1 spawn overlays (last 53 on monster 2791)" and the game stays up; the effect itself was not seen in the 0.4 s captures. The first build read the creation function's result without a check (callers that return 1) and ended the game on `cheat goto 2` (crash reports of `d2rloader\crashes`: read at address 1); fixed by only reading pointers |
 | Name colour | BLOCKED | the hover needs the cursor over the monster; background mode cannot place it. Rules and data are unit tested (`monster_looks_test.cpp`), the hooks install ("name colours on") |
 | PalShift stand-ins | PASS (tool) | `work/mod/effects_hd.md` paragraph PalShift: 21 shifted rows scored, 13 custom art; not looked at in game |
+
+### Backlog B: the old "fix to test" rows of bugs.md (lane bug-backlog-b, 2026-10-22, slot 2, background mode, plugin 0.53.0 + this branch)
+
+Run folders `%USERPROFILE%\mxl-d2r-runs\checks-20261022-*-s2\` (not committed). One check per bug, all PASS; run them with `py -3 tools/game_checks.py --slot N all <check>...` (at most three checks per call: a call stays under 10 minutes).
+
+| Bug | Check | Result | What it does / what stays manual |
+|---|---|---|---|
+| #3 skill tabs | `skilltree` | PASS | clicks the 8 tabs; harness `skilltab` reads the page of each click ([0..7]) and 8 / 8 panel pictures differ. Titles and stone art: look at `skilltab1-8.png` |
+| #9 skill tooltip assert | `skilltree` | PASS | hovers all 144 icon cells: no `stringIndex1 != strdummy` box in d2rloader.log. **Root cause of the old "hover does not work in background mode": WM_MOUSELEAVE.** The harness hook of `TrackMouseEvent` (testharness.cpp) now makes it a no-op, so the hover and its tooltip stay up |
+| #5 keybinds | `keybinds` | PASS | Options > Controls: Skill 9 = F9, Apply; `<char>.key` md5 cd37237f -> 57e96a28; Save and Exit, restart: same md5 and Skill 9 still F9; F6 skill hotkey selects the same skill before and after. The layout is restored (Default key list) |
+| #7 NPC text | `strings` | PASS | the client's string function (harness `str <id>`) for 592 NPC intro / Median strings: 0 wrong, no Median key shares a 16-bit id with a D2R string (D2R ships 27956/28082 shared itself). The subtitle on screen: manual look |
+| #15 automap | `automap` | PASS | one area per level type 36-51; harness `automap [type]` lists rows, how many resolve to an atlas cel, the game's own lookups and hits, and (single type) the first missed tile/style pairs. Type 37 has only wall rows, the game asks for styles 2/7/30, so 0 hits there is Median's own table; types 45-50 have no rows (unported.md) |
+| #17 levels > 255 | `scrollportals` | PASS | each summoning scroll in its act's town, `enter <portal id>`: areas 251-253, 263-268, 274-276 reached. Entry needs Hell (difficulty 2) and level 150 (mxl_dungeons.h levelReq 120-147); the check restores level 5 and difficulty 0 |
+| #18 vendor crash | `vendors` | PASS | Akara, Charsi, Gheed: interact, Trade, tabs (Akara has no Armor tab: a click on that spot closes his panel), right click buys one Misc item each (gold 40000 -> 39999): game alive, 0 `[default_unit]`, 0 `File not found`. One skillDescTbl assert box per run (bugs.md #29). The vendor pictures: look at `shop_*.png` |
+| #22 monsters | `monhover` | PASS | spawns a zombie, the virtual mouse goes over its projected position (harness `hover` names the unit), left clicks kill it in ~16 hits. Same WM_MOUSELEAVE root cause as #9 |
+
+New harness verbs (client side unless noted): `skilltab [n]` (selected tab, or select tab n), `str <id>..`, `hover`, `automap [type]`, `shop [npc class]` (server: the vendor's stock; buy through the panel), `levelact <id>..` (server: act of a level). `state` monster lines carry `mx= my=` (world position).
+
+Slot procedure used: `py -3 tools/game_slots.py lock 2 lane-backlog-b`, `py -3 tools/install_mod.py --slot 2`, `MXL_RUN=lane-backlog-b py -3 tools/game_checks.py --slot 2 all <checks>` (the run keeps the lock and releases it at its end). A full install is needed after another lane has used the slot: a partial data set from a foreign install made `strings` fail once (253 wrong, "Missing string"), and a re-install fixed it.
+Noticed and not fixed: the Wolf Stance tooltip shows a literal `%+d%%` (bugs.md #30).
