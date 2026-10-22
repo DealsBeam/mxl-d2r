@@ -2108,7 +2108,15 @@ STR_BANK = int(os.environ.get("MXL_STRINGS_BANK", "3"))  # data table bank: 1 cl
 # table -> byte offset of the name reference in the compiled row (from the calibration run: MXL_STRINGS_CALIBRATE=1)
 ROW_FIELDS = {"items": 0xfc, "uniqueitems": 0x22, "setitems": 0x24, "sets": 0x2, "monstats": 0x36, "superuniques": 0x2,
               "skilldesc": 0x8, "itemstatcost": 0x34}
-LEVEL_NAME_OFF = 0xfd  # LevelName, inline in the compiled Levels row (from `text scan levels`)
+LEVEL_CELLS = {"LevelName": 0xfd, "LevelWarp": 0x125}  # inline in the compiled Levels row (from `text scan levels`)
+# Median-only keys that stay native (`d2r:<key>`, tools/strings_native.json): too long for a prefixed fixed-size cell. With the
+# namespace on they are the ones that can show "Missing string". Each is read where it sits: uniqueitems / setitems index, levels.
+STR_NATIVE = ["Armor of the Old Religion", "Body of the Forbidden One", "Claw of the Spirit Wolf", "DurandaltheBlazingSword",
+              "Gift of the Spiritbeast", "MRAchilios' Sledgehammer", "MRHunter's Trackless Step", "MRImperius' Winged Feet",
+              "MRVasily's Falling Star", "MRVasily's Shepherd Moon", "MRWarmage's Flameshroud", "MRWitchhunter's Crucifix",
+              "MRZann Esu's Binding Circle", "Spirit Teacher's Headdress", "Staff of Herding Design", "Sunstone of the Twin Seas",
+              "To The Dimensional Labyrinth 10", "To The Island of the Sunless Sea", "UpgradedBossSummonerRing"]
+STR_NATIVE_WHERE = [("uniqueitems", "index"), ("setitems", "index"), ("levels", "LevelWarp"), ("levels", "LevelName")]
 _COLOUR = re.compile("ÿc.")
 
 # (category, table, column of the name key, keys). `items` rows are found by item code, `levels` by id, the rest by row index.
@@ -2263,6 +2271,7 @@ def check_strings():
     # ---- table rows: the display name field of the compiled row, resolved by the client's string lookup
     calibrate = {}
     pending = []  # (cat, table, label, key, ref, expected)
+    cellof = {}  # label -> column, for levels
     for cat, table, col, keys in STR_ROWS:
         for item in keys:
             sub, key = item if table == "items" else (None, item)
@@ -2272,6 +2281,18 @@ def check_strings():
                 record(cat, "%s:%s" % (table, key), False, exp, None, "no row in the built table" if ref is None else "no text in Median's .tbl")
                 continue
             pending.append((cat, table, "%s:%s %s" % (table, key, ref), key, ref, exp))
+            cellof[pending[-1][2]] = col
+    for key in STR_NATIVE:
+        exp = src.expected(key)
+        for table, col in STR_NATIVE_WHERE:
+            ref, _i = _row_ref(table, key, col)
+            if ref is not None:
+                break
+        if ref is None or exp is None:
+            record("native exceptions", key, False, exp, None, "no row in the built table" if ref is None else "no text in Median's .tbl")
+            continue
+        pending.append(("native exceptions", table, "%s.%s:%s %s" % (table, col, key, ref), key, ref, exp))
+        cellof[pending[-1][2]] = col
     for cat, table, label, key, ref, exp in pending:
         if table == "levels":
             continue
@@ -2304,7 +2325,7 @@ def check_strings():
         if table == "levels":
             # Levels keeps LevelName as characters in the compiled row (the game resolves it by key when it draws the name):
             # the cell must name the string, and the loader must resolve that name to the expected text.
-            ok, lines = H("text cstr levels %s %x %d" % (ref.split(":")[-1], LEVEL_NAME_OFF, STR_BANK))
+            ok, lines = H("text cstr levels %s %x %d" % (ref.split(":")[-1], LEVEL_CELLS[cellof[label]], STR_BANK))
             m = re.search(r"= \[(.*)\]$", lines[0]) if ok and lines else None
             cell = m.group(1) if m else None
             full = None if cell is None else (cell if ":" in cell else "d2r:" + cell)
@@ -2334,6 +2355,14 @@ def check_strings():
         kg = _text_key(full)
         exp = src.expected(key)
         record("rare affixes", full, kg is not None and kg.result == 0 and kg.same(exp), exp, kg.show() if kg else None,
+               "result %s" % (kg.result if kg else None))
+
+    # ---- native exceptions by key: unqualified, so the loader reads them as d2r:<key>
+    for key in STR_NATIVE:
+        full = src.full_key(key)
+        kg = _text_key(full)
+        exp = src.expected(key)
+        record("native exceptions (key)", full, kg is not None and kg.result == 0 and kg.same(exp), exp, kg.show() if kg else None,
                "result %s" % (kg.result if kg else None))
 
     # ---- D2R keys Median overrides: D2R's numeric id (native, fixed) and the key
