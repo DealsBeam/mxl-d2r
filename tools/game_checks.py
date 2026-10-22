@@ -1620,11 +1620,14 @@ def check_item_events():
     log += l
     if mid is None:
         return add(nm, "BLOCKED", "no monster could be spawned")
+    H("stat m%d 6 0 set 700000" % mid)  # a monster of the area's level has a few points of life, fewer than the 50 the event takes
     a = life_of(mid)
     H("evtrace fire 3 player m%d" % mid)
     b = life_of(mid)
-    thorns = ok and a is not None and b is not None and a - b == 50 * 256
-    notes.append("thorns 50: monster life %s -> %s (%s)" % (a, b, "-50 points" if thorns else "WRONG"))
+    # the monster is next to the character and may attack in the same second: its own hit fires the event as well, so the loss
+    # is one 50 or more (never a fraction of one)
+    thorns = ok and a is not None and b is not None and a - b >= 50 * 256 and (a - b) % (50 * 256) == 0
+    notes.append("thorns 50: monster life %s -> %s (%s)" % (a, b, "-%d points" % ((a - b) // 256) if thorns else "WRONG"))
     H("kill nearest")
     # life on kill: stat 265 = 50 (D2RCore function 33 -> D2R function 28), +50 points to a character at 100 life
     # (the character's own gear may heal on a kill too: the gain is measured against a kill without the ring)
@@ -5513,7 +5516,9 @@ def _check_sprint():
     if not ok or filled < full:
         bad.append("state 136 left the stamina at %d of %d" % (filled, full))
 
-    # 6. the key: R (toggle sprint) makes a click-to-move run, R again walks. The toggle is restored.
+    # 6. the key: R (toggle sprint) makes a click-to-move run, R again walks. The toggle is restored. The click needs open ground
+    # around the character, which the field the earlier checks left it in may not have (trees, a cliff): the town is open on every side.
+    goto(1)
     setstat("player", 10, full)
     keyrun = {}
     # Screen points in the directions the legs walked (world offset to isometric screen, the character is in the middle of the
