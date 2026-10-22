@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy. What a click in the world cannot do in background mode (kill a
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy nodurability autoid townmana. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -2090,6 +2090,231 @@ def check_statcols():
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
+def _item_id(lines):
+    m = re.search(r"item id=(\d+)", " ".join(lines))
+    return int(m.group(1)) if m else None
+
+
+def _iflags(item_id, unid=False):
+    """`iflags`: the item's flag word, mode, quantity, durability (dict of ints) or None."""
+    ok, lines = H("iflags %d%s" % (item_id, " unid" if unid else ""))
+    m = next((l for l in lines if l.startswith("iflags ")), None)
+    if not ok or m is None:
+        return None
+    return {k: int(v, 16) if v.startswith("0x") else int(v) for k, v in kv(m).items()}
+
+
+def check_nodurability():
+    """Audit IT1 / IT2 (Median: no durability, no quantity use): worn weapon and armour keep their durability through
+    many melee wear steps (harness `wear`, the function behind every hit) and a throwing stack keeps its quantity through
+    real throws (cast of the Throw skill, id 2)."""
+    nm = "No durability loss and no quantity use (audit IT1, IT2; plugin parts durability + quantity)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    fight_ready()
+    god(False)
+    log, notes, good = [], [], True
+    for slot in ("rhand", "torso"):
+        H("unequip " + slot)
+    ok, l1 = H("equip hfh q=2 rhand")
+    ok2, l2 = H("equip fld q=2 torso")
+    log += l1 + l2
+    weapon, armour = _item_id(l1), _item_id(l2)
+    if not (ok and ok2 and weapon and armour):
+        return add(nm, "BLOCKED", "could not equip the test weapon hfh / armour fld: %s" % " | ".join((l1 + l2)[-3:]), [], log)
+    w0, a0 = _iflags(weapon), _iflags(armour)
+    log.append("before: weapon %s armour %s" % (w0, a0))
+    if not w0 or not a0 or w0["maxdurability"] <= 0 or a0["maxdurability"] <= 0:
+        return add(nm, "BLOCKED", "the test items have no durability to lose (weapon %s, armour %s)" % (w0, a0), [], log)
+    mon = spawn_attacker(1)
+    if mon is None:
+        return add(nm, "BLOCKED", "no monster to hit", [], log)
+    boosted = {}
+    for st, val in ((0, 600), (2, 600), (12, 60)):  # strength, dexterity, level: the Throw skill checks the weapon's requirements
+        boosted[st] = rd("player", st)
+        setstat("player", st, val)
+    # 2 x 300 wear steps: weapon (player attacks) and armour (monster attacks); the wear proc is 4 - 10 percent, so a
+    # build that wears items loses dozens of points while this one must not lose one
+    _, l3 = H("wear player %s 300" % mon, 60)
+    _, l4 = H("wear %s player 300" % mon, 60)
+    log += l3 + l4
+    w1, a1 = _iflags(weapon), _iflags(armour)
+    log.append("after: weapon %s armour %s" % (w1, a1))
+    dur_ok = bool(w1 and a1) and w1["durability"] == w0["durability"] and a1["durability"] == a0["durability"]
+    good = good and dur_ok
+    notes.append("durability weapon %s -> %s, armour %s -> %s after 600 wear steps" % (
+        w0["durability"], w1 and w1["durability"], a0["durability"], a1 and a1["durability"]))
+    # quantity: real throws
+    H("unequip rhand")
+    ok, l5 = H("equip tax q=2 rhand")
+    log += l5
+    knives = _item_id(l5)
+    q0 = _iflags(knives) if knives else None
+    if not ok or not q0 or q0["quantity"] <= 1:
+        notes.append("throwing knives not usable here (%s)" % " | ".join(l5[-2:]))
+        good = False
+    else:
+        boosted = {}
+        for st, val in ((0, 600), (2, 600), (12, 60)):  # strength, dexterity, level: Throw checks the weapon's requirements
+            boosted[st] = rd("player", st)
+            setstat("player", st, val)
+        H("setskill 2 1")
+        throws = 0  # casts the game accepted with the skill usable (code 0) and the unit in a cast mode
+        for _ in range(14):
+            H("moveto nearest")
+            time.sleep(0.4)
+            okc, lc = H("cast 2 nearest")
+            log += lc
+            if okc and "usable=0" in " ".join(lc):
+                throws += 1
+            time.sleep(1.2)
+            if throws >= 4:
+                break
+            if not okc or not hstate()["mons"]:
+                spawn_attacker(1)
+        q1 = _iflags(knives)
+        qty_ok = bool(q1) and q1["quantity"] == q0["quantity"]
+        good = good and qty_ok and throws > 0
+        notes.append("quantity %s -> %s after %d accepted throws (Throw usable)" % (q0["quantity"], q1 and q1["quantity"], throws))
+        for st, val in boosted.items():
+            if val is not None:
+                setstat("player", st, val)
+    kill_all_near()
+    for slot in ("rhand", "torso"):
+        H("unequip " + slot)
+    add(nm, "PASS" if good else "FAIL", "; ".join(notes), [], log)
+
+
+def _pickup_packet(item):
+    """Client packet 0x16 (handler 0x4b9df0): id, item id, the item's x and y (the handler compares them with the unit's
+    position), to-inventory flag; 17 bytes."""
+    return "16 " + " ".join("%02x" % b for b in struct.pack("<IIII", item["id"], item["x"], item["y"], 0))
+
+
+def check_autoid():
+    """Audit IT3: an unidentified item lying on the ground is identified (flag 0x10) once the player picks it up, through the
+    client's pick-up packet 0x16 into the server handler."""
+    nm = "Auto-identify on pickup (audit IT3; plugin part autoid)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    fight_ready()
+    log, notes = [], []
+    ok, l1 = H("item rin q=6 ground")
+    log += l1
+    iid = _item_id(l1)
+    if not ok or iid is None:
+        return add(nm, "BLOCKED", "could not drop a rare ring: %s" % " | ".join(l1[-2:]), [], log)
+    f0 = _iflags(iid, unid=True)
+    log.append("on the ground, flag cleared: %s" % f0)
+    if not f0 or f0["identified"] != 0:
+        return add(nm, "BLOCKED", "the dropped ring is not unidentified (%s)" % f0, [], log)
+    ok, l2 = H("pkt " + _pickup_packet(f0))
+    log += l2
+    time.sleep(1.0)
+    f1 = _iflags(iid)
+    log.append("after the pick-up packet: %s" % f1)
+    picked = bool(f1) and f1.get("mode") not in (3, 5)  # mode 3 / 5 = on the ground
+    id_ok = bool(f1) and f1["identified"] == 1
+    notes.append("picked up %s, identified %s (flags 0x%x -> 0x%x, mode %s)" % (
+        picked, id_ok, f0["flags"], f1["flags"] if f1 else -1, f1["mode"] if f1 else "?"))
+    drop_cursor_item(log)  # the pick-up lands on the cursor, which blocks every skill use afterwards
+    H("remove rin 5")
+    add(nm, "PASS" if picked and id_ok else "FAIL", "; ".join(notes), [], log)
+
+
+def _intown_skills(limit=60):
+    """Skills of the built skills.txt that may be cast in town (InTown), can be selected (left / right skill) and cost mana
+    (mana column), without a restrict value, by required level: [(id, name, mana, lvlmana, manashift)]."""
+    import csv
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "mod", "data", "global", "excel", "skills.txt")
+    with open(path, encoding="utf-8", errors="replace", newline="") as f:
+        rows = list(csv.reader(f, delimiter="	"))
+    h = rows[0]
+    col = {c: h.index(c) for c in ("skill", "*Id", "InTown", "mana", "leftskill", "rightskill", "restrict", "reqlevel", "lvlmana", "manashift")}
+    out = []
+    for r in rows[1:]:
+        if len(r) < len(h) or r[col["InTown"]] != "1" or r[col["restrict"]] or r[col["mana"]] in ("", "0"):
+            continue
+        if r[col["leftskill"]] != "1" and r[col["rightskill"]] != "1":
+            continue
+        out.append((int(r[col["reqlevel"]] or 0), int(r[col["*Id"]]), r[col["skill"]], r[col["mana"]], r[col["lvlmana"]], r[col["manashift"]]))
+    out.sort()
+    return [(i, n, m, lm, sh) for _lv, i, n, m, lm, sh in out[:limit]]
+
+
+def drop_cursor_item(log):
+    """Skills cannot be used while an item is held on the cursor (0x4249f0 "busy"): drop it (client packet 0x17)."""
+    ok, lines = H("cursor")
+    log.extend(lines)
+    m = re.search(r"cursor id=(\d+)", " ".join(lines))
+    if m:
+        H("pkt 17 " + " ".join("%02x" % b for b in struct.pack("<I", int(m.group(1)))))
+        time.sleep(1.0)
+        log.extend(H("cursor")[1])
+
+
+def check_townmana():
+    """Audit SK3 (P2.1.0): skills cost no mana in a town. An InTown skill that costs mana (the first of skills.txt the game
+    accepts as a cast) cast in the Rogue Encampment leaves the mana alone, cast in the Blood Moor it costs its normal price."""
+    nm = "Free mana in town (audit SK3; plugin part townmana)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    log, notes = [], []
+    saved = {}
+
+    def prep(skill):
+        for s_ in (9, 8, 12):
+            if s_ not in saved:
+                saved[s_] = rd("player", s_)
+        setstat("player", 12, 60)  # the skills' level requirements
+        setstat("player", 9, 5000 * 256)
+        setstat("player", 8, 5000 * 256)
+        H("setskill %d 5" % skill)
+
+    def cast_mana(skill):
+        # the mana of a cast is charged when its action starts and regenerated within a few frames: the plugin samples the
+        # player's mana on every server frame (`manamin`), the lowest value since the reset is the cost
+        H("manamin reset")
+        ok, lines = H("cast %d self" % skill)
+        log.extend(lines)
+        time.sleep(2.0)
+        _, ml = H("manamin")
+        log.extend(ml)
+        log.extend(H("manacharge")[1])
+        m = re.search(r"manamin min=(-?\d+) max=(-?\d+)", " ".join(ml))
+        # the pool was filled to its maximum before the cast, so the highest value seen is the start
+        return (ok and "usable=0" in " ".join(lines)), (int(m.group(2)) if m else None), (int(m.group(1)) if m else None)
+
+    goto(1)
+    close_menu()
+    drop_cursor_item(log)
+    skill, t_ok, t0, t1 = None, False, None, None
+    tried = []
+    for cand, cname, *_cost in _intown_skills():
+        prep(cand)
+        t_ok, t0, t1 = cast_mana(cand)
+        tried.append("%d %s" % (cand, cname))
+        if t_ok:
+            skill = cand
+            break
+    if skill is None:
+        return add(nm, "BLOCKED", "no InTown skill could be cast in the Rogue Encampment (tried %s)" % ", ".join(tried), [], log)
+    town_ok = t0 is not None and t1 is not None and t1 >= t0
+    notes.append("town: skill %d cast OK (after %d tries), mana %s -> lowest %s" % (skill, len(tried), t0, t1))
+    goto(2)
+    close_menu()
+    kill_all_near()
+    prep(skill)
+    f_ok, f0, f1 = cast_mana(skill)
+    field_ok = f_ok and f0 is not None and f1 is not None and f0 - f1 >= 5
+    notes.append("field: skill %d cast %s, mana %s -> lowest %s (cost %s)" % (skill, "OK" if f_ok else "refused", f0, f1, (f0 - f1) if f0 is not None and f1 is not None else "?"))
+    kill_all_near()
+    for s_, v in saved.items():
+        if v is not None:
+            setstat("player", s_, v)
+    add(nm, "PASS" if town_ok and field_ok else "FAIL", "; ".join(notes), [], log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -2099,7 +2324,9 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
-          ("trophy", check_trophy), ("statcols", check_statcols)]
+          ("trophy", check_trophy), ("statcols", check_statcols),
+          # audit IT1 / IT2 / IT3 / SK3 (lane gap-items)
+          ("nodurability", check_nodurability), ("autoid", check_autoid), ("townmana", check_townmana)]
 
 
 def write_report(extra=""):

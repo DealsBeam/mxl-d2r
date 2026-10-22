@@ -321,6 +321,11 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `stat player\|merc\|mon:<id>\|<item id>\|<code> <stat> [layer] [set <value>]` | reads (or writes the base of) a stat; `merc` and `mon:<id>` are the mercenary and any monster by unit id (the verify checks set resists, avoid stats, life, strength, level on them) |
 | `hit <player\|merc\|mon:id> phys\|fire\|ltng\|magic\|cold <amount> [attacker ref]` | one hit through the game's own damage path: a damage block with the elemental field set (result flags bit 0), `0x44ce80` (resist, absorb) then `0x44a9b0` (life); the amount is in 1/256 life points. Prints life before -> after, the absorbed total (block `+0x130`) and the result flags. The player cannot hurt its own mercenary: give an attacker (`mon:<id>` of a spawned monster). Nothing happens in town |
 | `avoid <ref> melee\|missile\|evade [n]` | runs the game's avoid check `0x44ef70` n times (default 200, the hooked one with Median's caps; its first argument is the attacker unit, the player here) against the unit and tallies none / avoid (2) / dodge (4) / evade (8) / block (0x10); `evade` puts the unit into walk mode for the loop |
+| `wear <attacker ref> <defender ref> [n]` | n melee wear steps (`0x4526c0`, the function every hit runs; it calls the wear dispatcher `0x441b10`) and the summed durability of the player's worn items before and after |
+| `iflags <item unit id> [unid]` | flag word (0x10 identified), mode, quantity (stat 0x46), durability (0x48) and maximum (0x49) and position of any item unit, on the ground too; `unid` clears the identified flag first (the generator may make the item identified already) |
+| `cursor` | the item on the player's cursor (id, code) or `empty`; a held item makes `0x4249f0` report "busy" and refuses every skill use (drop it with the client packet `17 <id u32>`) |
+| `manamin [reset]` | the lowest and highest mana of the player on any server frame since `manamin reset` (a skill's mana is charged a frame or more after `cast` returns and regenerates within a few frames, so one read afterwards sees nothing) |
+| `manacharge` | what the mana cost hook decided at the last charge site: calls, room, town test, cost, charge, site (1 server, 2 client, 3 the loader's server copy), and the return address of the last other caller |
 | `itemroll <code> <n> [q=] [ilvl=]` | makes n items through the generator the way `item` does (quality default 2, item level default 110), reads sockets, the ethereal flag, defence and maximum durability, frees them; prints the socket histogram, the ethereal count, the defence sums and the durability ranges of normal and ethereal ones |
 | `colour <item id\|code>` | the item colour function `0x3710d0` (hooked for stat 368) on an item of the player: the colour byte, the item's colour kind and whether a palette entry came back |
 | `req <ref> [as <class>]` | the item requirement check `0x36bc50` (class lock stat 492, mercenary weapon / shield lists) of every backpack item against the player or the mercenary; `as` swaps the unit's class for the call (character class 0-6, or a hire monster class 271 / 338 / 359 / 561). Prints id, code, usable, lock, weapon / shield flags and the hireclasses list item types the item belongs to |
@@ -350,6 +355,31 @@ drive the player server side with the game's own functions (no input of any kind
 Notes for whoever extends this: `cast` needs the skill to be the active left skill (the unit cast uses the player's active skill), the
 harness selects it; a melee skill cast at a unit makes the player run to it first and the class 18 monsters wander off, so the check
 repeats the cast; the mana cost cannot be read from `state` after the fact (regeneration refills in a few frames), only at the call.
+
+### Item rules and free mana in town (lane gap-items, 2026-10-22, background mode, slot 1, plugin 0.48.0 + item rules)
+
+`py -3 tools/game_checks.py all nodurability autoid townmana`, the plugin with and without the off words
+`durability quantity autoid townmana` in `mxl-core-off.txt`.
+
+| Check | With the parts | Off words | Evidence |
+|---|---|---|---|
+| `nodurability` (audit IT1, IT2) | PASS | FAIL | hfh weapon 110 -> 110 and fld armour 48 -> 48 after 600 `wear` steps (off: 110 -> 101, 48 -> 16); a tax stack, 4 accepted Throws (`cast 2 nearest`), quantity 58 -> 58 (off: 110 -> 109) |
+| `autoid` (audit IT3) | PASS | FAIL | a rare ring dropped unidentified (`item rin q=6 ground`, `iflags <id> unid`), the pick-up packet 0x16 (`16 <id> <x> <y> <to inventory>`, 17 bytes; the handler `0x4b9df0` compares x and y with the item's position and walks when far): flags 0x82000 -> 0x82010, mode 4 (off: 0x82000 -> 0x82000) |
+| `townmana` (audit SK3) | PASS | FAIL | skill 1558 (`sk1486`, InTown, level 5) cast at the player: Rogue Encampment, lowest mana 5000 of 5000 (cost 16 by the plugin, charged 0, `manacharge` site 3); Blood Moor, lowest 4993 (off: 4993 in town too) |
+
+What the checks needed to learn (so the next check does not lose time on it):
+
+- Mana is charged when the cast's action starts and refills in a few frames, so `cast`'s own "mana A -> B" and a read two
+  seconds later both show nothing; `manamin` samples every server frame. The drop it sees (7) is smaller than the charge the
+  plugin decides (16): regeneration refills in the same frames.
+- `0x4249f0` ("busy") is also true while an item is on the cursor. `unequip` and a pick-up leave the item there, and the next
+  cast is refused with code 1 although the usability code says 0. `cursor` shows it, packet `17 <id>` drops it.
+- D2RLoader runs a re-assembled copy of the server's skill charge function (`0x436830`), so the return address of the mana
+  cost call is a heap address: see docs/plugin-spec.md, Mana costs.
+- A skill must be selectable (left or right skill); `cast` refuses the passives and the ones the game will not select
+  ("would not select"). The check tries the InTown skills of the built `skills.txt` by required level until one is accepted
+  (`usable=0`).
+- Median's Throw (skill 2) needs strength 600 / dexterity 600 / level 60 for tax; the check sets the stats and restores them.
 
 ### Client messages (lane client-ui, 2026-10-22, background mode, slot 2, plugin 0.48.0, window-only screenshots)
 

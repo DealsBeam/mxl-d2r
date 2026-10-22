@@ -316,6 +316,34 @@ and RBX at the client charge site (`0x2188b0`, call 0x218937), picked by return 
 callers (`0x338110` / `0x33d480` tooltips and checks) keep D2R's value. Skills record: minmana +0x226, manashift
 +0x228, mana +0x22a, lvlmana +0x22c, calc7 +0x1a8, calc8 +0x1ac.
 
+**Free mana in town (audit SK3, Median P2.1.0; off word `townmana`).** At the two charge sites the hook returns 0 when the
+caster stands in a town (`0x34b440` unit -> room, `0x2f0750` room is a town); every other caller keeps its value. Found in
+game (lane gap-items, 2026-10-22): the server charge does **not** run at `0x4369fb`. D2RLoader replaces `0x436830` with a
+re-assembled copy of its body (registers reallocated, the call through a pointer: `ff 15 ..`, then `89 c3 85 c0 b8 ..`, at
+a heap address), so neither the return address nor RDI identifies the site. The stub now picks the site by the bytes after
+the call (server original `8b d8 85 c0 7f 04`, server copy `89 c3 85 c0 b8`, client `8b f8 85 c0 7e`) and the server copy's
+caster comes from a second hook, on the skill use function `0x43acb0` (entry `48 89 5c 24 10 44 89 4c 24 20 44 89 44 24 18
+55 56 57 41 54`; the unit is its second argument, RDX): a stub stores RDX in `g_caster` and jumps on. Only a player
+(unit type 0) counts. The Sigma formulas therefore also reach the server charge now (before, only the client charge site
+matched). The harness verb `manacharge` shows the last decision (calls, room, town test, cost, charge, site).
+
+## Item rules (`item_rules.cpp`, audit IT1, IT2, IT3; off words `durability`, `quantity`, `autoid`)
+
+Median keeps the durability and quantity columns and removes the behaviour from D2Game.dll with binary patches (D2Sigma's
+patch table: the call to the wear dispatcher at D2Game+0xdee28 is NOPed, the `dec ebp` of the quantity use at D2Game+0xa16be
+is NOPed). D2R's counterparts, hooked with whole-instruction entries (recorded in the file):
+
+| Rule | D2R function | Replacement |
+|---|---|---|
+| IT1 durability | `0x441b10` wear dispatcher (game, unit, item), a 4-10% proc per hit; `0x5590c0` skill-use wear / stack chance | no-ops (the dispatcher is the only writer of stat 0x48 on a hit; stat 0x49 stays) |
+| IT2 quantity | `0x439130` quantity use (game, unit, item, flag), callers `0x439320` from `0x432f90`, `0x4333f0`, `0x43acb0`, `0x55906e` | returns the stack's quantity and leaves it alone |
+| IT3 auto-identify | `0x471950` pick-up (player, item id, to inventory, distance, f5, f6), 1 on success, called by the packet 0x16 handler `0x4b9df0` | calls the original; on success `0x46e8c0(game, player, item, 0)`, D2R's own identify (sets flag 0x10 at item data +0x18, recalculates, sends the item to the client) |
+
+How Median does identify on pickup is not in D2Sigma's patch tables or functions (it has no identify function and no
+pick-up hook there), so the mechanism is D2R's own identify at the moment of the pick-up. Pure rules live in
+`item_rules_logic.h` (`NeedsIdentify`, `PickupSucceeded`, `QuantityUseResult`, `ManaCharge`), unit tests in
+`item_rules_test.cpp`.
+
 ## Item spells (misc.txt `pSpell`)
 
 D2Sigma replaced pSpell 12-22 with its own handlers: table 0x101d95b0 of {client start, use} pairs, dispatcher

@@ -113,16 +113,16 @@ Median gameplay rules found by [median-rules-audit.md](median-rules-audit.md) th
 | Gamble refresh and filter (audit IT10) | refresh button (R), highlight filter, rings and amulets on the screen | stock only | open | Median UI |
 | Imbue/socket highlight (audit CR7) | eligible items are highlighted when using the reward | none | open | Median UI |
 | Signet of Learning cap (audit GS10) | +1 stat point each, at most 400 | pSpell 3 calc `min(1, 400 - stat 185)` | verify | `item` a signet, `use`, `stat player 185` |
-| Item durability (audit IT1) | removed in 2.4.0 | durability stats and the `durability` skill column are still there | open | zero the columns in the tables or hook the stat |
-| Quantity and ammo (audit IT2) | throwing/quantity items are not used up | `noammo` on 4 skills only | open | table change plus skill flags |
-| Auto-identify (audit IT3) | items are identified when picked up | D2R's identify | open | hook on pickup, or set the identified flag at drop |
+| Item durability (audit IT1) | removed in 2.4.0 (Median NOPs the call to the wear dispatcher at D2Game+0xdee28; the columns stay) | plugin part `durability` (`item_rules.cpp`): D2R's wear dispatcher `0x441b10` and the skill-use wear `0x5590c0` do nothing | ported, verified | `game_checks nodurability`: durability 110 -> 110 and 48 -> 48 after 600 wear steps (off word: 110 -> 101, 48 -> 16) |
+| Quantity and ammo (audit IT2) | throwing/quantity items are not used up (Median NOPs the `dec ebp` of the quantity use at D2Game+0xa16be) | plugin part `quantity`: D2R's quantity use `0x439130` leaves the stack alone | ported, verified | `game_checks nodurability`: 4 Throws, quantity 58 -> 58 (off word: 110 -> 109) |
+| Auto-identify (audit IT3) | items are identified when picked up | plugin part `autoid`: the pick-up `0x471950` is followed by D2R's identify `0x46e8c0`. Median's own mechanism is not in D2Sigma, so this is the same effect by D2R's function, not a copy | ported, verified | `game_checks autoid`: flags 0x82000 -> 0x82010 after the pick-up packet (off word: stays 0x82000) |
 | Drop item level (audit IT16, DF10) | uses the area level of the monster, not the town | D2R's own | verify | kill after a town trip, read the item level |
 | Cube hotkey and Cow portal (audit CR5, CR6) | C transmutes; the Cow portal works in any town | D2R button only; recipe in `cubemain` | verify | press C; make the portal in Act 5 |
 | Stat point shift-click (audit XP6) | adds 25 points | D2R's 5/all | verify | shift-click a stat |
 | Free respec until level 50 (audit XP7) | unlimited after Den of Evil on Normal | Akara respec only | verify | respec twice at level 20 |
 | Grit (audit XP9) | Strength grants a damage-reduction stat | not mentioned in docs | verify | raise Strength and read the stat |
 | Steady aim and Heat (audit SK10, SK11) | Hunter steady aim; Fire sorceress Heat replaces mana | not mentioned in docs | verify | `cast` the skills, read mana and the stat |
-| Free mana in town (audit SK3) | skills cost no mana in town | none | open | hook on the mana spend |
+| Free mana in town (audit SK3) | skills cost no mana in town (P2.1.0; Median's mechanism is not in D2Sigma's tables) | plugin part `townmana`: the mana cost hook (`mana_costs.cpp`) returns 0 at the charge sites when the caster is in a town | ported, verified | `game_checks townmana`: skill 1558 in the Rogue Encampment, mana 5000 -> lowest 5000; in the Blood Moor -> 4993 (off word: 4993 in town too) |
 | Skills in town (audit SK4) | many buffs, totems and warps castable in town | `town` column carried from Median | verify | `cast` in town |
 | Skill cooldown groups (audit SK6) | cooldowns computed dynamically, groups separate | D2R's cooldowns | verify | two groups' cooldowns |
 | Sprint (audit SK7) | run toggle off; sprint about 5 s; stamina removed | none | open | plugin movement hook |
