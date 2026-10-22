@@ -173,6 +173,28 @@ model). Draft plan, edit before starting: [realm-plan.md](realm-plan.md).
 
 Rule for Phases 4-6 meanwhile: Median logic stays server-side in the plugins, and Median's state lives in the save files.
 
+## Progress estimate (2026-10-23, plugin 0.55.0)
+
+Judgement estimates, not measurements. Same method as the tables below. Since 0.53.0: the `medianxl` string namespace
+switch, the Median rules audit (124 rules) and the D2Sigma patch audit (2,027 patch sites, 767 functions) with their
+top items ported (no corpse, level cap 150, sockets / automagic for every quality, cooldowns, damage reduction, skill
+damage scaling, item rules, quests, travel, gamble, stamina / mana, monster scaling, collide types, start functions,
+function slot remap), the first generated 3D model in game (Wereowl). Game checks on 0.55.0: 88 checks, 94 results PASS,
+9 FAIL / 4 BLOCKED (lane release-055-fixes; mostly test-state problems), 2 for a human to review.
+
+| Phase | Share of total work | Phase done | Adds to overall |
+|---|---|---|---|
+| 0 Setup | 2% | 100% | 2.0% |
+| 1 Tools (extract, decode, convert) | 12% | 100% | 12.0% |
+| 2 Data port (tables, strings, install, booting) | 10% | 100% | 10.0% |
+| 3 Triage of Median's engine code | 8% | 100% | 8.0% |
+| 4 Plugins (engine behaviour) | 30% | 97% | 29.1% |
+| 5 Graphics | 28% | 45% | 12.6% |
+| 6 Test and release | 10% | 45% | 4.5% |
+| **Total** | **100%** | **78.2%** | **78.2%** |
+
+Phase 7 (private realm) is outside this estimate.
+
 ## Progress estimate (2026-10-22, plugin 0.53.0)
 
 Judgement estimates, not measurements. Same method as the tables below. Game checks on 0.53.0: 31 of 33 pass, tooltip
