@@ -1420,8 +1420,8 @@ def hit(ref, elem, amount, attacker=None):
 
 def spawn_attacker(cls=1):
     ok, lines = H("spawn %d" % cls)
-    m = re.search(r"id=(\d+)", " ".join(lines))
-    return ("mon:%s" % m.group(1)) if ok and m else None
+    m = re.search(r"spawned class \d+ id=(\d+)", " ".join(lines))
+    return ("mon:%s" % m.group(1)) if m else None
 
 
 def fight_ready():
@@ -1485,7 +1485,7 @@ def check_resistcap():
     elems = [("fire", 39, 40), ("ltng", 41, 42), ("cold", 43, 44), ("magic", 37, 38)]
     cases = [(0, 0.25), (10, 0.15), (50, 0.10)]  # resist 200; the cap is 75 + max-resist, at most 90 (95 would be 5%)
     amount, bad, rows = 100000, [], []
-    for ref, attacker in (("player", None), ("merc", atk)):
+    for ref, attacker in (("player", atk), ("merc", atk)):  # never the nearest monster: that is the hired mercenary
         saved = {s: rd(ref, s) for e in elems for s in e[1:]}
         for elem, res, mx in elems:
             for add_max, want in cases:
