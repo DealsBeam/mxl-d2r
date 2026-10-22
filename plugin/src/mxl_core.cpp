@@ -607,11 +607,11 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: items %s", g_itemsExtReport);
 			context->LogInfo(line);
-			const bool cl = !Off("classlock"), et = !Off("ethereal"), so = !Off("sockets"), dy = !Off("dyes");
-			if (!cl && !et && !so && !dy) {
+			const bool cl = !Off("classlock"), et = !Off("ethereal"), so = !Off("sockets"), dy = !Off("dyes"), aq = !Off("allquals");
+			if (!cl && !et && !so && !dy && !aq) {
 				std::snprintf(g_itemGenReport, sizeof(g_itemGenReport), "%s", OffNote);
 			} else {
-				InstallItemGen(context, cl, et, so, dy, g_itemGenReport, sizeof(g_itemGenReport));
+				InstallItemGen(context, cl, et, so, dy, aq, g_itemGenReport, sizeof(g_itemGenReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: item generation %s", g_itemGenReport);
 			context->LogInfo(line);

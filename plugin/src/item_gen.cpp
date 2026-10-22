@@ -15,11 +15,19 @@
 // durability to 75% of the maximum read before D2R's halving (or restores it for the items that were not accepted).
 // Forced ethereal (generator flags +0xc0 bit 4, +0x54 bit 0x400000) always applies.
 //
-// Sockets. Median's 0x1007e240 (the call that replaces 1.13c's socket roll for quality 1-3 items) gives items whose base can
-// have sockets (and without the generator's no-socket flag +0xc0 bit 8) `rand() % 7` sockets, none for a remainder of 0. D2R's
-// own roll is 0x441fc0 (called for the same qualities from 0x442d60 and 0x443670): 33 in 100 items get rand(max) + 1 sockets.
-// Hook: 0x441fc0 replaced by Median's roll, with D2R's setter 0x375560 doing the clipping; forced sockets (generator flags
-// +0xc0 bit 0x10, +0x54 bit 0x800) keep D2R's own code.
+// Sockets. Median's 0x1007e240 (the call that replaces 1.13c's socket roll) gives items whose base can have sockets
+// `rand() % 7` sockets for the qualities with qualities.txt MaxSock 0 (1-4; not with the generator's no-socket flag +0xc0 bit 8),
+// none for a remainder of 0, and the base's maximum (6 clipped) for MaxSock 1 (set, rare, unique, crafted, tempered: no die, the
+// flag is not read; a unique row with the `nosockets` flag 0x10 stays bare, no row has it). D2R's own roll is 0x441fc0 (called
+// from 0x442d60 and 0x443670): 33 in 100 items get rand(max) + 1 sockets, and 0x442d60 calls it for quality 1-3 only.
+// Hook: 0x441fc0 replaced by Median's roll and setter (D2R's own setter 0x375560 caps magic at 4, rare 2, unique 1, crafted 3); forced sockets (generator flags
+// +0xc0 bit 0x10, +0x54 bit 0x800) keep D2R's own code. "allquals": the 2-byte `jne` after the quality 1..3 test of 0x442d60
+// (RVA 0x44356a) becomes a nop (D2Sigma nops the same guard), so 0x441fc0 runs for qualities 4-9 too; 0x443670 jumps to it
+// without a quality test already.
+//
+// Automagic. After the sockets 0x442d60 (item level 100+) applies the base's auto prefix group through a jump table on the
+// quality (RVA 0x44364c, 9 entries): D2R skips sets (5) and uniques (7). Median's stub 0x1009bbc0 asks qualities.txt
+// `Automagics` (1 for 1-9): the two entries become the apply case, so set and unique items get an innate automagic mod too.
 //
 // Dye. Median's item colour 0x1007e6d0 paints an item with the colour index in stat 183 (D2R 368, 1..21) instead of the base's.
 // D2R's colour function 0x3710d0 (player, item, &colourByte, mode) writes (transform kind << 5) + colour into the byte and
@@ -64,13 +72,15 @@ constexpr uint64_t CanSocketRva = 0x373610;      // (item): the base can have so
 constexpr uint64_t NoSocketBaseRva = 0x374660;   // (item): items record +0x142, nonzero keeps the item without sockets
 constexpr uint64_t ItemLevelRva = 0x3730d0;      // (item) -> item level (item data +0x40)
 constexpr uint64_t NoEtherealBaseRva = 0x3744d0; // (item): items record +0x13a, nonzero keeps D2R's generator from making it ethereal
-constexpr uint64_t SetSocketsRva = 0x375560;     // (item, count): sets stat 0xc2, clipped to what the item can hold
+constexpr uint64_t MaxSocketsRva = 0x36ead0;     // (item) -> byte: most sockets the item can hold (Sigma's import 0x101671c4)
 
+constexpr uint64_t SocketGuardRva = 0x44356a;    // 0x442d60: cmp eax,r13d / jne 0x44357d (quality is 3 or the call is skipped)
 constexpr int GenFlags = 0xc0;       // generator record: bit 2 no ethereal, 4 force ethereal, 8 no sockets, 0x10 force sockets
 constexpr int GenItemFlags = 0x54;   // generator record: item flag word (0x400000 ethereal, 0x800 socketed)
 constexpr int ItColourKind = 0x151;  // items record: transform kind of the character colour (1..8)
 constexpr int ItColourKindInv = 0x152;
 constexpr int32_t StatDye = 368;
+constexpr int32_t StatSockets = 0xc2;
 constexpr int32_t StatClassLock = 492;
 constexpr int32_t StatDurability = 0x48;
 constexpr int32_t StatMaxDurability = 0x49;
@@ -103,7 +113,6 @@ using IsTypeFn = int32_t (*)(Unit* item, int32_t type);
 using SeedFn = void* (*)(Unit* unit);
 using RandFn = int32_t (*)(void* seed, int32_t n);
 using ItemFn = int32_t (*)(Unit* item);
-using SetSocketsFn = void (*)(Unit* item, uint32_t count);
 using ItemLevelFn = uint16_t (*)(Unit* item);
 
 RequirementFn g_originalRequirement = nullptr;
@@ -128,7 +137,7 @@ ItemFn g_quality = nullptr;
 ItemFn g_hasDurability = nullptr;
 ItemFn g_canSocket = nullptr;
 ItemFn g_noSocketBase = nullptr;
-SetSocketsFn g_setSockets = nullptr;
+ItemFn g_maxSockets = nullptr;
 ItemLevelFn g_itemLevel = nullptr;
 ItemFn g_noEtherealBase = nullptr;
 
@@ -151,6 +160,14 @@ int g_qualityIn = -1;
 int g_qualityOut = -1;
 int g_socketsRolled = 0;
 int g_socketsGiven = 0;
+int g_socketCalls[10] = {};  // hook calls by quality 0-9 (diagnostics: itemroll prints them)
+long long g_socketAfter[10] = {};  // sockets stat right after D2R's setter, summed by quality
+int g_socketBlocked = 0;     // calls skipped: no-socket base, base cannot hold sockets, or the generator's no-socket flag
+int g_socketOriginal = 0;    // calls left to D2R's own roll (forced sockets, quality outside 1-9)
+int g_socketsRolledMax = 0;  // items of the qualities with MaxSock 1 (set, rare, unique, crafted, tempered)
+int g_socketsGivenMax = 0;
+int g_socketsRolledMagic = 0;  // quality 4 (D2R never rolls it)
+int g_socketsGivenMagic = 0;
 int g_dyed = 0;
 
 // 0x36bc50: mov [rsp+0x20],r9 / mov [rsp+0x18],r8d
@@ -161,6 +178,9 @@ constexpr uint8_t GenerateEntry[] = {0x40, 0x53, 0x55, 0x41, 0x56, 0x48, 0x83, 0
 constexpr uint8_t EtherealEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20};
 // 0x441fc0: mov [rsp+0x10],rbp / mov [rsp+0x18],rsi / push rdi / sub rsp,0x20
 constexpr uint8_t SocketRollEntry[] = {0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x20};
+// 0x44356a: cmp eax,r13d (41 3b c5) / jne +0xe; the jne becomes a two-byte nop
+constexpr uint8_t SocketGuardOriginal[] = {0x41, 0x3b, 0xc5, 0x75, 0x0e};
+constexpr uint8_t SocketGuardPatched[] = {0x41, 0x3b, 0xc5, 0x66, 0x90};
 // 0x3710d0: mov [rsp+8],rbx / mov [rsp+0x20],r9d / push rbp / push rsi / push rdi
 constexpr uint8_t ColourEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x44, 0x89, 0x4c, 0x24, 0x20, 0x55, 0x56, 0x57};
 
@@ -354,7 +374,7 @@ void EtherealHook(Unit* item) {
 
 // --- Sockets ------------------------------------------------------------------------------------------------------
 
-// 0x441fc0 (game, item, genRecord).
+// 0x441fc0 (game, item, genRecord). Qualities 1-4 roll the die, 5-9 get the base's maximum (item_gen_logic.h).
 void SocketRollHook(void* game, Unit* item, uint8_t* gen) {
 	if (item == nullptr || gen == nullptr) {
 		g_originalSocketRoll(game, item, gen);
@@ -362,21 +382,37 @@ void SocketRollHook(void* game, Unit* item, uint8_t* gen) {
 	}
 	const bool forced = (d2r::At<uint8_t>(gen, GenFlags) & 0x10) != 0 || (d2r::At<uint32_t>(gen, GenItemFlags) & FlagSocketed) != 0;
 	const int32_t quality = g_quality(item);
-	if (forced || quality < 1 || quality > 3) {
+	++g_socketCalls[quality >= 0 && quality < 10 ? quality : 0];
+	if (forced || !item_gen::QualityHasSocketRule(quality)) {
+		++g_socketOriginal;
 		g_originalSocketRoll(game, item, gen);
 		return;
 	}
-	if ((d2r::At<uint8_t>(gen, GenFlags) & 8) != 0 || g_canSocket(item) == 0 || g_noSocketBase(item) != 0) {
+	const bool dieQuality = item_gen::QualityMaxSock(quality) == 0;
+	const bool noGen = (d2r::At<uint8_t>(gen, GenFlags) & 8) != 0;
+	if ((dieQuality && noGen) || g_canSocket(item) == 0 || g_noSocketBase(item) != 0) {
+		++g_socketBlocked;
 		return;
 	}
 	++g_socketsRolled;
-	const int32_t count = item_gen::SocketsFromRoll(g_rand(g_seed(item), item_gen::SocketRollModulus));
+	g_socketsRolledMax += dieQuality ? 0 : 1;
+	g_socketsRolledMagic += quality == 4 ? 1 : 0;
+	const int32_t remainder = dieQuality ? g_rand(g_seed(item), item_gen::SocketRollModulus) : 0;
+	const int32_t count = item_gen::SocketsForQuality(quality, remainder, false, noGen);  // no row of Median's uniqueitems.txt has nosockets
 	if (count == 0) {
 		return;
 	}
+	// Median's setter 0x100800b0: min(count, the item's maximum), flag 0x800, stat 0xc2. D2R's 0x375560 would also cap by quality.
+	const int32_t placed = item_gen::ClipSockets(count, g_maxSockets(item) & 0xff);
+	if (placed <= 0) {
+		return;
+	}
 	g_setFlag(item, FlagSocketed, 1);
-	g_setSockets(item, static_cast<uint32_t>(count));
+	g_setBase(item, StatSockets, placed, 0);
+	g_socketAfter[quality >= 0 && quality < 10 ? quality : 0] += g_getStat(item, StatSockets, 0);
 	++g_socketsGiven;
+	g_socketsGivenMax += dieQuality ? 0 : 1;
+	g_socketsGivenMagic += quality == 4 ? 1 : 0;
 }
 
 // --- Dye ----------------------------------------------------------------------------------------------------------
@@ -400,13 +436,14 @@ int64_t ColourHook(Unit* player, Unit* item, uint8_t* colour, int32_t mode) {
 
 }  // namespace
 
-auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool ethereal, bool sockets, bool dyes, char* report,
+auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool ethereal, bool sockets, bool dyes, bool allQuals, char* report,
                     size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;
 	const char* lock = "left out";
 	const char* eth = "left out";
 	const char* sock = "left out";
 	const char* dye = "left out";
+	const char* all = "left out";
 	bool ok = true;
 	g_unitType = reinterpret_cast<UnitTypeFn>(base + UnitTypeRva);
 	g_unitClass = reinterpret_cast<UnitClassFn>(base + UnitClassRva);
@@ -424,7 +461,7 @@ auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool eth
 	g_hasDurability = reinterpret_cast<ItemFn>(base + HasDurabilityRva);
 	g_canSocket = reinterpret_cast<ItemFn>(base + CanSocketRva);
 	g_noSocketBase = reinterpret_cast<ItemFn>(base + NoSocketBaseRva);
-	g_setSockets = reinterpret_cast<SetSocketsFn>(base + SetSocketsRva);
+	g_maxSockets = reinterpret_cast<ItemFn>(base + MaxSocketsRva);
 	g_itemLevel = reinterpret_cast<ItemLevelFn>(base + ItemLevelRva);
 	g_noEtherealBase = reinterpret_cast<ItemFn>(base + NoEtherealBaseRva);
 	g_palette = reinterpret_cast<PaletteFn>(base + PaletteRva);
@@ -481,17 +518,46 @@ auto InstallItemGen(const D2RL::PluginContext* context, bool classLock, bool eth
 			ok = ok && hooked;
 		}
 	}
-	std::snprintf(report, reportSize, "%s: class lock (0x36bc50) %s, ethereal (0x442d60, 0x3d3510) %s, sockets (0x441fc0) %s, dyes (0x3710d0) %s",
-	              ok ? "on" : "partial", lock, eth, sock, dye);
+	if (allQuals) {
+		// Sockets for qualities 4-9: the quality 1..3 test in front of the call to 0x441fc0 (only with the socket hook, whose
+		// Median rule replaces D2R's roll for them).
+		bool guard = false;
+		if (sockets && g_originalSocketRoll != nullptr) {
+			guard = context->PatchBytes(SocketGuardRva, SocketGuardOriginal, sizeof(SocketGuardOriginal), SocketGuardPatched,
+			                            sizeof(SocketGuardPatched));
+		}
+		// Automagic for sets and uniques: jump table of the quality switch at 0x44364c.
+		uint32_t original[item_gen::AutomagicQualities];
+		uint32_t median[item_gen::AutomagicQualities];
+		for (int32_t q = 1; q <= item_gen::AutomagicQualities; ++q) {
+			original[q - 1] = item_gen::AutomagicTargetOriginal(q);
+			median[q - 1] = item_gen::AutomagicTargetMedian(q);
+		}
+		const bool table = context->PatchBytes(item_gen::AutomagicTableRva, original, sizeof(original), median, sizeof(median));
+		all = guard && table ? "patched" : (guard ? "socket guard patched, automagic table NOT patched" : (table ? "automagic table patched, socket guard NOT patched" : "NOT patched"));
+		ok = ok && table && (guard || !sockets);
+	}
+	std::snprintf(report, reportSize, "%s: class lock (0x36bc50) %s, ethereal (0x442d60, 0x3d3510) %s, sockets (0x441fc0) %s, dyes (0x3710d0) %s, "
+	                                  "all qualities (0x44356a socket guard, 0x44364c automagic table) %s",
+	              ok ? "on" : "partial", lock, eth, sock, dye, all);
 	return ok;
 }
 
 void ItemGenSummary(char* text, size_t size) noexcept {
-	std::snprintf(text, size, "class lock denied %d of %d locked-item checks, mercenary equip refused %d of %d | ethereal %d of %d at item level 100+ | sockets given %d of %d rolls | dyed colours drawn %d",
-	              g_lockDenied, g_lockChecked, g_mercDenied, g_mercChecked, g_etherealMade, g_etherealSeen, g_socketsGiven, g_socketsRolled, g_dyed);
+	std::snprintf(text, size, "class lock denied %d of %d locked-item checks, mercenary equip refused %d of %d | ethereal %d of %d at item level 100+ | sockets given %d of %d rolls (magic %d of %d, set / rare / unique / crafted / tempered %d of %d) | dyed colours drawn %d",
+	              g_lockDenied, g_lockChecked, g_mercDenied, g_mercChecked, g_etherealMade, g_etherealSeen, g_socketsGiven, g_socketsRolled,
+	              g_socketsGivenMagic, g_socketsRolledMagic, g_socketsGivenMax, g_socketsRolledMax, g_dyed);
 }
 
 void ItemGenGateText(char* text, size_t size) noexcept {
 	std::snprintf(text, size, "ethereal gate of 0x442d60: %d generated, level 100+ %d, weapon or armour %d, durable %d, quality ok %d, base ok %d | hook B called %d, ethereal made %d, quality 1 made %d | last item level %d -> %d, quality %d -> %d",
 	              g_gateGenerated, g_gateLevel, g_gateType, g_gateDurable, g_gateQuality, g_gateBase, g_etherealSeen, g_etherealMade, g_etherealLow, g_levelIn, g_levelOut, g_qualityIn, g_qualityOut);
+}
+
+// The socket hook's counters by quality for the harness `itemroll` (a second line: the console cuts long ones).
+void ItemGenSocketText(char* text, size_t size) noexcept {
+	std::snprintf(text, size, "socket hook calls by quality [%d %d %d %d %d %d %d %d %d %d], D2R's own %d, blocked %d, rolled %d (max %d), given %d (max %d); stat after the setter, sums [%lld %lld %lld %lld %lld %lld %lld %lld %lld %lld]",
+	              g_socketCalls[0], g_socketCalls[1], g_socketCalls[2], g_socketCalls[3], g_socketCalls[4], g_socketCalls[5], g_socketCalls[6], g_socketCalls[7], g_socketCalls[8], g_socketCalls[9],
+	              g_socketOriginal, g_socketBlocked, g_socketsRolled, g_socketsRolledMax, g_socketsGiven, g_socketsGivenMax,
+	              g_socketAfter[0], g_socketAfter[1], g_socketAfter[2], g_socketAfter[3], g_socketAfter[4], g_socketAfter[5], g_socketAfter[6], g_socketAfter[7], g_socketAfter[8], g_socketAfter[9]);
 }
