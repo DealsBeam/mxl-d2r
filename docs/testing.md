@@ -324,7 +324,7 @@ D2R's own cheat output.
 
 The `pkt` verb could not make the player act: the walk and run packets (1 / 3) are 210 bytes with the client's own path, and the
 cast packets run through the character's active skill. `move`, `skill`, `setskill`, `cast`, `equip` and the missile counter now
-drive the player server side with the game's own functions (no input of any kind; `py -3 tools/game_checks.py casts equipevents`).
+drive the player server side with the game's own functions (no input of any kind; `py -3 tools/game_checks.py casts itemevents`).
 
 | Row | Result | Evidence |
 |---|---|---|
@@ -333,7 +333,7 @@ drive the player server side with the game's own functions (no input of any kind
 | `cast` Bash (126) | PASS | mode 7, mana 1005 -> 996, no missile (a melee hit) |
 | `cast` Fire Bolt (36, a Sorceress spell cast by the Barbarian) | PASS | mode 10, missile class 58; the game does not check the class here. The only character in the slot is a Barbarian, and Median's Sorceress skills with a missile and no prerequisite are rare (frigid_nova 485 answers usability 2 and does not run) |
 | `equip` + `unequip` | PASS | worn item `body=4` / `body=7`; a +77 strength ring: stat 0 30 -> 107, back to 30 |
-| Item events (stat 396 / 397) | documents the open item | `equip 115 397=50 396=40 rhand`: the item holds the stats (`stat <item id> 397` = 50) and monsters hit the player, but `stat player 397` and `396` stay 0: D2R does not carry these event stats from the item to the owner's list (strength does); the damage to the attacker could not be read (`stat <monster id> 6` reads 0). The dispatcher is still not found; see docs/subsystems/items-xp.md section 5 |
+| Item events (stat 397 / 265 / 376 / 135 / 136) | PASS (`py -3 tools/game_checks.py all itemevents`, slot 3) | ring `397=50`: the monster loses 50 points on `evtrace fire 3 player m<id>`; ring `265=50`: +50 life on `evtrace fire 9`; ring `376:2309=100`: a class-58 missile (Fire Bolt 5, skill not owned); ring `135=100 136=100`: a plain monster loses life on events 5 / 6, one with stat 373 does not. A weapon `115` in `rhand` does not apply its stats in the harness, use a ring. See docs/subsystems/items-xp.md section 5b |
 
 Notes for whoever extends this: `cast` needs the skill to be the active left skill (the unit cast uses the player's active skill), the
 harness selects it; a melee skill cast at a unit makes the player run to it first and the class 18 monsters wander off, so the check

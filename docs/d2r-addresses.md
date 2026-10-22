@@ -1,4 +1,14 @@
-# D2R 3.3 build 93847: addresses for the blocked hooks (lane d2r-addresses, 2026-10-21)
+# D2R 3.3 build 93847: addresses fo
+Item events (lane p4ev, 2026-10-22; docs/subsystems/items-xp.md section 5b):
+
+| What | Address | Notes |
+|---|---|---|
+| unit-event thunks | exe `0x3e2a400` .. `0x3e2a428` | register, unregister, has, clear, dispatch, registerFn: slots into D2RCore |
+| per-unit event list | `unit + 0xe0` | node `0x40` bytes: `+8` `(stat << 32) \| layer`, `+0x28` handler, `+0x38` next |
+| event dispatch wrapper | exe `0x44d570` | `(game, event, unitA, unitB, arg5)`; kill = 9, thorns 2 / 3, open wounds / crushing blow 5 / 6 |
+| core handler table | D2RCore `0x630260` | slot = itemeventfunc; handler `(game, event, unit, other, arg5, code64, a7, a8, a9)`; 15 `0x3d12b0`, 16 `0x3d1310` (a `jmp`), 33 `0x3d19b0` and 34 `0x3d1a20` are forwarders that return 0 |
+| exe handler table | exe `0x238e5c0`, ids 1..40 | 6 `0x582b20` (thorns), 11 `0x582d30`, 12 `0x5828d0`, 15 `0x584170`, 16 `0x583150`, 20 `0x583b30` (cast), 28 `0x583a70` (life), 32 `0x42eea0`, 33 `0x42f300`, 34 `0x51f7b0`; code is `(stat << 16) \| layer` |
+| itemstatcost records | `*(exe + 0x2a9a580 + 16) + 0x1258`, stride `0x144` | event words `+0x44 / +0x46`, function words `+0x48 / +0x4a` |r the blocked hooks (lane d2r-addresses, 2026-10-21)
 
 All addresses are **RVAs** in the D2R image (`D2RLoader_6ab3782c_dump.exe` memory layout; file offset == RVA, base
 `0x140000000`), x64 Microsoft ABI (rcx, rdx, r8, r9, then stack at `[rsp+0x20]...` at the callee's entry).
