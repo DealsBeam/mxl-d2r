@@ -16,6 +16,7 @@
 #include "goblins.h"
 #include "info_panels.h"
 #include "mxl_hirelings.h"
+#include "cooldowns.h"
 #include "no_corpse.h"
 #include "item_events.h"
 #include "npc_actions.h"
@@ -447,6 +448,9 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Out("corpses %d players=%d self=%d | no corpse %s: skipped corpse calls=%ld penalty calls=%ld respawns held=%ld let=%ld xp=%u", corpses,
 	    players, self ? 1 : 0, noCorpseOn ? "on" : "off", skippedCorpses, skippedPenalties, respawnsHeld, respawns,
 	    static_cast<uint32_t>(Stat(p, 13)));
+	long cdStarts = 0, cdReduced = 0, cdShared = 0, cdDropped = 0;
+	const bool cooldownsOn = CooldownCounts(&cdStarts, &cdReduced, &cdShared, &cdDropped);
+	Out("cooldowns %s: starts=%ld reduced=%ld shared=%ld dropped=%ld", cooldownsOn ? "on" : "off", cdStarts, cdReduced, cdShared, cdDropped);
 	Out("skills left=%d right=%d", SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(p)), SkillIdOf(Fn<ActiveSkillFn>(RvaRightSkill)(p)));
 	PrintMissiles(c);
 	int mons = 0;
