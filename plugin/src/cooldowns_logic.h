@@ -13,10 +13,18 @@ namespace cooldowns {
 //   delay    = the skill's delay formula (D2R: localdelay) - stat 309 at layer = the skill id (unit's total; only when not 0)
 //   start    = only for a player unit and delay > 0: the end frame is now + delay, stored in the unit's own table at
 //              group != 0 ? timer[group] : timer[skill]  (skills2 byte +0x2c is the group); the client is sent packet 0x2b
-//   ready    = non-player: always; player: now >= timer[group != 0 ? group : skill]  (nothing stored = ready)
+//   ready    = non-player: always (`if (*unit != 0) return 1` at 0x100b0a40+0x70); player: now >= timer[group != 0 ? group : skill]
+//              (nothing stored = ready)
 // So skills of one group share one timer (the latest start wins, whichever skill started it), every other skill has its own,
 // and there is no unit-wide delay state any more.
 constexpr int32_t StatCooldownReduction = 309;
+
+// Only a player unit (D2 unit type 0) has cooldowns: a monster, pet or hireling is always ready and its start stores nothing,
+// so a monster skill with a delay in skills.txt can be cast again at once. D2R's start would give the monster its own timer.
+constexpr int32_t UnitTypePlayer = 0;
+constexpr auto HasCooldowns(int32_t unitType) noexcept -> bool {
+	return unitType == UnitTypePlayer;
+}
 
 // The delay after the stat; zero reduction leaves it alone, a negative one lengthens it (Median's `sub ebx, eax`).
 constexpr auto ReducedDelay(int32_t delay, int32_t reduction) noexcept -> int32_t {
@@ -129,15 +137,16 @@ struct Counters {
 	volatile long reduced = 0;   // of those, delays that stat 309 changed
 	volatile long shared = 0;    // extra group members started
 	volatile long dropped = 0;   // starts whose reduced delay was not above zero
+	volatile long monsters = 0;  // starts of a non-player unit that were not passed on (Median: monsters have no cooldown)
 };
 
 // "on: D2R local cooldown start 0x439500 (server) / 0x217b90 (client): stat 309 reduces the delay, 156 skills in 67 groups share
-// one timer (starts 0, reduced 0, shared 0, dropped 0)"
+// one timer, non-players have none (starts 0, reduced 0, shared 0, dropped 0, non-player starts skipped 0)"
 inline void FormatReport(char* out, size_t outSize, size_t skills, size_t groups, const Counters& c) noexcept {
 	std::snprintf(out, outSize,
 	              "on: local cooldown start 0x439500 (server) / 0x217b90 (client): stat 309 reduces the delay, %zu skills in %zu groups "
-	              "share one timer (starts %ld, reduced %ld, shared %ld, dropped %ld)",
-	              skills, groups, c.starts, c.reduced, c.shared, c.dropped);
+	              "share one timer, non-players have none (starts %ld, reduced %ld, shared %ld, dropped %ld, non-player starts skipped %ld)",
+	              skills, groups, c.starts, c.reduced, c.shared, c.dropped, c.monsters);
 }
 
 // Number of distinct groups in a table.

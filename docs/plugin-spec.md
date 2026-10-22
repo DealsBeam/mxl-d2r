@@ -386,6 +386,13 @@ returning 4 when it fails. The migrated record carries the column; the mode 7 ru
 `txt_migrate.py` writes into `mxl_ids.h` (`StateMeleeDevotion`, `StateProgressiveCold`). Hunter Heartseeker is mode 5 with
 the states `sk1296_state` (Steady Aim) / `progressive_cold`: "Requires Steady Aim". Checked by `game_checks steadyaim`.
 
+**Item-triggered skills are not restricted** (lane skill-leftovers). D2R has a second restrict test, `0x33f6a0` (modes 0-2 only,
+gated by a flag bit of the skill record), whose single caller `0x589930` is the event-skill caster behind `0x5896e0` (item procs,
+charges, oskills). D2Sigma has no counterpart: 1.13c's restrict test `0x6fd9f590` is called from D2Common 10787 alone and the
+1.13c event-skill caster `0x6fd114f0` never reaches it, so in Median an item's cast ignores `restrict`; `0x33f6a0` lets 3-7
+through, which is the same, and is not hooked. Checked by `game_checks restrictitems` (Heartseeker refused for the player's cast
+without Steady Aim, cast by an item's cast-on-kill with and without it).
+
 ## Steady Aim (Hunter, audit SK10): data plus the restrict module
 
 Steady Aim is stat 220 layer 5 on the state `sk1296_state` (D2R 558), held by the layered self buff (`auras.cpp`, slot
@@ -854,7 +861,9 @@ skills2 cooldown group share one timer (D2Sigma `0x100b0f40` / `0x100b1140` / `0
 cooldown starts (server `0x439500`, client `0x217b90`; entry bytes are verified before the hook is installed): for a player it subtracts stat 309 and starts the D2R timer
 (state `0xb9`, stat 359 at layer = skill id) of every member of the skill's group with the same delay; other units keep D2R's behaviour. The group table is generated
 (`mxl_cooldowns.h`, `txt_migrate cooldown_tables`); the pure rules and a model of Median's tables are in `cooldowns_logic.h` (`cooldown_tests`). `mxl` prints the line
-`cooldowns` with the counters starts / reduced / shared / dropped (also in `h state`). Median's removal of monster cooldowns and the client packet `0x2b` are not ported.
+`cooldowns` with the counters starts / reduced / shared / dropped / non-player starts skipped (also in `h state`, `monsters=`). Median's removal of monster cooldowns is ported:
+a start of a unit that is not a player (monster, pet, hireling) is not passed on at all, so it stores no timer (D2R's ready test `0x3404a0` already answers "ready" for non-players;
+what changes is the state `0xb9` / stat 359 left on the monster; in game the harness's monster skill use never reached `0x439500`, so the counter stayed 0 and the rule is a guard). The client packet `0x2b` is not ported.
 
 ## Runewords and kill experience (`items_ext.cpp`, off words `runewords`, `xp`)
 

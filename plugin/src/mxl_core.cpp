@@ -249,14 +249,15 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		Say(command, line);
 	}
 	{
-		long starts = 0, reduced = 0, shared = 0, dropped = 0;
-		char report[320];
-		if (CooldownCounts(&starts, &reduced, &shared, &dropped)) {
+		long starts = 0, reduced = 0, shared = 0, dropped = 0, monsters = 0;
+		char report[360];
+		if (CooldownCounts(&starts, &reduced, &shared, &dropped, &monsters)) {
 			cooldowns::Counters c;
 			c.starts = starts;
 			c.reduced = reduced;
 			c.shared = shared;
 			c.dropped = dropped;
+			c.monsters = monsters;
 			cooldowns::FormatReport(report, sizeof(report), CooldownMemberCount(), CooldownGroupCount(), c);
 		} else {
 			std::snprintf(report, sizeof(report), "%s", g_cooldownsReport);

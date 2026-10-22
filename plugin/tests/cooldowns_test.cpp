@@ -34,6 +34,10 @@ int main() {
 	Check(ReducedDelay(100, -20) == 120, "a negative stat lengthens the delay (Median's sub)");
 	Check(Starts(1) && !Starts(0) && !Starts(-5), "starts only above zero");
 
+	// only a player has cooldowns: monsters (1), missiles (3), items (4), tiles (5) and the rest are always ready
+	Check(HasCooldowns(0) && !HasCooldowns(1) && !HasCooldowns(2) && !HasCooldowns(3) && !HasCooldowns(4) && !HasCooldowns(-1),
+	      "only unit type 0 (player) has cooldowns");
+
 	// groups
 	Check(GroupOf(Table, N, 10) == 1 && GroupOf(Table, N, 21) == 2 && GroupOf(Table, N, 30) == 0, "group of a skill");
 	int32_t out[8];
@@ -110,6 +114,9 @@ int main() {
 	FormatReport(line, sizeof(line), 156, 67, c);
 	Check(std::strstr(line, "156 skills in 67 groups") != nullptr && std::strstr(line, "starts 0, reduced 0, shared 0, dropped 0") != nullptr,
 	      "report");
+	c.monsters = 7;
+	FormatReport(line, sizeof(line), 156, 67, c);
+	Check(std::strstr(line, "non-players have none") != nullptr && std::strstr(line, "non-player starts skipped 7)") != nullptr, "report counts non-player starts");
 	char small[16];
 	FormatReport(small, sizeof(small), 1, 1, c);
 	Check(std::strlen(small) == sizeof(small) - 1, "report truncates to the buffer");

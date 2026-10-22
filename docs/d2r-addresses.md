@@ -790,7 +790,7 @@ unchanged by the port.
 Median's rules (D2Sigma, read from the disassembly; audit item 4 in sigma-patch-audit.md): delay `0x100b0f40` = the skill's delay formula - stat 309 at layer = skill id
 (unit total, only when not 0); start `0x100b1140` = player units only and delay > 0, end frame (now + delay) stored in the unit's extension
 (`unit + 0xf4`) at `ext[+8][group]` when skills2 byte `+0x2c` (CooldownGroup) is not 0, else `ext[+4][skill]`, and client packet `0x2b`; ready test
-`0x100b0ab0` = `now >= timer`, non-players always ready. Median patch sites: D2Client `0xa2e06`, D2Common `0x52279` and `0x52462` (stub `0x1009b7f0`), D2Game `0xa09d5` /
+`0x100b0ab0` = `now >= timer`, non-players always ready. The plugin passes on no start for a non-player (checked in game: the harness's monster skill use does not reach `0x439500` at all, with or without the hook). Median patch sites: D2Client `0xa2e06`, D2Common `0x52279` and `0x52462` (stub `0x1009b7f0`), D2Game `0xa09d5` /
 `0xa1aed` (stub `0x1009bc90`).
 
 | What | Address | Signature | Entry bytes (build 93847) | Notes |

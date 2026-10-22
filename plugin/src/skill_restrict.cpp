@@ -9,6 +9,11 @@
 // The skill entry D2R passes is a pointer to a struct whose first field is the skills.txt record (+0x2d0 the mode
 // byte, +0x2d2 the three states as int16, -1 none). Restrict 7 also refuses while Median's melee devotion or
 // progressive cold is set: tools/txt_migrate.py writes their D2R state ids to mxl_ids.h.
+//
+// Item-triggered skills are left alone on purpose. D2R has a second restrict test, 0x33f6a0 (modes 0 to 2 only), called by the
+// event-skill caster 0x589930 (item procs, charges, oskills). D2Sigma has no counterpart: in 1.13c the restrict test is called
+// from D2Common 10787 only, and the event-skill caster 0x6fd114f0 never reaches it, so Median's item procs ignore `restrict`.
+// 0x33f6a0 lets modes 3 to 7 through, which is the same (docs/sigma-patch-audit.md item 7; game check `restrictitems`).
 #include "skill_restrict.h"
 
 #include "d2r.h"
@@ -58,7 +63,7 @@ auto InstallSkillRestrict(const D2RL::PluginContext* context, char* report, size
 	g_hasState = reinterpret_cast<HasStateFn>(context->exeBase + HasStateRva);
 	const bool ok = context->InstallInlineHook(SkillCheckRva, SkillCheckEntry, sizeof(SkillCheckEntry), SkillCheck,
 	                                           reinterpret_cast<void**>(&g_original));
-	std::snprintf(report, reportSize, ok ? "on: restrict 3-7 (no state, all states, first-not-others, first or second, devotion/cold)"
+	std::snprintf(report, reportSize, ok ? "on: restrict 3-7 on the cast path (no state, all states, first-not-others, first or second, devotion/cold); item procs/charges unrestricted as in Median"
 	                                     : "off: skill check hook failed (the state trace has it?)");
 	return ok;
 }
