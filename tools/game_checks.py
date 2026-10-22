@@ -2369,13 +2369,14 @@ def check_strings():
             record("plugin string ids", full, bool(m) and m.group(1) == "ok" and int(m.group(3)) != 0 and via == exp, exp, via,
                    "service %s id %s" % (m.group(1), m.group(3)) if m else (lines[-1] if lines else "no answer"))
 
-    # ---- native exceptions by key: unqualified, so the loader reads them as d2r:<key>
+    # ---- native exceptions by key: the loader must know the key, native (`d2r:`) or in the namespace (an unqualified record of a
+    # namespaced mod belongs to it); the row samples above are the proof of what the player sees
     for key in STR_NATIVE:
-        full = src.full_key(key)
-        kg = _text_key(full)
         exp = src.expected(key)
-        record("native exceptions (key)", full, kg is not None and kg.result == 0 and kg.same(exp), exp, kg.show() if kg else None,
-               "result %s" % (kg.result if kg else None))
+        tries = [_text_key(f + ":" + key) for f in ("d2r", STR_NS)]
+        kg = next((t for t in tries if t is not None and t.result == 0 and t.same(exp)), tries[0])
+        record("native exceptions (key)", key, kg is not None and kg.result == 0 and kg.same(exp), exp, kg.show() if kg else None,
+               "d2r: result %s, %s: result %s" % (tries[0].result, STR_NS, tries[1].result))
 
     # ---- D2R keys Median overrides: D2R's numeric id (native, fixed) and the key
     for key in STR_D2R:
