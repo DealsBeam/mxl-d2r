@@ -171,6 +171,32 @@ As a module: `Gr2File.read(bytes)`, `parse_tree(g)` (typed `Obj` tree with `.f` 
   `Position.w` and `VertexScale` consistently, as the exporter must anyway. Screenshots are in the lane's run folders
   (`checks-20261022-173647-s1`, `checks-20261022-174859-s1`), not committed.
 
+### Mesh swap in game (Wereowl lane, step 2, 2026-10-22)
+
+`tools/d2r_mesh.py` (`replace_with_mesh`) writes a generated triangle mesh into a vanilla `.model` through the Writer: it keeps
+one donor mesh as the template, rewrites the vertices (28 B skinned layout, `Position` quantised against `VertexScale`, tangents
+from the UVs), `Indices16`, the single group, the bone bindings (box per bone in the bone's own space, via the skeleton's
+`InverseWorldTransform`), `bbMin/bbMax/VertexScale`, and drops the donor's other meshes. Without weights the mesh is rigid to
+one bone (`pelvis_bind_jnt`). `tools/sprite3d/mesh_prep.py` decimates a Hunyuan3D GLB to that input (`.npz`),
+`tools/sprite3d/deploy_unit_model.py` copies the files into a slot and points a built unit at them.
+
+Results on slot 2 (goatman1 torso, Hunyuan3D Wereowl mesh, 5 LODs, ~25k tris at LOD 0, spawned with `cheat mspawn wereowl`):
+
+| Test | Result |
+|---|---|
+| Swapped model at the donor's own path (`goatman1/torso_lodN.model`) | draws, the Wereowl mesh with goatman's textures on planar UVs |
+| Byte-identical copy of the donor's models at a **new directory** (`wc/`, `wereowl3d/`), unit JSON and `ModelDefinitionComponent` pointing there | **invisible** (no error in the logs, only the player is drawn) |
+| Writer round trip at a new directory | invisible |
+| New file name in the donor's directory (`goatman1/wotorso_lodN.model`) | invisible |
+| Swapped model at the path of a vanilla model nothing in Median uses (`wargoatman/torso_lodN.model`; the others are `colossal1-3`, `corpsefire`, `cowking`, `darkelder`, `horse`, `pig`, `seagull`) | draws, only the Wereowl unit shows it; goatman1 keeps its own model |
+| Own `.texture` (RGBA8 from `d2r_texture.write_rgba`, a recoloured goatman albedo) written over an existing vanilla path (`pig/textures/pig_alb.texture`), the model's albedo map pointing at that path | accepted: the Wereowl is drawn with the changed colours |
+
+So the engine loads a `.model` only when its path is one D2R already has (a folder mod overrides existing files; a new `.json`
+or `.texture` file name was not needed or tested in this step). The way to give one unit its own model without touching
+another unit's is to **override the files of a vanilla unit that no Median Id maps to** and point the unit JSON's model
+entity at that path; the skeleton and state machine stay the donor's (goatman1). New textures should be tried the same way
+(override a texture file of the same unused unit; not tested at a brand-new path).
+
 ## 4. Pipeline sketch: artist's Blender rig -> D2R unit
 
 ### 4.1 Steps

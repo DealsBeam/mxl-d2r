@@ -58,6 +58,22 @@ screenshots (not committed): `%USERPROFILE%\mxl-d2r-runs\hd-monsters-before-afte
 priest, astrogha as a spider, tenebral as a wolf, undead lancer ...). Colour experiment: `checks-20261021-195552`.
 A flying donor (wyvern -> wisp) and the viper were not visible in their shot: not verified.
 
+### Pinned donors (2026-10-22)
+`PINNED_DONORS` in `tools/hd_monsters.py` maps a Median Id to `(D2R donor unit, size factor)` and replaces the scoring for that
+Id; colour (`tint_of`), scale (`score`'s art-size ratio times the factor), weapon-class state machine and part mapping stay as
+for every other monster. Used for the Wereowl (code OW): `wereowl` and `corrupted_wereowl` -> goatman1 (before:
+barricadewall1 and cantor1 x1.25), corrupted keeps its x1.25 over the plain one (scale 1.4 and 1.75). goatman1 has no
+attack2 or cast clip, so A2 and SC play its attack1 / skill1 through the donor's state machine. This is the placeholder
+for the real Wereowl model (tools/sprite3d/README.md); `tools/sprite3d/ingame_shots.py` spawns an Id and screenshots its modes.
+
+Rebuilt (`tools/build.py`, validate 0 errors in both banks), installed on slot 2 and spawned in the Blood Moor
+(`cheat mspawn`, slot 2, 2026-10-22): both load and draw as the goatman model in Median's colour, no new error class. What the
+two Ids do: `wereowl` is a NecroPet (Align 1, friendly, 19 life): it stands in neutral and does not move, hits do no damage,
+`h kill` plays the death clip (screenshots show the fall and the corpse). `corrupted_wereowl` is a BloodRaven boss (Normal
+rows have no life, so any hit kills it): it comes running, plays its attack (earth_talons, A1) and dies on `h kill`. Neutral,
+run, attack1 and death are seen for goatman1 on both; gethit (hit flag set, life taken under Hell rules, the animation itself
+not caught in a picture) and cast (neither Id has an SC skill; Sk1 / Sk2 use A1) are not seen yet.
+
 ## 4. Real models later
 Needs new `.model` meshes + skeleton + animations; each Median look then becomes its own unit using this tool's
 unit/variant/state-machine plumbing instead of a donor. Priority: bosses and the families with the most monsters
