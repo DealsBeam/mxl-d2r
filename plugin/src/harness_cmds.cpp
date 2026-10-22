@@ -2009,10 +2009,14 @@ constexpr uint64_t RvaApplyDamage = 0x44a9b0;  // (game, attacker, target, &dama
 constexpr uint64_t RvaAvoidCheck = 0x44ef70;   // (attacker unit, defender unit, missile flag) -> 0 / 2 / 4 / 8 / 0x10
 constexpr uint64_t RvaAllocator = 0x12063c0;   // -> allocator object; vtable +0x20 frees
 constexpr uint64_t RvaItemColour = 0x3710d0;   // (player, item, &colour byte, mode) -> palette entry
+constexpr uint64_t RvaItemAutomagic = 0x36ca80;  // (item) -> automagic affix id (0 = none)
+constexpr uint64_t RvaItemQuality = 0x36cf60;    // (item) -> quality
 constexpr uint64_t RvaIsItemType = 0x373890;   // (item, type id) -> nonzero when the item is of that type
 constexpr int ItemFlagsOffset = 0x18;          // item data: flag word (0x400000 ethereal, 0x800 socketed, 0x10 identified)
 constexpr uint32_t ItemFlagEthereal = 0x400000;
 constexpr int StatSockets = 194, StatDefence = 31, StatMaxDurabilityItem = 0x49, StatDye = 368, StatClassLock = 492;
+using ItemQualityFn = int32_t (*)(Unit*);
+using ItemAutomagicFn = uint32_t (*)(Unit*);
 using HitUnitFn = void (*)(Game*, Unit*, Unit*, int32_t, void*);
 using ApplyDamageFn = void (*)(Game*, Unit*, Unit*, void*);
 using AvoidCheckFn = int32_t (*)(Unit* attacker, Unit* defender, int32_t missile);
@@ -2172,8 +2176,9 @@ auto CmdAvoid(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 }
 
 // `itemroll <code> <n> [q=quality] [ilvl=level]`: makes n items the way `item` does (the generator, quality default 2, item
-// level default 110 so the ethereal gate is open), reads sockets, the ethereal flag, defence and maximum durability and frees
-// them again. Prints the socket histogram and the ethereal count, then the defence and durability by ethereal or not.
+// level default 110 so the ethereal gate and the automagic roll are open), reads sockets, the ethereal flag, the quality the
+// generator gave, the automagic affix id, defence and maximum durability and frees them again. Prints the socket histogram,
+// the quality histogram, the automagic count and the ethereal count, then the defence and durability by ethereal or not.
 auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long n = 0, quality = 2, ilvl = 110;
 	if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &n) || n < 1 || n > 20000) {
@@ -2209,6 +2214,7 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		const bool eth = (FlagsOf(item) & ItemFlagEthereal) != 0;
 		const int32_t def = Stat(item, StatDefence), dur = Stat(item, StatMaxDurabilityItem);
 		tally.Add(Stat(item, StatSockets), eth);
+		tally.AddQuality(Fn<ItemQualityFn>(RvaItemQuality)(item), Fn<ItemAutomagicFn>(RvaItemAutomagic)(item) != 0);
 		if (eth) {
 			++nEth;
 			sumEth += def;
@@ -2222,13 +2228,17 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		}
 		Fn<FreeItemFn>(RvaFreeItem)(c->game, item);
 	}
-	char sockets[96];
+	char sockets[96], qualities[96];
 	tally.Sockets(sockets, sizeof(sockets));
-	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d sockets=[%s]", t.tok[1], tally.n, failed, firstLevel, tally.ethereal, sockets);
+	tally.Qualities(qualities, sizeof(qualities));
+	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d sockets=[%s] qualities=[%s] automagic=%d", t.tok[1], tally.n, failed, firstLevel,
+	    tally.ethereal, sockets, qualities, tally.automagic);
 	Out("itemroll def normal n=%d sum=%lld, ethereal n=%d sum=%lld; maxdur normal %d..%d, ethereal %d..%d", nNormal, sumNormal, nEth, sumEth,
 	    durNormalMax < 0 ? 0 : durNormalMin, durNormalMax, durEthMax < 0 ? 0 : durEthMin, durEthMax);
-	char gate[256];
+	char gate[512];
 	ItemGenGateText(gate, sizeof(gate));
+	Out("itemroll %s", gate);
+	ItemGenSocketText(gate, sizeof(gate));
 	Out("itemroll %s", gate);
 	return true;
 }
