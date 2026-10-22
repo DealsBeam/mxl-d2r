@@ -128,7 +128,7 @@ Median gameplay rules found by [median-rules-audit.md](median-rules-audit.md) th
 | Free mana in town (audit SK3) | skills cost no mana in town | none | open | hook on the mana spend |
 | Skills in town (audit SK4) | many buffs, totems and warps castable in town | `town` column carried from Median | verify | `cast` in town |
 | Skill cooldown groups (audit SK6) | cooldowns computed dynamically, groups separate | D2R's cooldowns | verify | two groups' cooldowns |
-| Sprint (audit SK7) | run toggle off; sprint about 5 s; stamina removed | none | open | plugin movement hook |
+| Sprint (audit SK7) | Run toggle is "Toggle Sprint"; a sprint lasts about 5 s on the stamina bar (50 stamina, RunDrain 60, no stamina per level or vitality); no cooldown timer, the bar is the cooldown | `charstats` carried: stamina 50, WalkVelocity 10, RunVelocity 15 (Barbarian 14), RunDrain 60; D2R's run toggle (R) works | verified (game check `sprint`) | none needed. Median has no sprint code: D2Game's stamina is vanilla 1.13c and only reads these columns. Unknown: Median's stamina regen rate is unpublished |
 | Melee skills without a target (audit SK8) | Shift attacks with no target for most melee skills | none | open | engine hook on the skill start |
 | Skill tree conveniences (audit SK9) | base/max level shown, Alt soft level, prerequisite arrows, Shift+Click max | none | open | Median UI |
 | NPC healing (audit NPC1) | all NPCs heal you | none | verify | talk to a vendor when hurt |

@@ -115,6 +115,7 @@ Use [test-sessions.md](test-sessions.md) to run these checks by character.
 
 | What | Notes |
 |---|---|
+| Sprint (audit SK7), game check `sprint` | 2026-10-22, Barbarian on slot 2. Median's sprint is its charstats stamina, not code: a run from full stamina drains 100 raw per frame (RunDrain 60 x2 = 120 expected, 25% allowed) = 5.1 s, is forced back to walking at 0, runs 1.44x the walk speed (data 1.40), starts again at 2 points of stamina (no cooldown timer), and the R key toggles run and walk. Standing refill 0 to 50 takes 10.1 s; Median's regen rate is unpublished, so that is not compared |
 | Bug #21 fix (0.33.3): barby loads; Akara, buying, moving items, potions, shared stash tabs work on barby and dewid | 2026-10-07. The stash-link check (bug #20) still fails once at the first join of a session |
 | Plugin 0.33.0 loads; every engine change installs (Phase 4 verification, 2026-10-06 20:22, launched to the menu) | mxl-core.log: states fix on (73 sites), level types/automap on (10 Median row ranges), calc codes on (incl. itemstat, tabpoints), 15/15 skill functions, item spells on, 13/13 missile hits (no FAILED), mana costs on. d2rloader.log: only the known startup checks (state count, level-type names, both handled by the plugin); clean shutdown, no crash report |
 | Vendors stock Median's items (bug #8) | |

@@ -36,7 +36,7 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 | Experience, party and level cap | 5 | 0 | 0 | 0 | 4 | 9 |
 | Difficulty, area levels and monster scaling | 7 | 1 | 0 | 0 | 2 | 10 |
 | Uber and quest content | 3 | 2 | 1 | 0 | 1 | 7 |
-| Skills, respec and caps | 4 | 1 | 4 | 0 | 4 | 13 |
+| Skills, respec and caps | 5 | 1 | 3 | 0 | 4 | 13 |
 | Mercenaries | 3 | 1 | 0 | 1 | 0 | 5 |
 | NPC services and town | 3 | 0 | 0 | 0 | 1 | 4 |
 | Waypoints and travel | 1 | 1 | 1 | 0 | 1 | 4 |
@@ -45,7 +45,7 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 | Multiplayer | 0 | 0 | 0 | 1 | 3 | 4 |
 | Hardcore | 1 | 0 | 1 | 0 | 0 | 2 |
 | Anything else Median documents as different | 1 | 0 | 0 | 2 | 1 | 4 |
-| **All** | **49** | **14** | **22** | **9** | **30** | **124** |
+| **All** | **50** | **14** | **21** | **9** | **30** | **124** |
 
 ## Top 10 gaps (by player impact)
 
@@ -55,7 +55,7 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 4. **IT1 and IT2, durability and quantity**: Median removed durability and stack depletion; the port still wears items down and uses up throwing stacks.
 5. **IT3, auto-identify on pickup**: every unidentified drop needs a scroll in the port.
 6. **DC4 and DC3, death rules**: no 5 second respawn wait, and gold on death is untested.
-7. **SK7, sprint and no stamina**: Median replaces running with a 5 second sprint; the port keeps D2R's run and stamina.
+7. ~~**SK7, sprint and no stamina**~~: not a gap. Median's sprint is its charstats stamina (50 points, 5 seconds of running) and the port carries those columns; game check `sprint` confirms it.
 8. **CR4 and DC6, trophy challenge timers**: no timer op in the cube, no void on death or zone change, so the cube cannot enforce the time limit.
 9. **MU2, WP2, UI4, Map Reveal, waypoint auto-activation, X/R/C hotkeys**: daily quality-of-life rules that every Median player expects.
 10. **GS5 and SK3, stash pages and free mana in town**: D2R's tab count applies (no Median multi-page stash), and skills still cost mana in town.
@@ -189,7 +189,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | SK4 | Many skills castable in town (buffs, totems, warp, Shadow Refuge, Acid aura). | P1.1.0, P1.2.0, P1.7.0, P2.1.0 | unknown | skills.txt `town` column carried from Median; not tested. Check: `cast` each in town |
 | SK5 | Town Portal is an innate skill (no scrolls) with a 10 s cooldown, and a 1 second delay when opening. | P1.0.0, P2.2.0 | partly | D:skills town_portal srvdofunc 109, localdelay 250; the 1 s delay is not checked |
 | SK6 | Skill cooldowns are computed dynamically; skill groups no longer share cooldowns. | P1.0.0 | unknown | D2Sigma engine feature; D2R's cooldown. Check: two groups' cooldowns |
-| SK7 | Run/walk toggle disabled; Sprint replaces running (about 5 seconds, much faster); stamina removed. | P1.0.0 | missing | no sprint code; `stamina` data is carried. Check: hold the run key, measure speed and duration |
+| SK7 | Run/walk toggle is renamed "Toggle Sprint"; a sprint lasts about 5 seconds and is much faster than walking. The patch note's "stamina removed" means the vitality and level stamina gains, not the stamina bar. | P1.0.0, patch strings, D:charstats | ported (verified) | Median's sprint is data: `charstats` stamina 50, WalkVelocity 10, RunVelocity 15 (Barbarian 14), RunDrain 60, StaminaPerLevel and StaminaPerVitality blank, built identical to Median's. D2Game's drain (RunDrain x2 per frame, forced to walk at 0) is vanilla 1.13c code in both games; there is no sprint state or skill and no cooldown timer (the bar refilling is the cooldown). Game check `sprint`: run from full drains 100 raw per frame = 5.1 s, run/walk speed 1.44 (data 1.40), walking from empty refills, a run starts at 2 points of stamina, R toggles run and walk. Not comparable: Median's stamina regen rate (unpublished) |
 | SK8 | Most melee skills can be used with Shift without a target. | P2.3.0 | missing | no code. Check: shift-click a Great Hunt with no target |
 | SK9 | Skill tree UI: base/max levels, Alt shows soft level, prerequisite arrows, Shift+Click maxes a skill. | P2.0.0 | missing | Median UI, no panel code |
 | SK10 | Druid bow "steady aim" pseudo-resource. | P1.7.0 | unknown | not mentioned in docs; may be table driven. Check: `cast` a Hunter skill, read the stat |
