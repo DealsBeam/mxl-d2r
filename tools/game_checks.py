@@ -4802,30 +4802,21 @@ def mapcells():
     return None
 
 
-def shot_diff(path_a, path_b):
-    """Pixels that differ clearly between two screenshots (the world area only: not the debug bar, nor the orbs and belt)."""
-    import numpy as np
-    from PIL import Image
-    pa = np.asarray(Image.open(path_a).convert("RGB"), dtype=np.int16)[130:740]
-    pb = np.asarray(Image.open(path_b).convert("RGB"), dtype=np.int16)[130:740]
-    return int((np.abs(pa - pb).max(axis=2) > 40).sum())
-
-
 def check_mapreveal():
     name = "Map reveal: the automap of a fresh level has more cells after the reveal"
     if not need_game():
         return add(name, "BLOCKED", "not in a game")
-    # D2R's `cheat goto` (what goto() uses) already reveals the level it arrives in, so this runs where the game put the character
-    # (a new game starts in the Rogue Encampment, whose automap nobody has walked)
-    st = hstate()
-    area = st["player"].get("area")
+    # `cheat goto` (needs debug mode) arrives in a level whose automap is already drawn whole (the pictures show it), and the game's
+    # town map is whole from the start, so the cell count and the picture cannot show a reveal on a level reached this way; what
+    # the call does is measured in the layers: it adds the layers of the act's levels
+    st = goto(3)  # Cold Plains
+    if st["player"].get("area") != 3:
+        return add(name, "BLOCKED", "could not go to area 3")
     time.sleep(2)
-    a0 = mapcells()
-    g.press("tab")  # automap overlay on (D2R's default key): the pictures show what the reveal draws
+    g.press("tab")  # automap overlay on (D2R's default key)
     time.sleep(1.5)
+    a0 = mapcells()
     p0 = g.shot("mapreveal_before")
-    time.sleep(1)
-    p0b = g.shot("mapreveal_before2")  # a second picture before: how much the world moves by itself
     ok, lines = H("reveal")
     time.sleep(2.5)
     a1 = mapcells()
@@ -4837,16 +4828,18 @@ def check_mapreveal():
     log = ["before %s" % a0, "after %s" % a1, "again %s" % a2] + lines + lines2
     if not a0 or not a1:
         return add(name, "BLOCKED", "no automap data: %s" % lines[:2], [], log)
-    noise, drawn = shot_diff(p0, p0b), shot_diff(p0b, p1)
-    grew = a1["cells"] > a0["cells"] or a1["layers"] > a0["layers"]
-    shown = drawn > max(2000, 4 * noise)
-    flag_kept = a1["debugflag"] == a0["debugflag"]
-    add(name, "PASS" if (ok and grew and shown and flag_kept) else "FAIL",
-        "harness `reveal` (the R hotkey's call of the debug menu's Reveal Automap) in area %d with the automap shown: automap cells %d -> %d (%+d), "
-        "layers %d -> %d, a second reveal %+d cells; the picture moves by %d pixels on its own before the reveal, by %d after it (needs > max(2000, 4x)); "
-        "debug flag byte %d -> %d (kept: %s)" % (area, a0["cells"], a1["cells"], a1["cells"] - a0["cells"], a0["layers"], a1["layers"],
-                                                   (a2 or a1)["cells"] - a1["cells"], noise, drawn, a0["debugflag"], a1["debugflag"], flag_kept),
-        [os.path.basename(p0), os.path.basename(p0b), os.path.basename(p1)], log)
+    flag_kept = a1["debugflag"] == a0["debugflag"] == (a2 or a1)["debugflag"]
+    cells_grew = a1["cells"] > a0["cells"]
+    layers_grew = a1["layers"] > a0["layers"]
+    again = (a2 or a1)["layers"] == a1["layers"] and (a2 or a1)["cells"] == a1["cells"]
+    status = "PASS" if ok and ok2 and cells_grew and flag_kept and again else              "PARTIAL" if ok and ok2 and layers_grew and flag_kept and again else "FAIL"
+    add(name, status,
+        "harness `reveal` (the R hotkey's call of the debug menu's Reveal Automap) in Cold Plains: automap cells %d -> %d (%+d), layers %d -> %d, "
+        "a second reveal %+d cells %+d layers; debug flag byte %d -> %d (kept: %s)%s" % (
+            a0["cells"], a1["cells"], a1["cells"] - a0["cells"], a0["layers"], a1["layers"], (a2 or a1)["cells"] - a1["cells"],
+            (a2 or a1)["layers"] - a1["layers"], a0["debugflag"], a1["debugflag"], flag_kept,
+            "" if status == "PASS" else "; PARTIAL: the level was already drawn whole on arrival (mapreveal_before.png = mapreveal.png), only the layers grew"),
+        [os.path.basename(p0), os.path.basename(p1)], log)
 
 
 def wpbit(number):

@@ -529,3 +529,14 @@ New harness verbs (client side unless noted): `skilltab [n]` (selected tab, or s
 
 Slot procedure used: `py -3 tools/game_slots.py lock 2 lane-backlog-b`, `py -3 tools/install_mod.py --slot 2`, `MXL_RUN=lane-backlog-b py -3 tools/game_checks.py --slot 2 all <checks>` (the run keeps the lock and releases it at its end). A full install is needed after another lane has used the slot: a partial data set from a foreign install made `strings` fail once (253 wrong, "Missing string"), and a re-install fixed it.
 Noticed and not fixed: the Wolf Stance tooltip shows a literal `%+d%%` (bugs.md #30).
+
+### Travel: map reveal, waypoint auto-activation, hotkeys, stash pages (lane gap-travel, 2026-10-22, slot 1, background mode)
+
+Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261022-224236-s1\` (not committed; the run is `py -3 tools/game_checks.py --slot 1 all mapreveal wpauto hotkeys stashpages`). Plugin verbs: `mapcells`, `reveal`, `wpobj`, `travel`, `stashprobe` ([Harness commands](#harness-commands-gameplay-without-input-pluginsrcharness_cmdscpp)).
+
+| Row | Result | Note |
+|---|---|---|
+| Map reveal (R, MU2) | PARTIAL | the harness `reveal` (the R hotkey's call of D2R's debug Reveal Automap) returns, the automap layer list grows 1 -> 25, a second reveal adds nothing, the debug flag byte is kept. The picture did not change: `cheat goto` and the town arrive with the map drawn whole (`mapreveal_before.png` = `mapreveal.png`), and the cell count stays 8878. A fresh field level reached by walking was not tested. A first pixel-difference criterion passed on a moving NPC only and was removed |
+| Waypoint auto-activation (WP2, WP3) | PASS | Cold Plains waypoint (number 1): bit set within 1.5 s at distance 3, still clear at distance 47 (negative control), set at distance 24 while walking up. Two players in one game were not run |
+| Hotkeys X / R / C (UI4, CR5) | PASS | window-message presses reach InputService: X toggles (0->1->2 presses, pickup on/off/on), R reveals (+1), C with the cube closed is counted and ignored (transmutes 0, blocked 1), C with the cube open calls Transmute (transmutes 1). The cube-open state comes from the UI message `PanelManager:OpenPanel(<cube panel>)` and `ClosePanel` / `UnloadPanel`. The default keys can overlap D2R's own R and C bindings; not checked |
+| Stash pages (GS5) | PASS | `add_shared_tabs = 7` in `d2rloader.toml`: an item created through ItemService lands in shared tabs 0-9, tabs 10 and 12 are refused. The personal stash stays one page; no Prev / Next / Sort / Mode buttons |

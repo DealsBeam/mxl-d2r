@@ -230,7 +230,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
 | MU1 | Median adds new areas (Rifts, Dungeons, Labyrinth, the new towns). | W:Areas | ported | `docs/maps-hd.md`, levels, DS1 files |
-| MU2 | Map Reveal: accessible from the UI or the R key (shows Cairn Stones, shrines, Staff altar, Tal Rasha tomb, Act 5 waypoints). | P1.0.0 | partly | D2Sigma `0x887c0` reveals the act once per game. `travel.cpp`: R (InputService action) calls D2R's debug Reveal Automap `0xd42b0` on the current level (preset objects included); `game_checks mapreveal` PASS: +7698 cells on a fresh Cold Plains. Current level only, repeatable, no UI button |
+| MU2 | Map Reveal: accessible from the UI or the R key (shows Cairn Stones, shrines, Staff altar, Tal Rasha tomb, Act 5 waypoints). | P1.0.0 | partly | D2Sigma `0x887c0` reveals the act once per game. `travel.cpp`: R (InputService action) calls D2R's debug Reveal Automap `0xd42b0` on the current level (preset objects included); `game_checks mapreveal` PARTIAL: layers 1 -> 25, repeat adds nothing, flag kept; the drawn map did not visibly change because `cheat goto` arrives with it whole. Starts from the player's room, repeatable, no UI button |
 | MU3 | Area level can be displayed in the corner of the screen (optional). | P1.0.0 | unknown | no area-level HUD code. Check: look for the option in settings |
 | MU4 | Terror zones removed. | docs/PLAN.md | deviation | removed in the port plan |
 
