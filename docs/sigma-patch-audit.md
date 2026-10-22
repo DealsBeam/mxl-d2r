@@ -133,9 +133,9 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 | 14 | [Missile CollideType 9 and 10](#m14) | medium | game2-017, client5-032, client5-035 | overlap audit-rules (missiles) |
 | 15 | [Mana recovery, mana drain and infinite stamina](#m15) | medium | game3-043 | overlap audit-rules (stats) |
 | 16 | [Gamble window offers](#m16) | medium | game5-022 | - |
-| 17 | [Monster level and players-count scaling](#m17) | medium | game5-007, game5-004, game5-006 | overlap audit-rules: row "Players X (audit DF7, MP3)" for the count table |
-| 18 | [Normal-difficulty drops use the level-upgraded treasure class](#m18) | medium | game1-012 | overlap audit-rules (drops) |
-| 19 | [Summon and hireling leash](#m19) | low | game5-001, game5-002, game5-003, game1-018, game1-019, game1-020 | - |
+| 17 | [Monster level and players-count scaling](#m17) (**ported**, lane pa2-monsters) | medium | game5-007, game5-004, game5-006 | overlap audit-rules: row "Players X (audit DF7, MP3)" for the count table |
+| 18 | [Normal-difficulty drops use the level-upgraded treasure class](#m18) (**ported**, lane pa2-monsters) | medium | game1-012 | overlap audit-rules (drops) |
+| 19 | [Summon and hireling leash](#m19) (**ported**, lane pa2-monsters) | low | game5-001, game5-002, game5-003, game1-018, game1-019, game1-020 | - |
 | 20 | [D2Sigma's own skill start functions](#m20) | medium | game4-038 | overlap audit-rules (skills) |
 | 21 | [Smaller gaps](#m21) | low | common1-013, game2-014, game4-020, game4-029, game6-001, game3-016, game3-026, client4-027, client3-038, client4-044, client4-045 | - |
 | 22 | [Training dummy readout, Halloween currency, achievements](#m22) | low | client7-042.training, client7-042.currency, game2-012, game2-020, game3-016, game3-017, game3-027, game3-036, game3-037, game4-009 | - |
@@ -289,17 +289,19 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 ### 17. Monster level and players-count scaling
 
 * **Median** (game5-007, game5-004, game5-006): Monster creation always takes the area level (two conditions nopped, `0xafee6`, `0xafef9`); the players-count percent table (`6fccf5f0`) is replaced by Median's own table (`0x1008f880`).
-* **Port now:** No hook. If `txt_migrate` already writes the area level into monstats the first is closed by data; D2R has its own players-X scaling.
-* **To do:** Compare a Normal-difficulty monster level and the 2-8 player life / damage scaling between D2R and Median.
-* **Overlap:** overlap audit-rules: row "Players X (audit DF7, MP3)" for the count table
+* **Port now:** **Ported by lane pa2-monsters** (`plugin/src/monster_rules.cpp`, pure data in `monster_rules_logic.h`; off words `monlevel`, `playersx`). Median's rules, read against the 1.13c `D2Game.dll`: monster init `0x6fccfdb0` takes the area level (`levels.txt` MonLvl) only for Nightmare and Hell and only for monsters without monstats flag bits `0x4` and `0x40`; Median nops the difficulty gate (`test esi,esi / jle`, `0xafee6`) and the `0x40` test (`0xafef9`); `0x4` (npc) stays. Players table: vanilla's record is `{life %, exp %}` = 0, 0, 50, 100 .. 350 each by count; Median's stub `0x1008f880` gives life `(n-1)*50` and experience 0 for every count (the audit row's "`0x1008f880` is the table" was a wrong symbol label: it is the stub that fills the record).
+  * D2R twins (build 93847): `0x543b50` inside the monster setup `0x543120` (two nops: `45 85 ff 74 19` at `0x543d32`, `85 05 9e 59 85 01 75 04` at `0x543d44`; the classic test at `0x543d2d` and the `0x4` test at `0x543d3c` stay); the record `0x543e90` reads (`+0x24` life %, `+0x28` experience %, `+0x34` players) is rewritten by an inline hook on `0x543e90` before the original runs (a 0 / 0 record, a class that opts out, stays).
+  * Game check `monlevel` PASS: levels read with `stat m<id> 12` in areas 2 / 76 / 111 in all three difficulties for a living class and a lUndead class equal the area's `MonLvlEx` (Normal area 2: 1, 76: 29, 111: 91 / 100 / 108 by difficulty; with the part off the same Normal monsters keep their own monstats level, 28 and 2); 8 monsters at `players 1` against `players 8` in Hell: life x4.49 (Median 4.50), experience 450 both, level 100 both, the players stat (100) 1 against 8. Negative control (`mxl-core-off.txt` words `monlevel playersx`): FAIL as expected.
+* **To do:** nothing for the rule. Not seen: the 2-8 player life scaling in a real multi-player game (the harness sets the players setting with `players <n>`).
+* **Overlap:** overlap audit-rules: row "Players X (audit DF7, MP3)" for the count table (now ported, see unported.md)
 * **Impact:** medium
 
 <a id="m18"></a>
 ### 18. Normal-difficulty drops use the level-upgraded treasure class
 
 * **Median** (game1-012): D2Game `0x12d6a`: the 7-byte difficulty gate before the level-based treasure-class upgrade is nopped, so Normal monsters also roll the upgraded class (Median has 121 `treasureclassex` rows with group / level).
-* **Port now:** The plugin runs D2R's treasure-class executor (`0x441300`) unchanged; nothing patches a difficulty gate.
-* **To do:** Unverified: compare a level-appropriate Normal monster's drop class with D2R's; if D2R keeps a Nightmare / Hell-only gate, patch it in its executor.
+* **Port now:** **Ported by lane pa2-monsters** (`monster_rules.cpp`, off word `normaltc`). D2R's executor `0x441300` has the same gate: after the monstats null test it hands the monster's level (stat 12) to the class getter `0x397290` only when `cmp byte [rsi+0x104],dil / jbe` (the game difficulty is above Normal). Nine bytes `40 38 be 04 01 00 00 76 19` at `0x44138f` become nops; the monstats null test and the two flag tests after it stay. A trace hook on `0x397290` (`40 .. 48 89 5c 24 08`, 5 bytes, whole instructions) counts the lookups for the check.
+* **To do:** nothing for the rule. Game check `normaltc` PASS: a Normal kill of a level 6 monster handed the class getter level 6 (1 lookup, 1 with a level), a Nightmare kill of a level 52 monster level 52; with the part off the trace hook is not installed (0 lookups). Which items the stepped class rolls was not compared against Median's `treasureclassex` rows.
 * **Overlap:** overlap audit-rules (drops)
 * **Impact:** medium
 
@@ -307,8 +309,10 @@ Each item is also a row in [unported.md](unported.md) ("Sigma patch audit", stat
 ### 19. Summon and hireling leash
 
 * **Median** (game5-001, game5-002, game5-003, game1-018, game1-019, game1-020): Follow distance 50 becomes 40 (two AI handlers), a delay 250 becomes 125 in `6fcc8430`, and the owned-unit follow limits in the `0x1deab`, `0x1e20f`, `0x1e35e`, `0x1e70c` think routines drop from 100 / 80 / 50 / 50 to 40 sub-tiles: pets, mercenaries and summons catch up (warp) closer to the player.
-* **Port now:** No hook on these handlers.
-* **To do:** Patch the matching compares in D2R's twins.
+* **Port now:** **Ported by lane pa2-monsters** (`monster_rules.cpp`, off word `leash`): six compares become 40 sub-tiles (`0x28`), found by structure against the 1.13c sites. The audit grouped one unrelated rule in: game5-001 (`0x5c7070`, the "delay 250 becomes 125") is **Baal's throne AI (AI 134)**, its first-wave countdown `frame + 0xfa`, not a leash; the port patches it separately (`0x5c71e6` `81 c1 fa 00 00 00` -> `81 c1 7d 00 00 00`, off word `throne`, `mxl` line `Baal throne delay`) and it is not checked in game.
+  * Sites (all D2R, entry bytes checked): pet think `0x5bebe5` (twin of 1.13c `0x6fc3db40`; owner distance by `0x596720`, `cmp ecx,0x64 / jbe` at `0x5bec51`: warp mode 3 through `0x5c1460`); approach chooser `0x5bd1e0` (twin of `0x6fc3e140`): `cmp r12d,0x50` at `0x5bd29f` (no line of sight) and `cmp r12d,0x32` at `0x5bd474`; owner think `0x5c1080` (twin of `0x6fc3e640`) `cmp r15d,0x32` at `0x5c1136`; AI 112 (DruidBear) `0x5c95d0` `cmp r12d,0x32` at `0x5c96aa`; AI 107 (Raven) `0x5cca50` `cmp eax,0x32` at `0x5ccb39`. Each patch writes the last byte (the immediate).
+  * Game check `leash` PASS: the mercenary is moved (harness `leash <d>`: unit move `0x491ca0` on the merc; moving the player pulls the merc along at once, whatever the leash) 20 / 30 / 36 / 44 / 47 / 60 sub-tiles from the player. At 20-36 it walks back (at most 6 sub-tiles between samples); at 44, 47, 60 it warps (the distance drops by 25 / 32 / 39 in one sample). With `leash` off the same merc walks back at 44 / 47 / 60 (D2R's limits are 50 and above). `0x596720` returns about the Euclidean distance minus 2 (34 at 36, 42 at 44).
+* **To do:** nothing for the rule. Not checked: which of the six sites the mercenary's warp comes from, summons (Necromancer / Druid pets) and the AI 112 / 107 followers; the throne delay.
 * **Impact:** low
 
 <a id="m20"></a>

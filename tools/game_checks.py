@@ -15,7 +15,7 @@ classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner 
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling nodurability autoid townmana mercrevive questxp
-questrewards.
+questrewards monlevel normaltc leash.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -6230,6 +6230,192 @@ def check_questrewards():
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]) + " | " + "; ".join(rows), [sh("questrewards")], log)
 
 
+def _spawn_ids(cls, count):
+    """Spawns `count` monsters of a class; returns their unit ids (the `spawned class N id=M` lines)."""
+    ok, lines = H("spawn %d %d" % (cls, count))
+    return [int(m) for m in re.findall(r"spawned class \d+ id=(\d+)", " ".join(lines))]
+
+
+def _monlevel_tables():
+    """(area id -> [MonLvlEx per difficulty], monstats class -> {"level": [Level, Level(N), Level(H)], "lundead": bool, "npc": bool})
+    from the built mod (the expansion's area levels: D2R's area-level function reads the Ex columns)."""
+    lv = _tsv(_main_checkout(os.path.join(BUILT_EXCEL, "levels.txt")))
+    h = lv[0]
+    ci = {n: i for i, n in enumerate(h)}
+    areas = {}
+    for r in lv[1:]:
+        if len(r) > ci["MonLvlEx(H)"] and r[ci["Id"]].isdigit():
+            areas[int(r[ci["Id"]])] = [int(r[ci[c]] or 0) for c in ("MonLvlEx", "MonLvlEx(N)", "MonLvlEx(H)")]
+    ms = _tsv(_main_checkout(os.path.join(BUILT_EXCEL, "monstats.txt")))
+    mh = ms[0]
+    mi = {n: i for i, n in enumerate(mh)}
+    mons = {}
+    for cls, r in enumerate(ms[1:]):
+        if len(r) > mi["Level(H)"]:
+            mons[cls] = {"level": [int(r[mi[c]] or 0) for c in ("Level", "Level(N)", "Level(H)")],
+                         "lundead": (r[mi["lUndead"]] or "0") == "1", "npc": (r[mi["npc"]] or "0") == "1"}
+    return areas, mons
+
+
+def check_monlevel():
+    name = "Monster level and players count (Median: the area level in every difficulty, life +(n-1)*50 %, no experience bonus)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    txt = mxl_text()
+    bad, rows, log = [], [], []
+    for word in ("monster level on", "players scaling on"):
+        if word not in txt:
+            bad.append("`mxl` does not say `%s`: %s" % (word, next((l for l in txt.splitlines() if word.split()[0] in l and word.split()[1] in l), "-")))
+    areas, mons = _monlevel_tables()
+    classes = (18, 0)  # a living class and a low-undead one (monstats flag 0x40: opted out of the area level before)
+    god(True)
+    try:
+        H("players 1")
+        for area in (2, 76, 111):
+            goto(area)
+            for diff in (0, 1, 2):
+                H("difficulty %d" % diff)
+                for cls in classes:
+                    ids = _spawn_ids(cls, 1)
+                    if not ids:
+                        bad.append("area %d diff %d class %d: nothing spawned" % (area, diff, cls))
+                        continue
+                    got = rd("m%d" % ids[0], 12)
+                    want = areas[area][diff]
+                    if mons[cls]["npc"]:
+                        want = mons[cls]["level"][diff]
+                    rows.append("area %d %s class %d: level %s (area level %d, own row %d)" % (area, ("Normal", "Nightmare", "Hell")[diff], cls, got, areas[area][diff], mons[cls]["level"][diff]))
+                    log.append(rows[-1])
+                    if got != want:
+                        bad.append(rows[-1] + ", want %d" % want)
+                    H("kill %d" % ids[0])
+        # players-count scaling: eight monsters at each setting, in Hell (the levels stay the same)
+        goto(2)
+        H("difficulty 2")
+        stats = {}
+        for players in (1, 8):
+            ok, line, _l = hv("players %d" % players, "players")
+            log.append(line)
+            ids = _spawn_ids(18, 8)
+            life = [rd("m%d" % i, 7) for i in ids]
+            life = [v >> 8 for v in life if v]
+            exp = {rd("m%d" % i, 13) for i in ids}
+            lvl = {rd("m%d" % i, 12) for i in ids}
+            n = {rd("m%d" % i, 100) for i in ids}
+            stats[players] = (sum(life) / len(life) if life else 0, exp, lvl, n)
+            log.append("players %d: %d monsters, mean max life %.0f, experience %s, level %s, players stat %s" % (players, len(ids), stats[players][0], sorted(exp), sorted(lvl), sorted(n)))
+            kill_all_near()
+        (l1, e1, v1, n1), (l8, e8, v8, n8) = stats[1], stats[8]
+        ratio = l8 / l1 if l1 else 0
+        rows.append("players 1 -> 8: life x%.2f (Median 4.50), experience %s -> %s, level %s -> %s, players stat %s -> %s" % (ratio, sorted(e1), sorted(e8), sorted(v1), sorted(v8), sorted(n1), sorted(n8)))
+        if not (4.0 <= ratio <= 5.0):
+            bad.append("life ratio 8 players / 1 player is %.2f, Median's is 4.50" % ratio)
+        if e1 != e8 or len(e1) != 1:
+            bad.append("experience differs with the players count: %s -> %s" % (sorted(e1), sorted(e8)))
+        if v1 != v8:
+            bad.append("level differs with the players count: %s -> %s" % (sorted(v1), sorted(v8)))
+        if n1 != {1} or n8 != {8}:
+            bad.append("the players stat is %s / %s, want 1 / 8 (the players setting did not reach the monsters)" % (sorted(n1), sorted(n8)))
+        txt = mxl_text()
+        log += [l for l in txt.splitlines() if "players scaling" in l or "monster level" in l]
+    finally:
+        H("players 1")
+        H("difficulty 0")
+        kill_all_near()
+        god(False)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows[-4:]) if not bad else "; ".join(bad[:6]), [sh("monlevel")], log + rows)
+
+
+def check_normaltc():
+    name = "Normal-difficulty drops use the level-upgraded treasure class (Median 0x12d6a)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    txt = mxl_text()
+    bad, rows, log = [], [], []
+    if "normal-difficulty treasure class on" not in txt:
+        bad.append("`mxl` does not say `normal-difficulty treasure class on`: %s" % next((l for l in txt.splitlines() if "treasure class" in l), "-"))
+    god(True)
+    try:
+        goto(4)  # Wilderness 3: Normal monsters of level 6 (Median's area table)
+        for diff in (0, 1):  # Normal, then Nightmare (the executor's own behaviour: the control)
+            H("difficulty %d" % diff)
+            H("tctrace reset")
+            ids = _spawn_ids(18, 1)
+            if not ids:
+                bad.append("difficulty %d: nothing spawned" % diff)
+                continue
+            level = rd("m%d" % ids[0], 12)
+            H("kill %d" % ids[0])
+            time.sleep(1)
+            ok, line, _l = hv("tctrace", "tctrace")
+            m = re.search(r"calls=(\d+) leveled=(\d+) lastclass=(-?\d+) lastlevel=(-?\d+)", line)
+            log.append("%s: killed a level %s monster; %s" % (("Normal", "Nightmare")[diff], level, line))
+            if not m:
+                bad.append("difficulty %d: no tctrace line (%s)" % (diff, line[:80]))
+                continue
+            calls, leveled, tc, lvl = (int(x) for x in m.groups())
+            rows.append("%s kill of a level %s monster: %d class lookups, %d with a level, last class %d level %d" % (("Normal", "Nightmare")[diff], level, calls, leveled, tc, lvl))
+            if calls < 1 or leveled < 1 or lvl != level:
+                bad.append(rows[-1] + " (want the monster's level handed to the class getter)")
+    finally:
+        H("difficulty 0")
+        kill_all_near()
+        god(False)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]), [sh("normaltc")], log)
+
+
+def _leash_probe(dist, seconds=2.5):
+    """Moves the player `dist` sub-tiles from the mercenary, then samples the Euclidean distance every harness round trip.
+    Returns (placed distance, samples [(t, euclid)], largest single drop between two samples, the log lines)."""
+    ok, line, _l = hv("leash %d" % dist, "leash")
+    m = re.search(r"euclid=([\d.]+)", line)
+    if not ok or not m:
+        return None, [], 0, [line]
+    start = float(m.group(1))
+    t0 = time.time()
+    samples, log = [(0.0, start)], [line]
+    while time.time() - t0 < seconds:
+        ok, line, _l = hv("leash", "leash")
+        m = re.search(r"euclid=([\d.]+)", line)
+        if m:
+            samples.append((round(time.time() - t0, 2), float(m.group(1))))
+            log.append(line)
+    drop = max([a[1] - b[1] for a, b in zip(samples, samples[1:])] or [0])
+    return start, samples, drop, log
+
+
+def check_leash():
+    name = "Summon / hireling leash (Median: warp to the owner past 40 sub-tiles)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    txt = mxl_text()
+    bad, rows, log = [], [], []
+    if "summon leash on" not in txt:
+        bad.append("`mxl` does not say `summon leash on`: %s" % next((l for l in txt.splitlines() if "leash" in l), "-"))
+    fight_ready()
+    if not ensure_merc():
+        return add(name, "BLOCKED", "no mercenary could be hired")
+    god(True)
+    try:
+        # one probe per distance: the mercenary is placed that far from the player (moving the player would pull the mercenary
+        # along at once); a warp is a jump of the distance, a walk a few sub-tiles per sample
+        for dist, warps in ((20, False), (30, False), (36, False), (44, True), (47, True), (60, True)):
+            start, samples, drop, lines = _leash_probe(dist)
+            log += lines
+            if start is None:
+                bad.append("distance %d: the player could not be placed (%s)" % (dist, lines[0][:100]))
+                continue
+            warped = drop >= 15
+            rows.append("mercenary %d sub-tiles from the player: %s (largest drop between two samples %.0f, %.1f after %.1f s)" % (
+                dist, "warped to the owner" if warped else "walked back", drop, samples[-1][1], samples[-1][0]))
+            if warped != warps:
+                bad.append(rows[-1] + ", want %s" % ("a warp" if warps else "a walk"))
+    finally:
+        kill_all_near()
+        god(False)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]), [sh("leash")], log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -6261,7 +6447,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages),
           ("skillscaling", check_skillscaling),
           ("nodurability", check_nodurability), ("autoid", check_autoid), ("townmana", check_townmana),
-          ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards)]
+          ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards),
+          ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash)]
 
 
 def write_report(extra=""):

@@ -984,6 +984,22 @@ every hook, patched bytes before every patch; whole instructions, no rip-relativ
 
 Median-side corrections found on the way: D2Sigma's Andariel patch removes only the two chipped gems (the standard gem stays, the audit said "100 bytes nopped: the vanilla gift disappears"); the formula in the audit row game5-026 (`250*1.5^(level-90)`) is a misreading of `pow(level - 90, 1.5) * 250`.
 
+## 20. Monster level, players scaling, Normal drops, leash, Baal throne delay (lane pa2-monsters, 2026-10-23; plugin/src/monster_rules.cpp)
+
+Median patches (docs/sigma-patch-audit.md items 17-19). Every patched byte is checked before it is changed; all sites of a part change or none.
+
+| What | RVA | Entry / patched bytes | Notes |
+|---|---|---|---|
+| Monster level gate | `0x543d32` | `45 85 ff 74 19` -> 5 nops | `test r15d,r15d / je` inside `0x543b50` (called from the monster setup `0x543120`): the area level is taken only above Normal. Stays: the classic test `cmp dl,1 / je` (`0x543d2d`) and the npc flag `0x4` test (`0x543d3c`, mask `0x1d996d8`). |
+| lUndead flag test | `0x543d44` | `85 05 9e 59 85 01 75 04` -> 8 nops | `test [rip+0x1859e],eax / jne`: mask `0x1d996e8` = `0x40`. The rip-relative operand is inside the patched bytes (nops, not a hook entry). |
+| Players record rewrite | `0x543e90` (hook) | `40 55 53 57 41 54` (6 bytes) | `(game, monster, record*)`: record `+0x24` life %, `+0x28` experience %, `+0x34` players (D2RCore fills it through the thunk `0x3e2b43c`). The hook writes Median's `(n-1)*50` / 0 and runs the original. A 0 / 0 record stays. |
+| Normal drop gate | `0x44138f` | `40 38 be 04 01 00 00 76 19` -> 9 nops | `cmp byte [rsi+0x104],dil / jbe 0x4413b1` in the executor `0x441300`: the monster's level (stat 12) goes to the class getter only above Normal. |
+| Class getter (trace) | `0x397290` (hook) | `48 89 5c 24 08` (5 bytes) | `(dataFlag, tc index, level)`; the hook only counts calls and keeps the last level (harness `tctrace [reset]`). |
+| Leash compares | `0x5bec51` `83 f9 64`; `0x5bd29f` `41 83 fc 50`; `0x5bd474` `41 83 fc 32`; `0x5c1136` `41 83 ff 32`; `0x5c96aa` `41 83 fc 32`; `0x5ccb39` `83 f8 32` | last byte -> `0x28` | Pet think `0x5bebe5`, approach chooser `0x5bd1e0` (two), owner think `0x5c1080`, AI 112 `0x5c95d0`, AI 107 `0x5cca50`. The distance is `0x596720(unit, owner)`: (max + min/2) of the coordinate differences minus both units' radii (about Euclid - 2). |
+| Baal throne countdown | `0x5c71e6` | `81 c1 fa 00 00 00` -> `81 c1 7d 00 00 00` | AI 134 `0x5c7070`: first-wave start `frame + 0xfa` (250) becomes `0x7d` (125). This is the audit's game5-001 "delay 250 becomes 125", which is not a leash. |
+
+Harness verbs: `players <n>` (sets D2R's players setting: `0xe19e0()` then `0xd2f020(setting, n)`; it is not persistent and only the next spawned monsters see it), `tctrace [reset]`, `leash [d]` (moves the mercenary `d` sub-tiles from the player with the unit move `0x491ca0`, prints both positions, `0x596720` and the mercenary's mode). Moving the player instead pulls the mercenary along at once, which hid the thresholds.
+
 ## Unknown / next steps
 
 Solved in lane d2r-addresses-2 (sections 4, 5, 7-11): warp destination and the lockout refusal point, game frame, spawn, TC executor,
