@@ -59,6 +59,13 @@ Bit-packed, LSB first, each item padded to a byte:
 | quantity, total sockets | 9, 4 | when stackable / socketed |
 | stats | 16-bit id, Save Param Bits, Save Bits (value + Save Add) | ends with 0xffff |
 
+## Corpse, mercenary and golem lists (after the items)
+After the player's item list: `JM` + u16 corpse count (0 or 1); a corpse has a 12 byte header (u32 0, u32 x, u32 y) and a second `JM`
+item list of the items it holds; then `jf` and the mercenary's `JM` item list, then `kf` (golem). Seen in a test save after a death:
+`4a 4d 01 00 | 00 00 00 00 14 16 00 00 92 15 00 00 | 4a 4d 01 00 ...` = one corpse at (5652, 5522) with one item. With the plugin part
+`nocorpse` (docs/subsystems/death.md) a dying character no longer gets one: the count stays 0. A save that already holds a corpse
+loads through D2R's own path and the corpse can be picked up as before.
+
 ## Warning: hand-written items are rejected (2026-10-06)
 
 The mod runs D2RLoader's **extended** save format (`[d2rcore.save_format] mode = "extended"`), which stores wider

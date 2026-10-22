@@ -2107,9 +2107,9 @@ def check_nocorpse():
 
     def snap():
         st = hstate()
-        eq = sorted((i.get("code"), i.get("body")) for i in st["items"] if i.get("body", 0) > 0)
+        eq = sorted((str(i.get("code")), i.get("body")) for i in st["items"] if i.get("body", 0) > 0)
         m = re.search(r"corpses (\d+) players=(\d+) self=(\d)", " ".join(st["lines"]))
-        sk = re.search(r"no corpse (\w+): skipped corpse calls=(\d+) penalty calls=(\d+) xp=(\d+)", " ".join(st["lines"]))
+        sk = re.search(r"no corpse (\w+): skipped corpse calls=(\d+) penalty calls=(\d+) respawns held=\d+ let=\d+ xp=(\d+)", " ".join(st["lines"]))
         rh = re.search(r"respawns held=(\d+) let=(\d+)", " ".join(st["lines"]))
         p = st["player"]
         return {"gold": p.get("gold"), "bank": p.get("bank"), "area": p.get("area"), "mode": p.get("mode"), "eq": eq,
@@ -2125,7 +2125,7 @@ def check_nocorpse():
     ok1, _l1 = H("equip rin lring")
     ok2, _l2 = H("equip amu amulet")
     H("unequip belt")
-    ok3, _l3 = H("equip lbl belt")  # a sash: the belt's potions would go to the corpse in D2 (audit DC1); the harness cannot fill a belt
+    ok3, _l3 = H("equip 629 belt")  # a belt (Median code 629): the belt's potions would go to the corpse in D2 (audit DC1); the harness cannot fill a belt
     H("gold set 23456 7890")
     if level0 is not None and level0 < 2:
         setstat("player", 12, 20)  # the experience penalty only exists above level 1
@@ -2137,7 +2137,10 @@ def check_nocorpse():
     setstat("player", 7, BIG_LIFE)
     setstat("player", 6, 256 * 100)
     ok, line, lines = hv("hit player phys 2000000000 %s" % atk, "hit")
-    time.sleep(1)
+    for _ in range(12):  # the death animation (mode 0) runs a second or two; the corpse creator is called on the way into mode 0x11
+        time.sleep(1)
+        if hstate()["player"].get("mode") == 17:
+            break
     dead = snap()
     shot_dead = sh("nocorpse_dead")
     g.press("esc")  # too early: the respawn request must be held back (audit DC4)
@@ -2172,8 +2175,8 @@ def check_nocorpse():
         problems.append("the death did not reach the corpse creator / penalty hooks (skipped calls %s/%s -> %s/%s)" %
                         (before["skc"], before["skp"], dead["skc"], dead["skp"]))
     for label, snapshot in (("dead", dead), ("after respawn", after)):
-        if snapshot["corpses"] != 0:
-            problems.append("%s: %s corpse unit(s) in the game" % (label, snapshot["corpses"]))
+        if snapshot["corpses"] != before["corpses"]:  # a corpse from an earlier death in the save (made before the part) is not new
+            problems.append("%s: %s corpse unit(s) in the game, %s before the death" % (label, snapshot["corpses"], before["corpses"]))
         if not same(before, snapshot):
             problems.append("%s: equipment / gold / bank / xp changed: %s -> %s" % (label, {k: before[k] for k in ("eq", "gold", "bank", "xp")},
                                                                                 {k: snapshot[k] for k in ("eq", "gold", "bank", "xp")}))
@@ -2190,11 +2193,11 @@ def check_nocorpse():
     if after["area"] is None or after["area"] not in (1, 40, 75, 103, 109):
         problems.append("not in a town after the respawn (area %s)" % after["area"])
     add(nm, "FAIL" if problems else "PASS",
-        "%s | killed by a hit of 2e9 from a spawned monster (%s); before: items %s gold %s bank %s xp %s; dead (mode %s): corpses %s, "
+        "%s | killed by a hit of 2e9 from a spawned monster (%s); before: items %s gold %s bank %s xp %s; dead (mode %s): corpses %s (before: %s), "
         "gold %s xp %s, hooks swallowed corpse %s->%s penalty %s->%s calls; after Esc: mode %s area %s, corpses %s, items %s gold %s bank %s xp %s, "
         "ground gold piles %s->%s; respawn held %s->%s, let %s->%s, frames dead->early Esc->respawn %s->%s->%s" %
         ("; ".join(problems) if problems else "all unchanged", line[:70], before["eq"], before["gold"], before["bank"], before["xp"],
-         dead["mode"], dead["corpses"], dead["gold"], dead["xp"], before["skc"], dead["skc"], before["skp"], dead["skp"],
+         dead["mode"], dead["corpses"], before["corpses"], dead["gold"], dead["xp"], before["skc"], dead["skc"], before["skp"], dead["skp"],
          after["mode"], after["area"], after["corpses"], after["eq"], after["gold"], after["bank"], after["xp"],
          before["ground_gold"], after["ground_gold"], before["held"], after["held"], before["let"], after["let"],
          dead["frame"], early["frame"], after["frame"]), [shot_dead, shot_after], lines)
