@@ -23,6 +23,7 @@ Usage: python tools/item_hd.py
 import csv
 import json
 from item_art import median_asset
+from strings_ns import bare
 import re
 import sys
 from collections import Counter, defaultdict
@@ -56,7 +57,9 @@ def load_map(name: str) -> dict:
 
 
 def key(index: str) -> str:
-    return re.sub(r"[ \-]", "_", index.lower()).replace("'", "")
+    # uniqueitems / setitems index cells are localization cells (medianxl:<key> for Median-only names): the asset name
+    # is derived from the plain name
+    return re.sub(r"[ \-]", "_", bare(index).lower()).replace("'", "")
 
 
 def sprites() -> set[str]:

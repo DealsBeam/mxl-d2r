@@ -30,7 +30,15 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
 
 ## Exceptions (strings that must stay native with a fixed ID)
 
-(filled in by ns-research / ns-plugin)
+(filled in by ns-research / ns-plugin; the list itself is `tools/strings_native.json`, read by tbl2json, txt_migrate and validate)
+
+- **Cells that cannot hold `medianxl:<key>` (ns-tables).** Fixed-size text fields must hold the whole `namespace:key`
+  (`LOCALIZATION.md`): `levels.LevelWarp` 39 characters, `uniqueitems.index` and `setitems.index` 31. 19 Median keys
+  ("Sunstone of the Twin Seas", "MRVasily's Falling Star", "To The Island of the Sunless Sea", ...) would be 9
+  characters too long, so they stay native with a fixed ID and their cells stay unqualified. validate.py fails when
+  another key overflows its field (add it to `strings_native.json`).
+- Range columns (`hireling.NameFirst` / `NameLast`: every string ID from the first to the last is a name) cannot name a
+  namespaced key; they hold D2R keys only, validate.py fails otherwise.
 
 ## Generated plugin headers and layouts (ns-ui)
 
