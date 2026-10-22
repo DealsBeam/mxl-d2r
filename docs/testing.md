@@ -608,3 +608,15 @@ Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261022-224210-s1\` (not committe
 | Waypoint auto-activation (WP2, WP3) | PASS | Cold Plains waypoint (number 1): bit set within 1.5 s at distance 3, still clear at distance 47 (negative control), set at distance 24 while walking up. Two players in one game were not run |
 | Hotkeys X / R / C (UI4, CR5) | PASS | window-message presses reach InputService: X toggles (0->1->2 presses, pickup on/off/on), R reveals (+1), C with the cube closed is counted and ignored (transmutes 0, blocked 1), C with the cube open calls Transmute (transmutes 1). The cube-open state comes from the UI message `PanelManager:OpenPanel(<cube panel>)` and `ClosePanel` / `UnloadPanel`. The default keys can overlap D2R's own R and C bindings; not checked |
 | Stash pages (GS5) | PASS | `add_shared_tabs = 7` in `d2rloader.toml`: an item created through ItemService lands in shared tabs 0-9, tabs 10 and 12 are refused. The personal stash stays one page; no Prev / Next / Sort / Mode buttons |
+
+### Gamble window and small engine rules (lane pa2-gamble, 2026-10-23, slot 3, background mode)
+
+Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261023-003647-s3\` (not committed; `MXL_RUN=lane-pa2gamble py -3 tools/game_checks.py --slot 3 all mxl gamble enginegaps`). New harness verbs (server side): `gamble` (the player's gamble offers, player data `+0x108`, the same item lines as `shop`, then `gamble offers N`) and `gaps` (the bytes at the hit-20 floor and the recast guard, and the player slow floor through the hooked entry `0x449f40`).
+
+| Row | Result | Note |
+|---|---|---|
+| Gamble offers (audit item 16, IT10) | PASS | Gheed opened through `interact 147` and the Gamble line of his menu (handler `0x112c80`), then the same request twelve more times through `pkt 38 02 ...` (packet `0x38` kind 2 with Gheed's id): every window has 32 offers (13 x 32 = 416) in 32 distinct cells of page 0, a ring (`rin`) and an amulet (`amu`) in each, 311 magic, 101 rare (242 per mille; Median's chance is 25000 per 100000), 4 unique, no set item, and no window equals the one before. Negative control (`mxl-core-off.txt` with `gamble`): 14 offers per window and the check fails, so 14 is D2R's own count |
+| Hit 20 floor, recast guard (audit item 21) | PASS (bytes) | `gaps`: `0x45edce` reads `31 db 85 c0 0f 4f d8` and `0x56f859` is 13 x `90`; with the off word `recast` the guard keeps `e8 52 59 dc ff 85 c0 0f 85 b9 02 00 00`. The effect is not tried in play: it needs a skill whose calc comes out 0 or less (hit 20) and a srvdofunc 47 skill cast twice |
+| Player slow floor (audit item 21) | PASS | `gaps` at difficulty 0 / 1 / 2 (`h difficulty n`): -12 / -25 / -50 through the hooked entry |
+
+Off words are letters only (digits are dropped when `mxl-core-off.txt` is read): the hit-20 floor is `hitfloor`.
