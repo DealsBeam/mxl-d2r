@@ -111,6 +111,82 @@ constexpr auto AbsorbPercentCut(int32_t damage, int32_t stat) noexcept -> int32_
 	return pct > 0 ? static_cast<int32_t>(static_cast<int64_t>(damage) * pct / 100) : 0;
 }
 
+// Damage reduction on the incoming damage itself (D2Sigma 0x10057c10, reached from D2Game rva 0xdc4ea through the stub
+// 0x1009b7e0, which replaces the call of the per-type step 6fcfbd00 in the loop of SUnitDmg 6fcfc0b0). For each of the twelve
+// type entries Median first runs the vanilla step (D2R 0x4523e0: flat reduction, resistance, absorb), and then, when the
+// entry's field is not 0, cuts what is left with the same defender stats as the absorb credit, in this order:
+//   189 (D2R 373) divisor    a damage field becomes field / divisor (no floor, truncating); a duration (cold, freeze and
+//                            poison length) becomes half of it, at least 5 frames
+//   184 (D2R 369) percent    damage fields only: field - field * percent / 100
+//   417 (D2R 446) percent    damage fields only, layer = the type below (0 for physical): the same cut
+// A step needs its stat to be non-zero and the field above 0. There is no floor of one life point (the absorb credit has one),
+// and the stat is not limited. The entries are told apart by D2R's name string at entry + 0x30; the layer is Sigma's 0x10057d70.
+enum class FieldKind { None, Damage, Duration };
+
+struct DamageType {
+	FieldKind kind;
+	int32_t layer;  // the layer of stat 417
+};
+
+inline constexpr int32_t DurationFloor = 5;
+
+constexpr auto NameWord(char a, char b, char c, char d) noexcept -> uint32_t {
+	return static_cast<uint32_t>(static_cast<uint8_t>(a)) | static_cast<uint32_t>(static_cast<uint8_t>(b)) << 8 |
+	       static_cast<uint32_t>(static_cast<uint8_t>(c)) << 16 | static_cast<uint32_t>(static_cast<uint8_t>(d)) << 24;
+}
+
+// The type of a table entry from the first four characters of its name ("Phys", "Fire", "Ligt", "Cold", "Magc", "CLen",
+// "FLen", "PLen", "Pois", "Life", "Mana", "Stam").
+constexpr auto DamageTypeOfName(uint32_t name) noexcept -> DamageType {
+	switch (name) {
+	case NameWord('P', 'h', 'y', 's'): return {FieldKind::Damage, 0};
+	case NameWord('F', 'i', 'r', 'e'): return {FieldKind::Damage, 1};
+	case NameWord('L', 'i', 'g', 't'): return {FieldKind::Damage, 2};
+	case NameWord('M', 'a', 'g', 'c'): return {FieldKind::Damage, 3};
+	case NameWord('C', 'o', 'l', 'd'): return {FieldKind::Damage, 4};
+	case NameWord('P', 'o', 'i', 's'): return {FieldKind::Damage, 5};
+	case NameWord('L', 'i', 'f', 'e'): return {FieldKind::Damage, 6};
+	case NameWord('M', 'a', 'n', 'a'): return {FieldKind::Damage, 7};
+	case NameWord('S', 't', 'a', 'm'): return {FieldKind::Damage, 8};
+	case NameWord('C', 'L', 'e', 'n'):
+	case NameWord('F', 'L', 'e', 'n'):
+	case NameWord('P', 'L', 'e', 'n'): return {FieldKind::Duration, 0};
+	default: return {FieldKind::None, 0};
+	}
+}
+
+// D2Sigma 0x10057d20: field / divisor for a damage field, half (at least 5) for a duration.
+constexpr auto FieldDivide(int32_t field, FieldKind kind, int32_t divisor) noexcept -> int32_t {
+	if (field <= 0 || divisor == 0) {
+		return field;
+	}
+	if (kind == FieldKind::Damage) {
+		return std::max(field / divisor, 0);
+	}
+	if (kind == FieldKind::Duration) {
+		return std::max(field >> 1, DurationFloor);
+	}
+	return field;
+}
+
+// D2Sigma 0x10057f10: a damage field loses `percent` of itself. Not applied to durations. (Median's stats are far below 100;
+// the result is held at 0 so that a stray value cannot turn damage into healing.)
+constexpr auto FieldReduce(int32_t field, FieldKind kind, int32_t percent) noexcept -> int32_t {
+	if (field <= 0 || percent == 0 || kind != FieldKind::Damage) {
+		return field;
+	}
+	const auto cut = static_cast<int32_t>(static_cast<int64_t>(field) * percent / 100);
+	return std::max(field - cut, 0);
+}
+
+// What is left of a field after D2R's step, once Median's three stats have been applied (the field is read after the step).
+constexpr auto ReduceField(int32_t field, DamageType type, int32_t divisor, int32_t percent, int32_t typePercent) noexcept -> int32_t {
+	if (field == 0 || type.kind == FieldKind::None) {
+		return field;
+	}
+	return FieldReduce(FieldReduce(FieldDivide(field, type.kind, divisor), type.kind, percent), type.kind, typePercent);
+}
+
 // Ethereal items: D2Sigma 0x1007fdd0 (D2ItemStats.cpp) adds 25% to the weapon damage stats (0x15-0x18, 0x9f, 0xa0) or
 // the defense (0x1f); D2R's 0x3d3510 multiplies them by 3/2.
 inline constexpr int32_t EtherealPercent = 25;

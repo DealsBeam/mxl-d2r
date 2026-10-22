@@ -10,10 +10,11 @@ aborts the run when the real cursor enters the game window or the game window be
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
 Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
-craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb avoidcaps classlock
-hiregates itemrolls dye goldclient bonusdrops summoner tooltip gameend trophy statcols skilltree keybinds npcstrings
-automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills cowportals deathcrash nocorpse
-nslong strings goblinname rewardsound statorder infopanel sprint mercrevive questxp questrewards.
+craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
+classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
+skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
+cowportals deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
+heat trophytimer mapreveal wpauto hotkeys stashpages mercrevive questxp questrewards.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -646,6 +647,186 @@ def check_trophy():
         "printed lines are read from the screenshots (trophy_hover*.png, trophy_revealed.png)" % (
             used[0] if used else "-", sent0, sent1, sent2, failed0, failed2, kept), shots, made + used + again)
     H("remove a56 5")
+
+
+def skill_usable(skill):
+    """The game's usability code (`h skills`, 0x33f360) of one skill of the player, None when he has not got it."""
+    ok, lines = H("skills")
+    for ln in lines:
+        m = re.match(r"skill id=(\d+) level=\d+ mode=\d+ owner=-?\d+ usable=(\d+)", ln)
+        if m and int(m.group(1)) == skill:
+            return int(m.group(2))
+    return None
+
+
+def check_steadyaim():
+    """Hunter's Steady Aim (docs/median-rules-audit.md SK10): Steady Shot (D2R 1368) builds stat 220 layer 5 on state
+    sk1296_state one per shot up to the cap; Heartseeker (352, restrict 5: needs the state) is refused without it
+    (plugin/src/skill_restrict.cpp), spends one charge per cast and drops the state at the last one."""
+    nm = "Steady Aim: Steady Shot builds the counter, Heartseeker needs it and spends it (restrict 5)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(2)  # Blood Moor
+    kill_all_near()
+    st0 = hstate()["player"]
+    cls0 = st0.get("class")
+    log = []
+    for cmd in ("class 5", "stat player 0 set 400", "stat player 2 set 400", "unequip rhand", "equip 163 rhand",
+                "unequip lhand", "equip aqv lhand", "setskill 1368 5", "setskill 352 5"):
+        ok, lines = H(cmd)
+        log += lines
+    counter = lambda: stat_of(H("stat player 220 5")[1])
+    before = skill_usable(352)
+    first = counter()
+    H("spawn 3 1")
+    seen = []
+    for _ in range(4):
+        H("cast 1368 nearest")
+        time.sleep(2.5)
+        seen.append(counter())
+    during = skill_usable(352)
+    ok, lines = H("cast 352 nearest")
+    log += lines
+    time.sleep(2.5)
+    after_one = counter()
+    for _ in range(6):
+        if not counter():
+            break
+        H("cast 352 nearest")
+        time.sleep(2.5)
+    end = counter()
+    after = skill_usable(352)
+    kill_all_near()
+    if cls0 is not None:
+        H("class %d" % cls0)
+    good = (before == 4 and first == 0 and seen == [1, 2, 3, 4] and during == 0 and after_one is not None
+            and 0 < after_one < seen[-1] + 1 and end == 0 and after in (1, 4))  # 1 = Heartseeker's cooldown answers before the restriction
+    add(nm, "PASS" if good else "FAIL",
+        "Heartseeker usability (4 = restricted) before the first shot %s, counter %s; after Steady Shot x4 the counter reads %s "
+        "and Heartseeker %s; one Heartseeker leaves %s; spent to %s and Heartseeker %s (4 restricted, or 1 while its cooldown runs)" % (
+            before, first, seen, during, after_one, end, after), (), log)
+
+
+def check_heat():
+    """The Fire Sorceress's Heat (docs/median-rules-audit.md SK11): Molten Core (D2R 1682, a class skill) puts the heat loss
+    rate in stat 297; with it set the mana bar drains outside a town instead of regenerating (plugin/src/heat.cpp), Flamefront
+    (482) puts a negative rate on the caster for a moment, which builds heat, and a town stops the drain."""
+    nm = "Heat: stat 297 drains the mana bar outside town, Flamefront builds it, a town holds it"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(2)
+    kill_all_near()
+    cls0 = hstate()["player"].get("class")
+    log = []
+    for cmd in ("class 1", "setskill 482 5", "setskill 1682 5"):
+        ok, lines = H(cmd)
+        log += lines
+    mana = lambda: stat_of(H("stat player 8")[1])
+    rate = stat_of(H("stat player 297")[1])
+    H("stat player 8 set 25600")
+    top = mana()
+    time.sleep(2.5)
+    mid = mana()
+    time.sleep(2.5)
+    low = mana()
+    for _ in range(12):  # run it dry (the floor is 0)
+        if mana() == 0:
+            break
+        time.sleep(2)
+    empty = mana()
+    H("spawn 3 1")
+    peak = empty
+    H("cast 482 nearest")
+    seen_negative = False
+    for _ in range(8):
+        peak = max(peak, mana() or 0)
+        seen_negative = seen_negative or (stat_of(H("stat player 297")[1]) or 0) < 0
+    kill_all_near()
+    goto(1)  # Rogue Encampment
+    H("stat player 8 set 12800")
+    time.sleep(3)
+    town = mana()
+    goto(2)
+    H("stat player 8 set 25600")
+    if cls0 is not None:
+        H("class %d" % cls0)
+    good = (rate is not None and rate > 0 and top is not None and top >= 25000 and mid is not None and mid < top and low is not None and low < mid
+            and empty == 0 and peak > 0 and seen_negative and town == 12800)
+    add(nm, "PASS" if good else "FAIL",
+        "stat 297 = %s; mana x256 from full: %s -> %s (2.5 s) -> %s (5 s) -> %s (empty, floor 0); Flamefront at empty: peak %s, "
+        "stat 297 went negative: %s; in town (set to 12800, 3 s later): %s" % (rate, top, mid, low, empty, peak, seen_negative, town), (), log)
+
+
+def check_trophytimer():
+    """Trophy challenge windows (docs/median-rules-audit.md CR4, DC6; plugin/src/trophy_timer.cpp). The Heart of Sin recipe
+    (assassin row 6377: Azmodan's Heart a56, unique 27, challenge code 167166 in stat 378) must match within 10 s of the code
+    appearing, be refused later, and be refused after the player left the area or died. Control: the stat still holds the
+    code in every refused case, so the refusal is the window, not the stat compare."""
+    nm = "Trophy timer: cube in time passes, too late / another zone / dead is refused"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(1)
+    if not items(hstate(), "box"):  # the character may not have found its cube yet
+        H("item box inv")
+    H("cubeclear")
+    cls0 = hstate()["player"]["class"]
+    H("class 6")  # the recipe is for assassins
+    log, res = [], {}
+
+    def attempt(label):
+        H("flag player 9 clear")  # the recipe sets it and the follow-up recipe 6358 (same item) opens with it
+        H("cubeclear")
+        H("item a56 cube uniq=27")
+        ok, lines = H("cubecraft")
+        r = re.search(r"recipe (\d+)", lines[0]) if lines else None
+        res[label] = (ok and r is not None and r.group(1) == "6377", lines[0][:60] if lines else "-")
+        log.extend(lines)
+        H("cubeclear")
+
+    def start():
+        H("stat player 378 set 0")
+        time.sleep(1)
+        H("stat player 378 set 167166")
+        time.sleep(1.5)  # the frame hook samples the players every 5 frames
+
+    try:
+        start()
+        attempt("in time")
+        start()
+        time.sleep(11.5)
+        held_late = stat_of(H("stat player 378")[1])
+        attempt("too late")
+        start()
+        goto(2)
+        goto(1)
+        held_zone = stat_of(H("stat player 378")[1])
+        attempt("other zone")
+        goto(2)  # a town does not let a hit kill
+        atk = spawn_attacker(1)
+        start()
+        H("stat player 6 set 25600")
+        H("hit player phys 2000000000 %s" % (atk or ""))  # from a spawned monster; 1/256 life points
+        for _ in range(12):  # the death animation runs a second or two
+            time.sleep(1)
+            if hstate()["player"].get("mode") in (0, 17):
+                break
+        died = hstate()["player"].get("mode") in (0, 17)
+        time.sleep(3)  # the sampler sees the dead player
+        revive_if_dead()
+        goto(1)
+        held_dead = stat_of(H("stat player 378")[1])
+        attempt("died")
+    finally:
+        H("stat player 378 set 0")
+        H("class %d" % cls0)
+        H("cubeclear")
+    held = (held_late, held_zone, held_dead)
+    good = (res["in time"][0] and not res["too late"][0] and not res["other zone"][0] and not res["died"][0]
+            and died and all(v == 167166 for v in held))
+    add(nm, "PASS" if good else "FAIL",
+        "recipe 6377 matched: in time %s; 12 s later %s; after goto 2 and back %s; after dying %s (the character died: %s; stat 378 "
+        "still %s in the refused cases)" % (res["in time"][0], res["too late"][0], res["other zone"][0], res["died"][0], died, held),
+        (), log)
 
 
 def check_cain():
@@ -1699,18 +1880,18 @@ BIG_LIFE = 2097151  # 8191 life points in D2's 8.8 fixed point
 
 
 def hit(ref, elem, amount, attacker=None):
-    """One `hit`: the target at full life, returns (lost raw, absorbed raw, result flags) or None."""
+    """One `hit`: the target at full life, returns (lost raw, absorbed raw, result flags, the element's field after the step) or None."""
     setstat(ref, 7, BIG_LIFE)
     setstat(ref, 6, BIG_LIFE)
     for _ in range(8):  # result 0: the engine ignored the hit (just arrived in the area, hit recovery); try again
         ok, line, _l = hv("hit %s %s %d%s" % (ref, elem, amount, (" " + attacker) if attacker else ""), "hit")
-        m = re.search(r"life=(-?\d+)->(-?\d+) lost=\S+ absorbed=(-?\d+) result=0x(\w+)", line)
+        m = re.search(r"life=(-?\d+)->(-?\d+) lost=\S+ absorbed=(-?\d+) result=0x(\w+)(?: field=(-?\d+))?", line)
         if not ok or not m:
             return None
         if int(m.group(4), 16) != 0:
             break
         time.sleep(1)
-    return int(m.group(1)) - int(m.group(2)), int(m.group(3)), int(m.group(4), 16)
+    return int(m.group(1)) - int(m.group(2)), int(m.group(3)), int(m.group(4), 16), int(m.group(5)) if m.group(5) else None
 
 
 def spawn_attacker(cls=1):
@@ -1862,6 +2043,124 @@ def check_absorb():
     add(name, "PASS" if not bad else "FAIL",
         "100000-unit hits on the player (stat 184 from other sources: %s%%); healed amount = D2R's cut run through the three stats: %s"
         % (base184, "; ".join(rows)), [sh("absorb")], rows)
+
+
+def _field_cut(field, pct):
+    """Median's percent step on a damage field (D2Sigma 0x10057f10): no floor, the cut truncates."""
+    return field - field * pct // 100 if field > 0 and pct else field
+
+
+def _field_reduce(field, divisor, pct, tpct, duration=False):
+    """What Median leaves of a field once D2R's step is done: 189 (divide, or halve a duration to 5 at least), 184, 417."""
+    if field <= 0:
+        return field
+    if divisor:
+        field = max(field >> 1, 5) if duration else field // divisor
+    if duration:
+        return field
+    return _field_cut(_field_cut(field, pct), tpct)
+
+
+def check_damagered():
+    name = "Damage reduction stats 184 / 189 / 417 (D2R 369 / 373 / 446) on the incoming damage itself (D2Sigma 0x10057c10)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    fight_ready()
+    elems = [("fire", 39, 40, 1), ("ltng", 41, 42, 2), ("cold", 43, 44, 4), ("magic", 37, 38, 3)]
+    absorb = [142, 143, 144, 145, 146, 147, 148, 149]
+    stats = [s for e in elems for s in e[1:3]] + absorb + [369, 373]
+    saved = {s: rd("player", s) for s in stats}
+    saved_t = {l: rd("player", 446, l) for l in range(0, 6)}
+    for e in elems:  # resist 200 with no max-resist: the cap leaves 25% of every hit, whatever the difficulty's penalty
+        setstat("player", e[1], 200)
+        setstat("player", e[2], 0)
+    for s in absorb:  # no absorb unless a probe asks for it
+        setstat("player", s, 0)
+    setstat("player", 369, 0)  # `stat set` writes the base value; what is left is what other sources give
+    setstat("player", 373, 0)
+    for l in range(0, 6):
+        setstat("player", 446, 0, l)
+    p0 = rd("player", 369) or 0
+    amount, pre, rows, bad = 100000, 25000, [], []
+
+    def note(label, got, want, ok):
+        rows.append("%s: %s (want %s)" % (label, got, want))
+        if not ok:
+            bad.append(rows[-1])
+
+    def probe(label, elem, want, amt=amount):
+        r = hit("player", elem, amt)
+        note(label, "field %s lost %s" % (r and r[3], r and r[0]), want, r is not None and r[3] == want and abs(r[0] - want) <= 2)
+
+    probe("baseline, 184 from other sources %d%%" % p0, "fire", _field_reduce(pre, 0, p0, 0))
+    setstat("player", 373, 4)
+    probe("189 divisor 4", "fire", _field_reduce(pre, 4, p0, 0))
+    setstat("player", 373, 0)
+    setstat("player", 369, 50)
+    p = rd("player", 369)
+    probe("184 -> %d%%" % p, "fire", _field_reduce(pre, 0, p, 0))
+    setstat("player", 369, 0)
+    setstat("player", 446, 50, 1)
+    probe("417 layer 1 (fire) 50%", "fire", _field_reduce(pre, 0, p0, 50))
+    probe("417 layer 1 on cold (unchanged)", "cold", _field_reduce(pre, 0, p0, 0))
+    setstat("player", 446, 0, 1)
+    for elem, _res, _mx, layer in elems:
+        setstat("player", 446, 40, layer)
+        probe("417 layer %d (%s) 40%%" % (layer, elem), elem, _field_reduce(pre, 0, p0, 40))
+        setstat("player", 446, 0, layer)
+    # all three on odd numbers: the order (divide, 184, 417) and the truncation of every step show in the exact field
+    setstat("player", 373, 3)
+    setstat("player", 369, 33)
+    p = rd("player", 369)
+    setstat("player", 446, 17, 1)
+    probe("all three on 25001 (189 3, 184 %d%%, 417 17%%)" % p, "fire", _field_reduce(25001, 3, p, 17), amt=100005)
+    setstat("player", 373, 0)
+    setstat("player", 369, 0)
+    setstat("player", 446, 0, 1)
+    # the absorb credit is computed before these stats: 30% of the 25000 left by the resist is 7500, healed through 189 (and 184)
+    setstat("player", 142, 30)
+    setstat("player", 373, 4)
+    r = hit("player", "fire", amount)
+    want_heal, want_field = _credit(7500, 4, p0, 0), _field_reduce(17500, 4, p0, 0)
+    note("fire absorb 30% + 189 divisor 4", "healed %s field %s" % (r and r[1], r and r[3]), "healed %s field %s" % (want_heal, want_field),
+         r is not None and abs(r[1] - want_heal) <= 2 and r[3] == want_field)
+    setstat("player", 142, 0)
+    setstat("player", 373, 0)
+    # durations: 189 halves a freeze / cold length (at least 5 frames); 184 / 417 leave it alone
+    for elem in ("flen", "clen"):
+        r0 = hit("player", elem, 400)
+        base = r0[3] if r0 else None
+        if base is None:
+            bad.append("%s: no hit" % elem)
+            continue
+        for label, divisor, pct, tpct in (("189 divisor 4", 4, 0, 0), ("189 divisor 1000", 1000, 0, 0), ("184 50%, 417 50%", 0, 50, 50)):
+            setstat("player", 373, divisor)
+            setstat("player", 369, pct)
+            setstat("player", 446, tpct, 0)
+            r = hit("player", elem, 400)
+            want = _field_reduce(base, divisor, 0, 0, duration=True)
+            note("%s %s (base %s)" % (elem, label, base), r and r[3], want, r is not None and r[3] == want)
+            setstat("player", 373, 0)
+            setstat("player", 369, 0)
+            setstat("player", 446, 0, 0)
+    setstat("player", 373, 2)
+    r = hit("player", "flen", 16)
+    note("flen 16 with 189 (the floor of 5 frames)", r and r[3], 5, r is not None and r[3] == 5)
+    setstat("player", 373, 0)
+    # physical damage takes stat 417 with layer 0 (the layer Median passes for it)
+    r0 = hit("player", "phys", amount)
+    setstat("player", 446, 50, 0)
+    r1 = hit("player", "phys", amount)
+    want = _field_cut(r0[3], 50) if r0 and r0[3] is not None else None
+    note("phys 417 layer 0 50%% of %s" % (r0 and r0[3]), r1 and r1[3], want, r1 is not None and want is not None and r1[3] == want)
+    for s, v in saved.items():
+        setstat("player", s, 0 if (v is None or s in (369, 373)) else v)
+    for l, v in saved_t.items():
+        setstat("player", 446, v or 0, l)
+    add(name, "PASS" if not bad else "FAIL",
+        "hits on the player at resist 200 (25%% of 100000 left) and freeze / cold lengths; the damage field after D2R's step must equal Median's "
+        "formula exactly (divide, then 184, then 417, no floor): %s" % ("; ".join(rows) if not bad else "; ".join(bad)),
+        [sh("damagered")], rows)
 
 
 def _avoid_rate(ref, kind, stat, value, max_avoid, n=2000):
@@ -2067,6 +2366,107 @@ def check_itemrolls():
     add(n3, "PASS" if not bad3 and e_ >= 40 else "FAIL",
         "%d items at item level %s: %d ethereal (%.2f%%), max durability %d -> %s..%s%s"
         % (n_, m3.group(3), e_, 100.0 * e_ / n_, dmax3, md3.group(7), md3.group(8), ("; " + "; ".join(bad3)) if bad3 else ""), [], [line, d3])
+
+
+# Sockets and automagic for every quality (docs/sigma-patch-audit.md item 2; D2Sigma 0x1007e240, qualities.txt MaxSock /
+# Automagics). Median: qualities 1-4 roll rand % 7 sockets, qualities 5-9 get the base's maximum without a die, and the
+# automagic roll (item level 100+, base with an auto prefix group) runs for every quality, sets and uniques included.
+AQ_BASES = ("60@", "6@C", "!90", "87@", "!14", "@43", "3@P")  # Median bases: 6 sockets, auto prefix group 406 with a row for the type, set and unique items
+AQ_NAMES = {1: "low", 2: "normal", 3: "superior", 4: "magic", 5: "set", 6: "rare", 7: "unique", 8: "crafted", 9: "tempered"}
+AQ_N = 3000
+
+
+def _aq_roll(code, quality, n=AQ_N):
+    """`itemroll` of one base and quality -> dict (n, failed, ilvl, hist {sockets: count}, quals {quality: count}, auto) or None."""
+    ok, line, lines = hv("itemroll %s %d q=%d ilvl=110" % (code, n, quality), "itemroll", 240)
+    m = re.search(r"n=(\d+) failed=(\d+) ilvl=(\d+) ethereal=(\d+) sockets=\[([^\]]*)\] qualities=\[([^\]]*)\] automagic=(\d+)", line)
+    if not (ok and m):
+        return None
+    pairs = lambda s: {int(a): int(b) for a, b in (p.split(":") for p in s.split())}
+    return {"n": int(m.group(1)), "failed": int(m.group(2)), "ilvl": int(m.group(3)), "hist": pairs(m.group(5)),
+            "quals": pairs(m.group(6)), "auto": int(m.group(7)), "line": " | ".join(lines), "code": code, "q": quality}
+
+
+def _aq_pick_base():
+    """First base that holds sockets (normal items reach 4+) and has an auto prefix group (normal items show automagic)."""
+    tried = []
+    for code in AQ_BASES:
+        r = _aq_roll(code, 2, 1500)
+        if r is None:
+            tried.append("%s -" % code)
+            continue
+        top = max(r["hist"]) if r["hist"] else 0
+        tried.append("%s top=%d auto=%d" % (code, top, r["auto"]))
+        if top >= 4 and r["auto"] > 0:
+            return code, top, tried
+    return None, 0, tried
+
+
+def check_allqualsockets():
+    name = "Sockets and automagic for every quality (Median MaxSock / Automagics)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    code, top, tried = _aq_pick_base()
+    if code is None:
+        return add(name, "BLOCKED", "no base with 4+ sockets and an auto prefix among %s" % ", ".join(tried))
+    rolls, log = {}, []
+    for q in range(1, 10):
+        r = _aq_roll(code, q)
+        for other in AQ_BASES:  # a base without a set / unique row of the right level gets a lower quality: try the next base
+            if r is not None and r["quals"].get(q, 0) >= 0.9 * r["n"] or other == code:
+                continue
+            r2 = _aq_roll(other, q)
+            if r2 is not None and r2["quals"].get(q, 0) >= 0.9 * r2["n"]:
+                r = r2
+                break
+        rolls[q] = r
+        log.append(r["line"] if r else "q=%d: no answer" % q)
+    bad, rows = [], []
+    for q in range(1, 10):
+        r = rolls[q]
+        if r is None:
+            bad.append("%s: itemroll gave no answer" % AQ_NAMES[q])
+            continue
+        n = r["n"]
+        made = r["quals"].get(q, 0)
+        if n < 100 or made < n * 0.9:
+            rows.append("%s: generator gave quality %s for %d of %d (not judged)" % (AQ_NAMES[q], r["quals"], n - made, n))
+            continue
+        hist = r["hist"]
+        if q <= 4:  # the die: 1/7 for 0 .. top-1, (7 - top)/7 for top
+            exp = {k: n / 7.0 for k in range(top)}
+            exp[top] = n * (7 - top) / 7.0
+            for k in range(top + 1):
+                sd = (exp[k] * (1 - exp[k] / n)) ** 0.5
+                if abs(hist.get(k, 0) - exp[k]) > 4 * sd:
+                    bad.append("%s: %d sockets %d (want %.0f +- %.0f)" % (AQ_NAMES[q], k, hist.get(k, 0), exp[k], 4 * sd))
+            rows.append("%s (%s): sockets %s" % (AQ_NAMES[q], r["code"], " ".join("%d:%d" % kv_ for kv_ in sorted(hist.items()))))
+        else:  # the base's maximum for every item
+            at_top = hist.get(top, 0)
+            die_made = sum(c for k, c in r["quals"].items() if k <= 4)  # a fallback to a die quality may have fewer
+            if n - at_top > die_made:
+                bad.append("%s: %d of %d items have the maximum of %d sockets, histogram %s" % (AQ_NAMES[q], at_top, n, top, hist))
+            rows.append("%s (%s): sockets %s" % (AQ_NAMES[q], r["code"], " ".join("%d:%d" % kv_ for kv_ in sorted(hist.items()))))
+    # automagic: D2R's switch applied it to 1-4, 6, 8, 9; Median's Automagics column adds 5 and 7 at the same rate
+    old = [q for q in (1, 2, 3, 4, 6, 8, 9) if rolls[q] and rolls[q]["quals"].get(q, 0) >= 0.9 * rolls[q]["n"]]
+    old_n = sum(rolls[q]["n"] for q in old)
+    old_a = sum(rolls[q]["auto"] for q in old)
+    p = old_a / float(old_n) if old_n else 0.0
+    rows.append("automagic: " + ", ".join("%s %d/%d" % (AQ_NAMES[q], rolls[q]["auto"], rolls[q]["n"]) for q in range(1, 10) if rolls[q]))
+    for q in (5, 7):
+        r = rolls[q]
+        if r is None or r["quals"].get(q, 0) < 0.9 * r["n"]:
+            continue
+        if r["auto"] == 0:
+            bad.append("%s: no automagic affix in %d items (other qualities %.1f%%)" % (AQ_NAMES[q], r["n"], 100 * p))
+            continue
+        sd = (p * (1 - p) / r["n"]) ** 0.5
+        if p > 0 and abs(r["auto"] / float(r["n"]) - p) > 5 * sd:
+            bad.append("%s: automagic rate %.1f%% against %.1f%% of the qualities D2R covers" % (AQ_NAMES[q], 100.0 * r["auto"] / r["n"], 100 * p))
+    add(name, "PASS" if not bad else "FAIL",
+        "base %s (max %d sockets; tried %s), %d items per quality at item level %d: %s%s"
+        % (code, top, ", ".join(tried), AQ_N, rolls[2]["ilvl"] if rolls[2] else 0, " | ".join(rows), ("; FAIL: " + "; ".join(bad)) if bad else ""),
+        [], log)
 
 
 def check_dye():
@@ -3030,6 +3430,160 @@ def check_monster_hover():
         "spawned zombie1 id %d next to the player; the mouse moved over its projected position (harness `hover` reports the unit under "
         "the cursor): %s; left clicks on it: life %s, %s%s" % (mid, "hovered" if hovered else "NOT hovered", lives, "killed" if dead else "alive",
                                                            ("; " + "; ".join(bad)) if bad else ""), [shot], [str(lives)])
+
+def _cd_counts():
+    """`h state`'s cooldowns line: (on, starts, reduced, shared, dropped) or None (retried: the answer can be cut short)."""
+    for _ in range(4):
+        for ln in hstate()["lines"]:
+            m = re.match(r"cooldowns (on|off): starts=(-?\d+) reduced=(-?\d+) shared=(-?\d+) dropped=(-?\d+)", ln)
+            if m:
+                return (m.group(1) == "on",) + tuple(int(x) for x in m.groups()[1:])
+        time.sleep(0.5)
+    return None
+
+
+def _cd_frame():
+    return hstate()["player"].get("frame")
+
+
+_CD_LAST = {}
+
+
+def _cd_wait_ready(skill, timeout=40):
+    """Until `h skills` calls the skill usable (0) again: its cooldown (stat 359 at layer = skill id) has run out. The last
+    usability code is kept in _CD_LAST for the failure note (1 mana / cooldown, 2 requirements, 7 no level)."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        _ok, lines = H("skills")
+        u = next((re.search(r"usable=(-?\d+)", ln) for ln in lines if re.match(r"skill id=%d " % skill, ln)), None)
+        _CD_LAST[skill] = int(u.group(1)) if u else None
+        if u and int(u.group(1)) == 0:
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _cd_cast(skill):
+    """Cast the skill at a spawned monster and wait for the cooldown stat (359, layer = skill id) to appear: (end frame, frame
+    when seen) or (None, None). The stat holds the end frame of D2R's per-skill cooldown timer."""
+    H("spawn 18 1")
+    H("stat player 8 set %d" % (3000 << 8))
+    ok, _lines = H("cast %d nearest" % skill)
+    t0 = time.time()
+    while ok and time.time() - t0 < 6:
+        time.sleep(0.15)
+        end = rd("player", 359, skill)
+        if end:
+            return end, _cd_frame()
+        if not ok:
+            break
+    return None, None
+
+
+# Barbarian skills of one skills2 cooldown group with a constant localdelay (built mod, mxl_cooldowns.h): group -> {skill: delay,
+# reduction to test}. The first group whose skills the test character may use is tested.
+_CD_GROUPS = (("99 (Deep Freeze, Thunderstorm, Purifying Flame, Mana Sweep)", {1310: 300, 1275: 300, 1309: 625, 1651: 480}, 200),
+              ("4 (Blast Wave, skills_460, Cold Fear, Thunder Slam, Elvensong, Mind Control)", {554: 500, 532: 625, 1840: 350, 1954: 375, 1386: 500, 1897: 125}, 100),
+              ("1 (Leap, Spirit Walk)", {1323: 75, 1290: None}, 50))
+_CD_CONTROL = 1320  # Spirit Reave: localdelay 200, no group
+
+
+def _cd_usable(skills):
+    _ok, lines = H("skills")
+    out = {}
+    for ln in lines:
+        m = re.match(r"skill id=(\d+) .*usable=(-?\d+)", ln)
+        if m and int(m.group(1)) in skills:
+            out[int(m.group(1))] = int(m.group(2))
+    return out
+
+
+def check_cooldowns():
+    """Median's real cooldown reduction and shared groups (D2Sigma 0x100b0f40 / 0x100b1140 / 0x100b0ab0; audit section 4): the
+    delay of a cooldown is the skill's localdelay minus stat 309 at layer = the skill id, and the skills of one skills2
+    cooldown group share one timer. A skill of a group (the first usable one of _CD_GROUPS) is cast with stat 309 = 0 and with a
+    reduction: the cooldown stat (359, layer = skill id) the game keeps must differ by the reduction (the plugin's `reduced`
+    counter must rise); the group's other skills must then be on cooldown with the same end frame (`shared` counter, `h skills`
+    usable code), and Spirit Reave (no group) must not be touched."""
+    nm = "Cooldowns (Median): stat 309 shortens a skill's cooldown, skills of one group share one timer"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    c0 = _cd_counts()
+    if c0 is None or not c0[0]:
+        return add(nm, "FAIL", "plugin part cooldowns is not on (h state: %s; lines %s)" % (c0, [ln[:60] for ln in hstate()["lines"]][-8:]))
+    goto(2)
+    kill_all_near()
+    god(True)
+    problems, notes = [], []
+    allskills = {sk for _g, d, _r in _CD_GROUPS for sk in d} | {_CD_CONTROL}
+    for sk in sorted(allskills):
+        H("setskill %d 1" % sk)
+    base_level = rd("player", 12)
+    setstat("player", 12, 80)  # the skills need character level 15-30
+    codes = _cd_usable(allskills)
+    notes.append("usable codes at level 80 (0 usable, 1 mana / cooldown, 2 requirements): %s" % codes)
+    pick = None
+    for label, delays, red in _CD_GROUPS:
+        ok_skills = [sk for sk in delays if codes.get(sk) == 0]
+        if len(ok_skills) >= 2:
+            pick = (label, ok_skills, delays, red)
+            break
+    if pick is None:
+        setstat("player", 12, base_level or 21)
+        god(False)
+        return add(nm, "FAIL", "no group with two usable skills for the test character | " + " | ".join(notes), [sh("cooldowns")])
+    label, group, delays, red_amount = pick
+    main, others = group[0], group[1:]
+    base309 = rd("player", 309, main)
+    durs = {}
+    try:
+        for red in (0, red_amount):
+            for sk in group:
+                setstat("player", 309, 0, sk)
+            setstat("player", 309, red, main)
+            if not _cd_wait_ready(main):
+                problems.append("skill %d never became ready again before the cast with reduction %d (usable code %s)" % (main, red, _CD_LAST.get(main)))
+                continue
+            for sk in others:
+                _cd_wait_ready(sk)
+            before = _cd_counts()
+            end, seen = _cd_cast(main)
+            if end is None:
+                problems.append("reduction %d: the cast of skill %d left no cooldown stat 359 at layer %d (cast refused, or the start hook never ran)" % (red, main, main))
+                continue
+            durs[red] = end - seen
+            after = _cd_counts()
+            notes.append("group %s, skill %d, reduction %d: end frame %d seen at %d -> %d frames left; starts %s->%s reduced %s->%s shared %s->%s dropped %s->%s" % (
+                label, main, red, end, seen, end - seen, before[1], after[1], before[2], after[2], before[3], after[3], before[4], after[4]))
+            if red and after[2] <= before[2]:
+                problems.append("stat 309 = %d did not count as reduced (%s -> %s)" % (red, before[2], after[2]))
+            if after[3] - before[3] < 1:
+                problems.append("reduction %d: no shared start counted for the group's other skills" % red)
+            usable = _cd_usable(allskills)
+            ends = {sk: rd("player", 359, sk) for sk in sorted(allskills)}
+            for sk in others:  # the same end frame: they are read one after the other, so a later start of a moving skill can lie between
+                if usable.get(sk) == 0:
+                    problems.append("reduction %d: group skill %d is not on cooldown after skill %d (usable 0)" % (red, sk, main))
+                if ends[sk] != ends[main]:
+                    problems.append("reduction %d: group skill %d ends at %s, skill %d at %s (one shared timer)" % (red, sk, ends[sk], main, ends[main]))
+            if codes.get(_CD_CONTROL) == 0 and ends[_CD_CONTROL]:
+                problems.append("reduction %d: Spirit Reave (no group) got a cooldown (end %s)" % (red, ends[_CD_CONTROL]))
+            notes.append("  stat 359 ends %s usable %s" % (ends, usable))
+    finally:
+        setstat("player", 309, base309 or 0, main)
+        setstat("player", 12, base_level or 21)
+        god(False)
+        kill_all_near()
+    if 0 in durs and red_amount in durs:
+        gain = durs[0] - durs[red_amount]
+        if abs(gain - red_amount) > 20:
+            problems.append("stat 309 = %d shortened the cooldown by %d frames (%d -> %d)" % (red_amount, gain, durs[0], durs[red_amount]))
+        want = delays.get(main)
+        if want and not want - 35 <= durs[0] <= want + 5:
+            problems.append("cooldown without reduction is %d frames, expected about %d (localdelay)" % (durs[0], want))
+    add(nm, "FAIL" if problems else "PASS", "%s | %s" % ("; ".join(problems) if problems else "reduction and sharing as Median", " | ".join(notes)),
+        [sh("cooldowns")])
+
 
 def check_nocorpse():
     """Median's death rules (docs/subsystems/death.md; audit rows DC1-DC4): a dying player leaves no corpse, keeps the equipment
@@ -4742,6 +5296,269 @@ def check_questrewards():
     log += [l for l in mxl_lines_since(m0) if re.search(r"hellforge|countess|qual-kehk|quest exp", l)]
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]) + " | " + "; ".join(rows), [sh("questrewards")], log)
 
+def mapcells():
+    """`h mapcells` (client): dict cells / layer / layers / debugflag, or None."""
+    ok, lines = H("mapcells")
+    for ln in lines:
+        if ln.startswith("mapcells "):
+            return {k: int(v) for k, v in kv(ln).items() if re.fullmatch(r"-?\d+", v)}
+    return None
+
+
+def check_mapreveal():
+    name = "Map reveal: the automap of a fresh level has more cells after the reveal"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    # `cheat goto` (needs debug mode) arrives in a level whose automap is already drawn whole (the pictures show it), and the game's
+    # town map is whole from the start, so the cell count and the picture cannot show a reveal on a level reached this way; what
+    # the call does is measured in the layers: it adds the layers of the act's levels
+    st = goto(3)  # Cold Plains
+    if st["player"].get("area") != 3:
+        return add(name, "BLOCKED", "could not go to area 3")
+    time.sleep(2)
+    g.press("tab")  # automap overlay on (D2R's default key)
+    time.sleep(1.5)
+    a0 = mapcells()
+    p0 = g.shot("mapreveal_before")
+    ok, lines = H("reveal")
+    time.sleep(2.5)
+    a1 = mapcells()
+    p1 = g.shot("mapreveal")
+    ok2, lines2 = H("reveal")  # a second reveal finds nothing new
+    time.sleep(1)
+    a2 = mapcells()
+    g.press("tab")
+    log = ["before %s" % a0, "after %s" % a1, "again %s" % a2] + lines + lines2
+    if not a0 or not a1:
+        return add(name, "BLOCKED", "no automap data: %s" % lines[:2], [], log)
+    flag_kept = a1["debugflag"] == a0["debugflag"] == (a2 or a1)["debugflag"]
+    cells_grew = a1["cells"] > a0["cells"]
+    layers_grew = a1["layers"] > a0["layers"]
+    again = (a2 or a1)["layers"] == a1["layers"] and (a2 or a1)["cells"] == a1["cells"]
+    status = "PASS" if ok and ok2 and cells_grew and flag_kept and again else              "PARTIAL" if ok and ok2 and layers_grew and flag_kept and again else "FAIL"
+    add(name, status,
+        "harness `reveal` (the R hotkey's call of the debug menu's Reveal Automap) in Cold Plains: automap cells %d -> %d (%+d), layers %d -> %d, "
+        "a second reveal %+d cells %+d layers; debug flag byte %d -> %d (kept: %s)%s" % (
+            a0["cells"], a1["cells"], a1["cells"] - a0["cells"], a0["layers"], a1["layers"], (a2 or a1)["cells"] - a1["cells"],
+            (a2 or a1)["layers"] - a1["layers"], a0["debugflag"], a1["debugflag"], flag_kept,
+            "" if status == "PASS" else "; PARTIAL: the level was already drawn whole on arrival (mapreveal_before.png = mapreveal.png), only the layers grew"),
+        [os.path.basename(p0), os.path.basename(p1)], log)
+
+
+def wpbit(number):
+    ok, lines = H("waypoint n %d get" % number)
+    for ln in lines:
+        m = re.match(r"waypoint number %d = (\d)" % number, ln)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def wpobjs():
+    """`h wpobj`: (player dict, [object dicts])."""
+    ok, lines = H("wpobj")
+    player, objs = {}, []
+    for ln in lines:
+        if ln.startswith("wpobj player"):
+            m = re.search(r"at (\d+),(\d+) level=(-?\d+) number=(-?\d+)", ln)
+            if m:
+                player = dict(x=int(m.group(1)), y=int(m.group(2)), level=int(m.group(3)), number=int(m.group(4)))
+        elif ln.startswith("wpobj id="):
+            m = re.search(r"id=(\d+) class=(\d+) at (\d+),(\d+) dist=(\d+) level=(-?\d+) inrange=(\d)", ln)
+            if m:
+                objs.append(dict(id=int(m.group(1)), cls=int(m.group(2)), x=int(m.group(3)), y=int(m.group(4)), dist=int(m.group(5)),
+                                 level=int(m.group(6)), inrange=int(m.group(7))))
+    return player, objs
+
+
+def check_wpauto():
+    name = "Waypoint auto-activation: walking up to a waypoint (distance < 36) activates it, standing away does not"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    st = goto(3)
+    if st["player"].get("area") != 3:
+        return add(name, "BLOCKED", "could not go to area 3")
+    time.sleep(2)
+    player, objs = wpobjs()
+    here = [o for o in objs if o["level"] == player.get("level")]
+    log = ["player %s" % player] + ["obj %s" % o for o in here]
+    if not here or player.get("number", -1) < 0:
+        return add(name, "BLOCKED", "no waypoint object of this level is loaded yet (%s)" % log[:2], [], log)
+    num = player["number"]
+    wp = min(here, key=lambda o: o["dist"])
+    res = []
+    # A. wherever the character stands: clear the bit and see whether the rule re-sets it, by distance.
+    H("waypoint n %d clear" % num)
+    time.sleep(1.5)
+    bit_a = wpbit(num)
+    res.append("A: distance %d, bit after 1.5 s: %s" % (wp["dist"], bit_a))
+    near_ok = (bit_a == 1) if wp["dist"] < 36 else (bit_a == 0)
+    # B. walk to the waypoint from outside the radius: clear first, expect the bit to come on within the walk.
+    far = None
+    if wp["dist"] >= 36 and bit_a == 0:
+        far = wp["dist"]
+    else:
+        # step away: try points 55 sub-tiles from the object in eight directions until the character is out of range
+        for ox, oy in ((55, 0), (-55, 0), (0, 55), (0, -55), (40, 40), (-40, -40), (40, -40), (-40, 40)):
+            H("move %d %d" % (wp["x"] + ox, wp["y"] + oy))
+            t0 = time.time()
+            while time.time() - t0 < 9:
+                time.sleep(1)
+                p2, o2 = wpobjs()
+                w2 = [o for o in o2 if o["id"] == wp["id"]]
+                if w2 and w2[0]["dist"] >= 40:
+                    far = w2[0]["dist"]
+                    break
+            if far is not None:
+                break
+        H("waypoint n %d clear" % num)
+        time.sleep(1.5)
+    bit_far = wpbit(num)
+    res.append("B: left to distance %s, bit cleared and still %s after 1.5 s (rule must not fire)" % (far, bit_far))
+    walked_ok = None
+    if far is not None and bit_far == 0:
+        H("move %d %d" % (wp["x"], wp["y"]))
+        t0 = time.time()
+        d_at = None
+        while time.time() - t0 < 30:
+            time.sleep(1)
+            if wpbit(num) == 1:
+                p3, o3 = wpobjs()
+                w3 = [o for o in o3 if o["id"] == wp["id"]]
+                d_at = w3[0]["dist"] if w3 else None
+                break
+        walked_ok = d_at is not None
+        res.append("C: walking to the object set the bit at distance %s" % d_at)
+    status = [l for l in H("travel")[1] if l.startswith("travel ")]
+    log += res + status
+    if far is None or bit_far != 0:
+        return add(name, "PARTIAL" if near_ok else "FAIL", "; ".join(res) + " (could not get out of range for the negative control)", [], log)
+    add(name, "PASS" if (near_ok and walked_ok) else "FAIL", "waypoint number %d of level %d: %s" % (num, player["level"], "; ".join(res)), [sh("wpauto")], log)
+
+
+def travel_counts():
+    """`h travel` -> dict: x r c presses, reveals, transmutes, blocked, registered bindings text, pickup state, cube state."""
+    ok, lines = H("travel")
+    line = next((l for l in lines if l.startswith("travel ")), "")
+    d = {"line": line}
+    m = re.search(r"keys X (\d+) R (\d+) C (\d+)", line)
+    if m:
+        d.update(x=int(m.group(1)), r=int(m.group(2)), c=int(m.group(3)))
+    m = re.search(r"reveals (\d+)", line)
+    d["reveals"] = int(m.group(1)) if m else None
+    m = re.search(r"transmutes (\d+) \(blocked (\d+), cube (\w+)\)", line)
+    if m:
+        d.update(transmutes=int(m.group(1)), blocked=int(m.group(2)), cube=m.group(3))
+    m = re.search(r"pickup (on|off)", line)
+    d["pickup"] = m.group(1) if m else None
+    d["bindings"] = line.split("||")[0]
+    return d
+
+
+def check_hotkeys():
+    name = "Hotkeys X / R / C: window-message key presses reach the plugin's actions"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(3)
+    time.sleep(2)
+    t0 = travel_counts()
+    if "x" not in t0:
+        return add(name, "BLOCKED", "no travel status line: %s" % t0["line"][:100], [], [t0["line"]])
+    log = [t0["line"]]
+    res, bad = [], []
+    # X toggles auto pickup
+    g.press("x")
+    time.sleep(0.6)
+    t1 = travel_counts()
+    g.press("x")
+    time.sleep(0.6)
+    t2 = travel_counts()
+    x_ok = t1.get("x") == t0["x"] + 1 and t1["pickup"] != t0["pickup"] and t2.get("x") == t0["x"] + 2 and t2["pickup"] == t0["pickup"]
+    res.append("X: presses %s->%s->%s, pickup %s->%s->%s" % (t0.get("x"), t1.get("x"), t2.get("x"), t0["pickup"], t1["pickup"], t2["pickup"]))
+    if not x_ok:
+        bad.append("X")
+    # R reveals the map
+    a0 = mapcells()
+    g.press("r")
+    time.sleep(1.5)
+    t3 = travel_counts()
+    a1 = mapcells()
+    r_ok = t3.get("r") == t2.get("r") + 1 and t3["reveals"] == t2["reveals"] + 1
+    res.append("R: presses %s->%s, reveals %s->%s, cells %s->%s" % (t2.get("r"), t3.get("r"), t2["reveals"], t3["reveals"],
+                                                                    a0 and a0["cells"], a1 and a1["cells"]))
+    if not r_ok:
+        bad.append("R")
+    # the cube item lies in the inventory; shots of the inventory show where its cell is (for opening the panel)
+    okb, lb = H("item box inv")
+    log += lb
+    mark = mxl_mark()
+    g.press("i")
+    time.sleep(1.2)
+    inv_shot = sh("hotkeys_inventory")
+    g.click(0.711, 0.453, "right")  # the cube item's cell in the 1600 x 900 inventory (hotkeys_inventory.png)
+    time.sleep(1.5)
+    cube_shot = sh("hotkeys_cube")
+    msgs = [l for l in mxl_lines_since(mark) if "cube ui message" in l]
+    log += msgs[:12]
+    t_open = travel_counts()
+    g.press("esc")  # one Esc closes the cube panel and the inventory with it (a second one would open the game menu)
+    time.sleep(0.6)
+    # C with no cube open: counted, not transmuted
+    g.press("c")
+    time.sleep(0.8)
+    t4 = travel_counts()
+    c_closed = t4.get("c") == t3.get("c") + 1 and t4["transmutes"] == t3["transmutes"]
+    res.append("C (cube closed): presses %s->%s, transmutes %s->%s (blocked %s)" % (t3.get("c"), t4.get("c"), t3["transmutes"], t4["transmutes"], t4.get("blocked")))
+    if not c_closed:
+        bad.append("C closed")
+    log += [t1["line"], t2["line"], t3["line"], t4["line"], t0["bindings"]]
+    open_note = "C with the cube open: not driven (the plugin did not see the cube panel open; ui messages: %s)" % (msgs[:3] or "none")
+    if t_open.get("cube") == "open":
+        g.press("i")  # open it again for the key
+        time.sleep(1.0)
+        g.click(0.711, 0.453, "right")
+        time.sleep(1.2)
+        t5 = travel_counts()
+        g.press("c")
+        time.sleep(1.0)
+        t6 = travel_counts()
+        c_open = t6.get("transmutes") == t5.get("transmutes", 0) + 1 and t6.get("c") == t5.get("c") + 1
+        log += [t_open["line"], t5["line"], t6["line"]]
+        open_note = "C with the cube open: presses %s->%s, transmutes %s->%s (cube %s; ui message %s)" % (
+            t5.get("c"), t6.get("c"), t5.get("transmutes"), t6.get("transmutes"), t5.get("cube"), msgs[:1])
+        if not c_open:
+            bad.append("C open")
+        g.press("esc")
+        time.sleep(0.5)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(res) + "; " + open_note + ("; failed: %s" % bad if bad else ""), [sh("hotkeys"), inv_shot, cube_shot], log)
+
+
+def check_stashpages():
+    name = "Stash pages: ten shared stash tabs exist (d2rloader.toml add_shared_tabs)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    res, log, wrong = [], [], []
+    for tab in list(range(0, 11)) + [12]:
+        ok, lines = H("stashprobe %d" % tab)
+        if not ok:
+            return add(name, "BLOCKED", "stashprobe refused: %s" % lines[:2], [], lines)
+        out = ""
+        for _ in range(20):
+            time.sleep(0.4)
+            ok2, l2 = H("stashprobe result")
+            out = next((l for l in l2 if l.startswith("stashprobe result")), "")
+            if " -1 " not in out:
+                break
+        log.append("tab %d: %s" % (tab, out))
+        made = " 1 page=" in out
+        should = tab < 10
+        res.append("%d%s" % (tab, "+" if made else "-"))
+        if made != should:
+            wrong.append("tab %d %s" % (tab, "accepted an item" if made else "refused (%s)" % out[:60]))
+    add(name, "PASS" if not wrong else "FAIL",
+        "an item created in shared stash tab n through ItemService (+ accepted, - refused): %s; expected tabs 0-9 accepted and 10, 12 refused%s"
+        % (" ".join(res), ("; wrong: " + "; ".join(wrong)) if wrong else ""), [], log)
+
 
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
@@ -4749,8 +5566,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
           ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
           # the verify rows of docs/unported.md
-          ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
-          ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
+          ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
+          ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
           ("trophy", check_trophy), ("statcols", check_statcols),
           # the old "fix to test" rows of docs/bugs.md
@@ -4764,10 +5581,14 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("cowportals", check_cowportals),
           ("deathcrash", check_deathcrash),
           ("nocorpse", check_nocorpse),
+          ("cooldowns", check_cooldowns),
           ("nslong", check_nslong),
           ("strings", check_strings),
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
-          ("sprint", check_sprint), ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards)]
+          ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("heat", check_heat),
+          ("trophytimer", check_trophytimer),
+          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages),
+          ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards)]
 
 
 def write_report(extra=""):

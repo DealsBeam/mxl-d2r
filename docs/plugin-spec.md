@@ -316,6 +316,61 @@ and RBX at the client charge site (`0x2188b0`, call 0x218937), picked by return 
 callers (`0x338110` / `0x33d480` tooltips and checks) keep D2R's value. Skills record: minmana +0x226, manashift
 +0x228, mana +0x22a, lvlmana +0x22c, calc7 +0x1a8, calc8 +0x1ac.
 
+## Skill restrictions (`skill_restrict.cpp`, off word `restrict`)
+
+Median's skills.txt has a `restrict` column (0-7) with `State1`-`State3`; D2Sigma's usability check
+(D2SkillValidation.cpp `FUN_100b0c30`) knows modes 0-7, D2R's `0x33f360` (skill usable: 0 usable, 1 mana or cooldown, 2
+requirements, 3 not a skill, 4 restricted, 5 no weapon, 7 no level, 8 charges) only 0-2. The plugin detours `0x33f360`
+(entry `40 56 57 48 83 ec 28 48 8b fa 48 8b f1 48 85 d2`, 16 bytes), calls the original, and for a usable skill whose
+record (+0x2d0 mode byte, +0x2d2/+0x2d4/+0x2d6 states) has mode 3-7 applies the rule (`skill_restrict_logic.h`, `Allowed`),
+returning 4 when it fails. The migrated record carries the column; the mode 7 rule needs two state ids that
+`txt_migrate.py` writes into `mxl_ids.h` (`StateMeleeDevotion`, `StateProgressiveCold`). Hunter Heartseeker is mode 5 with
+the states `sk1296_state` (Steady Aim) / `progressive_cold`: "Requires Steady Aim". Checked by `game_checks steadyaim`.
+
+## Steady Aim (Hunter, audit SK10): data plus the restrict module
+
+Steady Aim is stat 220 layer 5 on the state `sk1296_state` (D2R 558), held by the layered self buff (`auras.cpp`, slot
+174). **Build:** each Steady Shot (D2R 1368) adds one charge, `min(mxf_4 + clc3, clc2)` with a cap of 6, and turns the proc
+state on at the cap. **Spend:** Heartseeker (D2R 352) removes one charge on the missile hit (missile hit 71, `HitOwnerState`
+slot 63; the state goes with the last charge), Cascade (351) removes them all. **Gate:** Heartseeker and Cascade are
+unusable without the state (restrict mode 5, above). The charge counter and the missile spend already worked from the data
+once `tools/formula.py` turned missile `stat(x, n>2)` into the `mxl_statlayer` proxy and `txt_migrate.py formula_proxies`
+looked the `ParamN` columns up by name; only the gate was missing.
+
+## Heat (Fire Sorceress, audit SK11): `heat.cpp`, off word `heat`
+
+Heat is the mana bar. The Molten Core passive (D2R 1682) sets stat 297 to the heat loss rate, `100 + level / 3 - mana
+regeneration / 10`; D2Sigma's mana regeneration (D2Resource.cpp `0x100a1b50`) turns the regeneration into a drain of that
+rate whenever stat 297 is not 0 (no drain in a town); the fire skills cost 0 mana in the data; Emberstep's aura and the
+hit states of the fire skills put a **negative** 297 on the caster for a while, which makes the drain a build-up. D2R's
+regeneration is `0x42e350` (game, unit; entry `48 89 5c 24 10 48 89 6c 24 18 56 57 41 57 48 83 ec 20`, 18 bytes): the
+plugin detours it. With stat 297 zero it calls the original; in a town (`0x34b440` room, `0x2f0750`) it does nothing;
+otherwise `heat_logic.h` `HeatDelta` takes the regeneration D2R would give (max mana / the class's regeneration frames
+x (stat 27 + 140)%, plus stat 26), scales it by -stat 297% and adds the result to mana (stat 8), clamped to 0 and max
+mana. Not ported: the UI relabel of the mana bar as Heat. Checked by `game_checks heat` (drain, floor at 0, Flamefront
+build-up, town hold). Emberstep was not cast in the test (the harness cannot select it).
+
+## Trophy timer (`trophy_timer.cpp`, off word `trophy`)
+
+The 20 trophy recipes (class-split cubemain rows 6369-6501, rows 9, 10, 64-75) check player stat 202 (D2R 378) against a
+per-trophy challenge code (op 6, value e.g. 167166 = 167 x 1000 + 166 for Azmodan's Heart, 176000 for the Book of Lies).
+In the data the code comes from 15 aura-style skills (`srvdofunc` 30; `aurastat` 202 with calc `area` or `area*1000`, an
+`auralencalc` of 250 frames = 10 s for the kill states, 750, 1500 and 15000 for the longer ones). So **the timer is the
+state duration** and D2R runs it natively; but Median's second rule (patch notes P2.10.0: dying or entering another zone
+voids the challenge) is in no table, and which skill is cast on a boss kill is not in the data either (only the chimaera
+traps 2-4, judgementwander and `skills_556` through missile 5087 are referenced; the other ten are not named by any
+monster, missile or state, so D2Sigma's server code, not txt, fires them).
+
+The plugin therefore adds the window itself (`trophy_timer_logic.h`, `Tracker`): the game-frame hook (`goblins.cpp`
+`FrameHook`) calls `TrophyTimerFrame`, which every 5 frames reads each player's stat 378, level and mode. A window opens
+when the stat takes a value (a changed total, e.g. the second Tran Athulua buff, opens a new one), is **voided** when the
+player dies (mode 0 / 17) or the area changes (the player gets a red chat line), and closes when the stat goes to 0.
+`cube_conditions.cpp` op 6 on stat 378 also asks `TrophyWindowOpen`: false when the window is voided or older than the
+trophy's limit (`trophy::Limits`: 10 s for most trophies, 15 s Legacy of Blood, 25 s Vizjun, 60 s Judgement Day, 4 min
+Nephalem's Sacrifice, 5 min 30 s Yshari; counted from the code appearing, never stricter than the trophy text; codes not in
+the table have no plugin limit). A player the tracker has not seen with that code passes. The `mxl` line is `trophy
+timer on: ...` with the counts of windows opened, voided and cube checks refused. Checked by `game_checks trophytimer`.
+
 ## Item spells (misc.txt `pSpell`)
 
 D2Sigma replaced pSpell 12-22 with its own handlers: table 0x101d95b0 of {client start, use} pairs, dispatcher
@@ -733,6 +788,15 @@ pages of all classes, many item skills): the row is now split per sheet ("row~cl
 tree skill finds its own icon in its class sheet (bug #3b: empty sockets on masteries, wrong icons where a class-less
 skill came first). Classes with more than 62 tree icons get smaller HD frames (Amazon 113 px, Barbarian 116 px).
 
+## Cooldowns (`cooldowns.cpp`, off word `cooldowns`)
+
+Median's skill cooldown: delay = skill delay formula - stat 309 (layer = skill id), started only for a player when the delay is above 0, and skills of one
+skills2 cooldown group share one timer (D2Sigma `0x100b0f40` / `0x100b1140` / `0x100b0ab0`; details in d2r-addresses.md section 17). The plugin hooks D2R's two
+cooldown starts (server `0x439500`, client `0x217b90`; entry bytes are verified before the hook is installed): for a player it subtracts stat 309 and starts the D2R timer
+(state `0xb9`, stat 359 at layer = skill id) of every member of the skill's group with the same delay; other units keep D2R's behaviour. The group table is generated
+(`mxl_cooldowns.h`, `txt_migrate cooldown_tables`); the pure rules and a model of Median's tables are in `cooldowns_logic.h` (`cooldown_tests`). `mxl` prints the line
+`cooldowns` with the counters starts / reduced / shared / dropped (also in `h state`). Median's removal of monster cooldowns and the client packet `0x2b` are not ported.
+
 ## Runewords and kill experience (`items_ext.cpp`, off words `runewords`, `xp`)
 
 Details, addresses and evidence in [subsystems/items-xp.md](subsystems/items-xp.md). Three hooks, each checked against
@@ -777,10 +841,31 @@ handler (`0x12c870`) plays Median's sounds at the player's unit (217 item_gem, 4
 2608 as stand-in, 230 item_lightarmor); the chat line is the fallback when the hook is off. Harness verbs `rewardmsg`,
 `rewardsnd`, `goblinsay` (the goblin line with the variant's own monstats name).
 
+## Travel: waypoint auto-activation, map reveal, hotkeys (`travel.cpp`, off words `wpauto`, `mapreveal`, `hotkeys`)
+
+Pure rules in `travel_logic.h` (unit tests `tests/travel_test.cpp`); evidence and addresses in `docs/d2r-addresses.md` section 18.
+No inline hook: the plugin calls D2R functions whose first bytes it checks with `memcmp` (a mismatch switches that part off and
+the `mxl` line says why).
+
+* **Waypoint auto-activation** (`wpauto`). `TravelGameFrame` runs from the goblins frame hook (`goblins.cpp`, after
+  `HarnessGameFrame`), every 5th server frame. For each player in the game it reads the level (`0x2efc10(0x34b440(player))`), the
+  waypoint number (`mxl_waypoints.h`), and tests the record bit (`0x3d6930`). Unknown, and a waypoint object (the 16 classes of
+  objects.txt OperateFn 23) of the same level within 36 sub-tiles (squared integer distance): `0x3d6890` sets the bit. Median does
+  the same after a walk order (`D2AutoPickup.cpp`, distance below `0x24`). The `goblins` word must be on because it owns the hook.
+* **Map reveal** (`mapreveal`). D2R's debug "Reveal Automap" `0xd42b0` on the UI thread, then the debug flag byte `0x2a2add4` is put back.
+  Starts from the player's room (the rooms joined to it); in game the automap layer list grew from 1 to 25 layers. Median's `0x887c0` walks every
+  level of the act once. Not ported: the once-per-game limit (the reveal can be repeated).
+* **Hotkeys** (`hotkeys`). Three InputService actions (category "Median XL", ids `mxl_pickup_toggle` X, `mxl_map_reveal` R,
+  `mxl_transmute` C, in the Controls menu, rebindable). X flips the switch that gates the auto-activation; R queues the reveal on
+  the UI thread; C queues the cube panel's Transmute `0x2cd720` on the UI thread when a UiMessageListener has seen the Horadric
+  Cube panel open. Counters and the last UI messages are in the `mxl` command (`travel` lines) and the harness verb `travel`.
+* **Stash pages** are not code: `tools/install_mod.py` writes `d2rcore.stash.add_shared_tabs = 7` into the mod's `d2rloader.toml`
+  (3 normal tabs + 7 = Median's 10 pages), only when the key is not set by hand.
+
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints lockout goblins npc reqgates hirelings skilltree runewords xp mapmem mercrevive questxp questrewards`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem mercrevive questxp questrewards`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500

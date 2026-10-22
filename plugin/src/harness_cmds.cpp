@@ -18,6 +18,7 @@
 #include "hirelings_logic.h"
 #include "info_panels.h"
 #include "mxl_hirelings.h"
+#include "cooldowns.h"
 #include "no_corpse.h"
 #include "item_events.h"
 #include "npc_actions.h"
@@ -31,6 +32,8 @@
 #include "strings.h"
 #include "strings_probe.h"
 #include "testharness.h"
+#include "travel.h"
+#include "travel_logic.h"
 #include "waypoints.h"
 #include "waypoints_logic.h"
 
@@ -449,6 +452,9 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Out("corpses %d players=%d self=%d | no corpse %s: skipped corpse calls=%ld penalty calls=%ld respawns held=%ld let=%ld xp=%u", corpses,
 	    players, self ? 1 : 0, noCorpseOn ? "on" : "off", skippedCorpses, skippedPenalties, respawnsHeld, respawns,
 	    static_cast<uint32_t>(Stat(p, 13)));
+	long cdStarts = 0, cdReduced = 0, cdShared = 0, cdDropped = 0;
+	const bool cooldownsOn = CooldownCounts(&cdStarts, &cdReduced, &cdShared, &cdDropped);
+	Out("cooldowns %s: starts=%ld reduced=%ld shared=%ld dropped=%ld", cooldownsOn ? "on" : "off", cdStarts, cdReduced, cdShared, cdDropped);
 	Out("skills left=%d right=%d", SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(p)), SkillIdOf(Fn<ActiveSkillFn>(RvaRightSkill)(p)));
 	PrintMissiles(c);
 	int mons = 0;
@@ -2123,10 +2129,14 @@ constexpr uint64_t RvaApplyDamage = 0x44a9b0;  // (game, attacker, target, &dama
 constexpr uint64_t RvaAvoidCheck = 0x44ef70;   // (attacker unit, defender unit, missile flag) -> 0 / 2 / 4 / 8 / 0x10
 constexpr uint64_t RvaAllocator = 0x12063c0;   // -> allocator object; vtable +0x20 frees
 constexpr uint64_t RvaItemColour = 0x3710d0;   // (player, item, &colour byte, mode) -> palette entry
+constexpr uint64_t RvaItemAutomagic = 0x36ca80;  // (item) -> automagic affix id (0 = none)
+constexpr uint64_t RvaItemQuality = 0x36cf60;    // (item) -> quality
 constexpr uint64_t RvaIsItemType = 0x373890;   // (item, type id) -> nonzero when the item is of that type
 constexpr int ItemFlagsOffset = 0x18;          // item data: flag word (0x400000 ethereal, 0x800 socketed, 0x10 identified)
 constexpr uint32_t ItemFlagEthereal = 0x400000;
 constexpr int StatSockets = 194, StatDefence = 31, StatMaxDurabilityItem = 0x49, StatDye = 368, StatClassLock = 492;
+using ItemQualityFn = int32_t (*)(Unit*);
+using ItemAutomagicFn = uint32_t (*)(Unit*);
 using HitUnitFn = void (*)(Game*, Unit*, Unit*, int32_t, void*);
 using ApplyDamageFn = void (*)(Game*, Unit*, Unit*, void*);
 using AvoidCheckFn = int32_t (*)(Unit* attacker, Unit* defender, int32_t missile);
@@ -2180,21 +2190,25 @@ auto FlagsOf(Unit* item) noexcept -> uint32_t {
 	return data != nullptr ? d2r::At<uint32_t>(data, ItemFlagsOffset) : 0;
 }
 
-// `hit <target ref> phys|fire|ltng|magic|cold <amount> [attacker ref] [stagger]`: one hit of that damage through D2R's hit and apply
+// `hit <target ref> phys|fire|ltng|magic|cold|pois|life|mana|stam|clen|flen|plen <amount> [attacker ref] [stagger]`: one hit of that damage through D2R's hit and apply
 // steps (0x44ce80, 0x44a9b0; the same pair the area damage hook uses), so the resist step 0x4523e0 and the absorb step
 // 0x450670 run. The amount goes into the damage block's field as is. Attacker: the player; for the player as target the
 // nearest live monster (else the player itself). `stagger` sets the result flag 4 (hit recovery) between the two steps, so the
 // target enters its GetHit mode even when its hit recovery would not (bosses): the monster's last-mode field then reads 3 after it.
+// `field=` is the element's field right after the hit step (what is left of `amount` after resist, absorb and Median's stats
+// 184 / 189 / 417); for clen / flen / plen (cold, freeze and poison length) it is the shortened duration.
 auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	struct Elem {
 		const char* name;
 		int offset;
 		int hitClass;
 	};
-	static const Elem elems[] = {{"phys", 0x18, 0}, {"fire", 0x20, 0x20}, {"ltng", 0x2c, 0x40}, {"magic", 0x30, 0}, {"cold", 0x34, 0x30}};
+	static const Elem elems[] = {{"phys", 0x18, 0}, {"fire", 0x20, 0x20}, {"ltng", 0x2c, 0x40}, {"magic", 0x30, 0}, {"cold", 0x34, 0x30},
+	                          {"pois", 0x38, 0}, {"life", 0x120, 0}, {"mana", 0x124, 0}, {"stam", 0x128, 0}, {"clen", 0x118, 0},
+	                          {"flen", 0x11c, 0}, {"plen", 0x3c, 0}};
 	long long amount = 0;
 	if (t.n < 4 || !hcmd::ParseInt(t.tok[3], &amount) || amount < 0) {
-		return Fail(c, "usage: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker ref] [stagger]");
+		return Fail(c, "usage: hit <player|merc|mon:id> phys|fire|ltng|magic|cold|pois|life|mana|stam|clen|flen|plen <amount> [attacker ref] [stagger]");
 	}
 	const Elem* elem = nullptr;
 	for (const Elem& e : elems) {
@@ -2236,13 +2250,14 @@ auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	}
 	const int32_t before = Stat(target, StatLife);
 	Fn<HitUnitFn>(RvaHitUnit)(c->game, attacker, target, 1, d.b);
+	const int32_t fieldAfter = DmgField<int32_t>(d, elem->offset);
 	if (stagger) {
 		DmgField<uint16_t>(d, 0x04) |= 4;
 	}
 	Fn<ApplyDamageFn>(RvaApplyDamage)(c->game, attacker, target, d.b);
 	const int32_t after = Stat(target, StatLife);
-	Out("hit target=%s elem=%s amount=%lld life=%d->%d lost=%d absorbed=%d result=0x%x", t.tok[1], elem->name, amount, before, after,
-	    hcmd::LifeLost(before, after), DmgField<int32_t>(d, 0x130), static_cast<unsigned>(DmgField<uint16_t>(d, 0x04)));
+	Out("hit target=%s elem=%s amount=%lld life=%d->%d lost=%d absorbed=%d result=0x%x field=%d", t.tok[1], elem->name, amount, before, after,
+	    hcmd::LifeLost(before, after), DmgField<int32_t>(d, 0x130), static_cast<unsigned>(DmgField<uint16_t>(d, 0x04)), fieldAfter);
 	DamageDestroy(d);
 	return true;
 }
@@ -2281,8 +2296,9 @@ auto CmdAvoid(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 }
 
 // `itemroll <code> <n> [q=quality] [ilvl=level]`: makes n items the way `item` does (the generator, quality default 2, item
-// level default 110 so the ethereal gate is open), reads sockets, the ethereal flag, defence and maximum durability and frees
-// them again. Prints the socket histogram and the ethereal count, then the defence and durability by ethereal or not.
+// level default 110 so the ethereal gate and the automagic roll are open), reads sockets, the ethereal flag, the quality the
+// generator gave, the automagic affix id, defence and maximum durability and frees them again. Prints the socket histogram,
+// the quality histogram, the automagic count and the ethereal count, then the defence and durability by ethereal or not.
 auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long n = 0, quality = 2, ilvl = 110;
 	if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &n) || n < 1 || n > 20000) {
@@ -2318,6 +2334,7 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		const bool eth = (FlagsOf(item) & ItemFlagEthereal) != 0;
 		const int32_t def = Stat(item, StatDefence), dur = Stat(item, StatMaxDurabilityItem);
 		tally.Add(Stat(item, StatSockets), eth);
+		tally.AddQuality(Fn<ItemQualityFn>(RvaItemQuality)(item), Fn<ItemAutomagicFn>(RvaItemAutomagic)(item) != 0);
 		if (eth) {
 			++nEth;
 			sumEth += def;
@@ -2331,13 +2348,17 @@ auto CmdItemRoll(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		}
 		Fn<FreeItemFn>(RvaFreeItem)(c->game, item);
 	}
-	char sockets[96];
+	char sockets[96], qualities[96];
 	tally.Sockets(sockets, sizeof(sockets));
-	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d sockets=[%s]", t.tok[1], tally.n, failed, firstLevel, tally.ethereal, sockets);
+	tally.Qualities(qualities, sizeof(qualities));
+	Out("itemroll code=%s n=%d failed=%d ilvl=%d ethereal=%d sockets=[%s] qualities=[%s] automagic=%d", t.tok[1], tally.n, failed, firstLevel,
+	    tally.ethereal, sockets, qualities, tally.automagic);
 	Out("itemroll def normal n=%d sum=%lld, ethereal n=%d sum=%lld; maxdur normal %d..%d, ethereal %d..%d", nNormal, sumNormal, nEth, sumEth,
 	    durNormalMax < 0 ? 0 : durNormalMin, durNormalMax, durEthMax < 0 ? 0 : durEthMin, durEthMax);
-	char gate[256];
+	char gate[512];
 	ItemGenGateText(gate, sizeof(gate));
+	Out("itemroll %s", gate);
+	ItemGenSocketText(gate, sizeof(gate));
 	Out("itemroll %s", gate);
 	return true;
 }
@@ -2691,7 +2712,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
-	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
+	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | levelact <id>..");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
@@ -3220,6 +3241,79 @@ auto CmdEvTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// Client side (UI thread): the automap (layers, cells, the debug reveal flag) and the travel counters (waypoint auto-activation,
+// hotkeys, map reveal). `mapcells` is what the mapreveal check compares before and after a reveal.
+auto CmdMapCells(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	uint64_t cells = 0;
+	int layer = -1, flag = 0, layers = 0;
+	if (!TravelAutomap(&cells, &layer, &flag, &layers)) {
+		return Fail(c, "mapcells: not available (no game yet)");
+	}
+	Out("mapcells cells=%llu layer=%d layers=%d debugflag=%d", static_cast<unsigned long long>(cells), layer, layers, flag);
+	return true;
+}
+
+auto CmdTravel(Ctx*, const hcmd::Tokens&) noexcept -> bool {
+	char text[960];
+	TravelHotkeyReport(text, sizeof(text));
+	Out("travel %s", text);
+	char msgs[900];
+	TravelUiMessages("Panel", msgs, sizeof(msgs));
+	Out("uimsgs %s", msgs);
+	return true;
+}
+
+// stashprobe <page>: create a rune in shared stash tab <page> on the game thread, then delete it; stashprobe result: what happened.
+auto CmdStashProbe(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	char text[200];
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "result")) {
+		const int rc = TravelStashResult(text, sizeof(text));
+		Out("stashprobe result %d %s", rc, text);
+		return true;
+	}
+	long long page = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &page) || page < 0 || page > 998) {
+		return Fail(c, "usage: stashprobe <tab 0..998> | stashprobe result");
+	}
+	if (TravelStashProbe(static_cast<int>(page), text, sizeof(text)) == 0) {
+		return Fail(c, text);
+	}
+	Out("stashprobe tab %lld %s", page, text);
+	return true;
+}
+
+// wpobj: every waypoint object of the game with its position and its distance to the player (the wpauto check walks to one).
+auto CmdWpObj(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	int32_t px = 0, py = 0;
+	PlayerPos(c, &px, &py);
+	void* room = Fn<UnitRoomFn>(RvaUnitRoom)(c->player);
+	const int32_t level = room != nullptr ? Fn<RoomLevelFn>(RvaRoomLevel)(room) : -1;
+	int found = 0;
+	EachUnit(c->game, HashObjects, [&](Unit* u) {
+		if (TypeOf(u) != 2 || !travel::IsWaypointObject(ClassOf(u))) {
+			return;
+		}
+		int32_t ox = 0, oy = 0;
+		d2r::UnitXY(u, &ox, &oy);
+		void* oroom = Fn<UnitRoomFn>(RvaUnitRoom)(u);
+		++found;
+		Out("wpobj id=%u class=%d at %d,%d dist=%.0f level=%d inrange=%d", IdOf(u), ClassOf(u), ox, oy, DistTo(c->player, u),
+		    oroom != nullptr ? Fn<RoomLevelFn>(RvaRoomLevel)(oroom) : -1, travel::InPickupRange(px, py, ox, oy) ? 1 : 0);
+	});
+	Out("wpobj player at %d,%d level=%d number=%d objects=%d", px, py, level, travel::WaypointNumberOfLevel(level), found);
+	return true;
+}
+
+// Client side (UI thread): the map reveal the R hotkey runs, without the key.
+auto CmdReveal(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const int rc = TravelRevealNow();
+	if (rc < 0) {
+		return Fail(c, "reveal: not available (off, or no local player)");
+	}
+	Out("reveal done");
+	return true;
+}
+
 using VerbFn = bool (*)(Ctx*, const hcmd::Tokens&) noexcept;
 struct Verb {
 	const char* name;
@@ -3236,6 +3330,7 @@ const Verb Verbs[] = {
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {
