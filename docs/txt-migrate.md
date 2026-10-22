@@ -19,7 +19,7 @@ which bank a Median character loads is still to be confirmed in game. Report: `w
 | d2r_wins | sounds, soundenviron, skillcalc, misscalc, playerclass, plrtype, storepage | D2R rows, then Median rows D2R lacks (D2R's audio system and its calc-code order must stay; Median's extra calc codes are appended). |
 | keyed | the rest (itemtypes, skilldesc, monsounds, ...) | Median rows, then D2R rows whose key Median lacks. |
 
-`monai` has a hard engine limit: D2R's AI table has 155 entries (rows 0-154), so Median's one extra AI (`andariel_ai`, appended as row 155) is replaced afterwards by `tools/monster_ai_data.py` (monsters-ai.md section 5).
+`monai` has a hard engine limit: D2R's AI table has 155 entries (rows 0-154), so Median's one extra AI (`andariel_ai`, appended as row 155) is served by the plugin (`monster_ai.cpp` hooks the table getter); `tools/monster_ai_data.py` only checks that the row sits at id 155 (monsters-ai.md section 5).
 
 ## Columns
 - Same name (case-insensitive) copies. Curated renames: `Hralti*`->`Hratli*`, `Drehya*`->`Anya*`,

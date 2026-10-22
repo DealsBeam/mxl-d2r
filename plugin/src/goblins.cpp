@@ -18,6 +18,8 @@
 // MXL_GOBLINS_FORCE=1 in the environment makes every roll pass, =2 also ignores the last-kill requirement (testing).
 #include "goblins.h"
 
+#include "client_messages.h"
+#include "client_messages_logic.h"
 #include "d2r.h"
 #include "goblins_logic.h"
 #include "testharness.h"
@@ -148,6 +150,9 @@ void PlayerTick(Game* game, Unit* player, uint32_t frame, int32_t players) noexc
 		return;
 	}
 	const uint32_t n = g_spawned.fetch_add(1) + 1;
+	char notice[64];
+	clientmsg::GoblinAppears(notice, sizeof(notice));
+	SendClientMessage(player, notice, clientmsg::Yellow);
 	g_lastMonster = monster;
 	g_lastLevel = level;
 	if (n <= 20 && g_context != nullptr) {
@@ -184,6 +189,7 @@ void FrameHook(Game* game) {
 		return;
 	}
 	HarnessGameFrame(game);  // test harness gameplay commands (off in normal play)
+	FlushClientMessages(game);  // quest notices held until the NPC menu is up
 	const uint32_t frame = d2r::At<uint32_t>(game, GameFrame);
 	g_state.Touch(game, frame);
 	if (goblins::IsTickFrame(frame)) {

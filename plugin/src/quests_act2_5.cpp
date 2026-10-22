@@ -22,12 +22,14 @@
 //
 // Flags "bonus catalyst handed out" are bits of quest record 47 of the difficulty (Act 1 uses bit 0 there). The treasure
 // class drops of D2Sigma become direct creations in the killer's inventory, as in Act 1. Messages 0x5f-0x61 (client
-// notices) are not shown.
+// notices) are lines in the player's message log (client_messages.h; the text is neutral, the D2Sigma text is not known).
 //
 // Entry bytes are whole instructions from the dump of build 93847 (docs/d2r-addresses.md section 11 and Appendix A);
 // no rip-relative operands.
 #include "quests_act2_5.h"
 
+#include "client_messages.h"
+#include "client_messages_logic.h"
 #include "d2r.h"
 #include "quests_common.h"
 #include "quests_logic.h"
@@ -45,6 +47,7 @@ using d2r::Unit;
 using questeng::api;
 using questeng::Bit;
 using questeng::Difficulty;
+using questeng::DropBonusPerPlayer;
 using questeng::Record;
 
 constexpr uint64_t SummonerKillRva = 0x5a5490;
@@ -152,7 +155,8 @@ auto Give(Game* game, Unit* player, uint32_t code, int32_t itemLevel = 0) noexce
 
 // ---- bonus catalysts --------------------------------------------------------------------------------------------
 
-void GiveOnKill(const Event& e, int flagBit, bool (*rule)(int, int32_t, bool), uint32_t code, const char* name) noexcept {
+void GiveOnKill(const Event& e, int flagBit, bool (*rule)(int, int32_t, bool), const quests::BonusTc& tc, uint32_t code,
+                const char* name) noexcept {
 	if (e.game == nullptr || e.unit == nullptr || e.player == nullptr) {
 		return;
 	}
@@ -160,7 +164,8 @@ void GiveOnKill(const Event& e, int flagBit, bool (*rule)(int, int32_t, bool), u
 	if (record == nullptr || !rule(Difficulty(e.game), ClassOf(e.unit), Bit(record, QuestFlagRecord, flagBit))) {
 		return;
 	}
-	if (Give(e.game, e.player, code)) {
+	// Once per player on the ground like Median; the inventory item is the fallback (class not resolved).
+	if (DropBonusPerPlayer(e.game, e.unit, e.player, tc) > 0 || Give(e.game, e.player, code)) {
 		api.bitSet(record, QuestFlagRecord, flagBit);
 	} else {
 		Log(name, static_cast<int>(code), 0);
@@ -168,14 +173,14 @@ void GiveOnKill(const Event& e, int flagBit, bool (*rule)(int, int32_t, bool), u
 }
 
 void SummonerKillHook(void* quest, uint8_t* event) {
-	GiveOnKill(ReadEvent(event), quests::FlagLearning, quests::ShouldGiveLearningOnKill, quests::CodeCatalystLearning,
-	           "learning catalyst not created, code");
+	GiveOnKill(ReadEvent(event), quests::FlagLearning, quests::ShouldGiveLearningOnKill, quests::TcLearning,
+	           quests::CodeCatalystLearning, "learning catalyst not created, code");
 	g_summonerKillOriginal(quest, event);
 }
 
 void IzualKillHook(void* quest, uint8_t* event) {
-	GiveOnKill(ReadEvent(event), quests::FlagJewelcraft, quests::ShouldGiveJewelcraftOnKill, quests::CodeCatalystJewelcraft,
-	           "jewelcraft catalyst not created, code");
+	GiveOnKill(ReadEvent(event), quests::FlagJewelcraft, quests::ShouldGiveJewelcraftOnKill, quests::TcJewelcraft,
+	           quests::CodeCatalystJewelcraft, "jewelcraft catalyst not created, code");
 	g_izualKillOriginal(quest, event);
 }
 
@@ -207,12 +212,20 @@ void TyraelActivateHook(void* quest, uint8_t* event) {
 
 // ---- dialog rewards ---------------------------------------------------------------------------------------------
 
+void Notice(Unit* player, const char* what, int count) noexcept {
+	char line[96];
+	clientmsg::RewardLine(what, count, line, sizeof(line));
+	SendClientNotice(player, line, clientmsg::Tan);
+}
+
 void JerhynHook(void* quest, uint8_t* event) {
 	const Event e = ReadEvent(event);
 	if (e.game != nullptr && e.player != nullptr && e.npc == quests::NpcJerhyn && e.message == quests::MsgJerhynCrystal) {
 		void* record = Record(e.game, e.player);
 		if (quests::ShouldGiveCrystalJerhyn(e.npc, e.message, Bit(record, quests::QuestDuriel, quests::BitDurielTalk))) {
-			Give(e.game, e.player, quests::CodeArcaneCrystal);
+			if (Give(e.game, e.player, quests::CodeArcaneCrystal)) {
+				Notice(e.player, "Arcane Crystal", 1);
+			}
 		}
 	}
 	g_jerhynOriginal(quest, event);
@@ -224,7 +237,9 @@ void CainHook(void* quest, uint8_t* event) {
 		void* record = Record(e.game, e.player);
 		if (quests::ShouldGiveCrystalCain(e.npc, e.message, Bit(record, quests::QuestKhalimsWill, quests::BitKhalimDone),
 		                                  Bit(record, quests::QuestKhalimsWill, quests::BitKhalimTalk))) {
-			Give(e.game, e.player, quests::CodeArcaneCrystal);
+			if (Give(e.game, e.player, quests::CodeArcaneCrystal)) {
+				Notice(e.player, "Arcane Crystal", 1);
+			}
 		}
 	}
 	g_cainOriginal(quest, event);
@@ -239,8 +254,12 @@ void OrmusHook(void* quest, uint8_t* event) {
 		                              Bit(record, quests::QuestBlade, quests::BitBladeDone))) {
 			uint32_t* seed = d2r::api.unitSeed(e.player);
 			const int count = quests::ShrineCount(Difficulty(e.game));
+			int given = 0;
 			for (int i = 0; seed != nullptr && i < count; ++i) {
-				Give(e.game, e.player, quests::ShrineCodes[d2r::RandomBelow(seed, quests::ShrineCodeCount)]);
+				given += Give(e.game, e.player, quests::ShrineCodes[d2r::RandomBelow(seed, quests::ShrineCodeCount)]) ? 1 : 0;
+			}
+			if (given > 0) {
+				Notice(e.player, "Shrine", given);
 			}
 		}
 	}

@@ -1,4 +1,14 @@
-# D2R 3.3 build 93847: addresses for the blocked hooks (lane d2r-addresses, 2026-10-21)
+# D2R 3.3 build 93847: addresses fo
+Item events (lane p4ev, 2026-10-22; docs/subsystems/items-xp.md section 5b):
+
+| What | Address | Notes |
+|---|---|---|
+| unit-event thunks | exe `0x3e2a400` .. `0x3e2a428` | register, unregister, has, clear, dispatch, registerFn: slots into D2RCore |
+| per-unit event list | `unit + 0xe0` | node `0x40` bytes: `+8` `(stat << 32) \| layer`, `+0x28` handler, `+0x38` next |
+| event dispatch wrapper | exe `0x44d570` | `(game, event, unitA, unitB, arg5)`; kill = 9, thorns 2 / 3, open wounds / crushing blow 5 / 6 |
+| core handler table | D2RCore `0x630260` | slot = itemeventfunc; handler `(game, event, unit, other, arg5, code64, a7, a8, a9)`; 15 `0x3d12b0`, 16 `0x3d1310` (a `jmp`), 33 `0x3d19b0` and 34 `0x3d1a20` are forwarders that return 0 |
+| exe handler table | exe `0x238e5c0`, ids 1..40 | 6 `0x582b20` (thorns), 11 `0x582d30`, 12 `0x5828d0`, 15 `0x584170`, 16 `0x583150`, 20 `0x583b30` (cast), 28 `0x583a70` (life), 32 `0x42eea0`, 33 `0x42f300`, 34 `0x51f7b0`; code is `(stat << 16) \| layer` |
+| itemstatcost records | `*(exe + 0x2a9a580 + 16) + 0x1258`, stride `0x144` | event words `+0x44 / +0x46`, function words `+0x48 / +0x4a` |r the blocked hooks (lane d2r-addresses, 2026-10-21)
 
 All addresses are **RVAs** in the D2R image (`D2RLoader_6ab3782c_dump.exe` memory layout; file offset == RVA, base
 `0x140000000`), x64 Microsoft ABI (rcx, rdx, r8, r9, then stack at `[rsp+0x20]...` at the callee's entry).
@@ -67,7 +77,9 @@ Reading aids that apply everywhere:
 | 7 | Create item from an item-gen struct (1.13c `0x11490`) | `0x43cd50` | verified |
 | 7 | Create item of a class (struct builder, quality / ilvl / flags) | `0x43d530` | verified |
 | 7 | Unique-item-by-index creator | not found: no equivalent function; see section 7 | open |
-| 8 | **Game destroy** `(u64 game id)` ("Deallocate game %p") | `0x4057c0` (called by the idle sweep `0x406e40`) | verified |
+| 8 | **Game destroy** `(u64 game id)` ("Deallocate game %p") | `0x4057c0` (called by the idle sweep `0x406e40`; its prologue has a rip-relative load, so it cannot be hooked) | verified |
+| 8 | **Per-game client teardown** `(Game*)`: the game-end event the plugin hooks (`game_end.cpp`; entry `40 56 48 83 ec 20 48 8b b1 38 01 00 00`, clean prologue) | `0x486be0` | verified (game_checks `gameend`) |
+| 8 | Game struct: first client record `+0x138` (next `+0x628`, client state at `+4`, 4 = in the game); the players in a game are counted from that list (Median reads a count word at game `+0x8c`) | `quests_common.h` | verified |
 | 8 | **Game create** (name, password, ... 14 args) | `0x4049d0` (no direct callers) | likely |
 | 9 | Client NPC menu table (48 x 0x48 bytes, heap, global ptr) | pointer `0x2a48830`, count `0x2a48838`, filled by `0x360d0` | verified |
 | 9 | Client menu builder / NPC row index / click-send | `0x1147a0` / `0x113990` / `0x117510` | verified |
@@ -153,8 +165,9 @@ start with a `jmp [rip+..]` thunk, entry bytes `ff 25 f2 51 b3 03 90 90 90 90 ..
 56 57 41 54 41 56`, already used by existing plugin code). The cost is checked by the search; the payment is the
 post-hook's job: take `param*100` from stat 14 first, the rest from stat 15. Whether the client sees the new gold
 without an extra packet: probably yes, no explicit update is needed (evidence in section 10; not tested in game).
-Flags: nothing to find in D2R, they live in plugin memory keyed per game pointer and player name (see the port spec).
-Clear the flags in the game-destroy hook `0x4057c0` (section 8); clearing when the game pointer changes is also enough.
+Flags: nothing to find in D2R, they live in plugin memory keyed per game pointer and character name (the name is the first 16
+bytes of the player data `0x34b240(unit)`; `craft_flags.cpp`). They are cleared in the game-end hook `0x486be0` (section 8,
+`game_end.cpp`); a changed game pointer clears them as well.
 
 ## 2. Act 1 quest rewards (Barbarian milestone)
 
@@ -333,8 +346,8 @@ Read from the Ghidra decompile (lane d2r-addresses-2, 2026-10-21). Entry bytes i
 - Alternative (smaller): patch the call at `0x49218c` to a plugin function with the `0x516a50` signature (return 1 to refuse)
   and also bypass the range test in front of it (it only calls `0x516a50` for the five levels above); a detour of
   `0x491ff0` avoids both.
-- **Signalling to the player.** The vanilla path is silent. A message needs a server -> client packet. No ready-made
-  "send system message" function was located (the telemetry lines in these handlers only log). Raw send works: the game
+- **Signalling to the player.** The vanilla path is silent. A message needs a server -> client packet. The ready-made
+  chat sender `0x477a30` is documented in section 13 (found later; the plugin uses it). Raw send also works: the game
   has a network service singleton `0x649610()` (`lea rax, [global]; ret`), and a packet is sent with
   `(*(void(**)(void*, uint32_t conn, Span*))(*svc + 0x28))(svc, *client, &span)` where `span = {begin, end}` points at the
   packet bytes (see `0x47abc0`, which sends packet 0x0d this way; `client = *(Client**)(0x34b240(player) + 0xf0)`, `*client` is the
@@ -555,7 +568,7 @@ craft, catalyst, etc.) and return; otherwise call the original. The "Talk" line 
 
 | What | Address | Notes |
 |---|---|---|
-| Menu builder hook | `0x1147a0` | entry `40 55 53 57 41 54 41 56 48 8d ac 24 10 fc ff ff 48 81 ec f0 04 00 00` (23 bytes, no rip-relative). The loop adds `count - 1` lines; the Identify line (id 0xfb4) overwrites the record's `+4` with 3 or 2 on every build, so lines behind it vanish and a skipped Identify is never retried: the plugin keeps its lines in front of Identify and re-sets the count on each call |
+| Menu builder hook | `0x1147a0` | entry `40 55 53 57 41 54 41 56 48 8d ac 24 10 fc ff ff 48 81 ec f0 04 00 00` (23 bytes, no rip-relative). The loop adds `count - 1` lines; the Identify line (id 0xfb4) overwrites the record's `+4` with 3 or 2 on every build, so lines behind it vanish and a skipped Identify is never retried: the plugin keeps its lines in front of Identify and writes the count back (lines + 1) after the builder returns, so the record shows what the list shows (the lowered count hid the plugin line from the harness `menu list`) and re-sets the count on each call |
 | Menu packet hook | `0x4b0470` | entry `40 55 53 56 57 41 54 41 55 48 8d 6c 24 d1 48 81 ec c8 00 00 00` (21 bytes). Packet: `u8 0x38, u32 kind, u32 npc unit id` (9 bytes). The NPC is found with `0x53b8f0(player, unit id, 0x32)` (distance 50), its class is `[unit+4]` |
 | Packet sender | `0xec730(u8 id, u32 a, u32 b)` | builds the 9-byte packet; `0xec820` is the 0x2e variant |
 | Cancel handler | `0x112c30` | closes the list widget (`0x1e9390`), clears `0x2a486a4`, calls `0x10de80(npc id)` and `0xc7d30(8)`; returns 1 |
@@ -566,13 +579,13 @@ craft, catalyst, etc.) and return; otherwise call the original. The "Talk" line 
 | Service lines (client) | fix table RVA `0x22a70e0`, 9 x 24 bytes (class u32, quest u32, bit u32, condition u32, function), count dword `0x22a71b8`; consumer `0x1141d0` (the NPC menu opener) | Charsi q3 b1 -> `0x109100` (line `0xfb1`), Larzuk q35 b1 -> `0x109300` (`0x58dc`), Anya q38 b1 -> `0x109400` (`0x58dd`), all with handler `0x10dd30`; Warriv q6 b0 and Meshif q14 b0 add the travel lines. Run on the client's own quest record `0x2a48778` |
 | Service confirmation (server) | packet `0x2e`: `0x4ae280` (21 bytes) -> `0x4fc230(game, player, packet, delayed)`; delayed run from the task `0x4b6050` | NPC `0x53b8f0`, NPC table row `0x3971a0` (`+0xb` service 1/2/3, `+0x10` quest + 1), quest bit 1 via `0x325c50`; spends the reward with `0x5da1c0` / `0x548b60` / `0x547c60` (bit 0 set, bit 1 cleared). Server packet table: handler = `0x1d2a790 + id * 8` (0x38 = `0x4b0470`) |
 | Travel | client special line handler `0x1162f0` sends packet 0x37; server `0x4a9880` | NPC table row (static table `0x237ea60`, 0x1c bytes: `+0xb` service, `+0xc` destination s32, `+0x10` gate byte = quest + 1): gated lines test bit 0 of quest `gate - 1`, travel with `0x4f2e40(game, player, level, 0)`, then set the arrival act town's waypoint. D2R grants what Median grants; checked by npc_services.cpp |
-| Waypoint record | `0x3d6670(version, level, u16* wp)` level -> waypoint field (levels row `+0xec`, 0xff = none); `0x3d6930(record, wp)` test; `0x3d6890(record, wp)` set (`*(u16*)(rec + 2 * T[wp].word) \|= T[wp].mask`, tables `0x2389010`, 112 entries); `0x4812c0(client, record)` sends packet 0x63 (record to the client, which also opens its waypoint UI); `0x40b540` sets every waypoint | record = `*(playerData + 0x58 + difficulty * 8)`, playerData = `0x34b240(player)`, difficulty = `game + 0x104`, version = `game + 0x106`. Object operate `0x58fe00` is the in-game touch (set, `0x481030` packet 0x64, `0x4812c0`). Entry bytes: `0x3d6890` `48 89 5c 24 08 57 48 83 ec 20 0f b7 da 48 8b f9`, `0x3d6670` `48 89 5c 24 08 48 89 6c 24 18 56 57 41 56 48 83`. Record = 112 bits (count dword `0x23891d0` = 0x70; number n = word `1 + n / 16`, mask `1 << n % 16`); save "WS" writer `0x52f090` / reader `0x52e910` copy 16 bytes of each 24-byte record (`0x3d6820` / `0x3d67c0`). Panel: `0x1ecbc0` loads the actinfo rows into 0x34-byte entries (vector `0x2a96a28`, 9 levels + 9 numbers each), `0x1ea9b0` fills a tab's 9-entry button table `0x2a969e0` (count `0x2a969d4`), `0x1e9b40` builds the buttons, tab-unlock quest ids at panel `+0x1c8` (5 ints, set at `0x1e9adf`); use-waypoint server handler `0x4b6f10` |
+| Waypoint record | `0x3d6670(version, level, u16* wp)` level -> waypoint field (levels row `+0xec`, 0xff = none); `0x3d6930(record, wp)` test; `0x3d6890(record, wp)` set (`*(u16*)(rec + 2 * T[wp].word) \|= T[wp].mask`, tables `0x2389010`, 112 entries); `0x4812c0(client, record)` sends packet 0x63 (record to the client, which also opens its waypoint UI); `0x40b540` sets every waypoint | record = `*(playerData + 0x58 + difficulty * 8)`, playerData = `0x34b240(player)`, difficulty = `game + 0x104`, version = `game + 0x106`. Object operate `0x58fe00` is the in-game touch (set, `0x481030` packet 0x64, `0x4812c0`). Entry bytes: `0x3d6890` `48 89 5c 24 08 57 48 83 ec 20 0f b7 da 48 8b f9`, `0x3d6670` `48 89 5c 24 08 48 89 6c 24 18 56 57 41 56 48 83`. Record = 112 bits (count dword `0x23891d0` = 0x70; number n = word `1 + n / 16`, mask `1 << n % 16`); save "WS" writer `0x52f090` / reader `0x52e910` copy 16 bytes of each 24-byte record (`0x3d6820` / `0x3d67c0`). Panel: `0x1ecbc0` loads the actinfo rows into 0x34-byte entries (vector `0x2a96a28`, 9 levels + 9 numbers each), `0x1ea9b0` fills a tab's 9-entry button table `0x2a969e0` (count `0x2a969d4`; entry bytes `40 55 53 56 41 55 41 56 48 8d 6c 24 c9`; mxl-core hooks it, see areas-drlg.md 3b), `0x1e9b40` builds the buttons, tab-unlock quest ids at panel `+0x1c8` (5 ints, set at `0x1e9adf`); use-waypoint server handler `0x4b6f10`. Table readers (each a 7-byte `lea reg,[rip+disp32]`, patched by mxl-core to its own table): `0x1ea198` (builder), `0x1ec05a` (click handler `0x1ebf50`), `0x1ec582` (refresh `0x1ec430`); the row vector is `0x2a96a28` data, `0x2a96a30` size, `0x2a96a38` capacity; buttons are `Act%d_Button%d` clones of `UnselectableButtonTemplate`, y = index * layout `buttonOffset` (default 123) + 264 |
 
 ## 10. Gold stat changes and the client
 
 `0x2f7d10(unit, stat, value, layer)` and `0x2f5020` start with a 10-byte `jmp [rip+x]` (the D2RLoader / protection thunk) followed by the real body
 (`0x2f7d1a`, sets the stat in the unit's stat list; asserts `0x2f1dc0`, calls `0x2f9b10`, `0x2f3030` and the stat-change path). The stat engine
-itself is not readable (the dump holds the thunk target in `0x3e2a248`). Evidence for "no explicit client update needed": the game's own gold
+itself is not in the dump (the thunk target is in `0x3e2a248`): the thunks are not a protection layer but **D2RLoader's own module D2RCore.dll** (see below). Evidence for "no explicit client update needed": the game's own gold
 changes do not send anything: the gold pickup code (`PlrModes.cpp`, function `0x42c110`) does `0x2f5020(unit, 14)`, compares with the cap
 (`0x2f5c60` family), then `0x2f7d10(unit, 14, newGold)` and **no packet call follows** (its only network calls are the item pickup packet `0x535f60`);
 the same `0x2f7d10(unit, 0xe, ...)` is used by item creation for stackable gold (`0x43cd50`, `0x43ef10`). In 1.13c the stat list of a player
@@ -581,6 +594,19 @@ payment (`0x2f7d10(player, 14, gold - cost, 0)`, bank `15`) should show up on th
 refresh is ever needed, the cheapest forcing step is to re-set the stat (set 14 to the old value and then to the new one). The stat-update packet
 sender itself was not located (no packet-id constant for 0x1d-0x1f near the network service in 102 sender functions; the builder is behind the
 stat callback). Confidence: likely.
+
+### D2RCore.dll (lane caps-events, 2026-10-22)
+
+Thirty-nine main-image stat functions (`0x2f5020` GetStat, `0x2f7d10` SetStat, `0x2f5c60`, `0x2f4d20`, `0x2f48c0`, ...) are
+10-byte `ff 25 disp32 90 90 90 90` thunks whose slots (`0x3e2a2xx`, filled at start-up) point into **D2RCore.dll**, a PE
+that D2RLoader maps at a random `0xc0de5xxxxxx` address (timestamp `0x6ab37824`; sections `.text` 0x1000, `.rdata`
+0x53b000, `.data` 0x6fb000, `.d2rlapi` 0x80e000, `.d2rsym` 0x838000). It holds a reimplemented stat engine: the getter body
+is at core RVA `0x3d8bd0`, stats live in sorted 16-byte `{key = stat << 32 | layer, value}` entries, stat ids go up to
+0x8000. Everything that is *not* one of those 39 thunks is ordinary main-image code and hookable: the resist code
+(`0x4523e0`), the damage table (`0x44df10`), the absorb step (`0x450670`). D2RLoader also redirects some call sites to
+wrappers in a stub area (`0x3e2b496+`; slot `0x3e2aab0` -> core `0x826720`, which calls the original `0x4523e0` and tracks
+damage in state `0xe7` / stat `0x54`); an inline hook on the *callee* still sees every call. Reading the core: attach to
+the game process (`ReadProcessMemory`) and dump the module; it is not in `D2RLoader_*_dump.exe`.
 
 ## 11. Quest handlers (read)
 
@@ -619,7 +645,7 @@ mode == 0 (after a mode 10-12 state test):  ai = u16 monstats[+0x52]
                                             return (0 <= ai < 0x9b) ? 0x2396e90 + ai*0x20 : 0x2396e90   // out of range = "None"
 mode != 0:                                  return 0x23981f0 + mode*0x20
 ```
-So a monai row at index 155 or higher (Median's `andariel_ai` as txt_migrate appends it) runs entry 0, whose think function `0x78d20` is a bare `ret`.
+So a monai row at index 155 or higher (Median's `andariel_ai` as txt_migrate appends it) runs entry 0, whose think function `0x78d20` is a bare `ret`. `plugin/src/monster_ai.cpp` detours the getter (entry bytes above, 15 bytes = 4 whole instructions) and, when it returns entry 0 for a monster whose `+0x52` is 155, returns its own `{1, 0, think, 0}` entry. Init (`+8`) is `init(game, unit, args)` with `ctl = *args`; entry 83 (MosquitoNest) gets one written by the plugin (`0x23978f8`).
 The tables are plain `.data` pointers; entries 0-154 line up one to one with `monai.txt` rows 0-154 (checked by name: Idle 1, Summoner 53,
 Hireable 61, FetishShaman 65, MosquitoNest 83, Nihlathak 128, ColBarbFrenzy 154) and the table ends exactly where the mode table begins
 (`0x2396e90 + 0x9b * 0x20 = 0x23981f0`), so it cannot grow in place.
@@ -646,8 +672,9 @@ Game frame `game+0x170` (Sigma `+0xa8`). Random: seed pointer `0x34a1e0(unit)` (
 | `0x4a6d10` | wait `(game, unit, frames)`, 0 frames = 1 | `0x4b270` (D2AI.cpp:0xb4) |
 | `0x4a7bc0` | use skill `(game, unit, u8 mode (< 0x10), skill id, target unit, x, y, flag)`; refused -> waits 10 | `0x4b310` (:0x116) |
 | `0x4a7df0` | move away / flee `(game, unit, target, u8 mode, n)` | Sigma thunk `0x422e0` |
-| `0x4a78e0` | set a mode action `(game, unit, mode, target)` | Sigma thunk `0x422c0` |
-| `0x595f80` | nearest suitable target `(game, unit, &u8 difficulty, 0)` | Sigma `0x41c50` (returns the distance too) |
+| `0x4a78e0` | set a mode action `(game, unit, mode, target)`: mode 4 = attack, 8 = the S1 "charge" (D2R's AIs call it with 8 at `0x5ae373`) | Sigma thunks `0x422c0` / `0x422e0` |
+| `0x595f80` | nearest suitable target `(game, unit, int* outDistance, u32* aux) -> Unit*` (`outDistance` = `0x7fffffff` when none; `aux` 0 is fine; verified in the Summoner and in `andariel_ai`'s port) | Sigma `0x41c50` (`(unit-in-eax) (&distance, 0)`) |
+| `0x4a7270` / `0x4a8740` | walk towards a target: `0x4a7270(unit, 1, 0, 0)` then `0x4a8740(game, unit, target, 7)` (D2R's Andariel think ends with exactly this) | Sigma `0x4b110` `AiMove(.., target, 2, 0, 0, 1, 7)` |
 | `0x5a0b80` | Summoner AI init (Act 2 quest 5 hook, `Quests\a2q5.cpp`) | Sigma `0x41c70` |
 | `0x4a3680` | the **Idle** think: `if room: wait(200)` | `0x4a210`: `wait(250)` |
 | `0x5af320` | alt think of Hireable, FetishShaman, Nihlathak, mode 4: clear state 0xc, AiSet, wait(1) | `0x4a280`, identical |
@@ -656,6 +683,67 @@ Entry bytes (16): `0x4a2690` `48 85 c9 0f 84 8a 02 00 00 55 53 56 57 41 55 48`; 
 `0x4a6d10` `48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 70 45`; `0x4a7bc0` `48 89 6c 24 10 48 89 74 24 20 57 48 83 ec 50 41`;
 `0x595f80` `4c 8b dc 53 41 54 41 55 41 56 41 57 48 81 ec 50`; `0x4a3680` `48 89 5c 24 08 57 48 83 ec 20 48 8b f9 48 8b da`;
 `0x5b4d50` (Summoner) `48 89 5c 24 08 55 56 57 41 54 41 55 41 56 41 57`; `0x5aba70` (Andariel) `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48`.
+
+## 13. Server -> client text messages (lane client-ui, 2026-10-22; plugin/src/client_messages.cpp)
+
+Ready-made path, called not hooked, verified in game (slot 2, background mode):
+- `0x48fde0(player unit)` -> the player's client (null for a non-player). Entry bytes `40 53 48 83 ec 20 48 8b d9 48 85 c9 74 1e e8`.
+- `0x477a30(client, record)`: trims the 0x147-byte chat record (name <= 60, text <= 255) and writes **packet 0x26** to that client.
+  Entry bytes `48 89 5c 24 18 55 56 57 41 56 41 57 48 81 ec`. The D2Game builder `0x53acf0` (SUnitMsg) uses the same two calls.
+- Record: `+0 0x26`, `+1 chat type`, `+2 language`, `+3 speaker unit type`, `+4 speaker unit id`, `+8 colour`, `+9 name flag`,
+  `+0x0a name[0x3d]`, `+0x47 text[0xff]`. Layout and builder: `clientmsg::BuildChat` (client_messages_logic.h, unit-tested).
+- The client reads it in `0x12c190` (table `0x22bbc40`, 24-byte entries `{handler, size, 0}`; id 0x26).
+- **Chat types seen on screen** (harness verb `sysmsg <type> <colour> <text>`): 4 = a line in the message log at the bottom left
+  coloured by the colour byte (used for every notice); 1 = the same; 5 = overhead bubble above the player; 0, 2, 3, 6-9 show nothing.
+  Colours (byte +8): 0 white, 1 red, 2 green, 3 blue, 4 tan, 8 orange, 9 yellow. Inline `Ã¿c1` colour codes are not interpreted.
+- **A chat line during an NPC's speech freezes the speech** (found 2026-10-22, regression hunt `respec` on 0.49.0): while Akara's
+  quest text scrolls (about 40 s with the Den of Evil and Cain speeches), any packet 0x26 of type 1, 4 or 5 stops it for good and the
+  NPC menu never opens (the builder 0x1147a0 is never called, the subtitle box stays up). Type 0 (shows nothing) does not; a line
+  that arrives with the menu already open does not either; the speaker fields and the delay (12 server frames) made no difference.
+  The speech ends when the client's menu-open flag (`0x2a486a4`, u32, 1 while the menu is up) turns 1. So the notices of quest
+  dialog handlers (the Heart is sent from the handler that the speech's own message 0x76 fires, in the middle of the speech) go
+  through `SendClientNotice`: held until that flag is 1 for 2 server frames, sent anyway after 120 s. Lockout and goblin lines
+  stay immediate (no NPC speech there). Limit: the flag is the local client's; a remote player of a TCP game gets the line after
+  the 120 s fallback.
+- Used for: Median's dungeon lockout texts (refusal "(Required Level: N)", "Requires Hell difficulty", "This area is locked / Join
+  another game to enter again", clock "Closing in: mm:ss" and "ONCE YOU EXIT YOU CANNOT GO BACK" to every player of the game),
+  the quest reward notices (Akara's Heart, Jerhyn / Cain crystals, Ormus shrines) and the goblin line ("Treasure Goblin appears!": Median's push notification is the unit name + string 12320 " appears!"). All shown in
+  the screenshots of the lane report. The plugin counts messages sent / failed on the `mxl` command.
+- Not used: the client packet table also has 0x5a (34 bytes, builder `0x5282b0(unit,type)`, sender `0x480510`; Median's goblin notice
+  is type 0x15) and unit message `0x491960(player,msg,subject)` (0x14 = D2R's generic "Impossible." line; Median's 0x13 and 0x88
+  have no D2R handler). Several client handlers sit behind protected thunks (`0x3e2b7xx`), so they cannot be read statically.
+- **Plugin messages (lane approx-items, 2026-10-22; client_messages.cpp / client_messages_logic.h): a hidden server -> client
+  data channel.** No NetworkService is needed: a chat packet 0x26 of type 0 (shows nothing, does not freeze an NPC's speech)
+  whose text is the marker `\x01MXL`, one kind letter and the payload as lower-case hex (up to 125 bytes). The client's
+  packet-table entry for 0x26 (table `0x22bbc40`, 24-byte entries, original handler `0x12c190`; the entry bytes of the handler
+  are checked: `48 89 5c 24 10 48 89 74 24 18 57 48 81 ec 90`) is replaced by a plugin function that reads the text, hands a
+  message that starts with the marker to the handler registered for the kind letter and passes every other chat packet to the
+  original. Kinds: `N` = an NPC page answer (npc_actions.cpp: u32 page kind, u16 NPC class, u16 mask of open entries), `T` = the
+  dungeon clock (dungeon_lockout.cpp: u16 level, u16 0, u32 ms left, 0 = no clock). Off word `clientmsg` switches it off with the
+  rest of the module.
+- **Dungeon countdown** (dungeon_lockout.cpp): the server sends `T` to everybody when a clock starts and to a player who enters a
+  level (level + ms left; a level without a clock sends 0, which clears the old one). The client keeps the end tick and draws
+  "Closing in: mm:ss" (string 11191) and "ONCE YOU EXIT YOU CANNOT GO BACK" (11193) with D2RLoader's OverlayService text calls from a
+  frame callback (phase AfterGameUi), centred at the top of the screen, while the local player's level
+  (`0x9a480(*(u32*)(image + 0x2a23704))` = the local player's unit, `0x34b440` its room, `0x2efc10` the room's level) equals the
+  clock's level. The chat lines of 3a stay.
+
+## 14. Player actions (lane harness-cast, 2026-10-22; plugin/src/harness_cmds.cpp)
+
+Server side, called from the game-frame hook (verified in the game):
+
+| What | RVA | Notes |
+|---|---|---|
+| walk / run packet handlers | table `0x1d2a790` ids 1 / 3 | 210 byte packets: `{id, curX u16, curY u16, destX u16, destY u16, pathLen byte ...}`; checks `0x34c2c0` (dead), `0x4fe1f0` (position within a tolerance of the packet's), `0x325370` (path distance <= 15) |
+| player move | `0x42d2c0` | `(game, unit, Skill* or 0, mode, x, y, 0, 0)`: mode 2 walk, 3 run, returns 0 on success; what the walk packet ends in, the server finds the path |
+| cast at a position / at a unit | `0x4fdb40(game, player, x, y, 1, Skill*)` / `0x4f8de0(game, player, type, id, Skill*, 1, shift)` | both use the player's active left skill; the unit form walks into range first |
+| skill by id | `0x33dcd0(player, id, -1)` | `Skill*`: `+0` row pointer (i16 id), `+8` next, `+0x10` skill mode (7 attack, 10 cast, 11 / 15 passive), `+0x40` base level |
+| skill list, usability | `0x34b6e0(unit)`, `0x33f360(unit, Skill*)` | list head with the first `Skill*` at `+0`; usability 0 ok, 2 passive / requirements, 5 no weapon |
+| active skills | `0x34a540` (left), `0x34b400` (right) | select with packet 0x3c (handler `0x4b4250`: `{0x3c, id u16, ...}`, byte 4 = 0x80 for the left skill) |
+| add a skill level | `0x438670(version, player, id)` | spends one point of stat 5, no prerequisite check |
+| equip | `0x471500` place, `0x382df0(int32 loc[4])` body location 1-12 | location struct `{mode 1 = equipped, page, x\|y, bodyloc}`; `0x471e90` is the generic move |
+| missiles | unit type 3 in the game's hash table base `0x646` | counted per server frame |
+| player busy | `0x4249f0(unit)` | nonzero blocks skill use (item on the cursor, trade) |
 
 ## Appendix A. Quest descriptor table (D2R, verified)
 
@@ -801,7 +889,7 @@ game destroy / create, client menu composition, quest handlers 13 / 14 / 25 / 38
 2. ~~Portal objects~~ lane dungeon-lockout: the portal object operate function is **`0x58f680`** (ctx `{game, portal, player, ?, object class}`; it pairs
    the portal with its twin through `0x490070`, places the player with `0x491ca0`, returns 1 moved / 0 failed with unit message `0x14`). Entry bytes
    `48 89 4c 24 08 55 53 56 57 41 56 41 57 48 8b ec`. Destination level = word from `0x34ad40(portal)`. Hooked by dungeon_lockout.cpp.
-3. A ready-made server -> client **system message** sender was not located; use the raw packet send of section 4 or a D2RLoader client-side message.
+3. ~~System message sender~~ lane client-ui: chat packet 0x26 via `0x48fde0` + `0x477a30`, section 13.
 4. Stat-update packet sender (0x1d-0x1f family) not located; gold sync argued from the game's own gold code (section 10), **untested**.
 5. The game create function `0x4049d0` has no direct callers (called through a job pointer); the destroy hook covers the reset need, so this is
    cosmetic. The monster death drop caller `0x5930b0` (the other caller of `0x4404f0`) was not read.

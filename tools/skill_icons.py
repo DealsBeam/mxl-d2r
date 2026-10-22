@@ -14,7 +14,10 @@ full. IconCel is renumbered to that order.
 One skilldesc row has one IconCel, but Median's skills of different classes (and the class-less item skills) share
 skilldesc rows (the seven Mastery pages of every class use the same few rows), each reading its own class's sheet. So a
 row used from several sheets is split: the sheet of the skill-tree skills keeps the row, the others get a copy named
-"<row>~<class>" that their skills point to (skills.txt), each with its own IconCel.
+"<row>~<class>" that their skills point to (skills.txt), each with its own IconCel. The copy of the class-less users
+("<row>~shared": item skills, monster skills such as the Fortress effects that Median gave the Fortress row too) loses
+the tree place (SkillPage / SkillRow / SkillColumn), so only class skills can sit on a tree slot: Barbarian
+Warmonger 6,1 is Median's own skill 336 (named RogueMissile in 1.13c, a self buff, string SkillnameFortress), alone.
 
 Writes into work/mod/data (after txt_migrate.py):
   global/excel/{base,}/skilldesc.txt          IconCel (+ the split rows), skills.txt skilldesc of the split users
@@ -272,11 +275,15 @@ def main() -> int:
                 if key not in have and base_desc(key) in have:
                     rows.append([key] + have[base_desc(key)][1:])
                     have[key] = rows[-1]
+            place = [h.index(c) for c in ("SkillPage", "SkillRow", "SkillColumn")]
             for r in rows:
                 if r[0] in icon_cel:
                     r[ic] = str(icon_cel[r[0]])
                 elif SPLIT in r[0]:
                     r[ic] = "0"  # a copy for skills outside the base bank's sheets: icon 0
+                if r[0].endswith(SPLIT + "shared"):
+                    for c in place:  # class-less skills have no slot in a tree
+                        r[c] = ""
             write_tsv(p, h, rows)
     report = []
     for cls, (sheet, classic, hd) in TARGETS.items():

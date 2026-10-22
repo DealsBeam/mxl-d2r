@@ -20,7 +20,7 @@ D2GS carries its own game rules), so for most functions D2R's version is the equ
 | propertiesext | default skill parameter of 4 properties | no such thing | **data, done** (txt_migrate.py `property_defaults`) |
 | maximum resistances | 75 + max-res stat, hard cap 90; damage resist cap 50 | 75 + stat, cap 95 | native hook, **open** (see 2.4) |
 | avoid check while moving without evade | falls through to block / dodge / avoid | returns 0 | cut (tiny) |
-| mercenaries share the avoid / block caps | yes | n/a | open (player-only port) |
+| mercenaries share the avoid / dodge / evade caps (not block) | yes | the `0x44ef70` hook accepts hirelings (`0x3af240`) | done, not exercised in game |
 
 ## 1. Function map
 
@@ -57,7 +57,8 @@ Median's own damage rules are not in this module but in the skill do-functions: 
 | 0x10057460 | "can block" wrapper: avoid check 0x10056e20 when called for hits, else the block roll of 0x100573a0 (a third of it for a player without a shield-type item) | `0x44b930` (calls 0x44ef70) | **done** |
 | 0x10057530, 0x10057690 | hit attempt: line of sight / distance test (D2Common 11138), the to-hit roll, then the avoid check mapped to result flags (avoid 0x100, dodge 0x80, block 0x8000, evade clears the hit); the second form is the missile version | `0x44b2b0` (melee hit), `0x45bc40` (missile hit) | vanilla; **done** |
 | 0x100577c0 | likely the damage percent between two units: 100 normally; 25 (0x19) between two mercenary-class units, a monstats value for a pet owner, 17 (0x11) for monsters hitting players, 0x15e / 200 for monsters with a negative owner state | `difficultylevels.txt` `PlayerDamagePercentVS*`, `MercenaryDamagePercentVS*` | data (migrated columns); **done**; PvP check in 4 |
-| 0x10057a20, 0x10057c10 | damage mitigation by Median's absorb stats on a damage block: the unit's pierce-reduced percent (cap 40), then (likely) Median stats 189 (divisor: the damage field / stat, or half with a floor of 5 for drain-type fields), 184 and 417 (percent off the field, 417 per damage-type layer); the removed part is added to the defender's absorbed total (+0x48). The field offsets are D2Game's damage block (0x10-0x40 elemental, 0x18/0x2c/0x30/0x34/0x44 drains) | `0x44df10` (apply resistances / absorb) | **open** (see 3) |
+| 0x10057a20 | absorb step of the damage block: the defender's absorb percent (cap 40) and flat stat cut the damage and the cut amount heals the defender (added to the block's absorbed total). Median runs every credited amount through the defender's stats 189 (divide, never below 1 point), 184 (percent off) and 417 (percent off, layer = damage type 1 fire / 2 lightning / 3 magic / 4 cold / 5 poison); the damage cut is unchanged | `0x450670` (called from the per-hit step `0x4523e0`) | **native hook, verified in game** (combat.cpp) |
+| 0x10057c10 | the same three stats applied to the damage fields of a block (divide / halve durations / percent off); **no caller** in D2Sigma or the patched D2Game | none | dead code, not ported |
 
 ### 1.3 D2Stats.cpp
 
@@ -65,7 +66,7 @@ Median's own damage rules are not in this module but in the skill do-functions: 
 |---|---|---|---|
 | 0x100b41b0 | the unit's level capped at the class' maximum level (experience table), times 10000: the fixed-point base of the `/lvl` stats | D2R's per-level stats (`op` columns) | likely; **done** (data) |
 | 0x100b4240 | resist stat to its maximum stat (0x25 -> 0x26, 0x27 -> 0x28, 0x29 -> 0x2a, 0x2b -> 0x2c, 0x2d -> 0x2e) | the `maxstat` column of itemstatcost | **done** |
-| 0x100b42c0 | **resist limits**: players and mercenaries get 75 + the maximum-resist stat, never above 90; damage resist (0x24) limited to 50; monsters 1,000,000 | hidden stat getter (`0x2f5020` thunk body) | native hook, **open** |
+| 0x100b42c0 | **resist limits**: players and mercenaries get 75 + the maximum-resist stat, never above 90; damage resist (0x24) limited to 50; monsters 1,000,000 | the clamp immediate in `0x4523e0` (and the two UI displays) | **done**: patched to 90 |
 | 0x100b43a0 | difficulty resist penalty: the difficultylevels row's ResistPenalty for the resist stats 0x27, 0x29, 0x2b, 0x2d, 0x6e | `difficultylevels.txt` ResistPenalty (-30 / -70 migrated) | **done** (data) |
 | 0x100b44a0 | `GetResist(stat)`: stat + penalty, at most the limit, at least -100 (damage resist: no penalty, at most 50) | D2R's resist read in `0x44df10` | vanilla shape; limits as above |
 | 0x100b45d0 | calls a `std::function` for every 8-byte entry of a stat list's modifier array | n/a | utility; **cut** |
@@ -107,7 +108,7 @@ D2R's dispatcher (`0x3d4620`) looks the entry up in the 8-byte table at **0x2386
 ends the property when it is empty, so before this lane those slots did nothing.
 
 **propertiesext** (437 rows x one int32; `work/sigma/propertiesext.txt`; `tools/sigma_tables.py` names the field
-`i32_0x00`): the **default parameter** of a property. It is read by the three wrappers above: if the property row's
+`DefaultParam`): the **default parameter** of a property. It is read by the three wrappers above: if the property row's
 ext value is a valid row (`FUN_100af700`: below a table count at D2TxtRecords +0xba0, likely the skills) and the property in the item or monster
 property slot has parameter 0, the parameter becomes the ext value. Only four rows are non-zero: Median
 `item_mana_bytime_2` (548), `properties_360` (548), `item_mana_bytime_3` (547), `properties_362` (547) - the skills
@@ -157,15 +158,38 @@ guard flag 0x100000 of D2Sigma is not set (unknown meaning in D2R). Same off wor
 
 ### 2.4 Not implemented
 
-- **Maximum resistances (90, not 95).** D2R reads resistances in the stat getter `0x2f5020`, whose body sits behind a
-  protection thunk (`jmp [rip+x]`, target not in the dump), and `ApplyResistances` `0x44df10` calls hidden helpers. There
-  is no readable hook point; options: (a) hook `0x2f5020` itself (needs rip-relative entry bytes - not allowed by the
-  plugin rules), (b) post-filter the damage block after `0x44df10`, (c) set the cap through itemstatcost `maxstat` rows
-  (the `op` columns) - to try. Impact: only builds above 90% resistance differ.
-- **Median absorb stats 184 / 189 / 417** (0x10057a20, 0x10057c10): which items roll them is not established (their
-  property rows carry placeholder names), they are applied in `0x44df10`. Needs the same hook point as the resist cap.
-- **Mercenary caps**, the **moving-without-evade fall-through**, the **PvP percent** (data columns exist) and the
-  **client-only hit-chance panels** (D2R's character sheet has its own).
+- **Maximum resistances (90, not 95): done.** The earlier note (the resist read sits behind a protection thunk) was half right:
+  the *stat getter* `0x2f5020` (and 38 more stat functions) is a 10-byte `jmp [rip+x]` thunk into **D2RCore.dll**,
+  D2RLoader's own module that reimplements the stat engine (docs/d2r-addresses.md, section 10). The resist code itself is
+  plain main-image code: the per-hit step `0x4523e0` (called for each of the twelve entries of `0x44df10`, through a
+  D2RLoader wrapper at `0x3e2b496` that only tracks damage) clamps `75 + max-resistance stat` with `mov eax,0x5f` at
+  `0x4524dd`; the character sheet (`0x14e7294`, function `0x14e6e70`) and the hireling panel (`0x14f4686`, function
+  `0x14f3400`) have the same clamp for the displayed number. `InstallCombat` patches the immediate of all three from `0x5f`
+  to `0x5a` (`PatchWriteU8` with the five instruction bytes as the expected value). Damage resistance (stat 36, cap 50)
+  is a separate constant and already matches. Verified in game: fire resist 300 with max-resist 0 / +10 / +20 took
+  25% / 15% / 10% of a fire bolt's damage (95 would have been 5%).
+- **Median absorb stats 184 / 189 / 417 (D2R 369 / 373 / 446): done.** D2Sigma's absorb step (`0x10057a20`) is D2R's
+  `0x450670`: percent first (stat limited to 40), then flat (`stat * 256`), each limited to what is left, and the cut
+  amount is added to the damage block's absorbed total (`+0x130`), which `0x44ce80` turns into life through `0x451820`.
+  Median additionally runs *each credited amount* through the defender's stats: 189 divides it (never below 1 life
+  point), 184 and 417 take a percent off (417 by damage type: the layer is 1 fire / 2 lightning / 3 magic / 4 cold /
+  5 poison, taken from the resistance stat of D2R's table entry). The damage cut itself is not changed, so these stats
+  only change how much an absorb *heals*. No generic item rolls them: 189 and 417 are monster stats (monprop rows `time`
+  and `stam`, 439 and 965 uses; a few skills), 184 is on two runewords (+5, -50) and on the Barbarian hireling (+20).
+  Stat 189 doubles as the "immune to open wounds / crushing blow" flag (items-xp.md section 5). The hook replaces
+  `0x450670` (15 verified entry bytes), keeps D2R's arithmetic and only changes what is credited; the first six cases
+  where the credit differs from the cut are logged (`combat: absorb of N healed M (layer L)`). Verified in game: absorb 40%
+  with fire resist 0 against a fire bolt shooter, net loss 70 / 106 / 249 per 30 s with 446 layer 1 = 0 / 50 and no absorb
+  (the test Barbarian also carries stat 369 = 7 from a source not found, which is why the credit is 7% lower in the log).
+  Median's second helper `0x10057c10` (the same stats on the damage fields) has no caller in D2Sigma or D2Game, so nothing
+  of it is needed.
+- **Mercenary caps: done, not exercised in game.** Resistances: the per-hit step tests the context flag `ctx+0x24`
+  ("defender is a monster that is not a hireling"), which is 0 for mercenaries, so they already take the player branch and
+  the patched 90 cap. Avoid / dodge / evade: D2Sigma caps them for "player or hireling" (`0x100bfad0` or `0x100bf9e0`), the
+  block cap (`0x100bd8d0`) only for players; the `0x44ef70` hook now accepts a monster for which `0x3af240` is non-zero
+  for the first three and keeps the player test for block.
+- The **moving-without-evade fall-through**, the **PvP percent** (data columns exist) and the
+  **client-only hit-chance panels** (D2R's character sheet has its own) stay open.
 
 ## 3. Open questions / in-game checks
 

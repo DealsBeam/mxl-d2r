@@ -2,6 +2,7 @@
 #include "../src/craft_state.h"
 
 #include <cstdio>
+#include <string>
 
 namespace {
 int failures = 0;
@@ -17,21 +18,34 @@ int main() {
 	craft::State s;
 	int g1 = 0, g2 = 0;
 	s.Touch(&g1);
-	Check(!s.Test(false, 7, 1) && !s.Test(true, 7, 1), "fresh flags clear");
-	s.Set(false, 7, 1, true);
-	Check(s.Test(false, 7, 1) && !s.Test(false, 8, 1) && !s.Test(true, 7, 1), "player flag is per player");
-	s.Set(true, 7, 50, true);
-	Check(s.Test(true, 0, 50) && s.Test(true, 99, 50), "game flag is for everybody");
+	Check(!s.Test(false, "p7", 1) && !s.Test(true, "p7", 1), "fresh flags clear");
+	s.Set(false, "p7", 1, true);
+	Check(s.Test(false, "p7", 1) && !s.Test(false, "p8", 1) && !s.Test(true, "p7", 1), "player flag is per player");
+	s.Set(true, "p7", 50, true);
+	Check(s.Test(true, "p0", 50) && s.Test(true, "p99", 50), "game flag is for everybody");
 	s.Touch(&g1);
-	Check(s.Test(false, 7, 1) && s.Test(true, 0, 50), "same game keeps flags");
-	s.Set(false, 7, 1, false);
-	Check(!s.Test(false, 7, 1), "clear works");
+	Check(s.Test(false, "p7", 1) && s.Test(true, "p0", 50), "same game keeps flags");
+	s.Set(false, "p7", 1, false);
+	Check(!s.Test(false, "p7", 1), "clear works");
 	s.Touch(&g2);
-	Check(!s.Test(true, 0, 50), "new game resets the game flags");
-	s.Set(false, 3, 255, true);
-	s.Set(false, 3, 256, true);
-	s.Set(false, 3, -1, true);
-	Check(s.Test(false, 3, 255) && !s.Test(false, 3, 256) && !s.Test(false, 3, -1), "flag range 0-255");
+	Check(!s.Test(true, "p0", 50), "new game resets the game flags");
+	s.Set(false, "p3", 255, true);
+	s.Set(false, "p3", 256, true);
+	s.Set(false, "p3", -1, true);
+	Check(s.Test(false, "p3", 255) && !s.Test(false, "p3", 256) && !s.Test(false, "p3", -1), "flag range 0-255");
+
+	// Flags are found by character name, not by unit id; a game's end clears that game's flags only.
+	s.Touch(&g1);
+	s.Set(false, "Alice", 5, true);
+	Check(s.Test(false, "Alice", 5) && !s.Test(false, "alice2", 5), "player flag is per name");
+	s.Forget(&g2);
+	Check(s.Test(false, "Alice", 5), "forgetting another game keeps the flags");
+	s.Set(true, "", 70, true);
+	s.Forget(&g1);
+	Check(!s.Test(false, "Alice", 5) && !s.Test(true, "", 70), "game end clears player and game flags");
+	s.Forget(nullptr);
+	s.Touch(&g1);
+	Check(!s.Test(false, "Alice", 5), "a reused pointer starts clean");
 
 	auto g = craft::Pay({1000, 500}, 300);
 	Check(g.carried == 700 && g.bank == 500, "paid from carried");

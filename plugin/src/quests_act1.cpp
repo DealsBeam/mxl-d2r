@@ -20,6 +20,8 @@
 // Entry bytes verified against the dump of build 93847 (docs/d2r-addresses.md); whole instructions, no rip-relative.
 #include "quests_act1.h"
 
+#include "client_messages.h"
+#include "client_messages_logic.h"
 #include "d2r.h"
 #include "quests_common.h"
 #include "quests_logic.h"
@@ -53,6 +55,7 @@ constexpr uint8_t ItemGenEntry[] = {0x40, 0x55, 0x53, 0x56, 0x41, 0x54, 0x41, 0x
 
 using questeng::Bit;
 using questeng::Difficulty;
+using questeng::DropBonusPerPlayer;
 using questeng::EventMessage;
 using questeng::EventNpcClass;
 using questeng::EventPlayer;
@@ -120,6 +123,9 @@ void GiveHeart(Game* game, Unit* player) noexcept {
 	if (got != static_cast<uint32_t>(heart->uniqueIndex)) {
 		Log("Griswold's Heart came out as another unique, got/wanted", static_cast<int>(got), heart->uniqueIndex);
 	}
+	char line[96];
+	clientmsg::RewardLine("Griswold's Heart", 1, line, sizeof(line));
+	SendClientNotice(player, line, clientmsg::Tan);
 }
 
 void HeartHook(void* quest, uint8_t* event) {
@@ -148,7 +154,10 @@ void KillHook(void* quest, uint8_t* event) {
 			const bool flag = Bit(record, quests::FlagQuest, quests::FlagCatalyst);
 			const auto monster = static_cast<int32_t>(d2r::At<uint32_t>(victim, UnitClass));
 			if (record != nullptr && quests::ShouldGiveCatalystOnKill(Difficulty(game), monster, flag)) {
-				if (api.createItem(game, player, quests::CodeCatalyst, 0, 2, 1) != nullptr) {
+				// Median rolls the class on the ground once per player and sets the flag whatever dropped; the
+				// inventory item is only the fallback for a class that could not be resolved.
+				if (DropBonusPerPlayer(game, victim, player, quests::TcCatalyst) > 0 ||
+				    api.createItem(game, player, quests::CodeCatalyst, 0, 2, 1) != nullptr) {
 					api.bitSet(record, quests::FlagQuest, quests::FlagCatalyst);
 				}
 			}

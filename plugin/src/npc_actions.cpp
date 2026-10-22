@@ -11,6 +11,12 @@
 //           (0x53b8f0, as the original does), its class must own the slot, then the requirement rows decide
 //           (requirements.cpp) and the action runs (npc_actions_logic.h). Other kinds go to the original untouched.
 //
+// Cain's "crafting materials" is Median's text page: a click does not give anything, it opens a submenu of the four
+// materials whose requirement holds. The server evaluates the requirements for the click and answers with the plugin
+// message 'N' (page kind, NPC class, mask of the open entries; client_messages_logic.h); the client then closes its list and
+// builds it again with the record's lines swapped for the entries (the record is put back afterwards, so ESC and the next
+// talk show the normal menu). Each entry is a line of its own: it sends its own kind, the server runs that slot.
+//
 // Realm rule: the client only draws the lines and sends the kind; requirements and effects are server code, in the
 // separate section below. Actions: respec (Akara) and the free crafting materials (the five Cains) are done here. The
 // travel packages (with their waypoint grant) and Imbue / Add sockets / Personalize are D2R's own: it shows its lines under
@@ -20,6 +26,8 @@
 // Entry bytes checked against the dump of build 93847; whole instructions, no rip-relative.
 #include "npc_actions.h"
 
+#include "client_messages.h"
+#include "client_messages_logic.h"
 #include "d2r.h"
 #include "mxl_requirements.h"
 #include "npc_actions_logic.h"
@@ -45,6 +53,10 @@ constexpr uint64_t MenuTableRva = 0x2a48830;    // client: pointer to the 48 rec
 constexpr uint64_t MenuCountRva = 0x2a48838;    // client: record count (qword)
 constexpr uint64_t MenuNpcIdRva = 0x2a4875c;    // client: unit id of the NPC in the open menu (u32)
 constexpr uint64_t MenuCancelRva = 0x112c30;    // client: the Cancel line's handler (closes list and panel)
+constexpr uint64_t ListWidgetRva = 0x2a487b0;   // client: pointer to the open list widget (qword)
+constexpr uint64_t CloseListRva = 0x1e9390;     // client: void (widget): closes the list widget
+constexpr uint64_t MenuOpenFlagRva = 0x2a486a4; // client: u32, 1 while the menu is up
+constexpr uint64_t MenuNpcClassRva = 0x2a48764; // client: class of the NPC in the open menu (u16)
 constexpr uint64_t SendPacketRva = 0xec730;     // client: (uint8 id, u32 a, u32 b) builds and sends a 9-byte packet
 constexpr uint64_t MenuPacketRva = 0x4b0470;    // server: (game, player, packet*, size): packet 0x38 handler
 constexpr uint64_t FindNpcRva = 0x53b8f0;       // server: (player, unit id, max distance) -> NPC unit or null
@@ -72,6 +84,7 @@ using MenuBuilderFn = void (*)(uint8_t dataFlag);
 using MenuPacketFn = void (*)(Game* game, Unit* player, uint8_t* packet, int size);
 using SendPacketFn = void (*)(uint8_t id, uint32_t a, uint32_t b);
 using MenuCancelFn = uint8_t (*)();
+using CloseListFn = void (*)(void* widget);
 using FindNpcFn = Unit* (*)(Unit* player, uint32_t id, uint32_t maxDistance);
 using CreateItemFn = Unit* (*)(Game* game, Unit* player, uint32_t code, int32_t itemLevel, int32_t quality, int32_t dropIfFull);
 using FindItemFn = Unit* (*)(Game* game, Unit* player, uint32_t code);
@@ -85,6 +98,7 @@ MenuBuilderFn g_builderOriginal = nullptr;
 MenuPacketFn g_packetOriginal = nullptr;
 SendPacketFn g_send = nullptr;
 MenuCancelFn g_cancel = nullptr;
+CloseListFn g_closeList = nullptr;
 FindNpcFn g_findNpc = nullptr;
 CreateItemFn g_createItem = nullptr;
 FindItemFn g_findItem = nullptr;
@@ -138,6 +152,15 @@ bool ActionCreateItem(void* user, uint32_t code, int itemLevel, int quality) noe
 }
 
 // What the vanilla respec packet (0x4b2530) does after its checks: the reset, then the quest 41 bookkeeping.
+void ActionPage(void* user, int npcClass, uint32_t pageKind, uint32_t mask) noexcept {
+	const auto* c = static_cast<Ctx*>(user);
+	uint8_t payload[npc::PagePayloadSize];
+	npc::BuildPagePayload(payload, pageKind, static_cast<uint16_t>(npcClass), static_cast<uint16_t>(mask));
+	if (!SendPluginMessage(c->player, clientmsg::PluginKindNpcPage, payload, sizeof(payload))) {
+		Log("page answer could not be sent (npc class, mask)", npcClass, static_cast<int>(mask));
+	}
+}
+
 bool ActionRespec(void* user) noexcept {
 	const auto* c = static_cast<Ctx*>(user);
 	g_respec(c->game, c->player, 0);
@@ -162,6 +185,7 @@ void HandleKind(Game* game, Unit* player, uint32_t kind, uint32_t npcId) noexcep
 	host.queries = {&ctx, QueryQuestBit, QueryPlayerClass, QueryHoldsItem};
 	host.createItem = ActionCreateItem;
 	host.respec = ActionRespec;
+	host.page = ActionPage;
 	host.note = ActionNote;
 	const npc::Result r = npc::RunSlot(kind, npcClass, host);
 	switch (r) {
@@ -169,6 +193,7 @@ void HandleKind(Game* game, Unit* player, uint32_t kind, uint32_t npcId) noexcep
 	case npc::Result::Denied: Log("requirement not met (kind, npc class)", static_cast<int>(kind), npcClass); break;
 	case npc::Result::Done: Log("done (kind, npc class)", static_cast<int>(kind), npcClass); break;
 	case npc::Result::Nothing: Log("nothing to do (kind, npc class)", static_cast<int>(kind), npcClass); break;
+	case npc::Result::Page: Log("page opened (kind, npc class)", static_cast<int>(kind), npcClass); break;
 	case npc::Result::Native: Log("D2R runs this service itself (kind, npc class)", static_cast<int>(kind), npcClass); break;
 	}
 }
@@ -194,17 +219,41 @@ struct ClientLine {
 	uint16_t npcClass;
 	uint16_t label;
 	uint32_t kind;
+	bool page;  // a text-page line: sends the kind and keeps the menu open for the answer
 };
 ClientLine g_lines[MaxClientLines];
 int g_lineCount = 0;
 int g_nativeSlots = 0;
 
 auto OnLine(int index) noexcept -> uint8_t {
+	bool page = false;
 	if (index >= 0 && index < g_lineCount) {
 		const uint32_t npcId = *reinterpret_cast<const uint32_t*>(g_base + MenuNpcIdRva);
 		g_send(MenuPacketId, g_lines[index].kind, npcId);
+		page = g_lines[index].page;
+	}
+	if (page) {
+		return 1;  // the server's answer (message 'N') replaces the list
 	}
 	return g_cancel();  // close the menu as the Cancel line does (returns 1)
+}
+
+// The entries of the open submenu (at most 8); their lines send their kind and close the menu.
+constexpr int MaxSubLines = 8;
+npc::PageEntry g_sub[MaxSubLines];
+int g_subCount = 0;
+
+auto OnSubLine(int index) noexcept -> uint8_t {
+	if (index >= 0 && index < g_subCount) {
+		const uint32_t npcId = *reinterpret_cast<const uint32_t*>(g_base + MenuNpcIdRva);
+		g_send(MenuPacketId, g_sub[index].kind, npcId);
+	}
+	return g_cancel();
+}
+
+template <size_t I>
+auto SubHandler() noexcept -> uint8_t {
+	return OnSubLine(static_cast<int>(I));
 }
 
 template <size_t I>
@@ -219,6 +268,31 @@ constexpr auto MakeHandlers(std::index_sequence<I...>) noexcept -> std::array<Li
 	return {&LineHandler<I>...};
 }
 const auto g_handlers = MakeHandlers(std::make_index_sequence<MaxClientLines>{});
+
+template <size_t... I>
+constexpr auto MakeSubHandlers(std::index_sequence<I...>) noexcept -> std::array<LineFn, sizeof...(I)> {
+	return {&SubHandler<I>...};
+}
+const auto g_subHandlers = MakeSubHandlers(std::make_index_sequence<MaxSubLines>{});
+
+uint8_t* FindRecord(uint16_t npcClass) noexcept {
+	auto* table = *reinterpret_cast<uint8_t**>(g_base + MenuTableRva);
+	const uint64_t count = *reinterpret_cast<const uint64_t*>(g_base + MenuCountRva);
+	if (table == nullptr || count == 0 || count > MaxMenuRecords) {
+		return nullptr;
+	}
+	for (uint64_t r = 0; r < count; ++r) {
+		if (*reinterpret_cast<const uint16_t*>(table + r * npc::RecordSize) == npcClass) {
+			return table + r * npc::RecordSize;
+		}
+	}
+	return nullptr;
+}
+
+uint8_t g_lastDataFlag = 0;
+
+// Builds the list again with the entries in place of the NPC record's lines (the record is restored at the next build).
+void BuildSubmenu(uint16_t npcClass) noexcept;
 
 void PatchMenuTable() noexcept {
 	auto* table = *reinterpret_cast<uint8_t**>(g_base + MenuTableRva);
@@ -245,11 +319,99 @@ void PatchMenuTable() noexcept {
 	}
 }
 
+// The builder lowers the record's line count when it passes the Identify line (0xfb4); the lines are drawn by then, but
+// the record would show one line less than the list (and the harness `menu list` would miss the plugin line).
+void RestoreCounts() noexcept {
+	auto* table = *reinterpret_cast<uint8_t**>(g_base + MenuTableRva);
+	const uint64_t count = *reinterpret_cast<const uint64_t*>(g_base + MenuCountRva);
+	if (table == nullptr || count == 0 || count > MaxMenuRecords) {
+		return;
+	}
+	for (uint64_t r = 0; r < count; ++r) {
+		uint8_t* record = table + r * npc::RecordSize;
+		const uint16_t cls = *reinterpret_cast<const uint16_t*>(record);
+		bool ours = false;
+		for (int i = 0; i < g_lineCount; ++i) {
+			ours = ours || g_lines[i].npcClass == cls;
+		}
+		if (ours) {
+			int lines = 0;
+			while (lines < npc::RecMaxLines && *reinterpret_cast<const uint16_t*>(record + npc::RecIdsOffset + lines * 2) != 0) {
+				++lines;
+			}
+			*reinterpret_cast<uint32_t*>(record + npc::RecCountOffset) = static_cast<uint32_t>(lines + 1);
+		}
+	}
+}
+
+// The record a submenu was built from: it keeps the entries until the next build (so the table shows what the list shows,
+// which the harness `menu list` / `menu <line>` read) and its own bytes are put back then.
+uint8_t g_savedRecord[npc::RecordSize];
+uint16_t g_savedClass = 0;
+bool g_savedValid = false;
+
+void RestoreSavedRecord() noexcept {
+	if (g_savedValid) {
+		g_savedValid = false;
+		uint8_t* record = FindRecord(g_savedClass);  // the table may be gone after the game ended: only a live record is written
+		if (record != nullptr) {
+			std::memcpy(record, g_savedRecord, sizeof(g_savedRecord));
+		}
+	}
+}
+
 void BuilderHook(uint8_t dataFlag) {
-	if (g_packetOriginal != nullptr) {  // lines the server cannot answer are not drawn
+	g_lastDataFlag = dataFlag;
+	RestoreSavedRecord();
+	const bool patch = g_packetOriginal != nullptr;  // lines the server cannot answer are not drawn
+	if (patch) {
 		PatchMenuTable();
 	}
 	g_builderOriginal(dataFlag);
+	if (patch) {
+		RestoreCounts();
+	}
+}
+
+void BuildSubmenu(uint16_t npcClass) noexcept {
+	uint8_t* record = FindRecord(npcClass);
+	if (record == nullptr || g_subCount > npc::RecMaxLines - 1) {
+		return;
+	}
+	if (!g_savedValid) {  // a second answer builds on the first one's saved bytes
+		std::memcpy(g_savedRecord, record, sizeof(g_savedRecord));
+		g_savedClass = npcClass;
+		g_savedValid = true;
+	}
+	auto* ids = reinterpret_cast<uint16_t*>(record + npc::RecIdsOffset);
+	auto* fns = reinterpret_cast<uint64_t*>(record + npc::RecHandlersOffset);
+	for (int i = 0; i < g_subCount; ++i) {
+		ids[i] = g_sub[i].label;
+		fns[i] = reinterpret_cast<uint64_t>(g_subHandlers[static_cast<size_t>(i)]);
+	}
+	*reinterpret_cast<uint32_t*>(record + npc::RecCountOffset) = static_cast<uint32_t>(g_subCount + 1);
+	g_builderOriginal(g_lastDataFlag);
+}
+
+// Plugin message 'N': the server's answer to a click on a text-page line.
+void OnPageMessage(const uint8_t* data, size_t n) noexcept {
+	uint32_t pageKind = 0;
+	uint16_t npcClass = 0;
+	uint16_t mask = 0;
+	if (!npc::ParsePagePayload(data, n, &pageKind, &npcClass, &mask)) {
+		return;
+	}
+	void* widget = *reinterpret_cast<void**>(g_base + ListWidgetRva);
+	const bool open = *reinterpret_cast<const uint32_t*>(g_base + MenuOpenFlagRva) == 1;
+	if (!open || widget == nullptr || *reinterpret_cast<const uint16_t*>(g_base + MenuNpcClassRva) != npcClass) {
+		Log("page answer with no matching menu open (npc class, mask)", npcClass, mask);
+		return;
+	}
+	g_subCount = npc::PageEntries(npcClass, pageKind, mask, g_sub, MaxSubLines);
+	g_closeList(widget);
+	*reinterpret_cast<void**>(g_base + ListWidgetRva) = nullptr;
+	BuildSubmenu(npcClass);
+	Log("submenu shown (entries, mask)", g_subCount, mask);
 }
 
 // Lines the client shows: the top-level slots whose action the server can run and that have a label.
@@ -265,7 +427,7 @@ void CollectLines() noexcept {
 		if (sup == npc::Support::Native) {
 			++g_nativeSlots;
 		} else if (sup == npc::Support::Run && g_lineCount < MaxClientLines) {
-			g_lines[g_lineCount++] = {s.npcClass, s.label, npc::KindOf(s.npcRow, s.slot)};
+			g_lines[g_lineCount++] = {s.npcClass, s.label, npc::KindOf(s.npcRow, s.slot), npc::IsPage(i)};
 		}
 	}
 }
@@ -277,6 +439,7 @@ auto InstallNpcActions(const D2RL::PluginContext* context, char* report, size_t 
 	g_base = context->exeBase;
 	g_send = reinterpret_cast<SendPacketFn>(g_base + SendPacketRva);
 	g_cancel = reinterpret_cast<MenuCancelFn>(g_base + MenuCancelRva);
+	g_closeList = reinterpret_cast<CloseListFn>(g_base + CloseListRva);
 	g_findNpc = reinterpret_cast<FindNpcFn>(g_base + FindNpcRva);
 	g_createItem = reinterpret_cast<CreateItemFn>(g_base + CreateQuestItemRva);
 	g_findItem = reinterpret_cast<FindItemFn>(g_base + FindItemRva);
@@ -290,10 +453,11 @@ auto InstallNpcActions(const D2RL::PluginContext* context, char* report, size_t 
 	ok += context->InstallInlineHook(MenuBuilderRva, BuilderEntry, sizeof(BuilderEntry), reinterpret_cast<void*>(&BuilderHook),
 	                                 reinterpret_cast<void**>(&g_builderOriginal)) ? 1 : 0;
 	if (ok == 2) {
+		SetPluginMessageHandler(clientmsg::PluginKindNpcPage, &OnPageMessage);
 		char native[160];
 		VerifyNativeServices(g_base, native, sizeof(native));
-		std::snprintf(report, reportSize, "on: %d menu lines (Akara, Cain); %d slots are D2R's own, %s", g_lineCount, g_nativeSlots,
-		              native);
+		std::snprintf(report, reportSize, "on: %d menu lines (Akara, Cain; Cain's page is a submenu%s); %d slots are D2R's own, %s",
+		              g_lineCount, PluginMessagesOn() ? "" : ", answer unreadable: plugin messages off", g_nativeSlots, native);
 	} else {
 		std::snprintf(report, reportSize, "partial: %d of 2 hooks installed (menu packet 0x4b0470, menu builder 0x1147a0)", ok);
 	}

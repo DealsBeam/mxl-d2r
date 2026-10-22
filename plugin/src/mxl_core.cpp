@@ -16,16 +16,20 @@
 #include "level_types.h"
 #include "calc_codes.h"
 #include "combat.h"
+#include "item_events.h"
 #include "properties_ext.h"
 #include "item_spells.h"
 #include "missile_hits.h"
 #include "mana_costs.h"
 #include "craft_flags.h"
+#include "client_messages.h"
+#include "game_end.h"
 #include "cube_conditions.h"
 #include "quests_act1.h"
 #include "quests_act2_5.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
+#include "monster_ai.h"
 #include "hirelings.h"
 #include "items_ext.h"
 #include "item_gen.h"
@@ -46,7 +50,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.48.0";
+constexpr const char* PluginVersion = "0.50.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -57,22 +61,26 @@ char g_levelTypesReport[160] = "off: not the expected game image";
 char g_calcReport[160] = "off: not the expected game image";
 char g_itemSpellsReport[160] = "off: not the expected game image";
 char g_manaCostsReport[160] = "off: not the expected game image";
-char g_missileHitsReport[512] = "";
+char g_missileHitsReport[1024] = "";
 char g_cubeReport[192] = "off: not the expected game image";
 char g_craftReport[96] = "off: not the expected game image";
+char g_gameEndReport[96] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
 char g_quests2Report[224] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
 char g_goblinsReport[192] = "off: not the expected game image";
+char g_monsterAiReport[192] = "off: not the expected game image";
 char g_npcReport[256] = "off: not the expected game image";
 char g_hirelingsReport[192] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
 char g_reqGatesReport[256] = "off: not the expected game image";
-char g_combatReport[192] = "off: not the expected game image";
+char g_combatReport[256] = "off: not the expected game image";
+char g_itemEventsReport[448] = "off: not the expected game image";
 char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
 char g_itemGenReport[320] = "off: not the expected game image";
 char g_waypointsReport[256] = "off: not the expected game image";
+char g_clientMsgReport[192] = "off: not the expected game image";
 int g_missileHitsInstalled = 0;
 
 constexpr D2RL::PluginInfo Info {
@@ -96,8 +104,8 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 	return context->exeBase != 0 && ImageStamp(context) == ExpectedImage;
 }
 
-// Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags quests quests2 lockout goblins npc reqgates hirelings skilltree combat props runewords xp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
+// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai npc reqgates hirelings skilltree combat itemevents props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -176,6 +184,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "craft flags %s", g_craftReport);
 	Say(command, line);
+	std::snprintf(line, sizeof(line), "game end %s (games ended %d)", g_gameEndReport, GameEndCount());
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "act 1 quests %s", g_questsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "act 2-5 quests %s", g_quests2Report);
@@ -192,6 +202,12 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		std::snprintf(line, sizeof(line), "goblins %s | %s", g_goblinsReport, status);
 		Say(command, line);
 	}
+	{
+		char status[256] = "";
+		MonsterAiStatus(status, sizeof(status));
+		std::snprintf(line, sizeof(line), "monster ai %s | %s", g_monsterAiReport, status);
+		Say(command, line);
+	}
 	std::snprintf(line, sizeof(line), "skill tree %s", g_skillTreeReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "npc actions %s", g_npcReport);
@@ -202,7 +218,15 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "waypoints %s", g_waypointsReport);
 	Say(command, line);
+	{
+		int sent = 0, failed = 0;
+		ClientMessageCounts(&sent, &failed);
+		std::snprintf(line, sizeof(line), "client messages %s (sent %d, failed %d)", g_clientMsgReport, sent, failed);
+		Say(command, line);
+	}
 	std::snprintf(line, sizeof(line), "combat %s", g_combatReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "item events %s", g_itemEventsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "property functions %s", g_propsReport);
 	Say(command, line);
@@ -244,6 +268,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 		constexpr const char* OffNote = "off: left out by mxl-core-off.txt";
+		if (Off("clientmsg")) {
+			std::snprintf(g_clientMsgReport, sizeof(g_clientMsgReport), "%s", OffNote);
+		} else {
+			InstallClientMessages(context, g_clientMsgReport, sizeof(g_clientMsgReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: client messages %s", g_clientMsgReport);
+		context->LogInfo(line);
 		// Off unless asked for (bug #22, 2026-10-14): D2RLoader 1.3.1 already syncs more than 512 states ("wide
 		// states", D2RCore SendChangedWideStateStats) and reads both arrays at D2R's own offsets (+0xaf0, then the
 		// "changed" flags right after), so moving them stopped every state change from reaching the client.
@@ -288,7 +319,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		if (Off("missiles")) {
 			std::snprintf(g_missileHitsReport, sizeof(g_missileHitsReport), " %s", OffNote);
 		} else {
-			g_missileHitsInstalled = InstallMissileHits(context, g_missileHitsReport, sizeof(g_missileHitsReport));
+			g_missileHitsInstalled = InstallMissileHits(context, g_missileHitsReport, sizeof(g_missileHitsReport), !Off("cltdostub"));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: %d/%d missile hits:%s", g_missileHitsInstalled, MissileHitCount(),
 		              g_missileHitsReport);
@@ -319,6 +350,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			}
 			std::snprintf(g_cubeReport, sizeof(g_cubeReport), "%s", report);
 			std::snprintf(line, sizeof(line), "mxl-core: cube conditions %s", report);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("gameend")) {
+				std::snprintf(g_gameEndReport, sizeof(g_gameEndReport), "%s", OffNote);
+			} else {
+				InstallGameEnd(context, g_gameEndReport, sizeof(g_gameEndReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: game end %s", g_gameEndReport);
 			context->LogInfo(line);
 		}
 		{
@@ -369,6 +409,12 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 		{
+			// "medianai" off: AI 155 stays alive with D2R's Andariel think; Summoner and MosquitoNest stay D2R's.
+			InstallMonsterAi(context, !Off("medianai"), g_monsterAiReport, sizeof(g_monsterAiReport));
+			std::snprintf(line, sizeof(line), "mxl-core: monster ai %s", g_monsterAiReport);
+			context->LogInfo(line);
+		}
+		{
 			if (Off("npc")) {
 				std::snprintf(g_npcReport, sizeof(g_npcReport), "%s", OffNote);
 			} else {
@@ -400,6 +446,10 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				std::snprintf(g_waypointsReport, sizeof(g_waypointsReport), "%s", OffNote);
 			} else {
 				VerifyWaypoints(context->exeBase, g_waypointsReport, sizeof(g_waypointsReport));
+				char panel[160];
+				InstallWaypointPanel(context, panel, sizeof(panel));
+				const size_t used = std::strlen(g_waypointsReport);
+				std::snprintf(g_waypointsReport + used, sizeof(g_waypointsReport) - used, "; %s", panel);
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: waypoints %s", g_waypointsReport);
 			context->LogInfo(line);
@@ -423,6 +473,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 		{
+			if (Off("itemevents")) {
+				std::snprintf(g_itemEventsReport, sizeof(g_itemEventsReport), "%s", OffNote);
+			} else {
+				item_events::Install(context->exeBase, g_itemEventsReport, sizeof(g_itemEventsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: item events %s", g_itemEventsReport);
+			context->LogInfo(line);
+		}
+		{
 			if (Off("props")) {
 				std::snprintf(g_propsReport, sizeof(g_propsReport), "%s", OffNote);
 			} else {
@@ -434,10 +493,11 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		{
 			const bool rw = !Off("runewords");
 			const bool xp = !Off("xp");
-			if (!rw && !xp) {
+			const bool party = !Off("partyxp");
+			if (!rw && !xp && !party) {
 				std::snprintf(g_itemsExtReport, sizeof(g_itemsExtReport), "%s", OffNote);
 			} else {
-				InstallItemsExt(context, rw, xp, g_itemsExtReport, sizeof(g_itemsExtReport));
+				InstallItemsExt(context, rw, xp, party, g_itemsExtReport, sizeof(g_itemsExtReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: items %s", g_itemsExtReport);
 			context->LogInfo(line);

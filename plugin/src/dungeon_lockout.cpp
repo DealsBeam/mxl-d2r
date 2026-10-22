@@ -11,19 +11,31 @@
 //
 // Allowed entries that did move the player (his room's level differs afterwards) start the level's clock, as D2Sigma's
 // warp (0x5cf90) and portal (0x96e80) functions call 0x5d9d0 after the move. State: dungeon::Lockout, per game
-// pointer, reset when the pointer or the frame counter (game+0x170) changes; no game-destroy hook (another lane may
-// use 0x4057c0). Not ported: Sigma's quest-table condition in 0x5d810 (levelDef +4), the 0x7fb70 item teleport, the
-// client DungeonWidget and the 0x88 state packet.
+// pointer, reset when the game ends (game_end.cpp) and, as a fallback, when the pointer or the frame counter
+// (game+0x170) changes. Not ported: Sigma's quest-table condition in 0x5d810 (levelDef +4), the 0x7fb70 item teleport, the
+// client DungeonWidget's art and the 0x88 state packet.
+//
+// The countdown (Median's DungeonWidget timer): the server part sends the plugin message 'T' (level, ms left;
+// client_messages_logic.h) to a player when he enters a level, to everybody when the clock starts, and the client part draws
+// "Closing in: mm:ss" and the warning with D2RLoader's OverlayService while the local player stands in that level. The chat
+// lines stay as well.
 #include "dungeon_lockout.h"
 
+#include "client_messages.h"
+#include "client_messages_logic.h"
 #include "d2r.h"
 #include "dungeon_logic.h"
+#include "game_end.h"
 
 #define NOMINMAX
 #include <windows.h>
 
+#include <D2RLPlugin/overlay.h>
+
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 
 namespace {
@@ -51,6 +63,8 @@ constexpr int GameFrame = 0x170;       // u32
 constexpr int UnitClass = 0x04;        // u32: player class / object class
 constexpr int32_t StatLevel = 12;
 constexpr int32_t MessageFailed = 0x14;  // the portal function's own failure message
+constexpr uint64_t LocalPlayerSlotRva = 0x2a23704;  // client: u32, the local player's slot
+constexpr uint64_t UnitBySlotRva = 0x9a480;         // client: (slot < 8) -> that player's unit or null
 
 using WarpFn = void (*)(Game* game, Unit* player, Unit* tile);
 using PortalFn = int64_t (*)(int64_t* ctx);
@@ -60,7 +74,9 @@ using UnitRoomFn = void* (*)(Unit* unit);
 using PortalLevelFn = uint16_t (*)(Unit* portal);
 using UnitMessageFn = void (*)(Unit* player, int32_t message, Unit* subject);
 using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
+using UnitBySlotFn = Unit* (*)(uint32_t slot);
 
+UnitBySlotFn g_unitBySlot = nullptr;
 WarpFn g_warpOriginal = nullptr;
 PortalFn g_portalOriginal = nullptr;
 FindTileFn g_findTile = nullptr;
@@ -97,11 +113,27 @@ void Log(const char* what, int32_t a, int32_t b) noexcept {
 	}
 }
 
-// True when the player may enter `dst`; otherwise sends the failure message. Median shows its own message (code 0x13,
-// D2Sigma 0x100b15d0) and the client's DungeonWidget; D2R has no text for that, so the player gets D2R's generic
-// "failed" reaction (the one the portal function itself uses) and nothing else.
+// Median's refusal texts (string table ids 11189 / 11192) as lines in the player's message log: D2R has no popup for
+// the lockout, the vanilla chat line stands in for it (the popup art is custom art, docs/unported.md).
+void TellRefusal(Unit* player, const dungeon::Entry& e, const dungeon::Who& who, dungeon::Verdict v) noexcept {
+	if (v == dungeon::Verdict::Sealed) {
+		SendClientMessage(player, clientmsg::SealedLine1, clientmsg::Red);
+		SendClientMessage(player, clientmsg::SealedLine2, clientmsg::Red);
+		return;
+	}
+	char lines[3][64];
+	const int n = clientmsg::RequirementLines(e.levelReq[who.difficulty < 3 ? who.difficulty : 2], e.minDifficulty,
+	                                          e.classLock, who.level, who.difficulty, who.cls, lines);
+	for (int i = 0; i < n; ++i) {
+		SendClientMessage(player, lines[i], clientmsg::Red);
+	}
+}
+
+// True when the player may enter `dst`; otherwise sends the failure message (D2R's generic "failed" reaction, the one
+// the portal function itself uses) and the reason as text. Median's own message is unit message 0x13 and its popup.
 auto Allowed(Game* game, Unit* player, int32_t src, int32_t dst) noexcept -> bool {
-	if (dst <= 0 || dungeon::Find(dst) == nullptr) {
+	const dungeon::Entry* entry = dst > 0 ? dungeon::Find(dst) : nullptr;
+	if (entry == nullptr) {
 		return true;
 	}
 	const dungeon::Who who{g_getStat(player, StatLevel, 0), static_cast<int32_t>(d2r::At<uint32_t>(player, UnitClass)),
@@ -120,16 +152,24 @@ auto Allowed(Game* game, Unit* player, int32_t src, int32_t dst) noexcept -> boo
 	}
 	Log(v == dungeon::Verdict::Sealed ? "level sealed, entry refused" : "entry requirements not met, refused", src, dst);
 	g_unitMessage(player, MessageFailed, player);
+	TellRefusal(player, *entry, who, v);
 	return false;
 }
 
 // After an allowed move: the clock of the level the player now stands in.
 void Entered(Game* game, Unit* player, int32_t src) noexcept {
 	const int32_t now = LevelOf(player);
-	if (now <= 0 || now == src || dungeon::Find(now) == nullptr) {
+	if (now <= 0 || now == src) {
+		return;
+	}
+	uint8_t payload[clientmsg::TimerPayloadSize];
+	if (dungeon::Find(now) == nullptr) {
+		clientmsg::BuildTimerPayload(payload, static_cast<uint16_t>(now), 0);  // the clock of the level he left goes off the screen
+		SendPluginMessage(player, clientmsg::PluginKindTimer, payload, sizeof(payload));
 		return;
 	}
 	bool started;
+	uint64_t remaining;
 	{
 		std::lock_guard<std::mutex> lock(g_mutex);
 		g_lockout.Touch(game, d2r::At<uint32_t>(game, GameFrame));
@@ -137,10 +177,120 @@ void Entered(Game* game, Unit* player, int32_t src) noexcept {
 		if (started) {
 			++g_started;
 		}
+		remaining = g_lockout.RemainingMs(now, Now());
+	}
+	// The countdown on the screen: everybody when the clock just started, else the player who came in.
+	clientmsg::BuildTimerPayload(payload, static_cast<uint16_t>(now),
+	                             static_cast<uint32_t>(remaining > 0xffffffffull ? 0xffffffffull : remaining));
+	if (started) {
+		SendGamePluginMessage(game, clientmsg::PluginKindTimer, payload, sizeof(payload));
+	} else {
+		SendPluginMessage(player, clientmsg::PluginKindTimer, payload, sizeof(payload));
 	}
 	if (started) {
 		Log("clock started", src, now);
+		// Median's DungeonWidget (packet 0x88) shows the clock to everybody in the game: a log line with the time
+		// instead ("Closing in: mm:ss", string 11191) and the warning of string 11193.
+		const dungeon::Entry* entry = dungeon::Find(now);
+		char line[64];
+		clientmsg::ClosingLine(entry->lockSeconds, line, sizeof(line));
+		SendGameMessage(game, line, clientmsg::Orange);
+		SendGameMessage(game, clientmsg::ExitWarning, clientmsg::Orange);
 	}
+}
+
+// --- client: the countdown on the screen -----------------------------------------------------------------------------
+const D2RL::OverlayService* g_overlay = nullptr;
+std::atomic<uint32_t> g_timerLevel{0};
+std::atomic<uint64_t> g_timerEnd{0};  // GetTickCount64 when the clock runs out, 0 = none
+
+// The level the local player stands in; 0 when it cannot be told (no game, no room).
+auto ClientLevel() noexcept -> int32_t {
+	__try {
+		const uint32_t slot = *reinterpret_cast<const uint32_t*>(g_context->exeBase + LocalPlayerSlotRva);
+		Unit* unit = slot < 8 ? g_unitBySlot(slot) : nullptr;
+		void* room = unit != nullptr ? g_unitRoom(unit) : nullptr;
+		return room != nullptr ? g_roomLevel(room) : 0;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return 0;
+	}
+}
+
+void OnTimerMessage(const uint8_t* data, size_t n) noexcept {
+	if (n != clientmsg::TimerPayloadSize) {
+		return;
+	}
+	const uint32_t ms = clientmsg::Get32(data + 4);
+	g_timerLevel.store(clientmsg::Get16(data));
+	g_timerEnd.store(ms == 0 ? 0 : Now() + ms);
+}
+
+// Text centred on `centerX`, with a black shadow.
+void DrawCentred(const D2RL::PluginContext* context, const D2RL::Overlay::Frame* frame, const char* text, float centerX, float y,
+                 float size) noexcept {
+	const auto length = static_cast<uint32_t>(std::strlen(text));
+	D2RL::Overlay::MeasureTextRequest measure{};
+	measure.structSize = D2RL::Overlay::MeasureTextRequestSize;
+	measure.canvas = frame->canvas;
+	measure.textSize = size;
+	measure.text = text;
+	measure.textLength = length;
+	D2RL::Overlay::TextMetrics metrics{};
+	metrics.structSize = D2RL::Overlay::TextMetricsSize;
+	float width = 0.0F;
+	if (g_overlay->measureText(context, &measure, &metrics) == D2RL::Overlay::Result::Success) {
+		width = metrics.width;
+	}
+	for (int pass = 0; pass < 2; ++pass) {
+		D2RL::Overlay::TextRequest req{};
+		req.structSize = D2RL::Overlay::TextRequestSize;
+		req.canvas = frame->canvas;
+		const float shadow = pass == 0 ? 1.5F : 0.0F;
+		req.position = {centerX - width / 2.0F + shadow, y + shadow};
+		req.color = pass == 0 ? D2RL::Overlay::Color{0.0F, 0.0F, 0.0F, 0.9F} : D2RL::Overlay::Color{1.0F, 0.55F, 0.1F, 1.0F};
+		req.textSize = size;
+		req.text = text;
+		req.textLength = length;
+		(void)g_overlay->drawText(context, &req);
+	}
+}
+
+void __cdecl DrawTimer(const D2RL::PluginContext* context, const D2RL::Overlay::Frame* frame, void*) noexcept {
+	const uint64_t end = g_timerEnd.load();
+	if (end == 0 || frame == nullptr) {
+		return;
+	}
+	const uint64_t now = Now();
+	if (now >= end) {
+		g_timerEnd.store(0);
+		return;
+	}
+	if (ClientLevel() != static_cast<int32_t>(g_timerLevel.load())) {
+		return;  // another level (or no game): the clock belongs to the level it was started for
+	}
+	char line[64];
+	clientmsg::ClosingLine(clientmsg::SecondsLeft(end - now), line, sizeof(line));
+	const float size = frame->defaultTextSize * 1.4F;
+	const float x = frame->screenWidth / 2.0F;
+	const float y = frame->screenHeight * 0.09F;
+	DrawCentred(context, frame, line, x, y, size);
+	DrawCentred(context, frame, clientmsg::ExitWarning, x, y + size * 1.3F, frame->defaultTextSize);
+}
+
+auto InstallTimerOverlay(const D2RL::PluginContext* context) noexcept -> bool {
+	if (!PluginMessagesOn() || context->QueryService(&g_overlay) != D2RL::ServiceQueryResult::Success ||
+	    !D2RL::HasOverlayServiceField(g_overlay, D2RL::OverlayServiceRequiredSize)) {
+		g_overlay = nullptr;
+		return false;
+	}
+	g_unitBySlot = reinterpret_cast<UnitBySlotFn>(context->exeBase + UnitBySlotRva);
+	SetPluginMessageHandler(clientmsg::PluginKindTimer, &OnTimerMessage);
+	D2RL::Overlay::CallbackRegistration reg{};
+	reg.structSize = D2RL::Overlay::CallbackRegistrationSize;
+	reg.phase = D2RL::Overlay::Phase::AfterGameUi;
+	reg.callback = &DrawTimer;
+	D2RL::Overlay::CallbackHandle handle = D2RL::Overlay::InvalidCallbackHandle;
+	return g_overlay->registerFrameCallback(context, &reg, &handle) == D2RL::Overlay::Result::Success;
 }
 
 void WarpHook(Game* game, Unit* player, Unit* tile) {
@@ -184,6 +334,11 @@ int64_t PortalHook(int64_t* ctx) {
 	return moved;
 }
 
+void ForgetGame(const void* game) noexcept {
+	std::lock_guard<std::mutex> lock(g_mutex);
+	g_lockout.Forget(game);
+}
+
 }  // namespace
 
 void DungeonLockoutCounts(int* refused, int* started) noexcept {
@@ -194,6 +349,7 @@ void DungeonLockoutCounts(int* refused, int* started) noexcept {
 
 auto InstallDungeonLockout(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	g_context = context;
+	RegisterGameEnd(&ForgetGame);
 	const uint64_t base = context->exeBase;
 	g_findTile = reinterpret_cast<FindTileFn>(base + FindTileRva);
 	g_roomLevel = reinterpret_cast<RoomLevelFn>(base + RoomLevelRva);
@@ -206,7 +362,9 @@ auto InstallDungeonLockout(const D2RL::PluginContext* context, char* report, siz
 	const bool portal = context->InstallInlineHook(PortalRva, PortalEntry, sizeof(PortalEntry),
 	                                               reinterpret_cast<void*>(&PortalHook),
 	                                               reinterpret_cast<void**>(&g_portalOriginal));
-	std::snprintf(report, reportSize, "%s: %d levels; tile warps %s, portals %s", warp && portal ? "on" : "partly off",
-	              static_cast<int>(mxl_dungeons::EntryCount), warp ? "on" : "hook failed", portal ? "on" : "hook failed");
+	const bool timer = InstallTimerOverlay(context);
+	std::snprintf(report, reportSize, "%s: %d levels; tile warps %s, portals %s, countdown %s", warp && portal ? "on" : "partly off",
+	              static_cast<int>(mxl_dungeons::EntryCount), warp ? "on" : "hook failed", portal ? "on" : "hook failed",
+	              timer ? "on screen" : "in chat lines only");
 	return warp && portal;
 }

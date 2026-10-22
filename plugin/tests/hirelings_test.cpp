@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 
 namespace {
 
@@ -100,6 +101,29 @@ int RunHirelingsTests() {
 		Check(Value(b, StatMedian184) == 20, "barbarian stat 184");
 		Check(Value(b, StatDamagePercent) == 90 && Value(b, StatVelocity) == 80, "barbarian shared part");
 		Check(b.count <= Bonuses::Capacity, "list fits");
+	}
+
+	// mercenary equip lists: A allows, B excludes (and wins), anything else is refused
+	{
+		const auto* rogue = hire::MercClassOf(ClassRogue);
+		const auto* desert = hire::MercClassOf(ClassDesert);
+		const auto* wolf = hire::MercClassOf(ClassIronWolf);
+		const auto* barb = hire::MercClassOf(ClassBarbarian);
+		Check(rogue && desert && wolf && barb && hire::MercClassOf(0) == nullptr, "four merc classes found");
+		Check(rogue->equivalentClass == 0 && desert->equivalentClass == 3 && wolf->equivalentClass == 1 &&
+		      barb->equivalentClass == 4, "equips as amazon, paladin, sorceress, barbarian");
+		auto is = [](std::initializer_list<int32_t> types) {
+			return [types](int32_t t) { for (int32_t x : types) { if (x == t) return true; } return false; };
+		};
+		constexpr int32_t Bow = 27, Spear = 33, Pole = 34, Sword = 30, Shield = 2, Scythe = 112, TwoHand = 212, Scroll = 198;
+		Check(hire::MercMayWield(*rogue, is({Bow})) && !hire::MercMayWield(*rogue, is({Sword})), "rogue: bow only");
+		Check(!hire::MercMayWield(*rogue, is({Shield})), "rogue: no shield");
+		Check(hire::MercMayWield(*desert, is({Spear})) && hire::MercMayWield(*desert, is({Pole})), "desert: spear and polearm");
+		Check(!hire::MercMayWield(*desert, is({Spear, Scythe})), "desert: scythe (a polearm child) excluded by list B");
+		Check(hire::MercMayWield(*wolf, is({Sword})) && hire::MercMayWield(*wolf, is({Shield})), "wolf: sword and shield");
+		Check(!hire::MercMayWield(*wolf, is({Sword, TwoHand})), "wolf: two-handed sword excluded");
+		Check(hire::MercMayWield(*barb, is({Sword})) && !hire::MercMayWield(*barb, is({Sword, Scroll})), "barbarian: sword, not scroll");
+		Check(!hire::MercMayWield(*barb, is({})), "an item of no listed type is refused");
 	}
 
 	// Kashya's level gate: only the value D2R ships is cleared, only for that class

@@ -4,15 +4,19 @@
 // flag). D2R's parser drops those bytes, so the plugin carries them in mxl_cube_effects.h (tools/cube_effects.py) and
 // detours the recipe executor 0x5269c0 (game, player, record, ctx -> first output item or null): when the original made
 // an output, the recipe's effects are applied. Flags are memory only, per game pointer (reset when it changes) and per
-// player unit id; gold comes from carried gold first, then the bank (D2Craft.cpp 0x10059120).
+// character name (as Median does); the game-end hook (game_end.cpp) clears them with their game; gold comes from
+// carried gold first, then the bank (D2Craft.cpp 0x10059120).
 #include "craft_flags.h"
 
 #include "craft_state.h"
 #include "d2r.h"
+#include "game_end.h"
 #include "mxl_cube.h"
 
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
+#include <string>
 
 namespace {
 
@@ -24,6 +28,9 @@ constexpr uint64_t RecordRva = 0x3e3f60;   // (dataFlag, index) -> cubemain reco
 constexpr uint64_t GetStatRva = 0x2f5020;  // (unit, stat, layer)
 constexpr uint64_t SetStatRva = 0x2f7d10;  // (unit, stat, value, layer)
 constexpr uint64_t UnitIdRva = 0x34a330;   // (unit, file, line) -> unit +8, the unit id (0x34ab60 is +0xc, the mode)
+constexpr uint64_t PlayerDataRva = 0x34b240;  // (player) -> player data
+constexpr int PlayerNameOffset = 0x00;        // char[16] in the player data (1.10: PlayerData.szName)
+constexpr int PlayerNameSize = 16;
 constexpr int RecordSize = 0x16c;
 constexpr int32_t StatGold = 14, StatGoldBank = 15;
 
@@ -47,9 +54,25 @@ const D2RL::PluginContext* g_context = nullptr;
 craft::State g_state;
 bool g_warned = false;
 
-auto PlayerKey(const void* player) noexcept -> uint32_t {
-	return player != nullptr && g_unitId != nullptr ? static_cast<uint32_t>(g_unitId(const_cast<Unit*>(static_cast<const Unit*>(player)), "mxl-core craft_flags", 0))
-	                                                : 0;
+using PlayerDataFn = const uint8_t* (*)(Unit* player);
+PlayerDataFn g_playerData = nullptr;
+
+// The character name keys the player flags, as in Median (D2Craft.cpp looks the flags up by szName). A unit without a
+// readable name falls back to "#<unit id>" so it still gets its own flags.
+auto PlayerKey(const void* player) noexcept -> std::string {
+	if (player == nullptr || g_playerData == nullptr) {
+		return std::string();
+	}
+	auto* unit = const_cast<Unit*>(static_cast<const Unit*>(player));
+	const uint8_t* data = g_playerData(unit);
+	if (data != nullptr) {
+		char name[PlayerNameSize + 1] = {};
+		std::memcpy(name, data + PlayerNameOffset, PlayerNameSize);
+		if (name[0] != '\0') {
+			return std::string(name);
+		}
+	}
+	return "#" + std::to_string(g_unitId != nullptr ? g_unitId(unit, "mxl-core craft_flags", 0) : 0U);
 }
 
 void PayGold(Unit* player, int64_t cost) noexcept {
@@ -92,7 +115,7 @@ void* ExecHook(Game* game, Unit* player, const uint8_t* record, void* ctx) {
 		switch (e->kind) {
 		case 6: PayGold(player, static_cast<int64_t>(e->param) * 100); break;
 		case 7: case 8: g_state.Set(false, PlayerKey(player), e->param, e->kind == 7); break;
-		case 9: case 10: g_state.Set(true, 0, e->param, e->kind == 9); break;
+		case 9: case 10: g_state.Set(true, std::string(), e->param, e->kind == 9); break;
 		default: break;
 		}
 	}
@@ -106,6 +129,11 @@ void CraftBind(uint64_t exeBase) noexcept {
 	g_getStat = reinterpret_cast<GetStatFn>(exeBase + GetStatRva);
 	g_setStat = reinterpret_cast<SetStatFn>(exeBase + SetStatRva);
 	g_unitId = reinterpret_cast<UnitIdFn>(exeBase + UnitIdRva);
+	g_playerData = reinterpret_cast<PlayerDataFn>(exeBase + PlayerDataRva);
+}
+
+void CraftForgetGame(const void* game) noexcept {
+	g_state.Forget(game);
 }
 
 void CraftTouchGame(const void* game) noexcept {
@@ -113,16 +141,17 @@ void CraftTouchGame(const void* game) noexcept {
 }
 
 auto CraftFlagTest(const void* player, int flag, bool gameWide) noexcept -> bool {
-	return g_state.Test(gameWide, gameWide ? 0 : PlayerKey(player), flag);
+	return g_state.Test(gameWide, gameWide ? std::string() : PlayerKey(player), flag);
 }
 
 void SetCraftFlag(const void* player, int flag, bool game, bool on) noexcept {
-	g_state.Set(game, game ? 0 : PlayerKey(player), flag, on);
+	g_state.Set(game, game ? std::string() : PlayerKey(player), flag, on);
 }
 
 auto InstallCraftFlags(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	g_context = context;
 	CraftBind(context->exeBase);
+	RegisterGameEnd(&CraftForgetGame);
 	const bool ok = context->InstallInlineHook(ExecRva, ExecEntry, sizeof(ExecEntry), reinterpret_cast<void*>(&ExecHook),
 	                                           reinterpret_cast<void**>(&g_execOriginal));
 	std::snprintf(report, reportSize, ok ? "on: %d output effects (gold, player and game flags)" : "off: hook failed",

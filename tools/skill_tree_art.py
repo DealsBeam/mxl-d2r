@@ -1,4 +1,4 @@
-"""Median's skill tree look for D2R's skill tree panel (bug #3): tab titles, tree background, arrows, 8 tab pictures.
+"""Median's skill tree look for D2R's skill tree panel (bug #3): tab titles, tree background, arrows, tab pictures (8, the Sorceress 9).
 
 What Median has (D2Sigma SkillTree.cpp, themes/classic_sigma/game): one stone panel (panels/skill-tree.dc6, the same in
 every class), one arrow layout per class and tab (skills/layout-<class>.dc6: 512 x 704 pages, arrows only; the icon
@@ -11,17 +11,17 @@ with a frame number; the sprite is a strip of frames 895 x 1169 (stride 897; low
 position 132, 160 for the active tab. D2R's frame holds the tab strip across the top (its 3 tabs), the skill
 sockets and the arrows of that tab; the stone under it is PANEL_SkillTreeBG (the same for every class).
 So the background can differ per class AND per tab, with as many frames as the layout has tabs (tools/ui_layouts.py:
-TABS = 8, frame n for tab n).
+TABS = 9, frame n for tab n).
 
 HD (data/hd/global/ui/spells/skill_trees/):
-  <xx>skilltree.sprite / .lowend.sprite   8 frames per class: the tab strip with Median's 8 titles (the active tab
+  <xx>skilltree.sprite / .lowend.sprite   9 frames per class: the tab strip with Median's 8 (Sorceress 9) titles (the active tab
                                            lit), D2R's own socket art on the cells of that tab's skills, arrows as
                                            Median's layout draws them (found in layout-<class>.dc6, redrawn between
                                            D2R's sockets: D2R's grid is 262 x 180 pixels, Median's 100 x 100)
   panel_skilltreebg.sprite / .lowend      D2R's frame with Median's stone inside (the holes in the DC6 filled)
 Classic mode (G) reads data/global/ui/spells/skltree_<x>_back.dc6: 4 tiles per picture (320 x 432 as 256+64 x 256+176),
-vanilla picture sets 0..3; here set 0 = panel with the tab column, sets 1..8 = tab n-1 active with its sockets, arrows
-and the tab titles (units palette; ui_layouts.py gives the classic panel 8 tabs in the same column).
+vanilla picture sets 0..3; here set 0 = panel with the tab column, sets 1..9 = tab n-1 active with its sockets, arrows
+and the tab titles (units palette; ui_layouts.py gives the classic panel 9 tab cells in the same column).
 
 Usage: python tools/skill_tree_art.py [--preview DIR]   (--preview writes PNGs: HD frames and classic sets)
 """
@@ -254,12 +254,13 @@ def tab_strip(d2r_frame: Image.Image, tab: int, names: list[str]) -> Image.Image
         x = n * cw
         w = cw if n < TABS - 1 else FW - x
         src, mid = (active, 107) if n == tab else (idle, 108)
+        if n >= len(names):
+            continue  # a class without this page: blank (the plugin ignores a click on it)
         cell = Image.new("RGBA", (w, STRIP_H))
         cell.paste(src.crop((0, 0, 12, STRIP_H)), (0, 0))
         cell.paste(src.crop((mid, 0, mid + w - 24, STRIP_H)), (12, 0))
         cell.paste(src.crop((src.width - 12, 0, src.width, STRIP_H)), (w - 12, 0))
-        if n < len(names):
-            text_fit(cell, (6, 10, w - 6, 78), names[n], GOLD if n == tab else GOLD_DIM, 30)
+        text_fit(cell, (6, 10, w - 6, 78), names[n], GOLD if n == tab else GOLD_DIM, 30)
         strip.paste(cell, (x, 0))
     return strip
 
@@ -359,13 +360,14 @@ def classic_class(cls: str, letter: str, names: list[str], cells_of, stone: Imag
         im = Image.new("RGBA", (CLASSIC_W, CLASSIC_H))
         d = ImageDraw.Draw(im)
         for n in range(TABS):
+            if n >= len(names):
+                continue  # a class without this page: blank
             y0 = round(CL_TAB_Y + n * ch)
             y1 = round(CL_TAB_Y + (n + 1) * ch) - 1
             on = n == active
             d.rectangle((CL_TAB_X, y0, CL_TAB_X + cw - 2, y1), fill=(58, 44, 28, 255) if on else (14, 8, 6, 255),
                         outline=(176, 142, 84, 255) if on else (84, 62, 40, 255))
-            if n < len(names):
-                text_fit(im, (CL_TAB_X + 3, y0 + 2, CL_TAB_X + cw - 4, y1 - 1), names[n], GOLD if on else GOLD_DIM, 15)
+            text_fit(im, (CL_TAB_X + 3, y0 + 2, CL_TAB_X + cw - 4, y1 - 1), names[n], GOLD if on else GOLD_DIM, 15)
         return im
 
     sets = []

@@ -29,6 +29,26 @@ int RunCombatTests() {
 	      "block cap");
 	Check(BlockCap(0, true) == 50 && BlockCap(25, true) == 50 && BlockCap(-20, true) == 30, "Indomitable limits block to 50");
 
+	// resistances: 75 + the max stat, at most 90 (D2R's own ceiling is 95)
+	Check(ResistCap(0, ResistMaxMedian) == 75 && ResistCap(10, ResistMaxMedian) == 85 && ResistCap(15, ResistMaxMedian) == 90 &&
+	          ResistCap(20, ResistMaxMedian) == 90,
+	      "resist cap rises to 90");
+	Check(ResistCap(20, ResistMaxD2R) == 95 && ResistCap(-10, ResistMaxMedian) == 65, "resist cap: D2R ceiling, negative max stat");
+
+	// absorb credit: divisor, percent, per-type percent (D2Sigma 0x10057a20); 1 point (0x100) at the least
+	Check(AbsorbCredit(5000, 0, 0, 0) == 5000, "no stats leave the credit alone");
+	Check(AbsorbCredit(5000, 4, 0, 0) == 1250 && AbsorbCredit(5000, 0, 50, 0) == 2500 && AbsorbCredit(5000, 0, 0, 25) == 3750,
+	      "each absorb stat on its own");
+	Check(AbsorbCredit(10000, 2, 50, 50) == 1250, "the three stats compose in order");
+	Check(AbsorbCredit(300, 60, 0, 0) == 0x100 && AbsorbCredit(300, 0, 90, 0) == 0x100, "floor of one life point");
+	Check(AbsorbCredit(0, 5, 50, 50) == 0, "nothing absorbed, nothing credited");
+	Check(AbsorbPercentCut(1000, 25) == 250 && AbsorbPercentCut(1000, 90) == 400 && AbsorbPercentCut(1000, 0) == 0 &&
+	          AbsorbPercentCut(1000, -5) == 0,
+	      "absorb percent is limited to 40");
+	Check(AbsorbLayer(0x27) == 1 && AbsorbLayer(0x29) == 2 && AbsorbLayer(0x25) == 3 && AbsorbLayer(0x2b) == 4 &&
+	          AbsorbLayer(0x2d) == 5 && AbsorbLayer(0x24) == 0,
+	      "absorb layers by resistance stat");
+
 	// ethereal: +25% (D2R's 3/2 is replaced), truncated toward zero
 	Check(EtherealBonus(100) == 125 && EtherealBonus(7) == 8 && EtherealBonus(3) == 3 && EtherealBonus(0) == 0,
 	      "ethereal bonus is 25%");

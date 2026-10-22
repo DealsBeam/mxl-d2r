@@ -22,6 +22,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import art_fix  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 D2R = ROOT / "extract" / "d2r" / "93847" / "data"
 GUIDE = D2R / "global" / "dataguide" / "data" / "files"
@@ -34,6 +37,7 @@ STAT_MODES = {"accr", "base", "mod"}
 MAX_FORMULA_NAME = 31
 MAX_ITEMS_PER_SET = 6
 ENGINE_AI_ROWS = 155  # D2R build 93847 AI table 0x2396e90
+PLUGIN_AI = {"andariel_ai": 155}  # AI ids the plugin serves past the table (plugin/src/monster_ai.cpp, tools/monster_ai_data.py)
 AUTO_TC = re.compile(r"^(weap|armo|mele|bow|mag[a-z]*|rar[a-z]*)\d+$")
 SCOPE_CODES = {"Skill": "skillcalc", "Missile": "misscalc", "Monster": "moncalc"}
 TOKEN = re.compile(r"\s*(?:(?P<num>\d+)|(?P<str>'[^']*')|(?P<id>[A-Za-z_][A-Za-z0-9_]*)|(?P<op><=|>=|==|!=|[-+*/%^()?:<>,.]))")
@@ -336,7 +340,7 @@ class Validator:
                 a = h.index("AI")
                 for r in rows:
                     name = r[a].strip()
-                    if name and ai_row.get(name, ENGINE_AI_ROWS) >= ENGINE_AI_ROWS:
+                    if name and ai_row.get(name, ENGINE_AI_ROWS) >= ENGINE_AI_ROWS and ai_row.get(name) != PLUGIN_AI.get(name):
                         self.add("error", "monstats", "AI", f"not in the engine's AI table (monai rows 0-{ENGINE_AI_ROWS - 1})", r[0], name)
         # hireling: the name range NameFirst..NameLast must go upwards in string IDs
         hl = d.table("hireling")
@@ -379,6 +383,35 @@ class Validator:
             for r in rows:
                 if r[h.index("charclass")] and not r[h.index("skilldesc")]:
                     self.add("error", "skills", "skilldesc", "class skill without a skilldesc", r[0], "")
+            # skill tree: one class skill per slot; class-less skills (item skills, monster skills) have none
+            dsc = d.table("skilldesc")
+            if dsc:
+                dh, drows = dsc
+                desc = {r[0]: r for r in drows}
+                pg, ro, co = (dh.index(c) for c in ("SkillPage", "SkillRow", "SkillColumn"))
+                slots: dict[tuple, str] = {}
+                for r in rows:
+                    dr = desc.get(r[h.index("skilldesc")])
+                    if not dr or dr[pg] in ("", "0"):
+                        continue
+                    if not r[h.index("charclass")]:
+                        if r[h.index("skilldesc")].endswith("~shared"):
+                            self.add("error", "skills", "skilldesc", "class-less skill's copy of a skilldesc row keeps a tree slot",
+                                     r[0], r[h.index("skilldesc")])
+                        continue
+                    key = (r[h.index("charclass")], dr[pg], dr[ro], dr[co])
+                    if key in slots:
+                        self.add("error", "skills", "skilldesc", "two class skills on one skill tree slot", r[0],
+                                 f"{slots[key]} / {'/'.join(key)}")
+                    slots[key] = r[0]
+        # missile / overlay art: every CelFile / Filename must be a file in D2R's data or Median's (tools/art_fix.py)
+        for tname, col in (("missiles", "CelFile"), ("overlay", "Filename")):
+            tab = d.table(tname)
+            if tab:
+                th, trows = tab
+                for r in trows:
+                    if r and r[0] and r[th.index(col)] and not art_fix.art_exists(tname, r[th.index(col)]):
+                        self.add("error", tname, col, "animation file exists neither in D2R nor in Median's data", r[0], r[th.index(col)])
         # inventory: D2R expects two rows (resolutions) per page
         inv = d.table("inventory")
         if inv:

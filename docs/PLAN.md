@@ -50,7 +50,7 @@ D2R addresses: [d2r-addresses.md](d2r-addresses.md).
 - Dungeon lockout: 141 levels, stairs and portals
 - Treasure goblins
 - NPC actions: Akara respec, Cain crafting materials
-- Skill tree: 8 pages
+- Skill tree: 8 pages (9 for the Sorceress)
 
 ## Phase 5: Graphics
 First test whether legacy-graphics mode loads modded DCC/DC6. Then decide per asset.
@@ -59,10 +59,13 @@ Status (2026-10-14):
 - HD monsters (2026-10-21): tools/hd_monsters.py picks donor, scale and colour per Median-only monster (docs/hd-monsters.md); real models later.
 - Installed for classic mode (install_mod.py, Median-only files; ones D2R has stay D2R's): map tiles/presets
   (`global/tiles`, also needed in HD), missile and overlay animations (265 + 107 .dcc), item pictures (542 .dc6).
-  Every item picture name the item tables use exists (D2R's or Median's). 11 missile CelFiles and 15 overlay
-  files exist nowhere (several are vanilla's own dead rows: nul, gore20, pentacle; Median's: extra/icestormimpactvar3,
-  extra/spikefiendmamamissile, extra/auraresistcoldcast, extra/firesmoke.dcc, extra/lifedrain.dcc, extra/genericsplash,
-  'expansion|baaldeathghostie01'): classic mode may fail on those if they ever spawn.
+  Every item picture name the item tables use exists (D2R's or Median's). 12 missile CelFiles and 12 overlay
+  files (+ 2 names written with a ".dcc") existed nowhere (vanilla's dead rows: nul, gore20, pentacle; Median's typos of D2R names or
+  art it never shipped: extra/icestormimpactvar3, extra/spikefiendmamamissile, extra/auraresistcoldcast, extra/firesmoke.dcc,
+  extra/lifedrain.dcc, extra/genericsplash, 'expansion|baaldeathghostie01'). 2026-10-22 (lane data-leftovers): tools/art_fix.py
+  (build step after txt_migrate) repairs the names and points the rest at the closest existing art (REDIRECT table; 74 rows in both
+  banks, work/mod/art_fix.md), so classic mode draws something and missile_hd.py / effects_hd.py give them the HD effect of that art;
+  validate.py fails when a new animation name is found in neither D2R nor Median's files.
 - Map ids (2026-10-21, lane areas): Median's .ds1 maps named objects through Median's flat ObjPreset table and Median-only
   monsters by Median's MonStats row; D2R resolves objects per act and moved Median's rows from 734. Fixed in the pipeline:
   txt_migrate adds Median's table to ObjPreset.txt, tools/ds1_remap.py (called by install_mod.py) renumbers the maps
