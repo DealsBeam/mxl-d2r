@@ -12,6 +12,12 @@ auto InstallQuestsAct1(const D2RL::PluginContext* context, char* report, size_t 
 // Test harness: the next item generated on this thread becomes the unique with this index + 1 (0 clears it).
 void QuestsWantUnique(int indexPlusOne) noexcept;
 
+// The kill the quest 5 hook is running the vanilla handler for (this thread, null outside it): the victim and the killer.
+auto QuestsTowerKill(void** victim, void** killer) noexcept -> bool;
+
+// Test harness (`countessreward`): the kill context for the Countess reward hook, set by hand (nulls clear it).
+void QuestsTowerKillSet(void* victim, void* killer) noexcept;
+
 // Kills of the Countess for which the vanilla handler was skipped because the killer had finished quest 5.
 auto QuestsTowerSkips() noexcept -> int;
 

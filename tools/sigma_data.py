@@ -253,6 +253,40 @@ def monster_looks(idmap: dict) -> tuple[str, str]:
                             f"plugin/src/mxl_monster_looks.h")
 
 
+SKILLS2_ROW = 66
+SKILL_BASE_SYNERGY = 0x2d  # skills2 byte: built-in level/energy damage bonus (D2SkillCalc 0x100a6c70)
+SKILL_STATIC_DAMAGE = 0x2e  # skills2 byte: no mastery bonus (D2SkillCalc 0x100a5d00 and the other three)
+STAT_BASE_SYNERGY = 485     # Median itemstatcost row the BaseSynergy percent reads (/ 10, capped at 100)
+
+
+def skill_flags(idmap: dict) -> tuple[str, str]:
+    """skills2 BaseSynergy / StaticDamage bytes per skill, and the stat id BaseSynergy reads."""
+    skills = ids(idmap, "skills")
+    snames = {e["row"]: e["name"] for e in idmap["skills"]}
+    stats = ids(idmap, "itemstatcost")
+    rows = []
+    for row, r in enumerate(table("skills2", SKILLS2_ROW)):
+        flags = (1 if r[SKILL_BASE_SYNERGY] else 0) | (2 if r[SKILL_STATIC_DAMAGE] else 0)
+        if flags:
+            rows.append((skills[row], flags, snames[row]))
+    rows.sort()
+    out = [HEADER, "#pragma once", "", "#include <cstdint>", "", "namespace mxl_skill_flags {", "",
+           "// skills2 bytes +0x2d (BaseSynergy: the skill's damage gets a level- and energy-based percent) and +0x2e",
+           "// (StaticDamage: mastery stats do not raise it), one row per skill (D2R id, ascending) that sets either.",
+           "inline constexpr uint8_t BaseSynergy = 1, StaticDamage = 2;",
+           "struct Flag {", "\tint32_t skill;", "\tuint8_t flags;", "};",
+           f"inline constexpr int32_t FlagCount = {len(rows)};", "inline constexpr Flag Flags[FlagCount] = {"]
+    for sid, f, n in rows:
+        out.append(f"    {{{sid}, {f}}},  // {n}")
+    out += ["};", "",
+            f"// Median itemstatcost row {STAT_BASE_SYNERGY} (migrated id), read by the BaseSynergy percent.",
+            f"inline constexpr int32_t StatBaseSynergy = {stats[STAT_BASE_SYNERGY]};", "",
+            "}  // namespace mxl_skill_flags", ""]
+    nb = sum(1 for r in rows if r[1] & 1)
+    ns = sum(1 for r in rows if r[1] & 2)
+    return "\n".join(out), (f"skill flags: {nb} BaseSynergy, {ns} StaticDamage skills -> plugin/src/mxl_skill_flags.h")
+
+
 def main() -> int:
     idmap = json.loads(IDMAP.read_text("utf-8"))
     req, msg = requirements()
@@ -260,6 +294,9 @@ def main() -> int:
     print(msg)
     looks, msg = monster_looks(idmap)
     (SRC / "mxl_monster_looks.h").write_text(looks, encoding="utf-8")
+    print(msg)
+    flags, msg = skill_flags(idmap)
+    (SRC / "mxl_skill_flags.h").write_text(flags, encoding="utf-8")
     print(msg)
     dng, gob, msg = levels_and_goblins(idmap)
     (SRC / "mxl_dungeons.h").write_text(dng, encoding="utf-8")

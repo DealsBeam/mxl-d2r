@@ -14,7 +14,8 @@ craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resist
 classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse cooldowns nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
-heat trophytimer mapreveal wpauto hotkeys stashpages.
+heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling nodurability autoid townmana mercrevive questxp
+questrewards.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -5364,6 +5365,762 @@ def check_stashpages():
         % (" ".join(res), ("; wrong: " + "; ".join(wrong)) if wrong else ""), [], log)
 
 
+
+def _sd_steps(st, lvl):
+    """Per-level bonus: the five steps cover the levels 2-8, 9-16, 17-22, 23-28 and 29+."""
+    if lvl <= 1:
+        return 0
+    total, prev = 0, 1
+    for i, top in enumerate((8, 16, 22, 28, None)):
+        top = lvl if top is None else min(top, lvl)
+        if top <= prev:
+            break
+        total += (top - prev) * st[i]
+        prev = top
+    return total
+
+
+def _sd_i32(v):
+    v &= 0xffffffff
+    return v - (1 << 32) if v & 0x80000000 else v
+
+
+def _sd_tdiv(a, b):
+    """Integer division truncated toward zero (C)."""
+    q = abs(a) // abs(b)
+    return q if (a < 0) == (b < 0) else -q
+
+
+def _sd_pct(value, percent):
+    """value * percent / 100 truncated toward zero (D2Sigma 0x10088e50); 0 when either factor is 0."""
+    if value == 0 or percent == 0:
+        return 0
+    return _sd_i32(_sd_tdiv(value * percent, 100))
+
+
+def _sd_base_synergy(clvl, energy, stat514):
+    """((energy+20)*130/(energy+500) + 50 + min(stat/10, 100)) * (min(clvl, 120)+5) * 10 / 100 - 75 (0x100a6c70)."""
+    extra = min(_sd_tdiv(stat514, 10), 100)
+    spread = _sd_tdiv((energy + 20) * 130, energy + 500) if energy + 500 else 0
+    return _sd_tdiv((spread + 50 + extra) * (min(clvl, 120) + 5) * 10, 100) - 75
+
+
+def _sd_elemental(base, st, shift, lvl, percent, mastery):
+    v = _sd_i32((_sd_steps(st, lvl) + base) << shift)
+    if percent:
+        v = _sd_i32(v + _sd_pct(v, percent))
+    if mastery:
+        v = _sd_i32(v + _sd_pct(v, mastery))
+    return v
+
+
+def _sd_physical(base, st, lvl, shift, percent, mastery):
+    """Skills without a weapon share (SrcDam 0): the weapon part is 0."""
+    own = _sd_steps(st, lvl) + base
+    if percent:
+        own = _sd_i32(own + _sd_pct(own, percent))
+    if mastery:
+        own = _sd_i32(own + _sd_pct(own, mastery))
+    return _sd_i32(own << shift)
+
+
+# damage type names of skills.txt EType that the mastery helper (0x337f40) maps to a mastery stat
+_SD_MASTERY_TYPES = ("fire", "ltng", "mag", "cold", "pois")
+
+
+_SD_MASTERY_STATS = (329, 330, 331, 332, 357)  # fire, lightning, cold, poison, magic mastery
+
+
+def _sd_load():
+    """D2R skill id -> the damage columns of the built skills.txt plus the skills2 flags (1 BaseSynergy, 2 StaticDamage)."""
+    t = _tsv(os.path.join(BUILT_EXCEL, "skills.txt"))
+    col = {c: i for i, c in enumerate(t[0])}
+
+    def cell(r, c):
+        return r[col[c]] if col[c] < len(r) else ""
+
+    def num(r, c):
+        try:
+            return int(cell(r, c))
+        except ValueError:
+            return 0
+
+    idmap = json.load(open(_main_checkout(os.path.join(REPO, "work", "named", "idmap.json")), encoding="utf-8"))
+    sk2 = open(_main_checkout(os.path.join(REPO, "extract", "mxl", "data", "global", "excel", "skills2.bin")), "rb").read()
+    n = struct.unpack_from("<I", sk2)[0]
+    flags = {}
+    for e in idmap["skills"]:
+        if e["row"] < n:
+            o = 4 + e["row"] * 66
+            f = (1 if sk2[o + 0x2d] else 0) | (2 if sk2[o + 0x2e] else 0)
+            if f:
+                flags[e["id"]] = f
+    skills = {}
+    for r in t[1:]:
+        if not r or not cell(r, "*Id").lstrip("-").isdigit():
+            continue
+        sid = int(cell(r, "*Id"))
+        skills[sid] = {
+            "name": r[0], "flags": flags.get(sid, 0), "shift": num(r, "HitShift"), "srcdam": num(r, "SrcDam"),
+            "pmin": num(r, "MinDam"), "pmax": num(r, "MaxDam"), "pminst": [num(r, "MinLevDam%d" % i) for i in range(1, 6)],
+            "pmaxst": [num(r, "MaxLevDam%d" % i) for i in range(1, 6)], "pcalc": cell(r, "DmgSymPerCalc"),
+            "etype": cell(r, "EType"), "emin": num(r, "EMin"), "emax": num(r, "EMax"),
+            "eminst": [num(r, "EMinLev%d" % i) for i in range(1, 6)], "emaxst": [num(r, "EMaxLev%d" % i) for i in range(1, 6)],
+            "ecalc": cell(r, "EDmgSymPerCalc"), "passive": cell(r, "passive"),
+        }
+    return skills, {v["name"]: k for k, v in skills.items()}
+
+
+def _sd_query(sid, lvl, mastery=True):
+    """`skilldmg` parsed to a dict of ints; ele / phys / orig_ele / orig_phys are (min, max)."""
+    for _ in range(3):  # the harness now and then misses its 15 s window while the game is busy
+        ok, line, _l = hv("skilldmg %d %d%s" % (sid, lvl, "" if mastery else " nomastery"), "skilldmg")
+        if ok and "skilldmg skill=" in line:
+            break
+        time.sleep(1)
+    else:
+        return None
+    d = {k: int(v) for k, v in kv(line).items() if re.fullmatch(r"-?\d+", v)}
+    for key in ("ele", "phys", "orig_ele", "orig_phys"):
+        m = re.search(r"\b" + key + r"=(-?\d+)-(-?\d+)", line)
+        d[key] = (int(m.group(1)), int(m.group(2))) if m else None
+    return d
+
+
+def check_skillscaling():
+    nm = "Skill damage scaling (Median): BaseSynergy percent, StaticDamage skips mastery, physical magic mastery, per-level steps"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    try:
+        skills, by_name = _sd_load()
+    except Exception as e:
+        return add(nm, "BLOCKED", "tables not readable: %r" % (e,))
+    has_ele = lambda s: s["emax"] > 0 or s["emin"] > 0 or any(s["emaxst"])  # noqa: E731
+    has_phys = lambda s: s["pmax"] > 0 or any(s["pmaxst"])  # noqa: E731
+    active = lambda s: s["passive"] in ("", "0")  # noqa: E731  (a passive-flagged skill keeps D2R's physical function)
+    pick = lambda pred, n=1: [i for i in sorted(skills) if pred(skills[i])][:n]  # noqa: E731
+    elem_ok = lambda s: has_ele(s) and s["etype"] in _SD_MASTERY_TYPES  # noqa: E731
+    phys_ok = lambda s: has_phys(s) and not has_ele(s) and s["srcdam"] == 0 and active(s)  # noqa: E731
+    syn_ele = pick(lambda s: s["flags"] == 1 and elem_ok(s), 2)
+    syn_phys = pick(lambda s: s["flags"] == 1 and phys_ok(s))
+    static_ele = pick(lambda s: s["flags"] == 2 and elem_ok(s))
+    static_phys = pick(lambda s: s["flags"] == 2 and phys_ok(s))
+    plain_ele = pick(lambda s: s["flags"] == 0 and elem_ok(s) and not s["ecalc"], 2)
+    plain_phys = pick(lambda s: s["flags"] == 0 and phys_ok(s) and not s["pcalc"], 2)
+    plain_weapon = pick(lambda s: s["flags"] == 0 and s["srcdam"] != 0 and not has_ele(s) and active(s) and not s["pcalc"], 2)
+    blvl = lambda s: [n for n in re.findall(r"skill\('([^']+)'\.blvl\)", s["ecalc"]) if n in by_name]  # noqa: E731
+    calc_ele = pick(lambda s: elem_ok(s) and active(s) and blvl(s), 8)  # synergy formulas over other skills' levels
+    groups = [("BaseSynergy elemental", syn_ele), ("BaseSynergy physical", syn_phys), ("StaticDamage elemental", static_ele),
+              ("StaticDamage physical", static_phys), ("plain elemental", plain_ele), ("plain physical", plain_phys),
+              ("synergy-formula elemental", calc_ele[:2])]
+    keep = {s: rd("player", s) for s in (1, 12, 514) + _SD_MASTERY_STATS}
+    log, bad, checked = [], [], 0
+
+    def expect(sid, d, lvl, mastery):
+        """Median's value for one skill: table columns plus the inputs `skilldmg` printed for the player."""
+        s = skills[sid]
+        syn = _sd_base_synergy(d["clvl"], d["energy"], d["stat514"]) if s["flags"] & 1 else 0
+        m_ele = d["masteryElem"] if mastery and not s["flags"] & 2 else 0
+        m_phys = d["masteryMagic"] if not s["flags"] & 2 else 0
+        out = {"baseSyn": syn}
+        if has_ele(s):
+            out["ele"] = (_sd_elemental(s["emin"], s["eminst"], s["shift"], lvl, d["calcElem"] + syn, m_ele),
+                          _sd_elemental(s["emax"], s["emaxst"], s["shift"], lvl, d["calcElem"] + syn, m_ele))
+        if has_phys(s):
+            out["phys"] = (_sd_physical(s["pmin"], s["pminst"], lvl, s["shift"], d["calcPhys"] + syn, m_phys),
+                           _sd_physical(s["pmax"], s["pmaxst"], lvl, s["shift"], d["calcPhys"] + syn, m_phys))
+        return out
+
+    try:
+        for gname, ids in groups:
+            if not ids:
+                bad.append("no %s skill in the tables" % gname)
+        scenarios = ((1, 0, 0, 0), (40, 150, 0, 25), (100, 300, 600, 40), (150, 1000, 5000, 60))  # clvl, energy, stat 514, mastery
+        for clvl, energy, e514, mast in scenarios:
+            setstat("player", 12, clvl)
+            setstat("player", 1, energy)
+            setstat("player", 514, e514)
+            for st in _SD_MASTERY_STATS:
+                setstat("player", st, mast)
+            for gname, ids in groups:
+                for sid in ids:
+                    s = skills[sid]
+                    for lvl in (1, 2, 8, 9, 16, 17, 22, 23, 28, 29, 45):
+                        for mastery in ((True, False) if lvl in (1, 29) else (True,)):
+                            d = _sd_query(sid, lvl, mastery)
+                            if d is None or (d["ele"] is None and d["phys"] is None):
+                                bad.append("skilldmg %d %d failed" % (sid, lvl))
+                                continue
+                            want = expect(sid, d, lvl, mastery)
+                            problems = []
+                            if d["flags"] != s["flags"]:
+                                problems.append("plugin flags %d, skills2 %d" % (d["flags"], s["flags"]))
+                            if want["baseSyn"] != d["baseSyn"]:
+                                problems.append("BaseSynergy %d, formula %d" % (d["baseSyn"], want["baseSyn"]))
+                            if has_ele(s) and d["masteryElem"] != mast:
+                                problems.append("mastery stat of %s read %d, set %d" % (s["etype"], d["masteryElem"], mast))
+                            if has_phys(s) and d["masteryMagic"] != mast:
+                                problems.append("stat 357 read %d, set %d" % (d["masteryMagic"], mast))
+                            for key in ("ele", "phys"):
+                                if key in want and tuple(d[key]) != want[key]:
+                                    problems.append("%s %s, Median's formula %s" % (key, d[key], want[key]))
+                            checked += 1
+                            if problems or (lvl in (1, 9, 29) and mastery and clvl in (1, 100)):
+                                log.append("%s %s(%d) L%d clvl %d energy %d stat514 %d mastery %d%s: ele %s phys %s (calc %d/%d, synergy %d)%s" % (
+                                    gname, s["name"], sid, lvl, clvl, energy, e514, mast, "" if mastery else " (nomastery)", d["ele"],
+                                    d["phys"], d["calcElem"], d["calcPhys"], d["baseSyn"], " PROBLEM: " + "; ".join(problems) if problems else ""))
+                            if problems:
+                                bad.append(log[-1])
+        # where Median's rules change nothing (no synergy flag, no mastery) the plugin must give D2R's own numbers
+        setstat("player", 12, 30)
+        setstat("player", 1, 50)
+        for st in _SD_MASTERY_STATS:
+            setstat("player", st, 0)
+        same = 0
+        for sid in plain_ele + plain_phys + plain_weapon:
+            for lvl in (1, 10, 25):
+                d = _sd_query(sid, lvl, True)
+                if d is None:
+                    bad.append("skilldmg %d %d failed" % (sid, lvl))
+                    continue
+                same += 1
+                s = skills[sid]
+                if has_ele(s) and d["ele"] != d["orig_ele"]:
+                    bad.append("plain elemental %s L%d: plugin %s, D2R's own %s" % (s["name"], lvl, d["ele"], d["orig_ele"]))
+                if (has_phys(s) or sid in plain_weapon) and d["phys"] != d["orig_phys"]:
+                    bad.append("plain physical %s L%d: plugin %s, D2R's own %s" % (s["name"], lvl, d["phys"], d["orig_phys"]))
+        log.append("%d plain-skill samples compared with D2R's own functions (%s)" % (same, ", ".join(skills[i]["name"] for i in plain_ele + plain_phys + plain_weapon)))
+        # synergy: raising a skill that a synergy formula names raises the percent column, and the damage follows
+        setstat("player", 12, 60)
+        syn_done = 0
+        for sid in calc_ele:
+            s = skills[sid]
+            names = blvl(s)
+            src = by_name[names[0]]
+            low = _setskill(src, 1)
+            a = _sd_query(sid, 10, True)
+            high = _setskill(src, 12)
+            b = _sd_query(sid, 10, True)
+            if a is None or b is None or low is None or high is None:
+                bad.append("synergy test of %s from %s: setskill / skilldmg failed (%s %s)" % (s["name"], names[0], low, high))
+                continue
+            wa, wb = expect(sid, a, 10, True), expect(sid, b, 10, True)
+            log.append("synergy %s(%d) from %s level %s -> %s: percent column %d -> %d, elemental %s -> %s (formula %s -> %s)" % (
+                s["name"], sid, names[0], low, high, a["calcElem"], b["calcElem"], a["ele"], b["ele"], wa["ele"], wb["ele"]))
+            syn_done += 1
+            if b["calcElem"] <= a["calcElem"] or tuple(a["ele"]) != wa["ele"] or tuple(b["ele"]) != wb["ele"] or b["ele"][1] <= a["ele"][1]:
+                bad.append(log[-1])
+            if syn_done >= 3:
+                break
+        if not syn_done:
+            bad.append("no skill with a skill() synergy formula could be tested")
+    finally:
+        for st, v in keep.items():
+            if v is not None:
+                setstat("player", st, v)
+    add(nm, "PASS" if not bad and checked else "FAIL",
+        ("%d samples at 11 skill levels and 4 character setups (%s) equal Median's formula computed from the tables; %d synergy raises followed" % (
+            checked, ", ".join("%s: %s" % (n, "/".join(skills[i]["name"] for i in ids)) for n, ids in groups), syn_done))
+        if not bad and checked else "; ".join(bad[:8]), [], log)
+
+
+
+def _item_id(lines):
+    m = re.search(r"item id=(\d+)", " ".join(lines))
+    return int(m.group(1)) if m else None
+
+
+def _iflags(item_id, unid=False):
+    """`iflags`: the item's flag word, mode, quantity, durability (dict of ints) or None."""
+    ok, lines = H("iflags %d%s" % (item_id, " unid" if unid else ""))
+    m = next((l for l in lines if l.startswith("iflags ")), None)
+    if not ok or m is None:
+        print("iflags %d: %s %s" % (item_id, ok, lines[-2:]))
+        return None
+    return {k: int(v, 16) if v.startswith("0x") else int(v) for k, v in kv(m).items()}
+
+
+def check_nodurability():
+    """Audit IT1 / IT2 (Median: no durability, no quantity use): worn weapon and armour keep their durability through
+    many melee wear steps (harness `wear`, the function behind every hit) and a throwing stack keeps its quantity through
+    real throws (cast of the Throw skill, id 2)."""
+    nm = "No durability loss and no quantity use (audit IT1, IT2; plugin parts durability + quantity)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    fight_ready()
+    god(False)
+    log, notes, good = [], [], True
+    H("packclear")  # room in the backpack: an unequip into a full backpack fails and the hand stays occupied
+    for slot in ("rhand", "lhand", "torso"):
+        H("unequip " + slot)
+    # hfh is a quest item that D2R's place function refuses once the character's quest state says its quest is done (see
+    # check_statcols): fall back to ordinary weapons (115 axe, bsd broad sword)
+    for code in ("hfh", "115", "bsd"):
+        ok, l1 = H("equip %s q=2 rhand" % code)
+        log += l1
+        if ok and _item_id(l1):
+            break
+        H("unequip rhand")
+    ok2, l2 = H("equip fld q=2 torso")
+    log += l2
+    weapon, armour = _item_id(l1), _item_id(l2)
+    if not (ok and ok2 and weapon and armour):
+        return add(nm, "BLOCKED", "could not equip a test weapon (hfh, 115, bsd) / armour fld: %s" % " | ".join((l1 + l2)[-3:]), [], log)
+    w0, a0 = _iflags(weapon), _iflags(armour)
+    log.append("before: weapon %s armour %s" % (w0, a0))
+    if not w0 or not a0 or w0["maxdurability"] <= 0 or a0["maxdurability"] <= 0:
+        return add(nm, "BLOCKED", "the test items have no durability to lose (weapon %s, armour %s)" % (w0, a0), [], log)
+    mon = spawn_attacker(1)
+    if mon is None:
+        return add(nm, "BLOCKED", "no monster to hit", [], log)
+    boosted = {}
+    for st, val in ((0, 600), (2, 600), (12, 60)):  # strength, dexterity, level: the Throw skill checks the weapon's requirements
+        boosted[st] = rd("player", st)
+        setstat("player", st, val)
+    # 2 x 300 wear steps: weapon (player attacks) and armour (monster attacks); the wear proc is 4 - 10 percent, so a
+    # build that wears items loses dozens of points while this one must not lose one
+    _, l3 = H("wear player %s 300" % mon, 60)
+    _, l4 = H("wear %s player 300" % mon, 60)
+    log += l3 + l4
+    w1, a1 = _iflags(weapon), _iflags(armour)
+    log.append("after: weapon %s armour %s" % (w1, a1))
+    dur_ok = bool(w1 and a1) and w1["durability"] == w0["durability"] and a1["durability"] == a0["durability"]
+    good = good and dur_ok
+    notes.append("durability weapon %s -> %s, armour %s -> %s after 600 wear steps" % (
+        w0["durability"], w1 and w1["durability"], a0["durability"], a1 and a1["durability"]))
+    # quantity: real throws
+    H("unequip rhand")
+    ok, l5 = H("equip tax q=2 rhand")
+    log += l5
+    knives = _item_id(l5)
+    q0 = _iflags(knives) if knives else None
+    if not ok or not q0 or q0["quantity"] <= 1:
+        notes.append("throwing knives not usable here (%s)" % " | ".join(l5[-2:]))
+        good = False
+    else:
+        boosted = {}
+        for st, val in ((0, 600), (2, 600), (12, 60)):  # strength, dexterity, level: Throw checks the weapon's requirements
+            boosted[st] = rd("player", st)
+            setstat("player", st, val)
+        H("setskill 2 1")
+        throws = 0  # casts the game accepted with the skill usable (code 0) and the unit in a cast mode
+        for _ in range(14):
+            H("moveto nearest")
+            time.sleep(0.4)
+            okc, lc = H("cast 2 nearest")
+            log += lc
+            if okc and "usable=0" in " ".join(lc):
+                throws += 1
+            time.sleep(1.2)
+            if throws >= 4:
+                break
+            if not okc or not hstate()["mons"]:
+                spawn_attacker(1)
+        q1 = _iflags(knives)
+        qty_ok = bool(q1) and q1["quantity"] == q0["quantity"]
+        good = good and qty_ok and throws > 0
+        notes.append("quantity %s -> %s after %d accepted throws (Throw usable)" % (q0["quantity"], q1 and q1["quantity"], throws))
+        for st, val in boosted.items():
+            if val is not None:
+                setstat("player", st, val)
+    kill_all_near()
+    for slot in ("rhand", "torso"):
+        H("unequip " + slot)
+    add(nm, "PASS" if good else "FAIL", "; ".join(notes), [], log)
+
+
+def check_autoid():
+    """Audit IT3 (Median: the magic, rare, set and unique generators push 1 into SetItemFlag(0x10 identified), D2Game 0x104c1,
+    0x15443, 0x13daa and the unique picker): monster drops of those qualities lie on the ground identified. Real drops: the
+    harness `item` / `itemroll` go through MakeItem (0x43d530), which identifies its item itself, so only monster kills show
+    what the generator does. Andariel (class 156) drops magic and rare items; `dump ground` prints quality and the flag."""
+    nm = "Items drop identified (audit IT3; plugin part autoid in item_gen.cpp)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    fight_ready()
+    log, seen = [], set()
+
+    def ground():
+        out = []
+        for l in H("dump ground")[1]:
+            if l.startswith("ground ") and re.search(r"mode=[35] ", l):
+                d = {k: v for k, v in re.findall(r"(\w+)=(-?\d+)", l)}
+                if int(d["id"]) not in seen:
+                    out.append(d)
+        return out
+
+    seen.update(int(d["id"]) for d in ground())
+    drops = []
+    for _ in range(14):
+        H("spawn 156")
+        ok, l = H("kill nearest 156")
+        log += l
+        time.sleep(1.5)
+        for d in ground():
+            seen.add(int(d["id"]))
+            drops.append(d)
+        if len([d for d in drops if 4 <= int(d["quality"]) <= 7]) >= 6:
+            break
+    kill_all_near()
+    fancy = [d for d in drops if 4 <= int(d["quality"]) <= 7]
+    ident = [d for d in fancy if d["identified"] == "1"]
+    plain = [d for d in drops if int(d["quality"]) in (1, 2, 3)]
+    pident = [d for d in plain if d["identified"] == "1"]
+    note = "%d drops: %d magic/set/rare/unique, %d of them identified; %d low/normal/superior, %d identified" % (
+        len(drops), len(fancy), len(ident), len(plain), len(pident))
+    log.append(note)
+    if len(fancy) < 3:
+        return add(nm, "BLOCKED", "too few magic or better drops to judge (%s)" % note, [], log)
+    add(nm, "PASS" if len(ident) == len(fancy) else "FAIL", note, [], log)
+
+
+def _intown_skills(limit=60):
+    """Skills of the built skills.txt that may be cast in town (InTown), can be selected (left / right skill) and cost mana
+    (mana column), without a restrict value, by required level: [(id, name, mana, lvlmana, manashift)]."""
+    import csv
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "mod", "data", "global", "excel", "skills.txt")
+    with open(path, encoding="utf-8", errors="replace", newline="") as f:
+        rows = list(csv.reader(f, delimiter="	"))
+    h = rows[0]
+    col = {c: h.index(c) for c in ("skill", "*Id", "InTown", "mana", "leftskill", "rightskill", "restrict", "reqlevel", "lvlmana", "manashift")}
+    out = []
+    for r in rows[1:]:
+        if len(r) < len(h) or r[col["InTown"]] != "1" or r[col["restrict"]] or r[col["mana"]] in ("", "0"):
+            continue
+        if r[col["leftskill"]] != "1" and r[col["rightskill"]] != "1":
+            continue
+        out.append((int(r[col["reqlevel"]] or 0), int(r[col["*Id"]]), r[col["skill"]], r[col["mana"]], r[col["lvlmana"]], r[col["manashift"]]))
+    out.sort()
+    return [(i, n, m, lm, sh) for _lv, i, n, m, lm, sh in out[:limit]]
+
+
+def drop_cursor_item(log):
+    """Skills cannot be used while an item is held on the cursor (0x4249f0 "busy"): drop it (client packet 0x17)."""
+    ok, lines = H("cursor")
+    log.extend(lines)
+    m = re.search(r"cursor id=(\d+)", " ".join(lines))
+    if m:
+        H("pkt 17 " + " ".join("%02x" % b for b in struct.pack("<I", int(m.group(1)))))
+        time.sleep(1.0)
+        log.extend(H("cursor")[1])
+
+
+def check_townmana():
+    """Audit SK3 (P2.1.0): skills cost no mana in a town. An InTown skill that costs mana (the first of skills.txt the game
+    accepts as a cast) cast in the Rogue Encampment leaves the mana alone, cast in the Blood Moor it costs its normal price."""
+    nm = "Free mana in town (audit SK3; plugin part townmana)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    log, notes = [], []
+    saved = {}
+
+    def prep(skill):
+        for s_ in (9, 8, 12):
+            if s_ not in saved:
+                saved[s_] = rd("player", s_)
+        setstat("player", 12, 60)  # the skills' level requirements
+        setstat("player", 9, 5000 * 256)
+        setstat("player", 8, 5000 * 256)
+        H("setskill %d 5" % skill)
+
+    def cast_mana(skill):
+        # the mana of a cast is charged when its action starts and regenerated within a few frames: the plugin samples the
+        # player's mana on every server frame (`manamin`), the lowest value since the reset is the cost
+        H("manamin reset")
+        ok, lines = H("cast %d self" % skill)
+        log.extend(lines)
+        time.sleep(2.0)
+        _, ml = H("manamin")
+        log.extend(ml)
+        log.extend(H("manacharge")[1])
+        m = re.search(r"manamin min=(-?\d+) max=(-?\d+)", " ".join(ml))
+        # the pool was filled to its maximum before the cast, so the highest value seen is the start
+        return (ok and "usable=0" in " ".join(lines)), (int(m.group(2)) if m else None), (int(m.group(1)) if m else None)
+
+    goto(1)
+    close_menu()
+    drop_cursor_item(log)
+    skill, t_ok, t0, t1 = None, False, None, None
+    tried = []
+    for cand, cname, *_cost in _intown_skills():
+        prep(cand)
+        t_ok, t0, t1 = cast_mana(cand)
+        tried.append("%d %s" % (cand, cname))
+        if t_ok:
+            skill = cand
+            break
+    if skill is None:
+        return add(nm, "BLOCKED", "no InTown skill could be cast in the Rogue Encampment (tried %s)" % ", ".join(tried), [], log)
+    town_ok = t0 is not None and t1 is not None and t1 >= t0
+    notes.append("town: skill %d cast OK (after %d tries), mana %s -> lowest %s" % (skill, len(tried), t0, t1))
+    goto(2)
+    close_menu()
+    kill_all_near()
+    prep(skill)
+    f_ok, f0, f1 = cast_mana(skill)
+    field_ok = f_ok and f0 is not None and f1 is not None and f0 - f1 >= 5
+    notes.append("field: skill %d cast %s, mana %s -> lowest %s (cost %s)" % (skill, "OK" if f_ok else "refused", f0, f1, (f0 - f1) if f0 is not None and f1 is not None else "?"))
+    kill_all_near()
+    for s_, v in saved.items():
+        if v is not None:
+            setstat("player", s_, v)
+    add(nm, "PASS" if town_ok and field_ok else "FAIL", "; ".join(notes), [], log)
+
+
+
+def merc_dead():
+    """True when the mercenary is dead (`h merc`: mode 0 / 8, or no life), None when there is none."""
+    _, lines = H("merc")
+    for l in lines:
+        m = re.match(r"merc id=\d+ .*mode=(\d+) life=(-?\d+)/", l)
+        if m:
+            return int(m.group(1)) in (0, 8) or int(m.group(2)) <= 0
+    return None
+
+
+def revive_price_expected(level):
+    """Median's mercenary revive price (D2Hirelings 0x10067450): 100 gold a level up to 105, then 250 * (level - 90)^1.5."""
+    return level * 100 if level <= 105 else int(((level - 90) ** 1.5) * 250)
+
+
+def check_mercrevive():
+    name = "Mercenary revive price (Median: level x 100 to 105, 250 x (level - 90)^1.5 above)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    fight_ready()  # first: it kills everything near, the mercenary too
+    if not ensure_merc():
+        return add(name, "BLOCKED", "no mercenary could be hired")
+    saved = rd("merc", 12)
+    rows, bad, log = [], [], []
+    txt = mxl_text()
+    if "merc revive price on" not in txt:
+        bad.append("`mxl` does not say `merc revive price on`: %s" % next((l for l in txt.splitlines() if "merc revive" in l), "-"))
+    for level in (1, 80, 105, 106, 126, 150):
+        ok, line, _l = hv("mercprice %d" % level, "mercprice")
+        want = revive_price_expected(level)
+        m = re.search(r"price=(-?\d+) median=(-?\d+)", line)
+        got = int(m.group(1)) if m else None
+        rows.append("level %d: D2R's price function says %s (want %d)" % (level, got, want))
+        log.append(line)
+        if not ok or got != want:
+            bad.append(rows[-1])
+    setstat("merc", 12, saved or 1)
+    # the price the death computes (0x4ffb90 asks the price function at the moment the mercenary dies)
+    priced0 = None
+    mm = re.search(r"merc revive price .*\((\d+) priced", mxl_text())
+    priced0 = int(mm.group(1)) if mm else None
+    for level in (126,):  # one death: the dead mercenary cannot be killed twice; 126 differs from the sweep's last level 150
+        if not ensure_merc():
+            bad.append("no mercenary for the death test at level %d" % level)
+            continue
+        setstat("merc", 12, level)
+        setstat("merc", 6, 256)  # one life point left, then one ordinary hit (a huge one is ignored by the engine)
+        r = None
+        for _ in range(4):
+            ok, line, _l = hv("hit merc phys 100000", "hit")
+            r = line[:100]
+            if merc_dead() is not False:
+                break
+            time.sleep(1)
+        if merc_dead() is False:
+            H("kill nearest")  # the harness' own kill of the nearest monster, which is the mercenary
+        time.sleep(1)
+        txt = mxl_text()
+        m = re.search(r"merc revive price .*\((\d+) priced, last (-?\d+) gold for level (\d+)\)", txt)
+        last = (int(m.group(2)), int(m.group(3))) if m else None
+        priced1 = int(m.group(1)) if m else None
+        if priced0 is not None and priced1 == priced0:
+            bad.append("death at level %d: the price function was not called (priced count stays %s)" % (level, priced1))
+        priced0 = priced1
+        dead = merc_dead()
+        rows.append("merc of level %d killed (hit %s; merc afterwards: %s): last price %s" % (level, r, {True: "dead", False: "alive", None: "gone"}[dead], last))
+        log.append(rows[-1])
+        if last is None or last != (revive_price_expected(level), level):
+            bad.append("death at level %d: last price %s, want %s" % (level, last, (revive_price_expected(level), level)))
+    # at the NPC: the menu of Kashya with the mercenary dead (the price the dialog shows and charges is the same function)
+    menu = None
+    try:
+        goto(1)
+        close_menu()
+        menu = npc_menu(150)
+    except Exception as e:  # the dialog is the part most likely to differ; report it, do not fail on it
+        log.append("npc menu: %s" % e)
+    if menu:
+        log += menu
+        rows.append("Kashya's menu opened with the mercenary dead (%d lines listed; the revive line is the client's own, not clicked)" % len(menu))
+    close_menu()
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]), [sh("mercrevive")], log)
+
+
+def check_questxp():
+    name = "Act 5 quest experience (Rite of Passage): a flat 50,000 in every difficulty, none above level 129"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    st = goto(109)
+    if st["player"].get("area") != 109:
+        return add(name, "BLOCKED", "could not reach Harrogath (area %s)" % st["player"].get("area"))
+    close_menu()
+    god(False)
+    lvl0, xp0 = rd("player", 12), rd("player", 13)
+    d0 = st["player"].get("difficulty", 0)
+    rows, bad, log = [], [], []
+    txt = mxl_text()
+    if "quest experience on" not in txt:
+        bad.append("`mxl` does not say `quest experience on`: %s" % next((l for l in txt.splitlines() if "quest experience" in l), "-"))
+    cases = ((0, 25, 50000), (1, 45, 50000), (2, 65, 50000), (2, 130, 0), (2, 150, 0))  # difficulty, level, wanted gain
+    for diff, level, want in cases:
+        H("difficulty %d" % diff)
+        setstat("player", 12, level)
+        setstat("player", 13, 1000)
+        H("quest 39 0 clear")
+        H("quest 39 13 clear")
+        ok, line, lines = hv("a5done", "a5done")
+        log += lines
+        m = re.search(r"level (\d+)->(\d+) xp (-?\d+)->(-?\d+) gained=(-?\d+)", line)
+        gained = int(m.group(5)) if m else None
+        rows.append("difficulty %d level %d: gained %s (want %d)" % (diff, level, gained, want))
+        if not ok or gained != want:
+            bad.append(rows[-1] + " [%s]" % line)
+    txt = mxl_text()
+    log += [l for l in txt.splitlines() if "quest experience" in l]
+    H("difficulty %d" % d0)
+    setstat("player", 12, lvl0 or 1)
+    setstat("player", 13, xp0 or 0)
+    H("quest 39 0 clear")
+    add(name, "PASS" if not bad else "FAIL", "`h a5done` (D2R's own Rite of Passage completion): %s" % ("; ".join(rows) if not bad else "; ".join(bad[:6])),
+        [sh("questxp")], log)
+
+
+def check_questrewards():
+    name = "Quest rewards D2Sigma removes: Qual-Kehk runes, Akara ring, Andariel chipped gems, Hellforge and Countess classes"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    rows, bad, log = [], [], []
+    m0 = mxl_mark()
+    txt = mxl_text()
+    qr = next((l for l in txt.splitlines() if "quest rewards" in l), "")
+    log.append(qr)
+    if "quest rewards on" not in qr:
+        bad.append("`mxl`: %s" % (qr or "no quest rewards line"))
+    runes = ("r07", "r08", "r09", "r10")
+
+    def count(code):
+        return len(items(hstate(), code)) + ground_count(code)
+
+    def ground_total():
+        for l in H("dump ground")[1]:
+            m = re.match(r"ground items (\d+)", l)
+            if m:
+                return int(m.group(1))
+        return 0
+
+    # Qual-Kehk (Normal): Median's r08 r09 r10 only; D2R would add r07 r08 r09 (r07 absent, r08 / r09 once)
+    st = goto(109)
+    if st["player"].get("area") == 109:
+        close_menu()
+        H("difficulty 0")
+        H("packclear")
+        for r in runes:
+            H("remove %s 6" % r)
+        H("quest 36 0 clear")
+        H("quest 36 1 set")
+        H("quest 36 6 clear")
+        H("quest 36 7 clear")
+        before = {r: count(r) for r in runes}
+        if not H("interact 515")[0]:  # the message packet is handled for the NPC the player is talking to
+            H("spawn 515")
+            H("interact 515")
+        time.sleep(3)
+        ok, ml = H("msg 515 0x4e8e")
+        time.sleep(3)
+        got = {r: count(r) - before[r] for r in runes}
+        rows.append("Qual-Kehk gave %s" % " ".join("%s x%d" % (r, got[r]) for r in runes))
+        log += ml
+        if not ok:
+            bad.append("Qual-Kehk could not be reached (msg 515)")
+        elif got != {"r07": 0, "r08": 1, "r09": 1, "r10": 1}:
+            bad.append("Qual-Kehk runes %s (want r08 r09 r10 once each, no r07)" % got)
+    else:
+        bad.append("could not reach Harrogath")
+
+    # Akara: no ring (the Heart is the reward)
+    goto(1)
+    close_menu()
+    H("quest 4 1 set")
+    H("packclear")
+    H("remove 600 6")
+    H("remove rin 6")
+    before = count("rin")
+    if not H("interact 148")[0]:
+        H("spawn 148")
+    ok, ml = H("msg 148 0x76")
+    time.sleep(3)
+    ring, heart = count("rin") - before, count("600")
+    rows.append("Akara gave %d rings and %d hearts" % (ring, heart))
+    log += ml
+    if ring != 0:
+        bad.append("Akara still gave a ring")
+    close_menu()
+
+    # Andariel: the two chipped gems of the vanilla quest drop are gone (three kills would leave 6 or more of them)
+    gems = ("gcv", "gcy", "gcb", "gcg", "gcr", "skc")
+    H("difficulty 0")
+    H("quest 47 0 clear")
+    n0 = sum(count(c) for c in gems)
+    for _ in range(3):
+        H("spawn 156")
+        H("kill nearest 156")
+        time.sleep(1)
+    n1 = sum(count(c) for c in gems) - n0
+    rows.append("three Andariel kills dropped %d chipped gems (vanilla: at least 6, two a kill; the standard roll can add a few)" % n1)
+    if n1 >= 6:
+        bad.append("Andariel dropped %d chipped gems in three kills" % n1)
+
+    # Hellforge (Hephasto 376) and the Countess (45): the plugin rolls Median's classes (counters in `mxl`)
+    def counters():
+        t = mxl_text()
+        m = re.search(r"quest rewards .*\(hellforge (\d+), countess (\d+), prison of ice (\d+)\)", t)
+        return tuple(int(x) for x in m.groups()) if m else None
+
+    c0 = counters()
+    g0 = ground_total()
+    # the forge is an object (class 376) that the harness cannot spawn: the reward function runs on a monster standing in for it
+    H("spawn 1")
+    okh, lh = H("hellforgereward 1")
+    time.sleep(1)
+    c1 = counters()
+    g1 = ground_total()
+    rows.append("Hellforge reward function run (%s): hellforge counter %s -> %s, ground items %d -> %d" % ("ok" if okh else "failed", c0, c1, g0, g1))
+    log += lh
+    if not (c0 and c1 and c1[0] == c0[0] + 1 and g1 > g0):
+        bad.append("Hellforge class not rolled: counters %s -> %s, ground items %d -> %d" % (c0, c1, g0, g1))
+    # Anya's Prison of Ice reward task: D2R builds a ring request, the hook makes it an amulet
+    H("packclear")
+    a0 = count("amu")
+    okp, lp = H("prisonreward")
+    time.sleep(1)
+    a1 = count("amu")
+    c3 = counters()
+    rows.append("Prison of Ice reward task run (%s): amulets %d -> %d, rewritten counter %s" % ("code rewritten" if okp else "code NOT rewritten", a0, a1, c3[2] if c3 else None))
+    log += lp
+    if not okp or a1 != a0 + 1:
+        bad.append("Prison of Ice reward: amulets %d -> %d (%s)" % (a0, a1, lp[:1]))
+    # a Countess spawned by the harness is not on quest 5's unit list (see check_tower): the kill never reaches the quest
+    # handler, so the reward function runs on its own with the kill context set by hand
+    c1, g1 = counters(), ground_total()
+    H("spawn 45")
+    okc, lc = H("countessreward")
+    time.sleep(1)
+    c2 = counters()
+    g2 = ground_total()
+    rows.append("Countess reward: counters %s -> %s, ground items %d -> %d" % (c1, c2, g1, g2))
+    log += lc
+    if not (c1 and c2 and c2[1] == c1[1] + 1 and g2 > g1):
+        bad.append("Countess class not rolled: counters %s -> %s, ground items %d -> %d" % (c1, c2, g1, g2))
+    log += [l for l in mxl_lines_since(m0) if re.search(r"hellforge|countess|qual-kehk|quest exp", l)]
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]) + " | " + "; ".join(rows), [sh("questrewards")], log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -5392,7 +6149,10 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
           ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("heat", check_heat),
           ("trophytimer", check_trophytimer),
-          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages)]
+          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages),
+          ("skillscaling", check_skillscaling),
+          ("nodurability", check_nodurability), ("autoid", check_autoid), ("townmana", check_townmana),
+          ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards)]
 
 
 def write_report(extra=""):

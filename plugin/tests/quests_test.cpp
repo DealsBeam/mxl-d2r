@@ -141,6 +141,19 @@ int RunQuestsTests() {
 	          TcJewelcraft.row == NpcTyraelAct4 && TcJewelcraft.difficulty == 1,
 	      "bonus class rows");
 
+	// Act 5 quest experience: flat 50,000, nothing above level 129 (D2Sigma 0x9fa20)
+	Check(QuestExperienceFor(1) == 50000 && QuestExperienceFor(99) == 50000 && QuestExperienceFor(129) == 50000, "quest xp flat");
+	Check(QuestExperienceFor(130) == 0 && QuestExperienceFor(150) == 0, "no quest xp above 129");
+
+	// rewards D2Sigma replaces: the rows that hold the classes, the amulet, the Countess gate
+	Check(TcHellforge(0).row == 257 && TcHellforge(2).row == 257 && TcHellforge(1).difficulty == 1, "hellforge class rows");
+	Check(TcCountess(0).row == 266 && TcCountess(2).difficulty == 2, "countess class rows");
+	static_assert(CodePrisonAmulet == 0x20756d61U);
+	Check(CodePrisonAmulet == Code("amu "), "prison amulet code");
+	Check(CountessRewardDue(true, false) && !CountessRewardDue(true, true) && !CountessRewardDue(false, false) &&
+	          !CountessRewardDue(false, true),
+	      "countess reward gate");
+
 	if (failures == 0) {
 		std::printf("quests: all tests passed\n");
 	}
