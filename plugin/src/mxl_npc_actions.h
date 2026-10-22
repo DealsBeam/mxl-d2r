@@ -53,7 +53,8 @@ inline constexpr Action Actions[ActionCount] = {
 // Menu slots of the NPCs that have any. kind = npcRow * 16 + slot is what the client sends (packet 0x38 kind
 // 0x10 + kind). label = D2R string id of the entry text (0 = none). sub: 10 = an entry of the submenu opened
 // by the top-level slot before it, 0 = a top-level entry. confirm: the client asks Yes / No first, with the text
-// `prompt` (D2R string id, 0 = none), before it sends the kind.
+// `prompt` (D2R string id, 0 = none), before it sends the kind. A Median-only string has no D2R id: label /
+// prompt are 0 and labelKey / promptKey hold its full key ("medianxl:<key>"; plugin/src/strings.h StringId).
 struct Slot {
 	int32_t npcRow;
 	int32_t slot;
@@ -64,43 +65,45 @@ struct Slot {
 	uint16_t sub;
 	uint16_t prompt;
 	bool confirm;
+	const char* labelKey;
+	const char* promptKey;
 };
 inline constexpr int32_t SlotCount = 34;
 inline constexpr Slot Slots[SlotCount] = {
-    {2, 0, 148, 26, 19, 33257, 0, 33257, true},
-    {4, 0, 154, 16, 20, 28265, 0, 0, false},
-    {5, 0, 155, 11, 23, 3382, 0, 0, false},
-    {6, 0, 175, 0, 4, 3383, 0, 0, false},
-    {15, 0, 210, 12, 24, 3384, 0, 0, false},
-    {16, 0, 244, 31, 26, 40516, 0, 0, false},
-    {16, 1, 244, 27, 27, 40517, 10, 0, false},
-    {16, 2, 244, 28, 28, 40518, 10, 0, false},
-    {16, 3, 244, 29, 29, 40519, 10, 0, false},
-    {16, 4, 244, 30, 30, 40520, 10, 0, false},
-    {17, 0, 245, 31, 26, 40516, 0, 0, false},
-    {17, 1, 245, 27, 27, 40517, 10, 0, false},
-    {17, 2, 245, 28, 28, 40518, 10, 0, false},
-    {17, 3, 245, 29, 29, 40519, 10, 0, false},
-    {17, 4, 245, 30, 30, 40520, 10, 0, false},
-    {18, 0, 246, 31, 26, 40516, 0, 0, false},
-    {18, 1, 246, 27, 27, 40517, 10, 0, false},
-    {18, 2, 246, 28, 28, 40518, 10, 0, false},
-    {18, 3, 246, 29, 29, 40519, 10, 0, false},
-    {18, 4, 246, 30, 30, 40520, 10, 0, false},
-    {25, 0, 264, 0, 5, 3385, 0, 0, false},
-    {26, 0, 265, 31, 26, 40516, 0, 0, false},
-    {26, 1, 265, 27, 27, 40517, 10, 0, false},
-    {26, 2, 265, 28, 28, 40518, 10, 0, false},
-    {26, 3, 265, 29, 29, 40519, 10, 0, false},
-    {26, 4, 265, 30, 30, 40520, 10, 0, false},
-    {30, 0, 367, 13, 25, 22738, 0, 0, false},
-    {36, 0, 511, 17, 22, 22748, 0, 0, false},
-    {37, 0, 512, 18, 21, 22749, 0, 0, false},
-    {41, 0, 520, 31, 26, 40516, 0, 0, false},
-    {41, 1, 520, 27, 27, 40517, 10, 0, false},
-    {41, 2, 520, 28, 28, 40518, 10, 0, false},
-    {41, 3, 520, 29, 29, 40519, 10, 0, false},
-    {41, 4, 520, 30, 30, 40520, 10, 0, false},
+    {2, 0, 148, 26, 19, 0, 0, 0, true, "medianxl:AkaraMenu1b", "medianxl:AkaraMenu1b"},
+    {4, 0, 154, 16, 20, 0, 0, 0, false, "medianxl:NpcMenuImbue", nullptr},
+    {5, 0, 155, 11, 23, 3382, 0, 0, false, nullptr, nullptr},
+    {6, 0, 175, 0, 4, 3383, 0, 0, false, nullptr, nullptr},
+    {15, 0, 210, 12, 24, 3384, 0, 0, false, nullptr, nullptr},
+    {16, 0, 244, 31, 26, 0, 0, 0, false, "medianxl:strCainMenuCraftMaterials", nullptr},
+    {16, 1, 244, 27, 27, 0, 10, 0, false, "medianxl:strCainMenuCMHoradricCube", nullptr},
+    {16, 2, 244, 28, 28, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst1", nullptr},
+    {16, 3, 244, 29, 29, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst2", nullptr},
+    {16, 4, 244, 30, 30, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst3", nullptr},
+    {17, 0, 245, 31, 26, 0, 0, 0, false, "medianxl:strCainMenuCraftMaterials", nullptr},
+    {17, 1, 245, 27, 27, 0, 10, 0, false, "medianxl:strCainMenuCMHoradricCube", nullptr},
+    {17, 2, 245, 28, 28, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst1", nullptr},
+    {17, 3, 245, 29, 29, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst2", nullptr},
+    {17, 4, 245, 30, 30, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst3", nullptr},
+    {18, 0, 246, 31, 26, 0, 0, 0, false, "medianxl:strCainMenuCraftMaterials", nullptr},
+    {18, 1, 246, 27, 27, 0, 10, 0, false, "medianxl:strCainMenuCMHoradricCube", nullptr},
+    {18, 2, 246, 28, 28, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst1", nullptr},
+    {18, 3, 246, 29, 29, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst2", nullptr},
+    {18, 4, 246, 30, 30, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst3", nullptr},
+    {25, 0, 264, 0, 5, 3385, 0, 0, false, nullptr, nullptr},
+    {26, 0, 265, 31, 26, 0, 0, 0, false, "medianxl:strCainMenuCraftMaterials", nullptr},
+    {26, 1, 265, 27, 27, 0, 10, 0, false, "medianxl:strCainMenuCMHoradricCube", nullptr},
+    {26, 2, 265, 28, 28, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst1", nullptr},
+    {26, 3, 265, 29, 29, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst2", nullptr},
+    {26, 4, 265, 30, 30, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst3", nullptr},
+    {30, 0, 367, 13, 25, 22738, 0, 0, false, nullptr, nullptr},
+    {36, 0, 511, 17, 22, 22748, 0, 0, false, nullptr, nullptr},
+    {37, 0, 512, 18, 21, 22749, 0, 0, false, nullptr, nullptr},
+    {41, 0, 520, 31, 26, 0, 0, 0, false, "medianxl:strCainMenuCraftMaterials", nullptr},
+    {41, 1, 520, 27, 27, 0, 10, 0, false, "medianxl:strCainMenuCMHoradricCube", nullptr},
+    {41, 2, 520, 28, 28, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst1", nullptr},
+    {41, 3, 520, 29, 29, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst2", nullptr},
+    {41, 4, 520, 30, 30, 0, 10, 0, false, "medianxl:strCainMenuCMCatalyst3", nullptr},
 };
 
 }  // namespace mxl_npc

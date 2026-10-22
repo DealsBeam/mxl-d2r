@@ -40,6 +40,7 @@
 #include "d2r.h"
 #include "items_ext_logic.h"
 #include "mxl_items.h"
+#include "strings.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -452,7 +453,11 @@ auto TrophyOf(const mxl_items::SigmaItem& entry) noexcept -> const mxl_items::Tr
 
 // The right click on a trophy: its challenge text in the chat log, the title in gold.
 void RevealTrophy(d2r::Unit* player, const mxl_items::Trophy& trophy) noexcept {
-	items_ext::ForEachTrophyLine(trophy.text, [player](const char* line, bool title) {
+	char text[2048];
+	if (!StringLookup(trophy.key, text, sizeof(text))) {
+		return;  // no localization service: nothing to print
+	}
+	items_ext::ForEachTrophyLine(mxlstr::SkipLeadingNumberLine(text), [player](const char* line, bool title) {
 		SendClientMessage(player, line, title ? clientmsg::Tan : clientmsg::White);
 	});
 }

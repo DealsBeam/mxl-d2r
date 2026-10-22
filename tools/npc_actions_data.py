@@ -7,9 +7,11 @@ Sources (extract/mxl, the compiled tables; layout in docs/subsystems/npc-hirelin
                   confirm (1 = ask first; only Akara's respec line)
   npcactions.bin  31 rows x 52 bytes: i32 type, i32 requirement row, i32 flags, 10 x i32 values
 
-Median string ids become D2R ids through work/mod/strings_idkeys.json (Median id -> key) and the string JSONs in
-work/mod/data/local/lng/strings (key -> D2R id): the client menu looks lines up by D2R id. Re-run this after
-tools/tbl2json.py changes the ids (build.py runs it after sigma_data.py). NPC class ids are the Median monstats
+Median string ids become strings through work/mod/strings_idkeys.json (Median id -> key). A key of D2R's own string files
+(native) is written as its D2R id, found in the string JSONs in work/mod/data/local/lng/strings (key -> D2R id). A Median-only
+key (`medianxl:<key>`, docs/strings-namespace.md) has no number: the slot gets id 0 and the full key, and the plugin gives D2R
+a number of its own at run time (plugin/src/strings.cpp). Re-run this after tools/tbl2json.py changes the ids (build.py runs it
+after sigma_data.py). NPC class ids are the Median monstats
 rows; the NPC rows go through work/named/idmap.json (vanilla NPCs map to themselves).
 
 Usage: python tools/npc_actions_data.py [--root <repo with extract/ and work/>]
@@ -62,13 +64,16 @@ def main() -> int:
     npcs = table(bins, "npcext", NPC_ROW)
     actions = table(bins, "npcactions", ACTION_ROW)
 
-    def d2r_label(median_id: int) -> int:
+    def d2r_label(median_id: int) -> tuple[int, str]:
+        """(D2R id, "") for a native string, (0, full key) for a namespaced one, (0, "") for none."""
         if median_id == NO_STRING:
-            return 0
+            return 0, ""
         key = idkeys.get(str(median_id))
+        if key is not None and ":" in key:  # medianxl:<key>
+            return 0, key
         if key is None or key not in by_key:
             raise SystemExit(f"string {median_id} has no D2R id (key {key!r}); run tools/tbl2json.py first")
-        return by_key[key]
+        return by_key[key], ""
 
     out = [HEADER, "#pragma once", "", "#include <cstdint>", "", "namespace mxl_npc {", "",
            "// npcactions (D2Sigma's NPC action table): type, requirement row (mxl_requirements.h), flags, up to ten values.",
@@ -101,8 +106,10 @@ def main() -> int:
                 continue
             rows.append((n, s, cls, req, act, d2r_label(lab), sub, d2r_label(prompt), confirm))
     out += [f"inline constexpr int32_t SlotCount = {len(rows)};", "inline constexpr Slot Slots[SlotCount] = {"]
-    for n, s, cls, req, act, lab, sub, prompt, confirm in rows:
-        out.append(f"    {{{n}, {s}, {cls}, {req}, {act}, {lab}, {sub}, {prompt}, {'true' if confirm else 'false'}}},")
+    for n, s, cls, req, act, (lab, lab_key), sub, (prompt, prompt_key), confirm in rows:
+        c_key = lambda k: f'"{k}"' if k else "nullptr"
+        out.append(f"    {{{n}, {s}, {cls}, {req}, {act}, {lab}, {sub}, {prompt}, {'true' if confirm else 'false'}, "
+                   f"{c_key(lab_key)}, {c_key(prompt_key)}}},")
     out += ["};", "", "}  // namespace mxl_npc", ""]
     args.out.write_text("\n".join(out), encoding="utf-8")
     print(f"npc actions: {len(actions)} actions, {len(rows)} menu slots on {len({r[2] for r in rows})} NPCs -> {args.out}")
