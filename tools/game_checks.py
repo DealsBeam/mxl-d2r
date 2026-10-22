@@ -10,10 +10,11 @@ aborts the run when the real cursor enters the game window or the game window be
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
 Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
-craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb avoidcaps classlock
+craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps classlock
 hiregates itemrolls dye goldclient bonusdrops summoner tooltip gameend trophy statcols skilltree keybinds npcstrings
 automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills cowportals deathcrash nocorpse
-nslong strings goblinname rewardsound statorder infopanel sprint nodurability autoid townmana.
+nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
+heat trophytimer nodurability autoid townmana.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -646,6 +647,186 @@ def check_trophy():
         "printed lines are read from the screenshots (trophy_hover*.png, trophy_revealed.png)" % (
             used[0] if used else "-", sent0, sent1, sent2, failed0, failed2, kept), shots, made + used + again)
     H("remove a56 5")
+
+
+def skill_usable(skill):
+    """The game's usability code (`h skills`, 0x33f360) of one skill of the player, None when he has not got it."""
+    ok, lines = H("skills")
+    for ln in lines:
+        m = re.match(r"skill id=(\d+) level=\d+ mode=\d+ owner=-?\d+ usable=(\d+)", ln)
+        if m and int(m.group(1)) == skill:
+            return int(m.group(2))
+    return None
+
+
+def check_steadyaim():
+    """Hunter's Steady Aim (docs/median-rules-audit.md SK10): Steady Shot (D2R 1368) builds stat 220 layer 5 on state
+    sk1296_state one per shot up to the cap; Heartseeker (352, restrict 5: needs the state) is refused without it
+    (plugin/src/skill_restrict.cpp), spends one charge per cast and drops the state at the last one."""
+    nm = "Steady Aim: Steady Shot builds the counter, Heartseeker needs it and spends it (restrict 5)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(2)  # Blood Moor
+    kill_all_near()
+    st0 = hstate()["player"]
+    cls0 = st0.get("class")
+    log = []
+    for cmd in ("class 5", "stat player 0 set 400", "stat player 2 set 400", "unequip rhand", "equip 163 rhand",
+                "unequip lhand", "equip aqv lhand", "setskill 1368 5", "setskill 352 5"):
+        ok, lines = H(cmd)
+        log += lines
+    counter = lambda: stat_of(H("stat player 220 5")[1])
+    before = skill_usable(352)
+    first = counter()
+    H("spawn 3 1")
+    seen = []
+    for _ in range(4):
+        H("cast 1368 nearest")
+        time.sleep(2.5)
+        seen.append(counter())
+    during = skill_usable(352)
+    ok, lines = H("cast 352 nearest")
+    log += lines
+    time.sleep(2.5)
+    after_one = counter()
+    for _ in range(6):
+        if not counter():
+            break
+        H("cast 352 nearest")
+        time.sleep(2.5)
+    end = counter()
+    after = skill_usable(352)
+    kill_all_near()
+    if cls0 is not None:
+        H("class %d" % cls0)
+    good = (before == 4 and first == 0 and seen == [1, 2, 3, 4] and during == 0 and after_one is not None
+            and 0 < after_one < seen[-1] + 1 and end == 0 and after in (1, 4))  # 1 = Heartseeker's cooldown answers before the restriction
+    add(nm, "PASS" if good else "FAIL",
+        "Heartseeker usability (4 = restricted) before the first shot %s, counter %s; after Steady Shot x4 the counter reads %s "
+        "and Heartseeker %s; one Heartseeker leaves %s; spent to %s and Heartseeker %s (4 restricted, or 1 while its cooldown runs)" % (
+            before, first, seen, during, after_one, end, after), (), log)
+
+
+def check_heat():
+    """The Fire Sorceress's Heat (docs/median-rules-audit.md SK11): Molten Core (D2R 1682, a class skill) puts the heat loss
+    rate in stat 297; with it set the mana bar drains outside a town instead of regenerating (plugin/src/heat.cpp), Flamefront
+    (482) puts a negative rate on the caster for a moment, which builds heat, and a town stops the drain."""
+    nm = "Heat: stat 297 drains the mana bar outside town, Flamefront builds it, a town holds it"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(2)
+    kill_all_near()
+    cls0 = hstate()["player"].get("class")
+    log = []
+    for cmd in ("class 1", "setskill 482 5", "setskill 1682 5"):
+        ok, lines = H(cmd)
+        log += lines
+    mana = lambda: stat_of(H("stat player 8")[1])
+    rate = stat_of(H("stat player 297")[1])
+    H("stat player 8 set 25600")
+    top = mana()
+    time.sleep(2.5)
+    mid = mana()
+    time.sleep(2.5)
+    low = mana()
+    for _ in range(12):  # run it dry (the floor is 0)
+        if mana() == 0:
+            break
+        time.sleep(2)
+    empty = mana()
+    H("spawn 3 1")
+    peak = empty
+    H("cast 482 nearest")
+    seen_negative = False
+    for _ in range(8):
+        peak = max(peak, mana() or 0)
+        seen_negative = seen_negative or (stat_of(H("stat player 297")[1]) or 0) < 0
+    kill_all_near()
+    goto(1)  # Rogue Encampment
+    H("stat player 8 set 12800")
+    time.sleep(3)
+    town = mana()
+    goto(2)
+    H("stat player 8 set 25600")
+    if cls0 is not None:
+        H("class %d" % cls0)
+    good = (rate is not None and rate > 0 and top is not None and top >= 25000 and mid is not None and mid < top and low is not None and low < mid
+            and empty == 0 and peak > 0 and seen_negative and town == 12800)
+    add(nm, "PASS" if good else "FAIL",
+        "stat 297 = %s; mana x256 from full: %s -> %s (2.5 s) -> %s (5 s) -> %s (empty, floor 0); Flamefront at empty: peak %s, "
+        "stat 297 went negative: %s; in town (set to 12800, 3 s later): %s" % (rate, top, mid, low, empty, peak, seen_negative, town), (), log)
+
+
+def check_trophytimer():
+    """Trophy challenge windows (docs/median-rules-audit.md CR4, DC6; plugin/src/trophy_timer.cpp). The Heart of Sin recipe
+    (assassin row 6377: Azmodan's Heart a56, unique 27, challenge code 167166 in stat 378) must match within 10 s of the code
+    appearing, be refused later, and be refused after the player left the area or died. Control: the stat still holds the
+    code in every refused case, so the refusal is the window, not the stat compare."""
+    nm = "Trophy timer: cube in time passes, too late / another zone / dead is refused"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    goto(1)
+    if not items(hstate(), "box"):  # the character may not have found its cube yet
+        H("item box inv")
+    H("cubeclear")
+    cls0 = hstate()["player"]["class"]
+    H("class 6")  # the recipe is for assassins
+    log, res = [], {}
+
+    def attempt(label):
+        H("flag player 9 clear")  # the recipe sets it and the follow-up recipe 6358 (same item) opens with it
+        H("cubeclear")
+        H("item a56 cube uniq=27")
+        ok, lines = H("cubecraft")
+        r = re.search(r"recipe (\d+)", lines[0]) if lines else None
+        res[label] = (ok and r is not None and r.group(1) == "6377", lines[0][:60] if lines else "-")
+        log.extend(lines)
+        H("cubeclear")
+
+    def start():
+        H("stat player 378 set 0")
+        time.sleep(1)
+        H("stat player 378 set 167166")
+        time.sleep(1.5)  # the frame hook samples the players every 5 frames
+
+    try:
+        start()
+        attempt("in time")
+        start()
+        time.sleep(11.5)
+        held_late = stat_of(H("stat player 378")[1])
+        attempt("too late")
+        start()
+        goto(2)
+        goto(1)
+        held_zone = stat_of(H("stat player 378")[1])
+        attempt("other zone")
+        goto(2)  # a town does not let a hit kill
+        atk = spawn_attacker(1)
+        start()
+        H("stat player 6 set 25600")
+        H("hit player phys 2000000000 %s" % (atk or ""))  # from a spawned monster; 1/256 life points
+        for _ in range(12):  # the death animation runs a second or two
+            time.sleep(1)
+            if hstate()["player"].get("mode") in (0, 17):
+                break
+        died = hstate()["player"].get("mode") in (0, 17)
+        time.sleep(3)  # the sampler sees the dead player
+        revive_if_dead()
+        goto(1)
+        held_dead = stat_of(H("stat player 378")[1])
+        attempt("died")
+    finally:
+        H("stat player 378 set 0")
+        H("class %d" % cls0)
+        H("cubeclear")
+    held = (held_late, held_zone, held_dead)
+    good = (res["in time"][0] and not res["too late"][0] and not res["other zone"][0] and not res["died"][0]
+            and died and all(v == 167166 for v in held))
+    add(nm, "PASS" if good else "FAIL",
+        "recipe 6377 matched: in time %s; 12 s later %s; after goto 2 and back %s; after dying %s (the character died: %s; stat 378 "
+        "still %s in the refused cases)" % (res["in time"][0], res["too late"][0], res["other zone"][0], res["died"][0], died, held),
+        (), log)
 
 
 def check_cain():
@@ -1699,18 +1880,18 @@ BIG_LIFE = 2097151  # 8191 life points in D2's 8.8 fixed point
 
 
 def hit(ref, elem, amount, attacker=None):
-    """One `hit`: the target at full life, returns (lost raw, absorbed raw, result flags) or None."""
+    """One `hit`: the target at full life, returns (lost raw, absorbed raw, result flags, the element's field after the step) or None."""
     setstat(ref, 7, BIG_LIFE)
     setstat(ref, 6, BIG_LIFE)
     for _ in range(8):  # result 0: the engine ignored the hit (just arrived in the area, hit recovery); try again
         ok, line, _l = hv("hit %s %s %d%s" % (ref, elem, amount, (" " + attacker) if attacker else ""), "hit")
-        m = re.search(r"life=(-?\d+)->(-?\d+) lost=\S+ absorbed=(-?\d+) result=0x(\w+)", line)
+        m = re.search(r"life=(-?\d+)->(-?\d+) lost=\S+ absorbed=(-?\d+) result=0x(\w+)(?: field=(-?\d+))?", line)
         if not ok or not m:
             return None
         if int(m.group(4), 16) != 0:
             break
         time.sleep(1)
-    return int(m.group(1)) - int(m.group(2)), int(m.group(3)), int(m.group(4), 16)
+    return int(m.group(1)) - int(m.group(2)), int(m.group(3)), int(m.group(4), 16), int(m.group(5)) if m.group(5) else None
 
 
 def spawn_attacker(cls=1):
@@ -1862,6 +2043,124 @@ def check_absorb():
     add(name, "PASS" if not bad else "FAIL",
         "100000-unit hits on the player (stat 184 from other sources: %s%%); healed amount = D2R's cut run through the three stats: %s"
         % (base184, "; ".join(rows)), [sh("absorb")], rows)
+
+
+def _field_cut(field, pct):
+    """Median's percent step on a damage field (D2Sigma 0x10057f10): no floor, the cut truncates."""
+    return field - field * pct // 100 if field > 0 and pct else field
+
+
+def _field_reduce(field, divisor, pct, tpct, duration=False):
+    """What Median leaves of a field once D2R's step is done: 189 (divide, or halve a duration to 5 at least), 184, 417."""
+    if field <= 0:
+        return field
+    if divisor:
+        field = max(field >> 1, 5) if duration else field // divisor
+    if duration:
+        return field
+    return _field_cut(_field_cut(field, pct), tpct)
+
+
+def check_damagered():
+    name = "Damage reduction stats 184 / 189 / 417 (D2R 369 / 373 / 446) on the incoming damage itself (D2Sigma 0x10057c10)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    fight_ready()
+    elems = [("fire", 39, 40, 1), ("ltng", 41, 42, 2), ("cold", 43, 44, 4), ("magic", 37, 38, 3)]
+    absorb = [142, 143, 144, 145, 146, 147, 148, 149]
+    stats = [s for e in elems for s in e[1:3]] + absorb + [369, 373]
+    saved = {s: rd("player", s) for s in stats}
+    saved_t = {l: rd("player", 446, l) for l in range(0, 6)}
+    for e in elems:  # resist 200 with no max-resist: the cap leaves 25% of every hit, whatever the difficulty's penalty
+        setstat("player", e[1], 200)
+        setstat("player", e[2], 0)
+    for s in absorb:  # no absorb unless a probe asks for it
+        setstat("player", s, 0)
+    setstat("player", 369, 0)  # `stat set` writes the base value; what is left is what other sources give
+    setstat("player", 373, 0)
+    for l in range(0, 6):
+        setstat("player", 446, 0, l)
+    p0 = rd("player", 369) or 0
+    amount, pre, rows, bad = 100000, 25000, [], []
+
+    def note(label, got, want, ok):
+        rows.append("%s: %s (want %s)" % (label, got, want))
+        if not ok:
+            bad.append(rows[-1])
+
+    def probe(label, elem, want, amt=amount):
+        r = hit("player", elem, amt)
+        note(label, "field %s lost %s" % (r and r[3], r and r[0]), want, r is not None and r[3] == want and abs(r[0] - want) <= 2)
+
+    probe("baseline, 184 from other sources %d%%" % p0, "fire", _field_reduce(pre, 0, p0, 0))
+    setstat("player", 373, 4)
+    probe("189 divisor 4", "fire", _field_reduce(pre, 4, p0, 0))
+    setstat("player", 373, 0)
+    setstat("player", 369, 50)
+    p = rd("player", 369)
+    probe("184 -> %d%%" % p, "fire", _field_reduce(pre, 0, p, 0))
+    setstat("player", 369, 0)
+    setstat("player", 446, 50, 1)
+    probe("417 layer 1 (fire) 50%", "fire", _field_reduce(pre, 0, p0, 50))
+    probe("417 layer 1 on cold (unchanged)", "cold", _field_reduce(pre, 0, p0, 0))
+    setstat("player", 446, 0, 1)
+    for elem, _res, _mx, layer in elems:
+        setstat("player", 446, 40, layer)
+        probe("417 layer %d (%s) 40%%" % (layer, elem), elem, _field_reduce(pre, 0, p0, 40))
+        setstat("player", 446, 0, layer)
+    # all three on odd numbers: the order (divide, 184, 417) and the truncation of every step show in the exact field
+    setstat("player", 373, 3)
+    setstat("player", 369, 33)
+    p = rd("player", 369)
+    setstat("player", 446, 17, 1)
+    probe("all three on 25001 (189 3, 184 %d%%, 417 17%%)" % p, "fire", _field_reduce(25001, 3, p, 17), amt=100005)
+    setstat("player", 373, 0)
+    setstat("player", 369, 0)
+    setstat("player", 446, 0, 1)
+    # the absorb credit is computed before these stats: 30% of the 25000 left by the resist is 7500, healed through 189 (and 184)
+    setstat("player", 142, 30)
+    setstat("player", 373, 4)
+    r = hit("player", "fire", amount)
+    want_heal, want_field = _credit(7500, 4, p0, 0), _field_reduce(17500, 4, p0, 0)
+    note("fire absorb 30% + 189 divisor 4", "healed %s field %s" % (r and r[1], r and r[3]), "healed %s field %s" % (want_heal, want_field),
+         r is not None and abs(r[1] - want_heal) <= 2 and r[3] == want_field)
+    setstat("player", 142, 0)
+    setstat("player", 373, 0)
+    # durations: 189 halves a freeze / cold length (at least 5 frames); 184 / 417 leave it alone
+    for elem in ("flen", "clen"):
+        r0 = hit("player", elem, 400)
+        base = r0[3] if r0 else None
+        if base is None:
+            bad.append("%s: no hit" % elem)
+            continue
+        for label, divisor, pct, tpct in (("189 divisor 4", 4, 0, 0), ("189 divisor 1000", 1000, 0, 0), ("184 50%, 417 50%", 0, 50, 50)):
+            setstat("player", 373, divisor)
+            setstat("player", 369, pct)
+            setstat("player", 446, tpct, 0)
+            r = hit("player", elem, 400)
+            want = _field_reduce(base, divisor, 0, 0, duration=True)
+            note("%s %s (base %s)" % (elem, label, base), r and r[3], want, r is not None and r[3] == want)
+            setstat("player", 373, 0)
+            setstat("player", 369, 0)
+            setstat("player", 446, 0, 0)
+    setstat("player", 373, 2)
+    r = hit("player", "flen", 16)
+    note("flen 16 with 189 (the floor of 5 frames)", r and r[3], 5, r is not None and r[3] == 5)
+    setstat("player", 373, 0)
+    # physical damage takes stat 417 with layer 0 (the layer Median passes for it)
+    r0 = hit("player", "phys", amount)
+    setstat("player", 446, 50, 0)
+    r1 = hit("player", "phys", amount)
+    want = _field_cut(r0[3], 50) if r0 and r0[3] is not None else None
+    note("phys 417 layer 0 50%% of %s" % (r0 and r0[3]), r1 and r1[3], want, r1 is not None and want is not None and r1[3] == want)
+    for s, v in saved.items():
+        setstat("player", s, 0 if (v is None or s in (369, 373)) else v)
+    for l, v in saved_t.items():
+        setstat("player", 446, v or 0, l)
+    add(name, "PASS" if not bad else "FAIL",
+        "hits on the player at resist 200 (25%% of 100000 left) and freeze / cold lengths; the damage field after D2R's step must equal Median's "
+        "formula exactly (divide, then 184, then 417, no floor): %s" % ("; ".join(rows) if not bad else "; ".join(bad)),
+        [sh("damagered")], rows)
 
 
 def _avoid_rate(ref, kind, stat, value, max_avoid, n=2000):
@@ -4729,7 +5028,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
           ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
           # the verify rows of docs/unported.md
-          ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
+          ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
           ("trophy", check_trophy), ("statcols", check_statcols),
@@ -4747,7 +5046,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("nslong", check_nslong),
           ("strings", check_strings),
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
-          ("sprint", check_sprint),
+          ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("heat", check_heat),
+          ("trophytimer", check_trophytimer),
           # audit IT1 / IT2 / IT3 / SK3 (lane gap-items)
           ("nodurability", check_nodurability), ("autoid", check_autoid), ("townmana", check_townmana)]
 

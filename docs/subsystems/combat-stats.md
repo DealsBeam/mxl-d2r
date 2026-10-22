@@ -58,7 +58,7 @@ Median's own damage rules are not in this module but in the skill do-functions: 
 | 0x10057530, 0x10057690 | hit attempt: line of sight / distance test (D2Common 11138), the to-hit roll, then the avoid check mapped to result flags (avoid 0x100, dodge 0x80, block 0x8000, evade clears the hit); the second form is the missile version | `0x44b2b0` (melee hit), `0x45bc40` (missile hit) | vanilla; **done** |
 | 0x100577c0 | likely the damage percent between two units: 100 normally; 25 (0x19) between two mercenary-class units, a monstats value for a pet owner, 17 (0x11) for monsters hitting players, 0x15e / 200 for monsters with a negative owner state | `difficultylevels.txt` `PlayerDamagePercentVS*`, `MercenaryDamagePercentVS*` | data (migrated columns); **done**; PvP check in 4 |
 | 0x10057a20 | absorb step of the damage block: the defender's absorb percent (cap 40) and flat stat cut the damage and the cut amount heals the defender (added to the block's absorbed total). Median runs every credited amount through the defender's stats 189 (divide, never below 1 point), 184 (percent off) and 417 (percent off, layer = damage type 1 fire / 2 lightning / 3 magic / 4 cold / 5 poison); the damage cut is unchanged | `0x450670` (called from the per-hit step `0x4523e0`) | **native hook, verified in game** (combat.cpp) |
-| 0x10057c10 | the same three stats applied to the damage fields of a block (divide / halve durations / percent off). **Live, corrected 2026-10-22**: the stub `0x1009b7e0` calls it, and D2Sigma patches D2Game rva `0xdc4ea` so it replaces the call to `6fcfbd00` (the per-type mitigation step of `SUnitDmg`, `6fcfc0b0`) | none | **missing**, see [sigma-patch-audit.md](../sigma-patch-audit.md) and [unported.md](../unported.md) |
+| **0x10057c10** | the same three stats applied to the damage fields of a block. **Live, corrected 2026-10-22**: the stub `0x1009b7e0` calls it, and D2Sigma patches D2Game rva `0xdc4ea` so it replaces the call to `6fcfbd00` (the per-type mitigation step of `SUnitDmg`, `6fcfc0b0`). It wraps the original step, see section 2.4 | `0x4523e0` (the per-type step; `0x44df10` calls it for each of the twelve entries) | **native hook, done** (combat.cpp, off word `damagered`) |
 
 ### 1.3 D2Stats.cpp
 
@@ -182,7 +182,44 @@ guard flag 0x100000 of D2Sigma is not set (unknown meaning in D2R). Same off wor
   with fire resist 0 against a fire bolt shooter, net loss 70 / 106 / 249 per 30 s with 446 layer 1 = 0 / 50 and no absorb
   (the test Barbarian also carries stat 369 = 7 from a source not found, which is why the credit is 7% lower in the log).
   Median's second helper `0x10057c10` (the same stats on the damage fields) is **not** dead code (corrected 2026-10-22, [sigma-patch-audit.md](../sigma-patch-audit.md)):
-  stub `0x1009b7e0` reaches it from D2Game rva `0xdc4ea`, so the stats also cut incoming damage; not ported.
+  stub `0x1009b7e0` reaches it from D2Game rva `0xdc4ea`, so the stats also cut incoming damage; ported, section 2.4.
+- **Damage reduction stats 184 / 189 / 417 on the incoming damage itself: done (lane pa-damagered, off word `damagered`).**
+  What D2Sigma does, read from the code (`tools/sigma_fn.py`, `tools/disasm.py`) and not guessed:
+  - The loop of `SUnitDmg` (D2Game `6fcfc0b0`, call at rva `0xdc4e9`) runs the per-type step `6fcfbd00` for the twelve entries of
+    the damage table (`6fd22ab0`: Phys, Fire, Ligt, Cold, Magc, CLen, FLen, PLen, Pois, Life, Mana, Stam; D2Sigma points the loop at its
+    own copy `0x101d8ea0`, which differs in one cell). D2Sigma redirects the call to the stub `0x1009b7e0` (`push [esp+4]; mov edx,eax;
+    call 0x10057c10; ret 4`: ecx = context, edx = table entry, stack = the "no resistance" flag).
+  - `0x10057c10` starts with `0x10041e00`, which is `push [esp+4]; mov eax,edx; call [6fcfbd00]; ret 4` (the pointer `0x101f1d44`
+    is the import of `6fcfbd00`). So the **original step runs first, whole** (flat reduction, resistance, the absorb with Median's
+    credit): the audit's worry that the step "is not run any more" does not apply. Nothing is lost; the stats come on top.
+  - Then, when the entry's field (`block + entry[0]`) is not 0, it reads the defender's stats and applies them one after the other
+    to the updated field: **189** (`0x10057d20`): a damage field becomes `field / divisor` (signed, truncating; **no floor** unlike the
+    absorb credit's one life point), a duration (cold, freeze, poison length) becomes `max(field >> 1, 5)` whatever the divisor; **184**
+    (`0x10057f10`): a damage field loses `field * stat / 100` (64-bit product, truncating); **417** (`0x10057f10` again, layer = the type
+    from `0x10057d70`): the same cut. The percent steps do nothing to durations. The sets are two jump tables: damage offsets
+    `0x8, 0x10, 0x14, 0x1c, 0x20, 0x24, 0x28, 0x38, 0x3c, 0x40` (physical, fire, burn, lightning, magic, cold, poison, the three
+    leeches) and durations `0x18, 0x2c, 0x30, 0x34, 0x44`; a step needs its stat non-zero and the field above 0.
+  - Layers of 417: fire 1, burn 11, lightning 2, magic 3, cold 4, poison 5, life leech 6, mana leech 7, stamina leech 8; physical
+    and the durations 0. (The absorb credit uses 1-5 only: its layer comes from the resistance stat.)
+  - Order against the rest of the hit: resistance, flat reduction and absorb first (inside the original step), so the **absorb credit
+    is computed from the damage before these stats** and the heal is not reduced twice; then 189, 184, 417 on what is left; then the
+    total of the block is summed from the fields.
+  - D2R: `0x4523e0` (ctx, entry, flag) is the twin of `6fcfbd00` and returns the field's new value (it ends with `mov [r15],edi`,
+    `mov eax,edi`). Entry `+0` points at the field, `+0x30` at its name string, so the hook (`HitStepHook`) calls the original, reads
+    the name (the first four characters give kind and layer, `combat_logic.h` `DamageTypeOfName`), reads the defender's 373 / 369 /
+    446 (`ctx + 0x18`) and writes the reduced field and the return value, which D2RLoader's wrapper (`0x3e2b496`) tracks. Entry
+    bytes `48 89 6c 24 18 56 41 54 41 55 41 56 41 57 48 83 ec 50`, 18 bytes, no rip-relative operand. The immediate of the max-resist
+    clamp at `0x4524dd` lies inside the same function, far from the hook.
+  - Deviations: a result under 0 is held at 0 (a divisor or percent that is negative or above 100 would heal in Median; no Median
+    row has one). Everything else is Median's arithmetic.
+  - Who has the stats: monsters (monprop `time` / `stam` rows, 439 and 965 uses), a few skills, two runewords and the Barbarian
+    hireling for 184. Stat 189 is also the "immune to open wounds / crushing blow" flag (items-xp.md section 5), so a monster with
+    that immunity also takes damage divided by the value of the stat.
+  - Check `damagered` (game_checks): fire, lightning, cold and magic hits at resist 200 against the player (25000 left of 100000)
+    with each stat alone and all three on odd numbers; the damage block's field after the step equals the formula to the unit and
+    the life lost is within 2 of it; the absorb credit of a hit with absorb and 189 equals the credit of the damage before the
+    stats; freeze and cold lengths halve to 5 at least and ignore 184 / 417; physical takes 417 layer 0. Harness `hit` got the
+    elements `pois life mana stam clen flen plen` and prints `field=`.
 - **Mercenary caps: done, not exercised in game.** Resistances: the per-hit step tests the context flag `ctx+0x24`
   ("defender is a monster that is not a hireling"), which is 0 for mercenaries, so they already take the player branch and
   the patched 90 cap. Avoid / dodge / evade: D2Sigma caps them for "player or hireling" (`0x100bfad0` or `0x100bf9e0`), the
