@@ -171,6 +171,96 @@ As a module: `Gr2File.read(bytes)`, `parse_tree(g)` (typed `Obj` tree with `.f` 
   `Position.w` and `VertexScale` consistently, as the exporter must anyway. Screenshots are in the lane's run folders
   (`checks-20261022-173647-s1`, `checks-20261022-174859-s1`), not committed.
 
+### Mesh swap in game (Wereowl lane, step 2, 2026-10-22)
+
+`tools/d2r_mesh.py` (`replace_with_mesh`) writes a generated triangle mesh into a vanilla `.model` through the Writer: it keeps
+one donor mesh as the template, rewrites the vertices (28 B skinned layout, `Position` quantised against `VertexScale`, tangents
+from the UVs), `Indices16`, the single group, the bone bindings (box per bone in the bone's own space, via the skeleton's
+`InverseWorldTransform`), `bbMin/bbMax/VertexScale`, and drops the donor's other meshes. Without weights the mesh is rigid to
+one bone (`pelvis_bind_jnt`). `tools/sprite3d/mesh_prep.py` decimates a Hunyuan3D GLB to that input (`.npz`),
+`tools/sprite3d/deploy_unit_model.py` copies the files into a slot and points a built unit at them.
+
+Results on slot 2 (goatman1 torso, Hunyuan3D Wereowl mesh, 5 LODs, ~25k tris at LOD 0, spawned with `cheat mspawn wereowl`):
+
+| Test | Result |
+|---|---|
+| Swapped model at the donor's own path (`goatman1/torso_lodN.model`) | draws, the Wereowl mesh with goatman's textures on planar UVs |
+| Byte-identical copy of the donor's models at a **new directory** (`wc/`, `wereowl3d/`), unit JSON and `ModelDefinitionComponent` pointing there | **invisible** (no error in the logs, only the player is drawn) |
+| Writer round trip at a new directory | invisible |
+| New file name in the donor's directory (`goatman1/wotorso_lodN.model`) | invisible |
+| Swapped model at the path of a vanilla model nothing in Median uses (`wargoatman/torso_lodN.model`; the others are `colossal1-3`, `corpsefire`, `cowking`, `darkelder`, `horse`, `pig`, `seagull`) | draws, only the Wereowl unit shows it; goatman1 keeps its own model |
+| Own `.texture` (RGBA8 from `d2r_texture.write_rgba`, a recoloured goatman albedo) written over an existing vanilla path (`pig/textures/pig_alb.texture`), the model's albedo map pointing at that path | draws, but see section 3b: an RGBA8 albedo is read wrongly (colour noise on the wolf material) and a 2048 px one lost the GPU device; BC3 (format 62) at 1024 is the format that works |
+
+So the engine loads a `.model` only when its path is one D2R already has (a folder mod overrides existing files; a new `.json`
+or `.texture` file name was not needed or tested in this step). The way to give one unit its own model without touching
+another unit's is to **override the files of a vanilla unit that no Median Id maps to** and point the unit JSON's model
+entity at that path; the skeleton and state machine stay the donor's (goatman1). New textures should be tried the same way
+(override a texture file of the same unused unit; not tested at a brand-new path).
+
+## 3b. The Wereowl in game: Druid form and Corrupted Wereowl (lane wereowl-3d, 2026-10-23)
+
+Build step `tools/wereowl_models.py` (in `tools/build.py` after `hd_monsters.py`; rigging in `tools/sprite3d/rig_fit.py`; in game
+test scripts `tools/sprite3d/morph_shots.py` for the Druid and `ingame_shots.py` for the enemy). The assets are not in the repo:
+`MXL_3D_DIR` (default `D:\mxl-3d\out\wereowl\s3\tex`) holds `mesh_lods.npz` and `albedo.png`.
+
+**Off switch:** `MXL_NO_3D=1` in the environment of the build (or `py -3 tools/wereowl_models.py --off`, or no assets in
+`MXL_3D_DIR`): the step does nothing and both uses keep the goatman1 stand-ins of `hd_monsters.py`. Nothing else in the build
+depends on the step.
+
+### Median's morph mechanics
+The Druid's form is a state drawn as a **monster unit**: skill `wereowl_form` (id 1364) sets state `wereowl_form_state` (id 278),
+whose `gfxtype` 1 / `gfxclass` is a monstats row (Median row 1066 = Id `wereowl`, row 1083 in the port). The client draws the
+player as that monster: monsters.json[Id] -> unit JSON -> model, skeleton, state machine; the player's animation requests
+(neutral, walk, run, attack, cast, get hit) are answered by the unit's clips. The port moves Median's monster rows, so
+`txt_migrate.py state_graphics()` rewrites the `gfxclass` of Median's own state rows to the migrated ID (before that fix the state
+pointed at a different monster). D2R's own wolf and bear forms (430 / 431) are unchanged.
+
+### Skeleton rigged to, and why
+The Wereowl mesh is rigged to **the werewolf skeleton** (`enemy/wolf`, 111 bones, the unit of the vanilla werewolf form). The
+unit is a copy of `wolf.json` (`mxl_wereowl3d`: state machine, Traversal / Fidget / LookAt, `vfxshell` part and all werewolf
+animations are reused), only its torso model entity is pointed at our model. The Wereowl is a bipedal beast with the werewolf's
+proportions, so the werebear fallback and goatman1 were not needed for the Druid. The enemy uses **goatman1** (the donor
+`hd_monsters.py` already chose for `corrupted_wereowl`, so its clips, the x1.25 scale and the corrupted colour stay).
+Rigging (`rig_fit.py`): the mesh is posed to the skeleton's bind proportions with hand-placed joint roles (arms, legs, spine, head,
+tail), vertex weights are the 4 nearest capsule segments (smoothed), each role's vertices are un-posed into the bone's bind space,
+and a unit scale u (wolf 0.55, goatman1 0.75) goes into the unit JSON's root transform so the in-game size is that of the Median
+sprite. The vertex layout is the donor's (28 byte skinned vertices, bone bindings with boxes).
+
+### Path problem (new model files for player forms)
+The engine loads `.model` / `.texture` only at paths D2R already has (section 3 table: a new directory or file name is invisible;
+a folder mod overrides vanilla paths). **Unit JSON files are different**: a new `data/hd/character/enemy/<name>.json` is found
+through monsters.json (hd_monsters.py writes about 1,200 of them). Player forms are monsters to the renderer, so they use the same
+free route as enemies: **no new path and no plugin hook were needed.** The model and texture files are written over the vanilla
+paths of units Median never spawns: Druid `enemy/horse/torso_lod0..4.model` + `horse/textures/horse_{alb,nrm,orm}.texture`; enemy
+`enemy/wargoatman/torso_lod0..4.model` + `pig/textures/pig_{alb,nrm,orm,sss}.texture`. Nine such units exist (`colossal1-3`,
+`corpsefire`, `cowking`, `darkelder`, `horse`, `pig`, `seagull`, `wargoatman`); each new 3D model uses one. Registering new paths
+through D2RLoader's ResourceService (in-memory files under `data/...d2rloader/<plugin-id>/`) was not tried for models; it stays
+the fallback if the nine run out.
+**Scale:** the form is drawn at the unit JSON's root `TransformDefinitionComponent` scale, like a monster; the character's own
+scale does not apply. `set_scale` multiplies it by the rig's u, in game the form is about as tall as the werewolf form.
+
+### Findings that cost time (keep)
+| Test (slot 2) | Result |
+|---|---|
+| Plain copy of the wolf models at the horse path, unit = wolf copy | draws the werewolf (control) |
+| Writer round trip of all wolf LODs at the horse path | draws |
+| Our mesh (rigid or skinned) at the horse path, vanilla textures, plain unit copy | draws |
+| Albedo `.texture` RGBA8 (format 31) | drawn as colour noise (maps are read as block compressed) |
+| Albedo RGBA8 2048 px (22 MB) | **GPU device lost** ("Present failed" 0x887A0005) at the first draw, every time |
+| Albedo BC3 (format 62, `d2r_texture.write_bc3`) 1024 px | correct colours |
+| Normal / ORM / mask as BC3 | too dark (decoded as sRGB); BC5 (format 61, `write_bc5`: red and green only) is what D2R uses for them |
+| Albedo as baked (mean 41 of 255) | reads as black in game; `ALBEDO_GAMMA` 0.5 in `wereowl_models.py` lifts it |
+
+Crash notes: three D2R instances at about 6.5 GB VRAM each exceed 16 GB, and a device lost in one game can take the others down;
+run in-game tests while at most one other lane's game is up. The unit keeps its `vfxshell` entity (a copy without it was tried
+inside a confounded series of runs and is not recommended).
+
+### In-game result (2026-10-23, build 93847, slot 2)
+Druid casting Wereowl (`cast 1364 self` from `morph_shots.py`): morph, neutral, walk, run, attack, cast and get hit draw the
+textured model with the werewolf animations. Corrupted Wereowl (`cheat mspawn 1985`): neutral, walk, attack, get hit and death draw.
+Known gaps: the fur is flat (flat normal and ORM, no fur shell layer), the albedo is gamma lifted, both uses share one mesh and one
+texture, the skinning is automatic (some limb stretch in the attack frames).
+
 ## 4. Pipeline sketch: artist's Blender rig -> D2R unit
 
 ### 4.1 Steps

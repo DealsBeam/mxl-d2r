@@ -1200,6 +1200,28 @@ class Migrator:
         self.report.append("\nproperty parameters: Median skill/monster row numbers -> migrated IDs: " +
                            ", ".join(f"{t} {n}" for t, n in counts.items() if n))
 
+    def state_graphics(self) -> None:
+        """Median's transform states (druid forms, prayer, treewarden ...) draw the unit as a monster: gfxtype 1 and
+        gfxclass = the monstats row of the form (Median's numbering). D2R keeps its rows at their IDs and Median's
+        monsters move (wereowl row 1066 is id 1083), so rewrite gfxclass to the migrated ID. Only Median's own
+        state rows are changed; D2R's wolf and bear keep 430 / 431."""
+        ids = self.median_ids("monstats")
+        named = {r[0] for r in read_tsv(NAMED / "states.txt")[1] if r}
+        changed = []
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "states.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            gt, gc = h.index("gfxtype"), h.index("gfxclass")
+            for r in rows:
+                if is_record(r) and r[0] in named and r[gt] == "1" and r[gc].isdigit() and ids.get(int(r[gc]), int(r[gc])) != int(r[gc]):
+                    if bank == "base":
+                        changed.append(f"{r[0]} {r[gc]}->{ids[int(r[gc])]}")
+                    r[gc] = str(ids[int(r[gc])])
+            write_tsv(p, h, rows)
+        self.report.append(f"\nstates: gfxclass Median monstats row -> migrated ID: {len(changed)} ({', '.join(changed[:12])}{' ...' if len(changed) > 12 else ''})")
+
     def property_defaults(self) -> None:
         """propertiesext (work/sigma/propertiesext.txt, one i32 per properties row, 4 of 437 non-zero) is a default
         parameter: D2Sigma wraps the property functions that take a skill (11, 22, 24; D2Sigma 0x1009d020, 0x1009d0e0,
@@ -2177,6 +2199,7 @@ def main() -> int:
     m.item_spells()
     m.help_tooltips()
     m.remap_property_params()
+    m.state_graphics()
     m.property_defaults()
     m.missile_functions()
     m.item_spell_tables()
