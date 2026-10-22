@@ -145,6 +145,9 @@ def main():
     if not (assets / "mesh_lods.npz").exists() or not (assets / "albedo.png").exists():
         print("no Wereowl 3D assets in %s: goatman1 stand-ins stay" % assets)
         return 0
+    if (assets / "mesh_lods.npz").read_bytes()[:40].startswith(b"version https://git-lfs"):
+        print("Wereowl 3D assets in %s are Git LFS pointers (run `git lfs install` + `git lfs pull`): goatman1 stand-ins stay" % assets)
+        return 0
     data = ROOT / "work" / "mod"  # the game paths (ENEMY ...) start with data/
     hdc = data / "data" / "hd" / "character"
     npz = dict(np.load(assets / "mesh_lods.npz", allow_pickle=True))
