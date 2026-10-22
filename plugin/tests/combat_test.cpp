@@ -29,6 +29,13 @@ int RunCombatTests() {
 	      "block cap");
 	Check(BlockCap(0, true) == 50 && BlockCap(25, true) == 50 && BlockCap(-20, true) == 30, "Indomitable limits block to 50");
 
+	// the Indomitable lookup (a skill level read through the unit's own data bank) is only made above the limit of 50
+	int lookups = 0;
+	const auto has = [&lookups](bool v) { return [&lookups, v] { ++lookups; return v; }; };
+	Check(BlockCapFor(30, 75, has(true)) == 50 && lookups == 1, "block 75 with Indomitable is capped to 50");
+	Check(BlockCapFor(30, 75, has(false)) == 80 && lookups == 2, "block 75 without Indomitable keeps the cap of 80");
+	Check(BlockCapFor(30, 50, has(true)) == 80 && lookups == 2, "block 50 or less does not look Indomitable up");
+
 	// resistances: 75 + the max stat, at most 90 (D2R's own ceiling is 95)
 	Check(ResistCap(0, ResistMaxMedian) == 75 && ResistCap(10, ResistMaxMedian) == 85 && ResistCap(15, ResistMaxMedian) == 90 &&
 	          ResistCap(20, ResistMaxMedian) == 90,

@@ -249,6 +249,31 @@ int RunNpcActionsTests() {
 		Check(fns[0] == 0x140112eb0 && fns[1] == 0x7ffa12340001 && fns[2] == 0x140114000 && fns[3] == 0 && rec[0x40] == 1,
 		      "handlers follow their ids, the flag byte behind the five handler slots is untouched");
 	}
+	// the respec asks first (npcext PromptConfirm), nothing else does
+	{
+		const int akara = SlotOf(148, 0);
+		Check(akara >= 0 && NeedsConfirm(akara), "Akara's respec line asks Yes / No first");
+		Check(ConfirmText(akara) == mxl_npc::Slots[akara].label && ConfirmText(akara) != 0,
+		      "the prompt text is the respec label (npcext PromptLabel)");
+		int asking = 0;
+		for (int i = 0; i < mxl_npc::SlotCount; ++i) {
+			asking += NeedsConfirm(i) ? 1 : 0;
+		}
+		Check(asking == 1, "only the respec line has a confirmation");
+		Check(!NeedsConfirm(-1) && !NeedsConfirm(mxl_npc::SlotCount), "out of range slots do not ask");
+		Check(StringYes == 3344 && StringNo == 3345, "D2R's stock Yes / No string ids");
+
+		Confirmation c;
+		Check(!c.open && c.Answer(true) == 0, "Yes with nothing pending sends nothing");
+		c.Open(KindFor(148, 0), ConfirmText(akara));
+		Check(c.open && c.Answer(true) == KindFor(148, 0) && !c.open, "Yes sends the line's kind once");
+		Check(c.Answer(true) == 0, "a second Yes sends nothing");
+		c.Open(KindFor(148, 0), ConfirmText(akara));
+		Check(c.Answer(false) == 0 && !c.open, "No sends nothing and ends the confirmation");
+		c.Open(KindFor(148, 0), 1);
+		c.Open(KindFor(244, 0), 2);
+		Check(c.Answer(true) == KindFor(244, 0), "a new confirmation replaces the pending one");
+	}
 	// Akara [Talk, Trade] gets the line at the end; a full record refuses
 	{
 		alignas(8) std::uint8_t rec[RecordSize] = {};

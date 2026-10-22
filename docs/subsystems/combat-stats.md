@@ -143,11 +143,11 @@ Unit tests: `plugin/tests/combat_test.cpp`.
 
 ### 2.2 Avoid / dodge / evade and block limits (`combat.cpp`, `combat_logic.h`)
 
-D2R's `0x44ef70` (game, defender, missile) is hooked. It runs, then for a player and a success whose stat is above
+D2R's `0x44ef70` (attacker unit, defender unit, missile flag; not a Game) is hooked. It runs, then for a player and a success whose stat is above
 Median's cap the success is kept with probability cap / stat (one extra roll on the unit's seed), which equals rolling on
 the cap. Caps: dodge / avoid / evade `min(75, 60 + stat 380)`, block `min(80, 50 + stat 387)`, 50 with the skill
 Indomitable (base level > 0). Stats are the migrated ids (Median 205 -> 380, 213 -> 387; skill 1063 -> 1135).
-Block uses D2R's own block chance (`0x450070`) as the "stat", so it can only be lowered to Median's cap, never above D2R's
+The Indomitable lookup takes the data bank flag from the defender (`0x34a0e0`); until 0.51.0 it read byte `+0x106` of the attacker unit. Block uses D2R's own block chance (`0x450070`) as the "stat", so it can only be lowered to Median's cap, never above D2R's
 75. Off word: `combat`.
 
 ### 2.3 Ethereal bonus (`combat.cpp`)

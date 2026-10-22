@@ -5,6 +5,7 @@
 
 #include "mxl_runewords.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace items_ext {
@@ -143,6 +144,47 @@ constexpr auto VanillaPartyAward(int32_t xp, int32_t n, int32_t level, int32_t s
 	const int64_t extra = static_cast<int64_t>(n - 1) * 0x59 * xp;
 	const int64_t pool = xp + ((extra + (extra < 0 ? 0xff : 0)) >> 8);
 	return static_cast<int32_t>(static_cast<double>(level) * (static_cast<double>(pool) / sum));
+}
+
+// --- Trophy challenges --------------------------------------------------------------------------------------------
+
+// The right click on a trophy (misc2 InteractString) prints the challenge text (mxl_items.h Trophies) as chat lines: one per
+// text line, spaces at both ends dropped, blank lines left out, each cut to what a chat record holds. `out(line, first)`
+// gets a NUL-terminated line and whether it is the title. Returns the number of lines.
+inline constexpr size_t TrophyLineMax = 250;
+
+template <class Out>
+auto ForEachTrophyLine(const char* text, Out out) noexcept -> int {
+	int lines = 0;
+	while (text != nullptr && *text != '\0') {
+		const char* end = text;
+		while (*end != '\0' && *end != '\n') {
+			++end;
+		}
+		const char* from = text;
+		const char* to = end;
+		while (from < to && *from == ' ') {
+			++from;
+		}
+		while (to > from && (to[-1] == ' ' || to[-1] == '\r')) {
+			--to;
+		}
+		if (to > from) {
+			char line[TrophyLineMax + 1];
+			size_t n = static_cast<size_t>(to - from);
+			if (n > TrophyLineMax) {
+				n = TrophyLineMax;
+			}
+			for (size_t i = 0; i < n; ++i) {
+				line[i] = from[i];
+			}
+			line[n] = '\0';
+			out(static_cast<const char*>(line), lines == 0);
+			++lines;
+		}
+		text = *end == '\n' ? end + 1 : end;
+	}
+	return lines;
 }
 
 }  // namespace items_ext

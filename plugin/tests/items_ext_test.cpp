@@ -1,7 +1,12 @@
 // Tests of the item and experience rules (items_ext_logic.h, mxl_runewords.h). Run through mxl_tests (requirements_test.cpp main).
 #include "../src/items_ext_logic.h"
+#include "../src/mxl_items.h"
 
 #include <cstdio>
+#include <iterator>
+#include <set>
+#include <string>
+#include <vector>
 
 namespace {
 int failures = 0;
@@ -104,6 +109,46 @@ int RunItemsExtTests() {
 	Check(RowOfRecord(table + 0xe8 * 4, table, 4, 0xe8) == -1, "past the end");
 	Check(RowOfRecord(table + 1, table, 4, 0xe8) == -1 && RowOfRecord(nullptr, table, 4, 0xe8) == -1, "unaligned and null");
 	Check(RowOfRecord(table, table + 8, 4, 0xe8) == -1, "record before the table");
+
+	// trophy challenge text (the right click on a trophy)
+	{
+		std::vector<std::string> got;
+		std::vector<bool> firsts;
+		const auto collect = [&](const char* line, bool first) {
+			got.emplace_back(line);
+			firsts.push_back(first);
+		};
+		Check(ForEachTrophyLine("Title\nRequirements: \n  Kill it\r\n\n\nGrants: \n+1\n", collect) == 5 && got.size() == 5, "five text lines");
+		Check(got[0] == "Title" && got[1] == "Requirements:" && got[2] == "Kill it" && got[3] == "Grants:" && got[4] == "+1",
+		      "spaces and CR are trimmed, blank lines dropped");
+		Check(firsts[0] && !firsts[1] && !firsts[4], "only the first line is the title");
+		got.clear();
+		Check(ForEachTrophyLine("", collect) == 0 && ForEachTrophyLine(nullptr, collect) == 0 && ForEachTrophyLine("\n \n", collect) == 0,
+		      "nothing to say");
+		const std::string longLine(400, 'x');
+		got.clear();
+		Check(ForEachTrophyLine(longLine.c_str(), collect) == 1 && got[0].size() == TrophyLineMax, "a long line is cut");
+
+		Check(std::size(mxl_items::Trophies) == 20, "the 20 trophy items of misc2 InteractString");
+		std::set<uint32_t> codes;
+		bool shaped = true;
+		for (const auto& t : mxl_items::Trophies) {
+			codes.insert(t.code);
+			got.clear();
+			shaped = shaped && ForEachTrophyLine(t.text, collect) >= 4 && got[0].find("Trophy Challenge") != std::string::npos;
+		}
+		Check(codes.size() == std::size(mxl_items::Trophies), "every trophy code once");
+		Check(shaped, "every trophy text has a '... Trophy Challenge' title and at least three more lines");
+		bool known = true;  // each trophy is one of the items D2Sigma's help spells (13 / 21) cover
+		for (const auto& t : mxl_items::Trophies) {
+			bool found = false;
+			for (const auto& item : mxl_items::Items) {
+				found = found || (item.code == t.code && (item.spell == 13 || item.spell == 21));
+			}
+			known = known && found;
+		}
+		Check(known, "every trophy is an item with a help spell");
+	}
 
 	return failures;
 }

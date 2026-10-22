@@ -43,7 +43,27 @@ inline auto MeetsRequirements(const Entry& e, const Who& who) noexcept -> bool {
 	return e.classLock == 0 || who.cls + 1 == e.classLock;
 }
 
-enum class Verdict { Allow, Requirements, Sealed };
+// D2Sigma 0x5d810, the quest-table condition: the destination's leveldefs row names a quest (QuestFlagEx, Entry::questLock,
+// 0 = none) and the level is refused unless the player's quest record of the game's difficulty holds one of bits 1, 0, 0xe
+// or 0xf of it (reward pending / granted, completed in this game / earlier). A player without a record is not refused.
+struct QuestBits {
+	bool haveRecord = false;
+	bool pending = false;          // bit 1
+	bool granted = false;          // bit 0
+	bool completedNow = false;     // bit 0xe
+	bool completedBefore = false;  // bit 0xf
+};
+inline constexpr int QuestBitCount = 4;
+inline constexpr int QuestBitList[QuestBitCount] = {1, 0, 0xe, 0xf};
+
+inline auto QuestAllows(const Entry& e, const QuestBits& q) noexcept -> bool {
+	if (e.questLock == 0 || !q.haveRecord) {
+		return true;
+	}
+	return q.pending || q.granted || q.completedNow || q.completedBefore;
+}
+
+enum class Verdict { Allow, Requirements, Quest, Sealed };
 
 // One game's clocks. Times are milliseconds on any monotonic clock.
 class Lockout {
@@ -130,14 +150,19 @@ private:
 	std::array<Slot, mxl_dungeons::EntryCount> slots_{};
 };
 
-// D2Sigma 0x5d810 for a player entering `dst`: requirements first, then the seal (only levels with a lock time).
-inline auto Check(const Lockout& lockout, const Who& who, int32_t dst, uint64_t now) noexcept -> Verdict {
+// D2Sigma 0x5d810 for a player entering `dst`: requirements first, then the quest condition, then the seal (only levels
+// with a lock time). Every refusal is the same unit message in D2Sigma, the order only picks the text.
+inline auto Check(const Lockout& lockout, const Who& who, int32_t dst, uint64_t now, const QuestBits& quest = {}) noexcept
+    -> Verdict {
 	const Entry* e = Find(dst);
 	if (e == nullptr) {
 		return Verdict::Allow;
 	}
 	if (!MeetsRequirements(*e, who)) {
 		return Verdict::Requirements;
+	}
+	if (!QuestAllows(*e, quest)) {
+		return Verdict::Quest;
 	}
 	if (e->lockSeconds != 0 && lockout.Sealed(dst, now)) {
 		return Verdict::Sealed;
