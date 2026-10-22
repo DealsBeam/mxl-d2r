@@ -98,7 +98,7 @@ Median gameplay rules found by [median-rules-audit.md](median-rules-audit.md) th
 
 | Area | Median | Port now | Status | Needs / notes |
 |---|---|---|---|---|
-| Level cap (audit XP1) | max character level 150 | `experience.txt` has 150 rows but Median's `MaxLvl` row lost its label and D2R's `MaxLvl 99` row is appended last, so the engine probably caps at 99 | open | `tools/txt_migrate.py` line 173 (`UNSIGNED_32_TABLES`) has no `MaxLvl` handling; fix the merge, then check XP above level 99 |
+| Level cap (audit XP1) | max character level 150 | ported: Median's `MaxLvl` row (150 for the seven Median classes, the Warlock column keeps D2R's 99) replaces D2R's `MaxLvl` row | done | `tools/txt_migrate.py` `EXPERIENCE_MAXLVL_KEY`; verified by `py -3 tools/game_checks.py all levelcap` ([testing.md](testing.md)) |
 | Player corpse (audit DC1) | no corpse; gear re-equipped in town, potions stay on the belt | D2R's corpse and its retrieval | open | lane `no-corpse` |
 | Respawn cooldown (audit DC4) | 5 second wait before reviving | revives at once | open | plugin hook on the revive path |
 | Gold on death (audit DC3) | no gold loss | unknown (experience loss is blank in `difficultylevels`) | verify | `gold set`, kill the player, `gold get` |
