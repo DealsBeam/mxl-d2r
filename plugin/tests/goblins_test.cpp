@@ -1,4 +1,5 @@
 // Standalone test of the treasure goblin rules (goblins_logic.h; not part of the plugin DLL).
+#include <cstring>
 #include "../src/goblins_logic.h"
 
 #include <cstdio>
@@ -72,6 +73,15 @@ int main() {
 	}
 	// glowing baron stops at monster level 99, the relic thieves start at 100 / 120, voided horror from 100
 	Check(!IsCandidate(mxl_goblins::Goblins[6], 2, 100) && IsCandidate(mxl_goblins::Goblins[6], 2, 99), "baron max 99");
+	// every row carries its own display name; the variants differ from the generic goblin
+	for (int32_t k = 0; k < mxl_goblins::GoblinCount; ++k) {
+		const char* n = NameOf(mxl_goblins::Goblins[k].monster);
+		Check(n != nullptr && n[0] != 0 && std::strcmp(n, mxl_goblins::Goblins[k].name) == 0, "every goblin row has a name");
+	}
+	Check(std::strcmp(NameOf(2791), "Treasure Goblin") == 0 && std::strcmp(NameOf(2792), "Shiny Hoarder") == 0 &&
+	          std::strcmp(NameOf(2793), "Voided Horror") == 0 && std::strcmp(NameOf(2799), "Relic Thief") == 0,
+	      "variant names come from monstats");
+	Check(NameOf(1) == nullptr && NameOf(-1) == nullptr, "no name for a non-goblin");
 	Check(Pick(2, 100, 0) == 2791, "high level draw still starts with the treasure goblin");
 	bool sawThief = false, sawThief2 = false, sawHorror = false, sawRainbow = false, sawBaron = false;
 	const uint32_t t100 = TotalWeight(2, 100), t125 = TotalWeight(2, 125);

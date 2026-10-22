@@ -176,12 +176,13 @@ inline void RewardLine(const char* what, int count, char* out, size_t outSize) n
 
 // The goblin notice. Median's client keeps the goblin's unit id from packet 0x5a type 0x15 (handler 0x91a50) and its push
 // notification code (D2Notifications.cpp 0x90f00) shows the unit's name followed by string 12320 StrPushNotifGoblinAppear,
-// " appears!" (patchstring.tbl), so the line is "<monster name> appears!". The server part has no client-side unit name, it
-// writes the generic goblin name (the variants' own names are monstats strings the client resolves).
+// " appears!" (patchstring.tbl), so the line is "<monster name> appears!". The server has no client-side unit, it writes
+// the variant's own monstats NameStr text (mxl_goblins.h, from the migrated monstats row: "Shiny Hoarder", "Rift
+// Inspector", ...); the generic name only stands in when the row has none.
 inline constexpr const char* GoblinName = "Treasure Goblin";
 inline constexpr const char* GoblinAppearsSuffix = " appears!";
-inline void GoblinAppears(char* out, size_t outSize) noexcept {
-	std::snprintf(out, outSize, "%s%s", GoblinName, GoblinAppearsSuffix);
+inline void GoblinAppears(const char* name, char* out, size_t outSize) noexcept {
+	std::snprintf(out, outSize, "%s%s", (name != nullptr && name[0] != 0) ? name : GoblinName, GoblinAppearsSuffix);
 }
 
 // The lines of an entry refusal for requirements, in the order Median's popup shows them: the level, the difficulty, the

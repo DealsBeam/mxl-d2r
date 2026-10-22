@@ -74,8 +74,12 @@ int main() {
 	Check(std::strcmp(out, "You have received: 3 x Shrine") == 0, "reward count");
 
 	// goblin notice: Median's StrPushNotifGoblinAppear, " appears!", after the monster's name
-	GoblinAppears(out, sizeof(out));
-	Check(std::strcmp(out, "Treasure Goblin appears!") == 0, "goblin notice");
+	GoblinAppears(nullptr, out, sizeof(out));
+	Check(std::strcmp(out, "Treasure Goblin appears!") == 0, "goblin notice, no name: the generic one");
+	GoblinAppears("", out, sizeof(out));
+	Check(std::strcmp(out, "Treasure Goblin appears!") == 0, "goblin notice, empty name: the generic one");
+	GoblinAppears("Shiny Hoarder", out, sizeof(out));
+	Check(std::strcmp(out, "Shiny Hoarder appears!") == 0, "goblin notice names the variant");
 
 	// plugin messages: hidden type, marker, kind letter, hex payload
 	{
