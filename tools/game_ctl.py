@@ -789,13 +789,18 @@ def play_selected():
 
 
 def in_game() -> bool:
-    """The red life orb (bottom left of the HUD) is on screen."""
+    """The red life orb (bottom left of the HUD) is on screen, or else the plugin harness answers `h state` (it fails
+    outside a game). The orb test alone misses a character with almost no life: the sampled upper part is empty."""
     from PIL import ImageStat
     img = grab_client()
     w, h = img.size
     box = (int(.235 * w), int(.87 * h), int(.265 * w), int(.92 * h))
     rr, gg, bb = ImageStat.Stat(img.crop(box).convert("RGB")).mean
-    return rr > 90 and rr > 2 * gg and rr > 2 * bb
+    if rr > 90 and rr > 2 * gg and rr > 2 * bb:
+        return True
+    if BG and vinput() is not None:
+        return hcmd("state", timeout=3)[0]
+    return False
 
 
 class Report:

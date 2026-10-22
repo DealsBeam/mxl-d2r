@@ -1194,10 +1194,11 @@ def check_casts():
 
 
 def spawn_id(cls=18):
-    """Spawns a monster and returns its unit id (the `spawned class N id=M` line)."""
+    """Spawns a monster and returns its unit id (the `spawned class N id=M` line; the monster exists once that line is
+    written, even when the closing "spawn OK" line is late)."""
     ok, lines = H("spawn %d 1" % cls)
-    m = re.search(r"id=(\d+)", " ".join(lines))
-    return int(m.group(1)) if ok and m else None
+    m = re.search(r"spawned class \d+ id=(\d+)", " ".join(lines))
+    return int(m.group(1)) if m else None
 
 
 def check_item_events():
