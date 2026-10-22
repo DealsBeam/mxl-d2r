@@ -22,6 +22,7 @@
 #include "client_messages_logic.h"
 #include "d2r.h"
 #include "goblins_logic.h"
+#include "strings.h"
 #include "testharness.h"
 
 #define NOMINMAX
@@ -150,7 +151,7 @@ void PlayerTick(Game* game, Unit* player, uint32_t frame, int32_t players) noexc
 		return;
 	}
 	const uint32_t n = g_spawned.fetch_add(1) + 1;
-	char notice[96];
+	char notice[160];
 	GoblinAnnounce(player, monster, notice, sizeof(notice));
 	g_lastMonster = monster;
 	g_lastLevel = level;
@@ -274,6 +275,8 @@ void GoblinsStatus(char* out, size_t outSize) noexcept {
 }
 
 auto GoblinAnnounce(void* player, int monster, char* out, size_t outSize) noexcept -> bool {
-	clientmsg::GoblinAppears(goblins::NameOf(monster), out, outSize);
+	char suffix[64];
+	StringText(mxlstr::KeyGoblinAppears, clientmsg::GoblinAppearsSuffix, suffix, sizeof(suffix));
+	clientmsg::GoblinAppears(goblins::NameOf(monster), out, outSize, suffix);
 	return SendClientMessage(static_cast<Unit*>(player), out, clientmsg::Yellow);
 }

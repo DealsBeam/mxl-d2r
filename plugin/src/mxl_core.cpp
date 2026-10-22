@@ -19,13 +19,17 @@
 #include "info_panels.h"
 #include "stat_columns.h"
 #include "item_events.h"
+#include "no_corpse.h"
+#include "no_corpse_logic.h"
 #include "properties_ext.h"
 #include "item_spells.h"
 #include "missile_hits.h"
 #include "mana_costs.h"
 #include "craft_flags.h"
 #include "client_messages.h"
+#include "strings.h"
 #include "game_end.h"
+#include "map_memory.h"
 #include "cube_conditions.h"
 #include "quests_act1.h"
 #include "quests_act2_5.h"
@@ -68,6 +72,9 @@ char g_missileHitsReport[1024] = "";
 char g_cubeReport[192] = "off: not the expected game image";
 char g_craftReport[96] = "off: not the expected game image";
 char g_gameEndReport[96] = "off: not the expected game image";
+char g_mapMemoryReport[128] = "off: not the expected game image";
+char g_noCorpseReport[160] = "off: not the expected game image";
+char g_respawnWaitReport[160] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
 char g_quests2Report[224] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
@@ -75,6 +82,7 @@ char g_goblinsReport[192] = "off: not the expected game image";
 char g_monsterAiReport[192] = "off: not the expected game image";
 char g_monsterLooksReport[256] = "off: not the expected game image";
 char g_npcReport[256] = "off: not the expected game image";
+char g_stringsReport[256] = "off: not the expected game image";
 char g_hirelingsReport[192] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
 char g_reqGatesReport[256] = "off: not the expected game image";
@@ -111,7 +119,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat statcols infopanels itemevents props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings skilltree combat statcols itemevents nocorpse respawnwait props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -192,6 +200,21 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "game end %s (games ended %d)", g_gameEndReport, GameEndCount());
 	Say(command, line);
+	std::snprintf(line, sizeof(line), "map memory %s", g_mapMemoryReport);
+	Say(command, line);
+	{
+		long corpses = 0, penalties = 0, held = 0, respawns = 0;
+		char report[160];
+		if (NoCorpseCounts(&corpses, &penalties, &held, &respawns)) {
+			nocorpse::FormatReport(report, sizeof(report), corpses, penalties);
+		} else {
+			std::snprintf(report, sizeof(report), "%s", g_noCorpseReport);
+		}
+		std::snprintf(line, sizeof(line), "no corpse %s", report);
+		Say(command, line);
+		std::snprintf(line, sizeof(line), "respawn wait %s (held %ld, let through %ld)", g_respawnWaitReport, held, respawns);
+		Say(command, line);
+	}
 	std::snprintf(line, sizeof(line), "act 1 quests %s", g_questsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "act 2-5 quests %s", g_quests2Report);
@@ -223,6 +246,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "skill tree %s", g_skillTreeReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "npc actions %s", g_npcReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "strings %s", g_stringsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "requirement gates %s", g_reqGatesReport);
 	Say(command, line);
@@ -294,6 +319,14 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			InstallClientMessages(context, g_clientMsgReport, sizeof(g_clientMsgReport));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: client messages %s", g_clientMsgReport);
+		context->LogInfo(line);
+		// Median's strings by key (the `medianxl` namespace) and the plugin's own ids for D2R's NPC menu: before the users below.
+		if (Off("strings")) {
+			std::snprintf(g_stringsReport, sizeof(g_stringsReport), "%s", OffNote);
+		} else {
+			InstallStrings(context, g_stringsReport, sizeof(g_stringsReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: strings %s", g_stringsReport);
 		context->LogInfo(line);
 		// Off unless asked for (bug #22, 2026-10-14): D2RLoader 1.3.1 already syncs more than 512 states ("wide
 		// states", D2RCore SendChangedWideStateStats) and reads both arrays at D2R's own offsets (+0xaf0, then the
@@ -379,6 +412,29 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallGameEnd(context, g_gameEndReport, sizeof(g_gameEndReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: game end %s", g_gameEndReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("mapmem")) {
+				std::snprintf(g_mapMemoryReport, sizeof(g_mapMemoryReport), "%s", OffNote);
+			} else {
+				InstallMapMemory(context, g_mapMemoryReport, sizeof(g_mapMemoryReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: map memory %s", g_mapMemoryReport);
+			context->LogInfo(line);
+			if (Off("nocorpse")) {
+				std::snprintf(g_noCorpseReport, sizeof(g_noCorpseReport), "%s", OffNote);
+			} else {
+				InstallNoCorpse(context, g_noCorpseReport, sizeof(g_noCorpseReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: no corpse %s", g_noCorpseReport);
+			context->LogInfo(line);
+			if (Off("respawnwait")) {
+				std::snprintf(g_respawnWaitReport, sizeof(g_respawnWaitReport), "%s", OffNote);
+			} else {
+				InstallRespawnWait(context, g_respawnWaitReport, sizeof(g_respawnWaitReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: respawn wait %s", g_respawnWaitReport);
 			context->LogInfo(line);
 		}
 		{
