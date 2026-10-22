@@ -31,7 +31,15 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
   way: key not in D2R's files).
 - **Table cells:** every localization cell (namestr, NameStr, LevelName, LevelWarp, EntryFile, str name / short /
   long / alt, descstrpos / descstrneg / descstr2, dgrpstr*, and any other string-key column) that names a group 2
-  key is written as `medianxl:<key>` by txt_migrate, in both banks. Unqualified cells always mean `d2r:`.
+  key is written as `medianxl:<key>` by txt_migrate, in both banks. Unqualified cells always mean `d2r:`. This includes
+  numeric cells: Median's item names are keys such as `704` (group 2); an unqualified `704` names `d2r:704`, which does
+  not exist (the item showed "an evil force"). validate.py fails on an unqualified numeric group-2 cell.
+- **Item references:** cubemain `input N` / `output [b c]` and treasureclassex `Item N` name a unique / set item by its
+  index. The index cell reads `medianxl:<key>`, so the reference is written the same way (`medianxl:HotTJ`,
+  `"medianxl:HotTJ,qty=2"`; `strings_ns.qualify_reference`). An unqualified name matches no item: the recipe's input
+  matched anything and the wrong recipe fired (goldcraft ran recipe 4555 instead of 6327), and a treasure class entry
+  dropped nothing (the Summoner / Izual catalysts). validate.py fails on an unqualified reference to a Median-only
+  index, and on a `medianxl:` reference that no index cell reads like.
 - **Layouts (HD JSON):** a reference to a group 2 key is written `@medianxl:<key>`.
 - **Plugin / ID map:** `strings_idkeys.json` maps each Median string ID to its full key (`medianxl:<key>` for group 2).
   Code that hands D2R a numeric string ID for a group 2 string must get that number from the loader at run time
@@ -57,8 +65,8 @@ key in it. (The text below is the history of the exceptions that existed before 
     and `strings_ns.write_aliases` adds an alias record with the same 13 texts to both `median.json` files and to
     `strings_namespace.json`. The long key stays defined (idkeys, the plugin's key lookups).
   - Every localization cell that names the key becomes `medianxl:<alias>` (uniqueitems / setitems `index`, levels
-    `LevelWarp`, misc `spelldescstr`); every plain reference to the key (cubemain input / output, treasureclassex
-    `ItemN`) becomes the bare alias, which is what a unique / set item's `index` now reads as. The pictures
+    `LevelWarp`, misc `spelldescstr`); every reference to the key (cubemain input / output, treasureclassex
+    `ItemN`) becomes `medianxl:<alias>` too, exactly what the unique / set item's `index` reads. The pictures
     (`item_hd.py`: `uniques.json` / `sets.json` keyed on the plain index) therefore use `mxlname_<n>` too. Median's
     text is not touched: the displayed name is the alias record's text.
   - In game (slot 3, background mode, `py -3 tools/game_checks.py --slot 3 all nslong`, run
@@ -67,8 +75,8 @@ key in it. (The text below is the history of the exceptions that existed before 
     (index cell `medianxl:mxlname_16`) shows **"SUNSTONE OF THE TWIN SEAS"** as its ground label (Alt held through the
     plugin's virtual modifier block). Not read in game: the set item (the harness cannot create a set quality item, `uniq=`
     forces unique) and the level warp text on screen; no tooltip is drawn in background mode.
-  - validate.py fails when any cell is longer than its field (with the prefix), when a plain reference still names a
-    long key that has an alias, and when an alias is missing from the namespace list. `tools/strings_native.json` is
+  - validate.py fails when any cell is longer than its field (with the prefix), when a reference still names a
+    long key that has an alias (unqualified), and when an alias is missing from the namespace list. `tools/strings_native.json` is
     empty again; add a key there only for a string the plugin must give D2R as a fixed numeric ID.
 - Range columns (`hireling.NameFirst` / `NameLast`: every string ID from the first to the last is a name) cannot name a
   namespaced key; they hold D2R keys only, validate.py fails otherwise.
