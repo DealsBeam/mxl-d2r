@@ -315,6 +315,13 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `dump player` / `dump client` / `dump mon <class>` / `dump ground` | hex dumps for the RE work behind plugin offsets: the player's data block (`0x34b240`: the character name at +0), the client record of the player in the game, a monstats record (`0x976e0`; the treasure class words are u16 at +0xc0 + difficulty * 0x10 + (n - 1) * 2, n = 1..4; the quest class is n = 4), the items on the ground |
 | `merc` | the player's mercenary unit (`0x4ff1a0(game, player, 7, 0)`): id, class, level, mode, life, and every item in its inventory (equipped ones have page 255) |
 | `hire [npc class] [n]` | hires the n-th free mercenary of the nearest hirer (or of the given NPC class) as the client's hire button does: lists the entries of the NPC's mercenary list (`0x502b70`), prices it (`0x3c17b0`) and sends packet 0x36 into the server handler; then `merc` shows what the new hire carries |
+| `stat player\|merc\|mon:<id>\|<item id>\|<code> <stat> [layer] [set <value>]` | reads (or writes the base of) a stat; `merc` and `mon:<id>` are the mercenary and any monster by unit id (the verify checks set resists, avoid stats, life, strength, level on them) |
+| `hit <player\|merc\|mon:id> phys\|fire\|ltng\|magic\|cold <amount> [attacker ref]` | one hit through the game's own damage path: a damage block with the elemental field set (result flags bit 0), `0x44ce80` (resist, absorb) then `0x44a9b0` (life); the amount is in 1/256 life points. Prints life before -> after, the absorbed total (block `+0x130`) and the result flags. The player cannot hurt its own mercenary: give an attacker (`mon:<id>` of a spawned monster). Nothing happens in town |
+| `avoid <ref> melee\|missile\|evade [n]` | runs the game's avoid check `0x44ef70` n times (default 200, the hooked one with Median's caps; its first argument is the attacker unit, the player here) against the unit and tallies none / avoid (2) / dodge (4) / evade (8) / block (0x10); `evade` puts the unit into walk mode for the loop |
+| `itemroll <code> <n> [q=] [ilvl=]` | makes n items through the generator the way `item` does (quality default 2, item level default 110), reads sockets, the ethereal flag, defence and maximum durability, frees them; prints the socket histogram, the ethereal count, the defence sums and the durability ranges of normal and ethereal ones |
+| `colour <item id\|code>` | the item colour function `0x3710d0` (hooked for stat 368) on an item of the player: the colour byte, the item's colour kind and whether a palette entry came back |
+| `req <ref> [as <class>]` | the item requirement check `0x36bc50` (class lock stat 492, mercenary weapon / shield lists) of every backpack item against the player or the mercenary; `as` swaps the unit's class for the call (character class 0-6, or a hire monster class 271 / 338 / 359 / 561). Prints id, code, usable, lock, weapon / shield flags and the hireclasses list item types the item belongs to |
+| `cstat <stat> [layer]` | (client side, UI thread) the stat of the client's copy of the player: what the screen shows, to compare with `stat player` after an update packet |
 | `sysmsg <type> <colour> <text...>` | one chat packet 0x26 to the player (docs/d2r-addresses.md section 13): type 4 = message-log line, 5 = overhead bubble; colour byte 0-11 |
 
 Where the answers cannot come from a call they come from the screenshot: the NPC popup text (`cain_menu.png`) and
@@ -390,6 +397,30 @@ Two checks of `game_checks.py all` failed on 0.49.0 and passed on 0.48.0.
 
 `py -3 tools/game_checks.py all mxl respec casts --slot 3` after the fix: all three PASS (`checks-20261022-033532-s3`). The
 `respec` check now puts the unused stat points back (each run had raised them by the refunded 60 in the saved test character).
+
+### Verify rows of unported.md (2026-10-22, lane verify-checks, background mode, slot 3, plugin 0.50.0)
+
+Twelve new checks in `tools/game_checks.py` (`py -3 tools/game_checks.py --slot N all resistcap absorb avoidcaps classlock hiregates itemrolls dye goldclient bonusdrops summoner tooltip gameend craftflags`), built on the harness verbs `hit`, `avoid`, `itemroll`, `colour`, `req`, `cstat` and `stat player|merc|mon:<id>`. A check needs a merc: it hires Kashya (`quest 2 0 set` first, Blood Raven) and waits for the mercenary to follow into the field. Notes for writing checks: damage and avoidance run only outside the town; `fight_ready` kills everything near, the mercenary too, so call it before `ensure_merc`; a hit on a unit just arrived in an area can return result 0 (ignored), the `hit` helper retries; a walking mercenary cannot avoid or dodge.
+
+| Row | Check | Result |
+|---|---|---|
+| Max resistance cap 90 (player, mercenary) | `resistcap` | PASS: resist 200 and max-resist +0 / +10 / +50 took 25 / 15 / 10% of a 100000 hit, fire / lightning / cold / magic, 24 of 24 |
+| Absorb stats 184 / 189 / 417 | `absorb` | PASS: 8 probes, the healed amount equals the formula to the unit (e.g. 30% of 100000 with 7% stat 184: 27900; with 184 = 57%: 12900; divisor 4: 6975; 417 layer 1 at 50%: 13950) |
+| Mercenary avoid / dodge / evade caps; player | `avoidcaps` | PASS: 2000 rolls each of the hooked `0x44ef70`: stat 100 with stat 380 = 0 / 10 / 30 gives 60 / 70 / 75%, stat 50 gives 50%, player and Rogue |
+| Class-locked items (stat 492), players and mercenaries | `classlock` | PASS: locks 1-8 against 7 player classes and 3 merc types |
+| Hireling equip gates by class | `hiregates` | PASS: 4 hire classes, allowed / refused weapon and shield types as the lists |
+| Socket roll | `itemrolls` | PASS: 4000 items, 1/7 per socket count below the base maximum |
+| Ethereal roll + 25% | `itemrolls` | **FAIL / open**: 0 ethereal of 4000 (tower shield) and of 4000 (broad sword); hook B never reached. docs/bugs.md #25 |
+| Dye colour (stat 368) | `dye` | PASS: bytes 0x00..0x14 for stat 1..21, undyed for 0 and negative |
+| Craft player flags by name | `craftflags` | PASS |
+| Craft per-game flags reset on game end | `gameend` | PASS: flag 50 set by recipe 7102, 0 in the next game, `games ended` 0 -> 1 |
+| Gold payment client update | `goldclient` | PASS: client gold stats equal the server's after rows 6327 / 6328 |
+| Summoner AI / MosquitoNest | `summoner` | PASS: spawned, acted (cast and moved), summoned |
+| Bonus drops (Summoner / Izual catalysts) | `bonusdrops` | PASS: one on the ground after each of two kills, quest bits set. Per-player count in multiplayer: manual |
+| Item tooltip text (65 stats) | `tooltip` | REVIEW: no tooltip drawn for the background cursor in the screenshots; one foreground look needed |
+| Trade window | none | manual: needs two players (TCP/IP), not scriptable here |
+
+Also found: the avoid hook's first parameter is the attacker unit, not the game (docs/bugs.md #26).
 
 ## Scripted checks (tools/game_checks.py, 2026-10-21, foreground input)
 
