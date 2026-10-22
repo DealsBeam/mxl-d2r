@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy. What a click in the world cannot do in background mode (kill a
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy nocorpse. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -2090,6 +2090,124 @@ def check_statcols():
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
+def check_nocorpse():
+    """Median's death rules (docs/subsystems/death.md; audit rows DC1-DC4): a dying player leaves no corpse, keeps the equipment
+    (ring, amulet, belt), and loses neither gold nor experience, and the respawn request is held back for 5 s (125 frames).
+    The character gets three equipped items, gold and a big experience value, is killed by a monster's hit, asks to respawn
+    at once (Esc: must be refused, still dead), and again after 125 frames (must work, in town); before and after the respawn
+    there must be no second player-type unit (D2's corpse), the same items on the same body locations, the same carried
+    gold and bank, the same experience, and no gold pile on the ground.
+    The plugin counts the calls it swallowed (`h state`: skipped corpse calls / penalty calls): they must have risen, or the
+    death never reached the two functions and nothing was tested."""
+    nm = "No corpse on death (Median): no corpse unit, gear and belt kept, gold and xp unchanged, respawn after 5 s in town"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    fight_ready()
+    pids = sorted(g.game_pids())
+
+    def snap():
+        st = hstate()
+        eq = sorted((i.get("code"), i.get("body")) for i in st["items"] if i.get("body", 0) > 0)
+        m = re.search(r"corpses (\d+) players=(\d+) self=(\d)", " ".join(st["lines"]))
+        sk = re.search(r"no corpse (\w+): skipped corpse calls=(\d+) penalty calls=(\d+) xp=(\d+)", " ".join(st["lines"]))
+        rh = re.search(r"respawns held=(\d+) let=(\d+)", " ".join(st["lines"]))
+        p = st["player"]
+        return {"gold": p.get("gold"), "bank": p.get("bank"), "area": p.get("area"), "mode": p.get("mode"), "eq": eq,
+                "corpses": int(m.group(1)) if m else None, "players": int(m.group(2)) if m else None,
+                "self": int(m.group(3)) if m else None, "on": sk.group(1) == "on" if sk else None,
+                "skc": int(sk.group(2)) if sk else None, "skp": int(sk.group(3)) if sk else None,
+                "xp": int(sk.group(4)) if sk else None, "level": p.get("level"), "ground_gold": ground_count("gld"),
+                "frame": p.get("frame"), "held": int(rh.group(1)) if rh else None, "let": int(rh.group(2)) if rh else None}
+
+    level0, xp0 = rd("player", 12), rd("player", 13)
+    H("unequip lring")
+    H("unequip amulet")
+    ok1, _l1 = H("equip rin lring")
+    ok2, _l2 = H("equip amu amulet")
+    H("unequip belt")
+    ok3, _l3 = H("equip lbl belt")  # a sash: the belt's potions would go to the corpse in D2 (audit DC1); the harness cannot fill a belt
+    H("gold set 23456 7890")
+    if level0 is not None and level0 < 2:
+        setstat("player", 12, 20)  # the experience penalty only exists above level 1
+    setstat("player", 13, 1000000000)
+    atk = spawn_attacker(1)
+    if atk is None or not (ok1 and ok2 and ok3):
+        return add(nm, "BLOCKED", "no attacker monster" if atk is None else "could not equip the three test items")
+    before = snap()
+    setstat("player", 7, BIG_LIFE)
+    setstat("player", 6, 256 * 100)
+    ok, line, lines = hv("hit player phys 2000000000 %s" % atk, "hit")
+    time.sleep(1)
+    dead = snap()
+    shot_dead = sh("nocorpse_dead")
+    g.press("esc")  # too early: the respawn request must be held back (audit DC4)
+    time.sleep(1)
+    early = snap()
+    waited = 0
+    while waited < 15 and (hstate()["player"].get("frame") or 0) - (dead["frame"] or 0) < 130:  # 125 frames = 5 s, plus a margin
+        time.sleep(1)
+        waited += 1
+    survived = sorted(g.game_pids()) == pids and hstate()["ok"]
+    revived = revive_if_dead()
+    time.sleep(2)
+    after = snap()
+    shot_after = sh("nocorpse_respawned")
+    alive = after["mode"] not in (0, 17)
+
+    def same(a, b):
+        return a["eq"] == b["eq"] and a["gold"] == b["gold"] and a["bank"] == b["bank"] and a["xp"] == b["xp"]
+
+    problems = []
+    if before["on"] is not True:
+        problems.append("plugin part nocorpse is not on: %s" % before["on"])
+    if before["self"] != 1:
+        problems.append("the unit scan does not see the character itself (self=%s): the corpse count means nothing" % before["self"])
+    if len(before["eq"]) < 2:
+        problems.append("fewer than two equipped items before the death: %s" % before["eq"])
+    if dead["mode"] not in (0, 17):
+        problems.append("the character did not die (mode %s): %s" % (dead["mode"], line[:90]))
+    if not survived:
+        problems.append("the game process did not survive")
+    if (dead["skc"] or 0) <= (before["skc"] or 0) or (dead["skp"] or 0) <= (before["skp"] or 0):
+        problems.append("the death did not reach the corpse creator / penalty hooks (skipped calls %s/%s -> %s/%s)" %
+                        (before["skc"], before["skp"], dead["skc"], dead["skp"]))
+    for label, snapshot in (("dead", dead), ("after respawn", after)):
+        if snapshot["corpses"] != 0:
+            problems.append("%s: %s corpse unit(s) in the game" % (label, snapshot["corpses"]))
+        if not same(before, snapshot):
+            problems.append("%s: equipment / gold / bank / xp changed: %s -> %s" % (label, {k: before[k] for k in ("eq", "gold", "bank", "xp")},
+                                                                                {k: snapshot[k] for k in ("eq", "gold", "bank", "xp")}))
+        if snapshot["ground_gold"] != before["ground_gold"]:
+            problems.append("%s: gold piles on the ground %s -> %s" % (label, before["ground_gold"], snapshot["ground_gold"]))
+    if not revived or not alive:
+        problems.append("respawn failed (revived %s, mode %s)" % (revived, after["mode"]))
+    if early["mode"] not in (0, 17):
+        problems.append("respawn at once was not held back (mode %s a second after the death)" % early["mode"])
+    if (early["held"] or 0) <= (before["held"] or 0):
+        problems.append("the plugin did not count a held respawn request (held %s -> %s): was Esc a respawn request?" % (before["held"], early["held"]))
+    if (after["let"] or 0) <= (before["let"] or 0):
+        problems.append("the respawn after the wait did not pass the hook (let through %s -> %s)" % (before["let"], after["let"]))
+    if after["area"] is None or after["area"] not in (1, 40, 75, 103, 109):
+        problems.append("not in a town after the respawn (area %s)" % after["area"])
+    add(nm, "FAIL" if problems else "PASS",
+        "%s | killed by a hit of 2e9 from a spawned monster (%s); before: items %s gold %s bank %s xp %s; dead (mode %s): corpses %s, "
+        "gold %s xp %s, hooks swallowed corpse %s->%s penalty %s->%s calls; after Esc: mode %s area %s, corpses %s, items %s gold %s bank %s xp %s, "
+        "ground gold piles %s->%s; respawn held %s->%s, let %s->%s, frames dead->early Esc->respawn %s->%s->%s" %
+        ("; ".join(problems) if problems else "all unchanged", line[:70], before["eq"], before["gold"], before["bank"], before["xp"],
+         dead["mode"], dead["corpses"], dead["gold"], dead["xp"], before["skc"], dead["skc"], before["skp"], dead["skp"],
+         after["mode"], after["area"], after["corpses"], after["eq"], after["gold"], after["bank"], after["xp"],
+         before["ground_gold"], after["ground_gold"], before["held"], after["held"], before["let"], after["let"],
+         dead["frame"], early["frame"], after["frame"]), [shot_dead, shot_after], lines)
+    # put the test character back
+    H("unequip lring")
+    H("unequip amulet")
+    H("unequip belt")
+    setstat("player", 13, xp0 if xp0 is not None else 0)
+    if level0 is not None:
+        setstat("player", 12, level0)
+    setstat("player", 6, rd("player", 7) or BIG_LIFE)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -2099,7 +2217,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
-          ("trophy", check_trophy), ("statcols", check_statcols)]
+          ("trophy", check_trophy), ("statcols", check_statcols), ("nocorpse", check_nocorpse)]
 
 
 def write_report(extra=""):
