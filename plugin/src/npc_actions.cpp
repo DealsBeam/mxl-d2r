@@ -17,6 +17,10 @@
 // builds it again with the record's lines swapped for the entries (the record is put back afterwards, so ESC and the next
 // talk show the normal menu). Each entry is a line of its own: it sends its own kind, the server runs that slot.
 //
+// A slot with npcext PromptConfirm (Akara's respec) asks first: the click closes the list and shows D2R's own confirmation
+// page, the one its Repair All builds (a list widget at 0x2a48798 with the prompt text as a header line and the stock Yes /
+// No lines); only Yes sends the kind, No and Escape close the menu like Cancel.
+//
 // Realm rule: the client only draws the lines and sends the kind; requirements and effects are server code, in the
 // separate section below. Actions: respec (Akara) and the free crafting materials (the five Cains) are done here. The
 // travel packages (with their waypoint grant) and Imbue / Add sockets / Personalize are D2R's own: it shows its lines under
@@ -57,6 +61,11 @@ constexpr uint64_t ListWidgetRva = 0x2a487b0;   // client: pointer to the open l
 constexpr uint64_t CloseListRva = 0x1e9390;     // client: void (widget): closes the list widget
 constexpr uint64_t MenuOpenFlagRva = 0x2a486a4; // client: u32, 1 while the menu is up
 constexpr uint64_t MenuNpcClassRva = 0x2a48764; // client: class of the NPC in the open menu (u16)
+constexpr uint64_t CloseAllListsRva = 0x110670; // client: void (): closes every NPC list widget and clears their globals
+constexpr uint64_t CreateListRva = 0x1e9200;    // client: (cancel handler, 0, 1) -> list widget (centred)
+constexpr uint64_t AddListLineRva = 0x1e9030;   // client: (widget, text, flags, 1, handler, selectable): adds a line
+constexpr uint64_t StringRva = 0x3e2b730;       // client: D2RCore thunk (u16 string id) -> text
+constexpr uint64_t ConfirmListRva = 0x2a48798;  // client: pointer to the confirmation list widget (qword)
 constexpr uint64_t SendPacketRva = 0xec730;     // client: (uint8 id, u32 a, u32 b) builds and sends a 9-byte packet
 constexpr uint64_t MenuPacketRva = 0x4b0470;    // server: (game, player, packet*, size): packet 0x38 handler
 constexpr uint64_t FindNpcRva = 0x53b8f0;       // server: (player, unit id, max distance) -> NPC unit or null
@@ -72,6 +81,19 @@ constexpr uint8_t PacketEntry[] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x4
 // 0x1147a0: push rbp / push rbx / push rdi / push r12 / push r14 / lea rbp,[rsp-0x3f0] / sub rsp,0x4f0
 constexpr uint8_t BuilderEntry[] = {0x40, 0x55, 0x53, 0x57, 0x41, 0x54, 0x41, 0x56, 0x48, 0x8d, 0xac, 0x24, 0x10, 0xfc,
                                     0xff, 0xff, 0x48, 0x81, 0xec, 0xf0, 0x04, 0x00, 0x00};
+
+// Entries of the client functions the confirmation calls (whole instructions, up to the first rip-relative operand).
+// 0x110670: push rbx / sub rsp,0x20
+constexpr uint8_t CloseAllEntry[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20};
+// 0x1e9200: mov [rsp+8],rbx / mov [rsp+0x10],rbp / push rsi / push rdi / push r14 / sub rsp,0x40 / mov esi,r8d / mov rbp,rdx /
+// mov r14,rcx
+constexpr uint8_t CreateListEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x56, 0x57, 0x41, 0x56,
+                                       0x48, 0x83, 0xec, 0x40, 0x41, 0x8b, 0xf0, 0x48, 0x8b, 0xea, 0x4c, 0x8b, 0xf1};
+// 0x1e9030: the same saves, sub rsp,0x20 / cmp dword [rcx+0x1c],10 / mov ebx,r9d / mov ebp,r8d / mov r14,rdx
+constexpr uint8_t AddLineEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83,
+                                    0xec, 0x20, 0x83, 0x79, 0x1c, 0x0a, 0x41, 0x8b, 0xd9, 0x41, 0x8b, 0xe8, 0x4c, 0x8b, 0xf2};
+// 0x3e2b730: jmp [rip+disp32], the thunk into D2RCore's string lookup
+constexpr uint8_t StringEntry[] = {0xff, 0x25};
 
 constexpr int GameDifficulty = 0x104;  // byte
 constexpr int UnitClass = 0x04;        // u32
@@ -91,6 +113,10 @@ using FindItemFn = Unit* (*)(Game* game, Unit* player, uint32_t code);
 using BitFn = int32_t (*)(void* record, int32_t quest, int32_t bit);
 using RespecFn = void (*)(Game* game, Unit* player, int32_t zero);
 using RespecDoneFn = void (*)(Game* game, Unit* player);
+using CloseAllFn = void (*)();
+using CreateListFn = void* (*)(void* cancelHandler, void* zero, int32_t one);
+using AddLineFn = void (*)(void* widget, const char* text, uint32_t flags, uint32_t one, void* handler, int32_t selectable);
+using StringFn = const char* (*)(uint32_t id);
 
 const D2RL::PluginContext* g_context = nullptr;
 uint64_t g_base = 0;
@@ -105,6 +131,11 @@ FindItemFn g_findItem = nullptr;
 BitFn g_bitTest = nullptr;
 RespecFn g_respec = nullptr;
 RespecDoneFn g_respecDone = nullptr;
+CloseAllFn g_closeAll = nullptr;
+CreateListFn g_createList = nullptr;
+AddLineFn g_addLine = nullptr;
+StringFn g_string = nullptr;
+bool g_confirmOk = false;  // the confirmation's functions are in the expected image; else a confirm line sends at once
 
 void Log(const char* what, int a, int b) noexcept {
 	if (g_context == nullptr) {
@@ -220,14 +251,58 @@ struct ClientLine {
 	uint16_t label;
 	uint32_t kind;
 	bool page;  // a text-page line: sends the kind and keeps the menu open for the answer
+	bool confirm;  // asks Yes / No first (npcext PromptConfirm)
+	uint16_t prompt;
 };
 ClientLine g_lines[MaxClientLines];
 int g_lineCount = 0;
 int g_nativeSlots = 0;
 
+// The pending Yes / No of a confirm line (one at a time; npc_actions_logic.h).
+npc::Confirmation g_confirm;
+
+auto OnConfirmAnswer(bool yes) noexcept -> uint8_t {
+	const uint32_t kind = g_confirm.Answer(yes);
+	const uint32_t npcId = *reinterpret_cast<const uint32_t*>(g_base + MenuNpcIdRva);
+	g_closeAll();  // the confirmation list (and any other); the Cancel step below closes the panel
+	if (kind != 0) {
+		g_send(MenuPacketId, kind, npcId);
+	}
+	Log(yes ? "confirmed (kind)" : "declined (kind)", static_cast<int>(kind), 0);
+	return g_cancel();
+}
+auto OnConfirmYes() noexcept -> uint8_t { return OnConfirmAnswer(true); }
+auto OnConfirmNo() noexcept -> uint8_t { return OnConfirmAnswer(false); }
+
+// D2R's confirmation page (what Repair All builds, 0x110b60): the NPC list is closed and a new centred list gets the prompt
+// as its header line (flag 4) and the stock Yes / No lines. False when it cannot be built (nothing was changed then, the
+// caller sends the kind as before).
+bool OpenConfirm(uint32_t kind, uint16_t text) noexcept {
+	if (!g_confirmOk) {
+		return false;
+	}
+	g_closeAll();
+	void* list = g_createList(reinterpret_cast<void*>(&OnConfirmNo), nullptr, 1);
+	if (list == nullptr) {
+		return false;
+	}
+	*(static_cast<uint8_t*>(list) + 8) = 1;
+	*reinterpret_cast<void**>(g_base + ConfirmListRva) = list;
+	*reinterpret_cast<uint32_t*>(g_base + MenuOpenFlagRva) = 3;  // as the original does for its confirmation page
+	g_confirm.Open(kind, text);
+	g_addLine(list, g_string(text), 4, 1, nullptr, 0);
+	g_addLine(list, g_string(npc::StringYes), 0, 1, reinterpret_cast<void*>(&OnConfirmYes), 1);
+	g_addLine(list, g_string(npc::StringNo), 0, 1, reinterpret_cast<void*>(&OnConfirmNo), 1);
+	Log("confirmation shown (kind, text id)", static_cast<int>(kind), text);
+	return true;
+}
+
 auto OnLine(int index) noexcept -> uint8_t {
 	bool page = false;
 	if (index >= 0 && index < g_lineCount) {
+		if (g_lines[index].confirm && OpenConfirm(g_lines[index].kind, g_lines[index].prompt)) {
+			return 1;
+		}
 		const uint32_t npcId = *reinterpret_cast<const uint32_t*>(g_base + MenuNpcIdRva);
 		g_send(MenuPacketId, g_lines[index].kind, npcId);
 		page = g_lines[index].page;
@@ -427,7 +502,8 @@ void CollectLines() noexcept {
 		if (sup == npc::Support::Native) {
 			++g_nativeSlots;
 		} else if (sup == npc::Support::Run && g_lineCount < MaxClientLines) {
-			g_lines[g_lineCount++] = {s.npcClass, s.label, npc::KindOf(s.npcRow, s.slot), npc::IsPage(i)};
+			g_lines[g_lineCount++] = {s.npcClass, s.label, npc::KindOf(s.npcRow, s.slot), npc::IsPage(i), npc::NeedsConfirm(i),
+			                          npc::ConfirmText(i)};
 		}
 	}
 }
@@ -446,6 +522,14 @@ auto InstallNpcActions(const D2RL::PluginContext* context, char* report, size_t 
 	g_bitTest = reinterpret_cast<BitFn>(g_base + QuestBitTestRva);
 	g_respec = reinterpret_cast<RespecFn>(g_base + RespecRva);
 	g_respecDone = reinterpret_cast<RespecDoneFn>(g_base + RespecDoneRva);
+	g_closeAll = reinterpret_cast<CloseAllFn>(g_base + CloseAllListsRva);
+	g_createList = reinterpret_cast<CreateListFn>(g_base + CreateListRva);
+	g_addLine = reinterpret_cast<AddLineFn>(g_base + AddListLineRva);
+	g_string = reinterpret_cast<StringFn>(g_base + StringRva);
+	g_confirmOk = std::memcmp(reinterpret_cast<const void*>(g_base + CloseAllListsRva), CloseAllEntry, sizeof(CloseAllEntry)) == 0 &&
+	              std::memcmp(reinterpret_cast<const void*>(g_base + CreateListRva), CreateListEntry, sizeof(CreateListEntry)) == 0 &&
+	              std::memcmp(reinterpret_cast<const void*>(g_base + AddListLineRva), AddLineEntry, sizeof(AddLineEntry)) == 0 &&
+	              std::memcmp(reinterpret_cast<const void*>(g_base + StringRva), StringEntry, sizeof(StringEntry)) == 0;
 	CollectLines();
 	int ok = 0;
 	ok += context->InstallInlineHook(MenuPacketRva, PacketEntry, sizeof(PacketEntry), reinterpret_cast<void*>(&PacketHook),
@@ -456,10 +540,23 @@ auto InstallNpcActions(const D2RL::PluginContext* context, char* report, size_t 
 		SetPluginMessageHandler(clientmsg::PluginKindNpcPage, &OnPageMessage);
 		char native[160];
 		VerifyNativeServices(g_base, native, sizeof(native));
-		std::snprintf(report, reportSize, "on: %d menu lines (Akara, Cain; Cain's page is a submenu%s); %d slots are D2R's own, %s",
-		              g_lineCount, PluginMessagesOn() ? "" : ", answer unreadable: plugin messages off", g_nativeSlots, native);
+		std::snprintf(report, reportSize, "on: %d menu lines (Akara, Cain; Cain's page is a submenu%s; respec confirm %s); %d slots are D2R's own, %s",
+		              g_lineCount, PluginMessagesOn() ? "" : ", answer unreadable: plugin messages off",
+		              g_confirmOk ? "on" : "off: image mismatch", g_nativeSlots, native);
 	} else {
 		std::snprintf(report, reportSize, "partial: %d of 2 hooks installed (menu packet 0x4b0470, menu builder 0x1147a0)", ok);
 	}
 	return ok == 2;
+}
+
+auto NpcConfirmOpen() noexcept -> bool {
+	return g_confirm.open;
+}
+
+auto NpcConfirmAnswer(bool yes) noexcept -> bool {
+	if (!g_confirm.open) {
+		return false;
+	}
+	OnConfirmAnswer(yes);
+	return true;
 }

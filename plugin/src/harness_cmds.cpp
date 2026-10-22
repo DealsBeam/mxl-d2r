@@ -16,6 +16,7 @@
 #include "goblins.h"
 #include "mxl_hirelings.h"
 #include "item_events.h"
+#include "npc_actions.h"
 #include "item_gen.h"
 #include "quests_act1.h"
 #include "testharness.h"
@@ -2062,7 +2063,7 @@ auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
-	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel | "
+	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
@@ -2074,6 +2075,18 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 
 // Client side (UI thread): the NPC menu the 0x27 packet opened.
 auto CmdMenu(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "confirm")) {  // the Yes / No page of a respec-style line
+		Out("menu confirm %s", NpcConfirmOpen() ? "open" : "closed");
+		return true;
+	}
+	if (t.n >= 2 && (hcmd::LowerEq(t.tok[1], "yes") || hcmd::LowerEq(t.tok[1], "no"))) {
+		const bool yes = hcmd::LowerEq(t.tok[1], "yes");
+		if (!NpcConfirmAnswer(yes)) {
+			return Fail(c, "menu: no confirmation is open");
+		}
+		Out("menu confirm answered %s", yes ? "yes" : "no");
+		return true;
+	}
 	const auto* b = reinterpret_cast<const uint8_t*>(g_base);
 	if (*reinterpret_cast<const uint32_t*>(b + RvaMenuNpcValid) == 0 || *reinterpret_cast<const uint32_t*>(b + RvaMenuOpenFlag) == 0) {
 		return Fail(c, "menu: no NPC menu is open (interact first, then wait a moment for the client)");
@@ -2088,7 +2101,7 @@ auto CmdMenu(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	const uint8_t* r = table + static_cast<size_t>(row) * 0x48;
 	const int32_t lines = d2r::At<int32_t>(r, 4);  // includes the final Cancel
 	if (t.n < 2) {
-		return Fail(c, "usage: menu list | menu <line index> | menu cancel");
+		return Fail(c, "usage: menu list | menu <line index> | menu cancel | menu confirm | menu yes | menu no");
 	}
 	if (hcmd::LowerEq(t.tok[1], "list")) {
 		Out("menu npc id=%u class=%u row=%d lines=%d (+ Cancel)", *reinterpret_cast<const uint32_t*>(b + RvaMenuNpcId),
