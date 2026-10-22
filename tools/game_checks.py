@@ -2244,13 +2244,20 @@ def _text_key(full):
     return _Got(lines[0]) if lines else _Got("")
 
 
+def _str_aliases():
+    import json
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "mod", "strings_alias.json")
+    return json.load(open(p, encoding="utf-8"))["aliases"] if os.path.exists(p) else {}
+
+
 def _row_ref(table, key, col, sub=None):
     """(row reference for the verb, plain keys of the row) of the first row of the built table whose cell is `key`."""
     name = sub or table
     head, rows = _txt_rows(name, STR_BANK)
     ci = head.index(col if isinstance(col, str) else col[name])
+    alias = _str_aliases().get(key, key)  # a long key sits in its cell as its short alias (work/mod/strings_alias.json)
     for i, r in enumerate(rows):
-        if ci < len(r) and _cell_key(r[ci]) == key:
+        if ci < len(r) and _cell_key(r[ci]) in (key, alias):
             if table == "items":
                 return "code:" + r[head.index("code")].ljust(4)[:4].replace(" ", ""), i
             return str(i), i
