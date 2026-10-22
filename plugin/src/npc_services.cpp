@@ -1,6 +1,7 @@
-// Read-only check that D2R's own Imbue / Add sockets / Personalize lines and NPC travel (with its waypoint grant) match what
-// Median's menu slots ask for (npc_services_logic.h; docs/subsystems/npc-hirelings.md section 1.6). Nothing is hooked or
-// written: D2R runs these services itself, under the quest state Median's requirement rows name.
+// Check that D2R's own Imbue / Add sockets / Personalize lines and NPC travel (with its waypoint grant) match what Median's
+// menu slots ask for (npc_services_logic.h; docs/subsystems/npc-hirelings.md section 1.6). Nothing is hooked: D2R runs these
+// services itself, under the quest state Median's requirement rows name. The one write is FixTravelGates: Tyrael's travel gate
+// byte (D2R quest 26) becomes Median's quest 28.
 //
 // Tables read (build 93847): the static NPC table at RVA 0x237ea60 (43 x 0x1c bytes, same table requirement_gates.cpp reads)
 // and the client menu fix table at RVA 0x22a70e0 (24-byte entries, count dword at RVA 0x22a71b8; consumer 0x1141d0).
@@ -31,7 +32,43 @@ auto Read(const uint8_t* p) noexcept -> T {
 	return v;
 }
 
+// Fills `npc` from the table entry of class `cls`; returns the entry's index, or -1 when there is none.
+auto FindNpc(const uint8_t* npcTable, int cls, npcsvc::D2rNpc& npc) noexcept -> int {
+	for (int n = 0; n < NpcTableCount; ++n) {
+		const uint8_t* entry = npcTable + n * NpcEntrySize;
+		if (Read<int16_t>(entry) == cls) {
+			npc.found = true;
+			npc.service = entry[0xb];
+			npc.dest = Read<int32_t>(entry + 0xc);
+			npc.gate = entry[0x10];
+			return n;
+		}
+	}
+	return -1;
+}
+
 }  // namespace
+
+auto FixTravelGates(const D2RL::PluginContext* context) noexcept -> int {
+	const auto* npcTable = reinterpret_cast<const uint8_t*>(context->exeBase + NpcTableRva);
+	if (Read<int16_t>(npcTable) != FirstClass || Read<int16_t>(npcTable + (NpcTableCount - 1) * NpcEntrySize) != LastClass) {
+		return -1;
+	}
+	int fixed = 0;
+	for (int i = 0; i < mxl_npc::SlotCount; ++i) {
+		const npcsvc::Expect e = npcsvc::ExpectOf(i);
+		npcsvc::D2rNpc npc;
+		const int n = e.service == npcsvc::Service::Travel ? FindNpc(npcTable, e.cls, npc) : -1;
+		const int32_t gate = n >= 0 ? npcsvc::TravelGateFix(e, npc) : -1;
+		if (gate < 0 || gate > 0xff) {
+			continue;
+		}
+		const auto old = static_cast<uint8_t>(npc.gate);
+		const uint64_t rva = NpcTableRva + static_cast<uint64_t>(n) * NpcEntrySize + 0x10;
+		fixed += context->PatchWriteU8(rva, &old, sizeof(old), static_cast<uint8_t>(gate)) ? 1 : 0;
+	}
+	return fixed;
+}
 
 auto VerifyNativeServices(uint64_t exeBase, char* report, size_t reportSize) noexcept -> int {
 	const auto* npcTable = reinterpret_cast<const uint8_t*>(exeBase + NpcTableRva);
@@ -53,16 +90,7 @@ auto VerifyNativeServices(uint64_t exeBase, char* report, size_t reportSize) noe
 		}
 		++total;
 		npcsvc::D2rNpc npc;
-		for (int n = 0; n < NpcTableCount; ++n) {
-			const uint8_t* entry = npcTable + n * NpcEntrySize;
-			if (Read<int16_t>(entry) == e.cls) {
-				npc.found = true;
-				npc.service = entry[0xb];
-				npc.dest = Read<int32_t>(entry + 0xc);
-				npc.gate = entry[0x10];
-				break;
-			}
-		}
+		FindNpc(npcTable, e.cls, npc);
 		npcsvc::D2rFix fix;
 		for (int n = 0; n < fixCount; ++n) {
 			const uint8_t* entry = fixTable + n * FixEntrySize;

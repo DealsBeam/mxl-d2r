@@ -134,9 +134,9 @@ Findings that matter beyond this tool:
   differences are not shown.
 - **Tint** would mean editing the particles: 51 of 373 missile and 74 of 331 overlay definitions take their colour from a
   gradient texture (`textures/gradient/T_FX_*gradient*`), the rest from constants baked into the `.particles` program. A
-  same-length path replacement (section 1) plus a hue-shifted gradient texture would recolour the gradient ones, but
-  patched particles were never confirmed in game (section 3), so colour is matched by choosing the stand-in whose
-  art colour is closest instead.
+  same-length path replacement (section 1) plus a hue-shifted gradient texture recolours the gradient ones
+  (tools/hd_recolour.py, used for provenance recolours below; the tint look is not yet confirmed in game); otherwise colour is
+  matched by choosing the stand-in whose art colour is closest.
 - **In game (slot 1, background mode, 2026-10-22):** casting player skills could not be driven: the harness `pkt` verb
   (client packets 0x3b, 0x3c, 0x05, 0x0c, 0x03) is accepted but the Barbarian neither casts nor moves after `cheat goto 2`
   (its mode stays 5, town neutral). Monsters were used instead: `h spawn 821 2` (Stone Clan goats, skill
@@ -145,6 +145,28 @@ Findings that matter beyond this tool:
   load and draw (new fire bursts and the stand-in missiles appear where the "before" run showed only the old rings), the
   game loads without new error classes (the assert lines seen, `sub.nCelNum`, `ii < NUM_LEVEL_TYPES`, unique item index, were
   also in a run without the files). The look of single stand-ins is not signed off; no Sorceress run.
+
+### Art provenance first (tools/art_provenance.py, 2026-10-22)
+
+Median's missile / overlay / monster art is matched to D2R's by description; much of it is vanilla art renamed or recoloured.
+`tools/art_provenance.py` decodes every Median DCC and every vanilla classic DCC (tools/dcc.py) and compares them by pixels:
+frame hashes, then mask IoU and palette mapping per frame (recolour = same shape, palette indices mapped consistently or
+brightness-correlated; rescale; retime = different frame count; mashup = frames from several sources). Output
+`work/mod/art_provenance.json` and `.md` (cache in `work/art_provenance/`, a re-run takes seconds). `effects_hd.py` reads it
+before the scoring: an exact or rescaled source gives the vanilla row's HD effect, a recolour gives the same effect with a
+tint (`tools/hd_recolour.py`: hue / saturation / brightness shifted copy of the effect's RGBA8 gradient textures
+and a patched `.particles` file under `data/hd/vfx/particles/mxl/`, texture paths of the same length), a mashup its dominant
+source. A recolour whose effect has no colourful gradient (baked colours) falls back to the old nearest-colour scoring.
+`--no-provenance` skips the step.
+
+Match rate (Median file has a vanilla source): missiles 265 files = 22 exact, 55 recolour, 0 rescale, 0 mashup, 184 new;
+overlays 107 = 23 exact, 12 recolour, 1 mashup, 71 new. Rescale found nothing: the near misses were all different art.
+Stand-ins that became vanilla art: missiles 96 rows (13 exact, 83 gradient-tinted), overlays 10 (all tinted).
+
+In game (slot 3, background mode, HD, 2026-10-22): the build with the patched particles and recoloured gradients loads and
+reaches the Blood Moor; re-matched missile rows (`h missile` 801, 818, 2085, 2276, 3664, 4754 tinted; 2215, 2665, 4033 exact)
+fired without a crash or a new error class. The tint colour itself was NOT confirmed in the screenshots (the missile was
+off screen or gone within the capture interval): the recoloured effects still need a look.
 
 ### PalShift (missiles2, 2026-10-22)
 

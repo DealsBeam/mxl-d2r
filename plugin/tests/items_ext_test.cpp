@@ -134,11 +134,11 @@ int RunItemsExtTests() {
 		bool shaped = true;
 		for (const auto& t : mxl_items::Trophies) {
 			codes.insert(t.code);
-			got.clear();
-			shaped = shaped && ForEachTrophyLine(t.text, collect) >= 4 && got[0].find("Trophy Challenge") != std::string::npos;
+			const std::string key = t.key != nullptr ? t.key : "";
+			shaped = shaped && key.rfind("medianxl:Desc", 0) == 0 && key.size() > 13 && key.substr(key.size() - 6) == "Trophy";
 		}
 		Check(codes.size() == std::size(mxl_items::Trophies), "every trophy code once");
-		Check(shaped, "every trophy text has a '... Trophy Challenge' title and at least three more lines");
+		Check(shaped, "every trophy's text is a namespaced 'medianxl:Desc...Trophy' key (read at run time)");
 		bool known = true;  // each trophy is one of the items D2Sigma's help spells (13 / 21) cover
 		for (const auto& t : mxl_items::Trophies) {
 			bool found = false;

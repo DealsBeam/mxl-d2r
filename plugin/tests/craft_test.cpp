@@ -68,6 +68,22 @@ int main() {
 	const auto none = craft::EffectsFor(1);
 	Check(none.first == none.last, "row 1 has no effect");
 
+	Check(craft::PortalLevel(2, 0) == 39 && craft::PortalLevel(3, 0) == 163 && craft::PortalLevel(85, 0) == 192 &&
+	          craft::PortalLevel(4962, 1) == 242 && craft::PortalLevel(7453, 0) == 214,
+	      "the five portal recipes name their Median level");
+	Check(craft::PortalLevel(4962, 0) == 0 && craft::PortalLevel(1, 0) == 0, "no portal in other slots / recipes");
+
+	// output slot pointer -> recipe and slot (record + 0x5a + 0x5b * i, stride 0x16c)
+	int32_t recipe = -1, slot = -1;
+	Check(craft::SlotOf(1000, 1000 + 4962 * 0x16c + 0x5a + 0x5b, 7500, &recipe, &slot) && recipe == 4962 && slot == 1,
+	      "slot 1 of recipe 4962");
+	Check(craft::SlotOf(1000, 1000 + 7 * 0x16c + 0x5a, 7500, &recipe, &slot) && recipe == 7 && slot == 0, "slot 0 of recipe 7");
+	Check(craft::SlotOf(1000, 1000 + 7 * 0x16c + 0x5a + 2 * 0x5b, 7500, &recipe, &slot) && recipe == 7 && slot == 2, "slot 2");
+	Check(!craft::SlotOf(1000, 1000 + 7 * 0x16c + 0x5a + 3 * 0x5b, 7500, &recipe, &slot), "no fourth slot");
+	Check(!craft::SlotOf(1000, 1000 + 7 * 0x16c + 0x5b, 7500, &recipe, &slot), "not on a slot boundary");
+	Check(!craft::SlotOf(1000, 999, 7500, &recipe, &slot) && !craft::SlotOf(1000, 1000 + 7500 * 0x16c + 0x5a, 7500, &recipe, &slot),
+	      "outside the table");
+
 	std::printf(failures == 0 ? "craft: all tests passed\n" : "craft: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }

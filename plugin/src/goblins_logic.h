@@ -84,6 +84,16 @@ inline auto TotalWeight(int32_t level, int32_t monLevel) noexcept -> uint32_t {
 	return total;
 }
 
+// The variant's own display name (its monstats NameStr text), nullptr for a monster that is not a goblin row.
+inline auto NameOf(int32_t monster) noexcept -> const char* {
+	for (int32_t i = 0; i < mxl_goblins::GoblinCount; ++i) {
+		if (mxl_goblins::Goblins[i].monster == monster) {
+			return mxl_goblins::Goblins[i].name;
+		}
+	}
+	return nullptr;
+}
+
 // The D2R monster id for a uniform random number, or -1 when there is no candidate.
 inline auto Pick(int32_t level, int32_t monLevel, uint32_t random) noexcept -> int32_t {
 	const uint32_t total = TotalWeight(level, monLevel);

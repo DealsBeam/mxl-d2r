@@ -5,6 +5,7 @@
 
 #include "mxl_npc_actions.h"
 #include "requirements.h"
+#include "strings_logic.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -221,10 +222,18 @@ constexpr auto NeedsConfirm(int slotIndex) noexcept -> bool {
 	return slotIndex >= 0 && slotIndex < mxl_npc::SlotCount && mxl_npc::Slots[slotIndex].confirm;
 }
 
+// The line text / prompt text of a slot as a string reference: D2R's id, or the full key of a Median-only string.
+constexpr auto LabelOf(const mxl_npc::Slot& s) noexcept -> mxlstr::Ref {
+	return {s.label, s.labelKey};
+}
+constexpr auto PromptOf(const mxl_npc::Slot& s) noexcept -> mxlstr::Ref {
+	return {s.prompt, s.promptKey};
+}
+
 // The header text of the prompt: the prompt label, else the line's own label.
-constexpr auto ConfirmText(int slotIndex) noexcept -> uint16_t {
+constexpr auto ConfirmText(int slotIndex) noexcept -> mxlstr::Ref {
 	const mxl_npc::Slot& s = mxl_npc::Slots[slotIndex];
-	return s.prompt != 0 ? s.prompt : s.label;
+	return PromptOf(s).IsNone() ? LabelOf(s) : PromptOf(s);
 }
 
 // The pending confirmation of the client: one at a time, answered once (the list's Yes, No and Escape all end it).
@@ -272,8 +281,8 @@ inline auto ParsePagePayload(const uint8_t* p, size_t n, uint32_t* pageKind, uin
 
 // The submenu the client shows for a page answer: the sub-entries whose mask bit is set, in order. Returns the count.
 struct PageEntry {
-	uint16_t label;  // D2R string id
-	uint32_t kind;   // packet 0x38 kind of the entry's own slot
+	mxlstr::Ref label;  // the entry text
+	uint32_t kind;      // packet 0x38 kind of the entry's own slot
 };
 inline auto PageEntries(int npcClass, uint32_t pageKind, uint32_t mask, PageEntry* out, int cap) noexcept -> int {
 	const int page = FindSlot(pageKind, npcClass);
@@ -286,7 +295,7 @@ inline auto PageEntries(int npcClass, uint32_t pageKind, uint32_t mask, PageEntr
 	for (int j = 0; j < n && j < 32 && count < cap; ++j) {
 		if ((mask >> j) & 1u) {
 			const mxl_npc::Slot& s = mxl_npc::Slots[subs[j]];
-			out[count++] = {s.label, KindOf(s.npcRow, s.slot)};
+			out[count++] = {LabelOf(s), KindOf(s.npcRow, s.slot)};
 		}
 	}
 	return count;
@@ -300,10 +309,40 @@ inline constexpr int RecHandlersOffset = 0x18; // u64[5]: click handlers per lin
 inline constexpr int RecMaxLines = 5;
 inline constexpr uint16_t IdentifyLine = 0xfb4;  // the builder (0x1147a0) rewrites the count at this line; keep it last
 
+// D2R re-initialises the Cain records now and then (the function behind 0x115d00, run when a menu closes): it writes
+// Identify (0xfb4, handler 0x114000) over line 1 and sets the count to 3, whatever the record holds. A plugin line that
+// sat in front of Identify is overwritten and the old Identify stays one line behind, so the record reads
+// [Talk, Identify, Identify]; every such reset adds one more copy, until the record is full and takes no line any more
+// (cainsub after respec: "Talk + four Identify lines"). Drops the repeats of the Identify line (the first one stays).
+inline void DropRepeatedIdentify(uint8_t* record) noexcept {
+	auto id = [&](int i) -> uint16_t& { return *reinterpret_cast<uint16_t*>(record + RecIdsOffset + i * 2); };
+	auto fn = [&](int i) -> uint64_t& { return *reinterpret_cast<uint64_t*>(record + RecHandlersOffset + i * 8); };
+	bool seen = false;
+	int out = 0;
+	for (int i = 0; i < RecMaxLines && id(i) != 0; ++i) {
+		if (id(i) == IdentifyLine) {
+			if (seen) {
+				continue;
+			}
+			seen = true;
+		}
+		if (out != i) {
+			id(out) = id(i);
+			fn(out) = fn(i);
+		}
+		++out;
+	}
+	for (int i = out; i < RecMaxLines && id(i) != 0; ++i) {
+		id(i) = 0;
+		fn(i) = 0;
+	}
+}
+
 // Adds the lines (string id + handler) that are not in the record yet: before Identify when the record has it, else at
 // the end, and sets the count to lines + 1 every call (the builder lowers it when it skips Identify). Returns the
 // number of lines the record has afterwards, or -1 when it would not fit.
 inline auto AddMenuLines(uint8_t* record, const uint16_t* ids, const uint64_t* handlers, int n) noexcept -> int {
+	DropRepeatedIdentify(record);
 	auto id = [&](int i) -> uint16_t& { return *reinterpret_cast<uint16_t*>(record + RecIdsOffset + i * 2); };
 	auto fn = [&](int i) -> uint64_t& { return *reinterpret_cast<uint64_t*>(record + RecHandlersOffset + i * 8); };
 	int lines = 0;

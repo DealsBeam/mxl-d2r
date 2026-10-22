@@ -207,6 +207,9 @@ def main():
             if ltype not in MAZE_LEVEL_TYPES:
                 rep.add("PROBLEM", "levels: maze level whose LevelType is not in D2R's maze switch (generation asserts and exits)",
                         f"{tag} LevelType={ltype}", sc)
+            if i >= vanilla_ids and r.get("Position", "").strip() not in ("", "0"):
+                rep.add("PROBLEM", "levels: Median-only maze level with Position set (no entry room: the arrival spot is "
+                        "(0, 0), the room is null and the game dies, bug #27)", tag, sc)
         for k in range(8):
             vis = num(r.get(f"Vis{k}"))
             if vis is not None and vis <= 0:
