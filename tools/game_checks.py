@@ -375,9 +375,30 @@ def goblins_counts(st):
     return (int(m.group(1)), int(m.group(2))) if m else (None, None)
 
 
+def revive_if_dead(timeout=20):
+    """A dead test character (player mode 0 / 17, life 0) closes the game on `cheat goto`: press Esc (D2R respawns
+    the character in town with full life, as a window message) and wait for it. Returns True when it was dead."""
+    def dead(p):
+        life = str(p.get("life", "1")).split("/")[0]
+        return p.get("mode") in (0, 17) or life == "0"
+    p = hstate()["player"]
+    if not p or not dead(p):
+        return False
+    g.log("the test character is dead (mode %s): Esc to respawn in town" % p.get("mode"))
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        g.press("esc")
+        time.sleep(3)
+        p = hstate()["player"]
+        if p and not dead(p):
+            break
+    return True
+
+
 def goto(area, timeout=40):
     """Move the character to an area: D2R's own `cheat goto` (debug mode) for the same act, the plugin's `level`
     (the NPC travel) across acts. Waits until `h state` says so."""
+    revive_if_dead()
     for attempt in range(2):
         enable_debug()
         con("cheat goto %d" % area) if attempt == 0 else H("level %d" % area)
@@ -1637,6 +1658,7 @@ def check_classlock():
     if not ensure_merc():
         return add(name, "BLOCKED", "no mercenary could be hired")
     merc_boost()
+    H("packclear")  # `req` lists a limited number of items: earlier checks' leftovers pushed the rings off the list
     rings = {lock: _make_ring(lock) for lock in range(1, 9)}
     if not all(rings.values()):
         return add(name, "BLOCKED", "could not create the locked rings: %s" % rings)
@@ -2144,6 +2166,7 @@ def run_all(only=None):
                     continue
                 try:
                     guard()
+                    revive_if_dead()
                     fn()
                 except Exception as e:
                     add(name, "BLOCKED", "script error: %r" % (e,))
