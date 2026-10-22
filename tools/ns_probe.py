@@ -63,42 +63,50 @@ def main():
         for i in range(728, 752):
             ok, lines = gc.H("str native %d" % i)
             say("   ", lines[0] if lines else lines)
-        ok, lines = gc.H("item hpo inv")
-        say("item hpo inv ->", ok, lines)
-        ok, lines = gc.H("item crn inv")
-        say("item crn inv ->", ok, lines)
+        import re
+        spots = {}
+        for code in ("hpo", "crn"):
+            ok, lines = gc.H("item %s inv" % code)
+            say("item", code, "->", ok, lines)
+            m = re.search(r"x=(\d+) y=(\d+)", lines[0]) if lines else None
+            if m:
+                spots[code] = (int(m.group(1)), int(m.group(2)))
+        for i in (513, 737, 28106):
+            ok, lines = gc.H("str id %d" % i)
+            say("   ", lines[0] if lines else lines)
         g.press("i")
         time.sleep(1.5)
         g.shot("ns_inventory")
-        for n, (fx, fy) in enumerate(((0.738, 0.696), (0.740, 0.690))):
+        # inventory grid of the HD panel at 1600x900: left 1052, top 378, cell 27.9 x 26.2 px; crown is 2 cells wide
+        for code, (cx, cy) in spots.items():
+            w = 2 if code == "crn" else 1
+            fx = (1052 + (cx + w / 2.0) * 27.9) / 1600.0
+            fy = (378 + (cy + 0.5) * 26.2) / 900.0
             g.click(fx, fy, move_only=True)
             time.sleep(1.0)
-            g.shot("ns_hover%d" % n)
+            g.shot("ns_hover_" + code)
+        g.click(0.30, 0.50, move_only=True)
         g.press("i")
+        time.sleep(1)
         ok, lines = gc.H("spawn 5 1")
         say("spawn 5 ->", ok, lines)
-        time.sleep(2)
-        g.shot("ns_zombie")
-        g.click(0.478, 0.529, move_only=True)
-        time.sleep(1.0)
-        g.shot("ns_zombie_hover")
-        g.click(0.50, 0.30, move_only=True)
-        gc.goto(2)
-        time.sleep(1.5)
-        g.shot("ns_bloodmoor")
-        gc.goto(1)
-        time.sleep(1.5)
-        g.shot("ns_rogue")
+        for n, (fx, fy) in enumerate(((0.544, 0.560), (0.540, 0.545), (0.548, 0.575))):
+            g.click(fx, fy, move_only=True)
+            time.sleep(0.6)
+            g.shot("ns_zombie_hover%d" % n)
+        g.click(0.30, 0.50, move_only=True)
+        for area in (2, 1):
+            gc.goto(area)
+            time.sleep(1.0)
+            g.press("tab")  # automap: shows the area name
+            time.sleep(1.0)
+            g.shot("ns_automap_%d" % area)
+            g.press("tab")
         g.press("g")  # classic (legacy) graphics: do the namespaced strings still resolve?
         time.sleep(6)
         for cmd in ["str key medianxl:NsItem", "str native 737", "str native 513"]:
             ok, lines = gc.H(cmd)
             say("legacy", cmd, "->", ok, lines)
-        g.press("i")
-        time.sleep(1.5)
-        g.click(0.738, 0.696, move_only=True)
-        time.sleep(1.0)
-        g.shot("ns_legacy_inv")
         ok, lines = gc.H("state")
         for ln in lines:
             say("   state:", ln[:200])

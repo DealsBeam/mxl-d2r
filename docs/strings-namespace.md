@@ -30,4 +30,21 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
 
 ## Exceptions (strings that must stay native with a fixed ID)
 
-(filled in by ns-research / ns-plugin)
+Research ([strings-namespace-research.md](strings-namespace-research.md)) found no column where a namespaced cell fails and no
+string that needs a fixed numeric ID: the loader assigns table references itself, and code that needs text calls
+`getStringByKey("medianxl:<key>")` (no numeric ID exists for a group 2 string; the temporary pool numbers move with the
+data). One open risk makes these keys exceptions until shown otherwise: name columns store the key in a fixed-size field
+(32 bytes), and `medianxl:` takes 9. Group 2 keys longer than 23 characters in those columns stay native (group 1 style,
+fixed ID, unqualified cell):
+
+- setitems `index`: `MRAchilios' Sledgehammer`, `MRHunter's Trackless Step`, `MRVasily's Shepherd Moon`,
+  `MRWitchhunter's Crucifix`, `MRZann Esu's Binding Circle`
+- uniqueitems `index`: `Armor of the Old Religion`, `Body of the Forbidden One`, `Spirit Teacher's Headdress`,
+  `Sunstone of the Twin Seas`, `UpgradedBossSummonerRing`
+
+(A 36-character `medianxl:` key in `uniqueitems.index` raised no loader error, so these may turn out to work; if a later test
+shows the namespaced long form displays correctly, move them back. The rule for any such column: key length + 9 <= 32.)
+
+Plugin rule that follows from the research: a string whose numeric ID the plugin would write into game memory or pass to D2R's
+lookup (`0x3e2b730`) cannot be group 2. Resolve text through the service instead; if a case turns up where only an ID works,
+list the key here and keep it native.
