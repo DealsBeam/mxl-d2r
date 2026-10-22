@@ -51,6 +51,37 @@ int RunItemGenTests() {
 	}
 	Check(given == 6, "six of seven remainders give sockets");
 
+	// sockets and automagic for every quality: qualities.txt MaxSock / Automagics, 0x1007e240
+	Check(QualityMaxSock(1) == 0 && QualityMaxSock(2) == 0 && QualityMaxSock(3) == 0 && QualityMaxSock(4) == 0, "MaxSock 0 for qualities 1-4 (die)");
+	Check(QualityMaxSock(5) == 1 && QualityMaxSock(6) == 1 && QualityMaxSock(7) == 1 && QualityMaxSock(8) == 1 && QualityMaxSock(9) == 1,
+	      "MaxSock 1 for qualities 5-9 (set, rare, unique, crafted, tempered)");
+	Check(!QualityHasSocketRule(0) && QualityHasSocketRule(1) && QualityHasSocketRule(9) && !QualityHasSocketRule(10), "rule for qualities 1-9");
+	for (int q = 1; q <= 4; ++q) {
+		int total = 0;
+		for (int r = 0; r < 7; ++r) {
+			total += SocketsForQuality(q, r, false, false);
+		}
+		Check(total == 21, "quality 1-4: remainders 0..6 give 0+1+..+6 sockets");
+		Check(SocketsForQuality(q, 3, false, true) == 0, "quality 1-4: the generator's no-socket flag keeps the item bare");
+	}
+	for (int q = 5; q <= 9; ++q) {
+		Check(SocketsForQuality(q, 0, false, false) == 6 && SocketsForQuality(q, 5, false, false) == 6, "quality 5-9: always the maximum, whatever the remainder");
+		Check(ClipSockets(6, 4) == 4 && ClipSockets(2, 6) == 2 && ClipSockets(6, 0) == 0, "sockets are cut to the item's maximum and nothing else");
+		Check(SocketsForQuality(q, 0, false, true) == 6, "quality 5-9: the generator's no-socket flag is not read");
+	}
+	Check(SocketsForQuality(7, 0, true, false) == 0 && SocketsForQuality(7, 0, false, false) == 6, "a unique with the nosockets flag stays bare");
+	Check(SocketsForQuality(5, 0, true, false) == 6 && SocketsForQuality(6, 0, true, false) == 6, "the nosockets flag is only read for uniques");
+	Check(SocketsForQuality(0, 3, false, false) == 0 && SocketsForQuality(10, 3, false, false) == 0, "no rule outside 1-9");
+	for (int q = 1; q <= 9; ++q) {
+		Check(QualityAutomagics(q), "Automagics is 1 for qualities 1-9");
+	}
+	Check(!QualityAutomagics(0) && !QualityAutomagics(10), "Automagics is 0 outside 1-9");
+	for (int q = 1; q <= 9; ++q) {
+		const bool skipped = q == 5 || q == 7;
+		Check(AutomagicTargetOriginal(q) == (skipped ? AutomagicSkipRva : AutomagicApplyRva), "D2R's table skips the set and unique case only");
+		Check(AutomagicTargetMedian(q) == AutomagicApplyRva, "Median's table applies the auto prefix for every quality");
+	}
+
 	// dye: 0x1007e6d0 / 0x1007e6c0
 	Check(DyeIndex(0) == -1 && DyeIndex(1) == 0 && DyeIndex(21) == 20, "stat 1..21 is palette 0..20");
 	Check(DyeIndex(22) == -1 && DyeIndex(40) == -1, "above 21 is no dye");

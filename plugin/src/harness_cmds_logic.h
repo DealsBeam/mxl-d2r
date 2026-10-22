@@ -318,10 +318,29 @@ struct RollTally {
 	int n = 0;
 	int sockets[MaxSockets + 1] = {};  // the last slot holds MaxSockets and more
 	int ethereal = 0;
+	static constexpr int MaxQuality = 10;
+	int qualities[MaxQuality + 1] = {};  // the quality the generator really gave (the last slot holds MaxQuality and more)
+	int automagic = 0;                   // items with an automagic affix id
 	void Add(int socketCount, bool isEthereal) noexcept {
 		++n;
 		++sockets[socketCount < 0 ? 0 : (socketCount > MaxSockets ? MaxSockets : socketCount)];
 		ethereal += isEthereal ? 1 : 0;
+	}
+	void AddQuality(int quality, bool hasAutomagic) noexcept {
+		++qualities[quality < 0 ? 0 : (quality > MaxQuality ? MaxQuality : quality)];
+		automagic += hasAutomagic ? 1 : 0;
+	}
+	// "2:1500 5:490" (only the qualities seen)
+	auto Qualities(char* out, size_t size) const noexcept -> void {
+		size_t len = 0;
+		if (size > 0) {
+			out[0] = '\0';
+		}
+		for (int i = 0; i <= MaxQuality && len + 12 < size; ++i) {
+			if (qualities[i] != 0) {
+				len += static_cast<size_t>(std::snprintf(out + len, size - len, "%s%d:%d", len > 0 ? " " : "", i, qualities[i]));
+			}
+		}
 	}
 	// "0:12 1:14 2:15 ..." (only the sockets seen)
 	auto Sockets(char* out, size_t size) const noexcept -> void {

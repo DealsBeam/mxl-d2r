@@ -74,6 +74,68 @@ constexpr auto SocketsFromRoll(int32_t remainder) noexcept -> int32_t {
 	return remainder > 0 && remainder < SocketRollModulus ? remainder : 0;
 }
 
+// --- Sockets and automagic for every quality (D2Sigma 0x1007e240, stub 0x1009bc00 / 0x1009bbc0) -----------------------
+
+// D2Sigma nops the `quality 1..3` guard in front of both socket calls (D2Game 0x10c95 / 0x106b0) and replaces the quality
+// switch of the automagic roll (D2Game 0x10c9x) by qualities.txt `Automagics`. qualities.txt (work/sigma/qualities.txt) has
+// rows 0-9; the two columns used here:
+//   quality 1-4 (low, normal, superior, magic):                MaxSock 0, Automagics 1
+//   quality 5-9 (set, rare, unique, crafted, tempered):        MaxSock 1, Automagics 1
+// MaxSock 0 rolls `rand() % 7` sockets as above. MaxSock 1 gives the base's maximum (6, clipped by the setter to what the
+// item holds) without a die, and without looking at the generator's no-socket flag; a unique is skipped when its row has
+// the flag 0x10 of the unique flags dword = Median's uniqueitems.txt column `nosockets` (the audit read it as `nolimit`;
+// that is bit 0x2). The column is 0 in all 1834 rows, so every unique on a socketable base gets its maximum.
+inline constexpr int32_t SocketQualityFirst = 1;
+inline constexpr int32_t SocketQualityLast = 9;
+inline constexpr int32_t MedianMaxSockets = 6;
+
+constexpr auto QualityHasSocketRule(int32_t quality) noexcept -> bool {
+	return quality >= SocketQualityFirst && quality <= SocketQualityLast;
+}
+
+// Median's setter (0x100800b0): the count is cut to the most sockets the item can hold (D2R 0x36ead0), nothing else. D2R's own
+// setter 0x375560 also caps by quality (measured: magic 4, rare 2, unique 1, crafted and tempered 3), so the hook places the
+// sockets itself.
+constexpr auto ClipSockets(int32_t count, int32_t itemMaximum) noexcept -> int32_t {
+	return count < itemMaximum ? count : itemMaximum;
+}
+
+// qualities.txt `MaxSock`: 0 = the die, 1 = always the maximum.
+constexpr auto QualityMaxSock(int32_t quality) noexcept -> int32_t {
+	return quality >= 5 && quality <= SocketQualityLast ? 1 : 0;
+}
+
+// The sockets the item gets: `remainder` is the die's result (rand % 7, only read when the quality rolls), `noSockets` the
+// unique row's flag 0x10, `generatorNoSockets` the generator flag 8 (read by the die branch only, as in 0x1007e240).
+constexpr auto SocketsForQuality(int32_t quality, int32_t remainder, bool noSockets, bool generatorNoSockets) noexcept -> int32_t {
+	if (!QualityHasSocketRule(quality)) {
+		return 0;
+	}
+	if (QualityMaxSock(quality) == 0) {
+		return generatorNoSockets ? 0 : SocketsFromRoll(remainder);
+	}
+	return quality == 7 && noSockets ? 0 : MedianMaxSockets;
+}
+
+// qualities.txt `Automagics` (D2Sigma 0x1007e0f0, stub 0x1009bbc0): 1 for qualities 1-9. D2R's switch after the generator
+// (0x442d60 at 0x4435a0, jump table at RVA 0x44364c, one 32-bit RVA per quality 1-9) applies the base's auto prefix group
+// for 1, 2, 3, 4, 6, 8, 9 and skips 5 and 7.
+constexpr auto QualityAutomagics(int32_t quality) noexcept -> bool {
+	return quality >= 1 && quality <= 9;
+}
+inline constexpr int32_t AutomagicQualities = 9;
+// RVAs of the two targets of the jump table: the apply case and the skip case (the switch's default).
+inline constexpr uint32_t AutomagicApplyRva = 0x4435ad;
+inline constexpr uint32_t AutomagicSkipRva = 0x44361c;
+inline constexpr uint64_t AutomagicTableRva = 0x44364c;
+// The table as D2R has it (quality 1-9) and as Median's `Automagics` column makes it.
+constexpr auto AutomagicTargetOriginal(int32_t quality) noexcept -> uint32_t {
+	return quality == 5 || quality == 7 ? AutomagicSkipRva : AutomagicApplyRva;
+}
+constexpr auto AutomagicTargetMedian(int32_t quality) noexcept -> uint32_t {
+	return QualityAutomagics(quality) ? AutomagicApplyRva : AutomagicSkipRva;
+}
+
 // --- Dye (D2Sigma 0x1007e6d0, 0x1007e6c0) --------------------------------------------------------------------------
 
 inline constexpr int32_t DyeColours = 21;
