@@ -744,6 +744,14 @@ the entry bytes of build 93847:
 | runeword matcher | `0x372260(item)` | the original first; if it finds nothing, Median's padded match: Jewels at the front of the rune list up to the socket count (never for rows made only of Jewels) |
 | kill experience | `0x44fef0(plvl, mlvl, xp)` | Median's level-gap formula instead of 1.13c's tables |
 
+## Stat columns (mxl-core 0.52.0, `stat_columns.cpp`, off word `statcols`)
+
+Hooks the Advanced Stats panel's row value (`0x14eb1b0`) and row text (`0x14eb250`) functions: the Str / Dex damage bonus rows
+(stats 299 / 300: total Str x StrBonus / 100, total Dex x DexBonus / 100 of the right-hand weapon) and the " (+N% bonus, M base)"
+suffix of the attribute, life, mana and stamina rows. Groups come from the generated `mxl_statcols.h`
+(tools/stat_screen.py `column_groups()`); the arithmetic is `stat_columns_logic.h` (unit tests `stat_columns_test.cpp`).
+Details and the game check: [subsystems/stat-screen.md](subsystems/stat-screen.md) section 3b.
+
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by

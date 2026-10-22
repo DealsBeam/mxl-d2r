@@ -638,7 +638,9 @@ class Migrator:
         """D2R's Advanced Stats panel lists every itemstatcost row whose advdisplay column is 2 (value not zero; the
         text is the stat's own description) in row order. Median's two extra stat pages (statscreen.bin pages 1 and 2,
         docs/subsystems/stat-screen.md) show about 95 stats: advdisplay is 2 for exactly those and empty for the rest
-        (D2R's own list has 97, among them knockback, howl and other stats Median does not use)."""
+        (D2R's own list has 97, among them knockback, howl and other stats Median does not use). The percent stats that are
+        columns of the attribute rows (stat_screen.column_groups) are not rows; the groups go to plugin/src/mxl_statcols.h
+        for the stat_columns.cpp hooks, which also fill rows 299 / 300 (Str / Dex damage bonus)."""
         import stat_screen
         wanted = set(stat_screen.advanced_stat_rows())
         always = set(stat_screen.ALWAYS_LISTED)
@@ -670,6 +672,7 @@ class Migrator:
                     r[neg] = r[neg] or r[pos]
                     fixed += 1
             write_tsv(p, h, rows)
+        (ROOT / "plugin" / "src" / "mxl_statcols.h").write_text(stat_screen.plugin_header(), encoding="utf-8")
         missing = sorted(wanted - found)
         self.report.append(f"\nadvanced stats (itemstatcost.advdisplay): {len(found)} stats listed ({len(always & wanted)} always, "
                            f"the rest while not 0), Median's stat pages name {len(wanted)}; {fixed} get descfunc 19 for D2R's "

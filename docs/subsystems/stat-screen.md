@@ -1,7 +1,9 @@
 # Stat screen (D2Sigma ..\ui\StatScreen.cpp): Median's character sheet pages
 
 Read 2026-10-21 (lane stat-pages). Result: Median's two extra pages are listed in D2R's Advanced Stats panel by data
-(`itemstatcost.advdisplay`, tools/stat_screen.py + txt_migrate.py `advanced_stats`); no plugin code is needed.
+(`itemstatcost.advdisplay`, tools/stat_screen.py + txt_migrate.py `advanced_stats`). The two things data cannot do - the
+Str / Dex damage bonus rows and the total / % bonus / base columns - are done by two small plugin hooks on the panel's row
+functions (section 3b, `stat_columns.cpp`, lane stat-columns 2026-10-22).
 
 ## 1. Median's side
 
@@ -27,8 +29,11 @@ type, each creating a `StatScreen:ContentItem` text component at the row's x, y 
 | +29 u32 | max | `Max` (was called cap): 0 none, 40 on the absorb percentages: `min(value, max)` |
 
 Type 0x17 (rows 115 and 117, "Str. / Dex. Damage Bonus") is not a stat: stats 299 / 300 are placeholders for what
-`FUN_1005c290` (D2Damage.cpp) computes from the unit's Strength / Dexterity and two per-class factors of its charstats
-record (`+0x106`, `+0x108`). The Advanced Stats list cannot show them (no stat); they are left out here.
+`FUN_1005c290` (D2Damage.cpp, handler `0x115e90`) computes: **total Strength x the wielded weapon's StrBonus / 100**
+(row 115) and **total Dexterity x its DexBonus / 100** (row 117), a truncating 64-bit divide, 0 with no weapon or a
+bonus of 0. (An earlier reading had two per-class charstats factors in it; the decompile has the weapon record's
+`StrBonus` / `DexBonus` - the same terms D2R's damage function `0x44d710` adds.) The Advanced Stats list takes them as
+rows 299 / 300 with the plugin supplying the number (section 3b).
 
 Page 2 of the sheet ("General"): the four attributes as total / % bonus / base columns, life, mana, stamina, skill
 levels, skill duration, Stat Signets (stat 185 of 400), weapon damage by element (min - max), physical damage %, innate
@@ -66,17 +71,51 @@ skills (the layer is fixed at 0).
   ("%+d to Strength") where Median's has no placeholders, while Median's descfunc 1-4 puts the value in front. `advanced_stats`
   sets descfunc 19 (D2R's own: the text formats the value) on every listed stat whose text contains "%". This changes the
   tooltip line of those stats on items too (for the better; before: the doubled value).
-- Not listed: stat 83 (class skills), 185 (signets, no description), 299 / 300 (computed damage bonuses).
+- Not listed: stat 83 (class skills) and 185 (signets, no description). 299 / 300 are listed (`advdisplay` 1: shown even at
+  0, like Median) and filled by the plugin; the percent stats that are columns now (below) are not rows.
 
 Checked in game (HD, background mode, 2026-10-21): the button on the sheet's right edge opens the panel with, first, the thirteen
 always rows (attack rating, block, six resistances, speeds), then the stats the character has ("+30 to Strength", "+3060 to
 Life", "+50 Maximum Stamina", the pierce stats, ...). Scrolling was not testable (no wheel in background mode).
 
+## 3b. The plugin side (`stat_columns.cpp`, `stat_columns_logic.h`, generated `mxl_statcols.h`; off word `statcols`)
+
+Two inline hooks on the panel class's row functions (RVAs of D2R 93847):
+
+| function | what it does | hook |
+|---|---|---|
+| `0x14eb1b0` (panel, record) | the value a row is listed by (`advdisplay` 2 rows show while it is not 0) | for stat 299 / 300 returns the computed damage bonus |
+| `0x14eb250` (panel, string*, record) | the row text; the unit is `panel + 0x168` | for 299 / 300 rewrites the line with the computed bonus; for the attribute rows appends the columns |
+
+- **Damage bonus**: the weapon is the item in body location 4 (right hand; a weapon swap moves items between 4 / 5 and
+  11 / 12) of the unit's inventory (`0x34a360`, `0x3886d0`); `StrBonus` / `DexBonus` come from D2R's getters `0x3736e0` /
+  `0x373490` (record `+0x116` / `+0x118`; a cell of 1 reads as 100, a blank cell is 0); the number is `stat_cols::DamageBonus`.
+  The text is formatted by `0x2d6520` directly: the usual `0x2d97e0` first multiplies the value by the character level for
+  the by-level ops (2-5), which the placeholder stats 299 / 300 carry.
+- **Columns**: Median page 2 shows total / % stat / base for Strength, Dexterity, Vitality, Energy, Life and Mana
+  and total / base for Stamina. The % stats are the Median rows 359-362 (the build maps them to D2R stat ids 388-391, the ID
+  column of `work/named/itemstatcost.txt`) and the life / mana percent stats 76 / 77; `tools/stat_screen.py`
+  `column_groups()` derives the groups from `statscreen.bin` (row, % stat) and `txt_migrate` writes them into `mxl_statcols.h`.
+  The % stat rows drop out of the list (no `advdisplay`); the attribute row's line gets the suffix
+  " (+N% bonus, M base)" (" (M base)" for Stamina), N = the % stat, M = the unit's base stat (`0x2f48c0`) >> ValShift.
+  The total is the row's own value (`0x2f5020`); ValShift is 8 for life / mana / stamina.
+- Install checks the entry bytes of both functions (15 and 14 whole instructions, no rip-relative bytes) and stays off when
+  they differ; the status line reads "stat columns on: ...".
+
+Checked in game (HD, slot 2, background mode, 2026-10-22, `py -3 tools/game_checks.py all statcols`; harness verb
+`panelrow <stat>` runs the two row functions on a stand-in panel of the server's player unit): no weapon gives 0 / 0;
+a 16 / 0 weapon (`hfh`) at Str 50 / 123 / 300 gives 8 / 19 / 48 % in the Strength row; a 0 / 6 weapon (`hst`) gives
+Dex x 6 / 100 in the Dexterity row; a ring with +25% Strength / -10% Dexterity shows " (+25% bonus, N base)" and
+" (-10% bonus, M base)". PASS. Not seen on screen: the real panel was not opened (no way to open it in background mode);
+the lines are the ones the panel would draw.
+
+Limits: the suffix is English text built by the plugin (no string-table entry); the columns are a suffix of the attribute
+row, not three columns of Median's page art.
+
 ## 4. Left
 
 - A second panel with Median's page art (stat-screen.dc6 pages 1 and 2, 60 boxes) and its own text widgets needs a plugin that
   feeds values to the boxes (the type table above is everything it needs) - not built; the flat list covers the content.
-- Median's computed rows (Str / Dex damage bonus) and the total / % bonus / base columns.
 - Order and headings follow the stat id, not Median's sections.
 
 ## 5. All rows of pages 2 and 3
