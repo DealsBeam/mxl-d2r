@@ -2469,6 +2469,78 @@ auto CmdWear(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+constexpr uint64_t RvaPotionOfLifeStep = 0x580680;  // (game, unit): the Potion of Life's grant; max life (stat 7) += 0x1400 (Median 0x3200)
+constexpr uint64_t RvaLamEsenStep = 0x5ed6d0;       // (game, unit): Lam Esen's Tome reward, once per quest bit; unspent stat points (stat 4) += 5 (Median 10)
+constexpr uint64_t RvaSetState = 0x3355a0;          // (unit, state, on): needs the unit's state stat list
+constexpr uint64_t RvaClearState = 0x3354c0;        // (unit, state, 0)
+constexpr uint64_t RvaStateList = 0x2f5940;         // (unit, state) -> the unit's stat list for that state
+constexpr uint64_t RvaCreateStateList = 0x433d20;   // (&params) -> list (D2R's self buffs, srvdofunc 18, 0x553e60)
+constexpr uint64_t RvaBuffExpired = 0x5551f0;       // the self buffs' expiry callback
+constexpr uint64_t RvaDetachList = 0x2f7920;        // (unit, list)
+constexpr uint64_t RvaFreeList = 0x2f4180;          // (dataFlag, list)
+using RewardStepFn = int (*)(Game*, Unit*);
+using SetStateFn = void (*)(Unit*, int32_t, int32_t);
+using StateListFn = void* (*)(Unit*, int32_t);
+using CreateStateListFn = void* (*)(void* params);
+using DetachListFn = void (*)(Unit*, void*);
+using FreeListFn = void (*)(uint32_t, void*);
+
+// `rewardstep potion|tome`: runs the game's own grant step of the Potion of Life or of Lam Esen's Tome on the player and prints
+// the stat it changes (max life raw and in points; unspent stat points) before and after, so the amounts can be compared with
+// Median's (+50 life, 10 stat points). The Tome step grants only while quest 17 has bit 1 set (`quest 17 1 set`) and clears it.
+auto CmdRewardStep(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: rewardstep potion|tome");
+	}
+	const bool potion = hcmd::LowerEq(t.tok[1], "potion");
+	if (!potion && !hcmd::LowerEq(t.tok[1], "tome")) {
+		return Fail(c, "usage: rewardstep potion|tome");
+	}
+	const int stat = potion ? 7 : 4;
+	const int32_t before = Stat(c->player, stat);
+	Fn<RewardStepFn>(potion ? RvaPotionOfLifeStep : RvaLamEsenStep)(c->game, c->player);
+	const int32_t after = Stat(c->player, stat);
+	Out("rewardstep %s stat=%d before=%d after=%d gained=%d points=%d", t.tok[1], stat, before, after, after - before,
+	    potion ? (after - before) >> 8 : after - before);
+	return true;
+}
+
+// `setstate <ref> <state> <0|1>`: puts a state on a unit or takes it off, the way D2R's self buffs do (srvdofunc 18: a state
+// stat list from 0x433d20, then the set-state call); on lasts 10 minutes. Prints whether the unit has the state afterwards.
+// Gives the player the Stamina Shrine's state 136 without a shrine.
+auto CmdSetState(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long state = 0, on = 0;
+	if (t.n < 4 || !hcmd::ParseInt(t.tok[2], &state) || !hcmd::ParseInt(t.tok[3], &on) || state < 1 || state > 1023) {
+		return Fail(c, "usage: setstate <player|merc|mon:id> <state> <0|1>");
+	}
+	Unit* unit = ResolveRef(c, t.tok[1]);
+	if (unit == nullptr) {
+		return Fail(c, "setstate: unit not found (%s)", t.tok[1]);
+	}
+	const int32_t st = static_cast<int32_t>(state);
+	void* list = Fn<StateListFn>(RvaStateList)(unit, st);
+	if (on != 0 && list == nullptr) {
+		struct Params {  // the request of srvdofunc 18 (see missile_hits.cpp)
+			Unit* caster;
+			Unit* target;
+			int32_t skill, level, duration, minus1, zero, state;
+			void* expired;
+		} params{unit, unit, 0, 1, 25 * 600, -1, 0, st, reinterpret_cast<void*>(g_base + RvaBuffExpired)};
+		static_assert(sizeof(Params) == 0x30);
+		list = Fn<CreateStateListFn>(RvaCreateStateList)(&params);
+		if (list == nullptr) {
+			return Fail(c, "setstate: no state list could be created");
+		}
+		Fn<SetStateFn>(RvaSetState)(unit, st, 1);
+	} else if (on == 0 && list != nullptr) {
+		Fn<SetStateFn>(RvaClearState)(unit, st, 0);
+		Fn<DetachListFn>(RvaDetachList)(unit, list);
+		Fn<FreeListFn>(RvaFreeList)(c->dataFlag, list);
+	}
+	Out("setstate %s state=%lld on=%lld has=%d", t.tok[1], state, on, Fn<UnitHasStateFn>(RvaUnitHasState)(unit, st) != 0 ? 1 : 0);
+	return true;
+}
+
 // `manamin [reset]`: the lowest mana the player had on any server frame since `manamin reset` (a skill's mana is charged
 // when its action starts, a frame or more after `cast` returns, and regeneration refills it within a few frames, so a
 // single read after the cast sees nothing; every frame is sampled here).
@@ -3637,7 +3709,7 @@ const Verb Verbs[] = {
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false},
-    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
+    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},

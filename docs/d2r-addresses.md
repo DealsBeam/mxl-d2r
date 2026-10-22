@@ -984,7 +984,22 @@ every hook, patched bytes before every patch; whole instructions, no rip-relativ
 
 Median-side corrections found on the way: D2Sigma's Andariel patch removes only the two chipped gems (the standard gem stays, the audit said "100 bytes nopped: the vanilla gift disappears"); the formula in the audit row game5-026 (`250*1.5^(level-90)`) is a misreading of `pow(level - 90, 1.5) * 250`.
 
-## 20. Monster level, players scaling, Normal drops, leash, Baal throne delay (lane pa2-monsters, 2026-10-23; plugin/src/monster_rules.cpp)
+## 20. Gamble offers and small engine rules (lane pa2-gamble, 2026-10-23; plugin/src/gamble.cpp, engine_gaps.cpp)
+
+Median patches game5-022, game2-014, game4-020, game4-029 (docs/sigma-patch-audit.md items 16 and 21). Expected bytes are checked before every patch / hook.
+
+| What | RVA | Bytes | Notes |
+|---|---|---|---|
+| Gamble offer generator `(game, player, npc)` | `0x541880` | loop bound `83 fd 0e 0f 8c db fe ff ff` at `0x541a7c` (`cmp ebp, 0xe / jl 0x54195f`) -> immediate at `0x541a7e` becomes `0x20` | the only caller is `0x540913` (in `0x540850`, the gamble request). Offer 0 is item code `rin ` (`0x206e6972`), 1 is `amu ` (`0x20756d61`), the rest a random pick of the NPC's per-level list; the player's old list at player data `+0x108` is freed and a new one made (`0x386260`) |
+| Offer quality `(game, npc, code, level, rng)` | `0x541ab0` | - | rolls `0..99999` (`0x153b00(rng, 100000)`) against the difficulty row at `0x300830(expansion, difficulty)`: `+0x6c` rare, `+0x70` set, `+0x74` unique, `+0x78` / `+0x7c` upgrade chances; unique below `+0x74`, set below `+0x74 + +0x70`, rare below the sum, else magic (quality 4). Median's difficultylevels file has 25000 / 1000 / 1000, D2R's own 10000 / 100 / 50 |
+| Place the offer `(game, npc, item, list)` | `0x541d20` | - | `0x3865b0` / `0x389270` put it into the list's grid, which fails when the grid is full (the generator then returns): the 32 offers of Median fit page 0 of D2R's gamble grid |
+| Client gamble line | `0x112c80` | - | sends `0xec730(0x38, 2, npc id)`; `0x2a4875c` holds the current NPC id |
+| Missile hit 20 `(game, missile)` | `0x45ec20` (slot `0x23910d0`) | `3b c6 8b d8 0f 4c de` at `0x45edce` -> `31 db 85 c0 0f 4f d8` | two calc results floored at 1 (`0x45ed93` first, ebp; `0x45edce` second, ebx); Median changes the second (1.13c `0x6fc5de78`) |
+| srvdofunc 47 `0x56f750` (table `0x238ea00` slot 47 at `0x238eb78`) | guard at `0x56f859` | `e8 52 59 dc ff 85 c0 0f 85 b9 02 00 00` -> 13 x `90` | `0x3351b0(unit, state)` tests the state on the caster, the jump (`0x56fb1f`) leaves the function |
+| Slow / damage floor `(game, unit)` | `0x449f40` (hook) | entry `48 89 5c 24 08 57 48 83 ec 20` | unit type 1: monstats byte at record `+0x1ba + difficulty` (via `0x976e0`), else -0x32; difficulty is the byte at game `+0x104`. Callers `0x4509fa`, `0x451644`, `0x5619d8`, `0x561bde` (aura callback `0x5616f0`, aura apply `0x563d90`). The hook returns -12 / -25 / -50 for a player (unit type 0) on Normal / Nightmare / Hell |
+| Required level `0x376de0` | - | `ff 25` thunk into D2RCore.dll (`[0x143e2a3c0]`) | not patchable from the exe (common1-013 stays open) |
+
+## 21. Monster level, players scaling, Normal drops, leash, Baal throne delay (lane pa2-monsters, 2026-10-23; plugin/src/monster_rules.cpp)
 
 Median patches (docs/sigma-patch-audit.md items 17-19). Every patched byte is checked before it is changed; all sites of a part change or none.
 
@@ -1016,18 +1031,3 @@ game destroy / create, client menu composition, quest handlers 13 / 14 / 25 / 38
    cosmetic. The monster death drop caller `0x5930b0` (the other caller of `0x4404f0`) was not read.
 6. Client: the string ids for new menu lines (tbl lookup `0x143e2b730`) and the layout / frame of a longer menu are untested; records hold only 5 lines.
 7. Everything above is static analysis: none of the hooks has been run in the game yet.
-
-## 20. Gamble offers and small engine rules (lane pa2-gamble, 2026-10-23; plugin/src/gamble.cpp, engine_gaps.cpp)
-
-Median patches game5-022, game2-014, game4-020, game4-029 (docs/sigma-patch-audit.md items 16 and 21). Expected bytes are checked before every patch / hook.
-
-| What | RVA | Bytes | Notes |
-|---|---|---|---|
-| Gamble offer generator `(game, player, npc)` | `0x541880` | loop bound `83 fd 0e 0f 8c db fe ff ff` at `0x541a7c` (`cmp ebp, 0xe / jl 0x54195f`) -> immediate at `0x541a7e` becomes `0x20` | the only caller is `0x540913` (in `0x540850`, the gamble request). Offer 0 is item code `rin ` (`0x206e6972`), 1 is `amu ` (`0x20756d61`), the rest a random pick of the NPC's per-level list; the player's old list at player data `+0x108` is freed and a new one made (`0x386260`) |
-| Offer quality `(game, npc, code, level, rng)` | `0x541ab0` | - | rolls `0..99999` (`0x153b00(rng, 100000)`) against the difficulty row at `0x300830(expansion, difficulty)`: `+0x6c` rare, `+0x70` set, `+0x74` unique, `+0x78` / `+0x7c` upgrade chances; unique below `+0x74`, set below `+0x74 + +0x70`, rare below the sum, else magic (quality 4). Median's difficultylevels file has 25000 / 1000 / 1000, D2R's own 10000 / 100 / 50 |
-| Place the offer `(game, npc, item, list)` | `0x541d20` | - | `0x3865b0` / `0x389270` put it into the list's grid, which fails when the grid is full (the generator then returns): the 32 offers of Median fit page 0 of D2R's gamble grid |
-| Client gamble line | `0x112c80` | - | sends `0xec730(0x38, 2, npc id)`; `0x2a4875c` holds the current NPC id |
-| Missile hit 20 `(game, missile)` | `0x45ec20` (slot `0x23910d0`) | `3b c6 8b d8 0f 4c de` at `0x45edce` -> `31 db 85 c0 0f 4f d8` | two calc results floored at 1 (`0x45ed93` first, ebp; `0x45edce` second, ebx); Median changes the second (1.13c `0x6fc5de78`) |
-| srvdofunc 47 `0x56f750` (table `0x238ea00` slot 47 at `0x238eb78`) | guard at `0x56f859` | `e8 52 59 dc ff 85 c0 0f 85 b9 02 00 00` -> 13 x `90` | `0x3351b0(unit, state)` tests the state on the caster, the jump (`0x56fb1f`) leaves the function |
-| Slow / damage floor `(game, unit)` | `0x449f40` (hook) | entry `48 89 5c 24 08 57 48 83 ec 20` | unit type 1: monstats byte at record `+0x1ba + difficulty` (via `0x976e0`), else -0x32; difficulty is the byte at game `+0x104`. Callers `0x4509fa`, `0x451644`, `0x5619d8`, `0x561bde` (aura callback `0x5616f0`, aura apply `0x563d90`). The hook returns -12 / -25 / -50 for a player (unit type 0) on Normal / Nightmare / Hell |
-| Required level `0x376de0` | - | `ff 25` thunk into D2RCore.dll (`[0x143e2a3c0]`) | not patchable from the exe (common1-013 stays open) |
