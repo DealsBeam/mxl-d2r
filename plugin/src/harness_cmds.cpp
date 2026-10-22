@@ -15,6 +15,7 @@
 #include "dungeon_lockout.h"
 #include "goblins.h"
 #include "mxl_hirelings.h"
+#include "no_corpse.h"
 #include "item_events.h"
 #include "npc_actions.h"
 #include "item_gen.h"
@@ -137,7 +138,7 @@ constexpr uint64_t RvaMenuOpenFlag = 0x2a486a4, RvaMenuNpcValid = 0x2a48760, Rva
 constexpr uint64_t RvaMenuTable = 0x2a48830, RvaMenuCount = 0x2a48838;
 // offsets
 constexpr int GameClients = 0x138, ClientNext = 0x628, ClientState = 0x04, GameFrame = 0x170, GameDifficulty = 0x104;
-constexpr int HashMonsters = 0x4c6, HashItems = 0x5c6, HashObjects = 0x546, HashMissiles = 0x646;  // game + (base + (id & 0x7f)) * 8
+constexpr int HashPlayers = 0x446, HashMonsters = 0x4c6, HashItems = 0x5c6, HashObjects = 0x546, HashMissiles = 0x646;  // game + (base + (id & 0x7f)) * 8
 constexpr int UnitNextInHash = 0x158, UnitClass = 0x04, UnitId = 0x08, UnitMode = 0x0c;
 constexpr int StatLife = 6, StatMana = 8, StatLevel = 12, StatGold = 14, StatGoldBank = 15, StatDurability = 0x48;
 
@@ -422,6 +423,25 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 		DescribeItem(c, it);
 	});
 	Out("items %d", items);
+	// Player-type units in the game: the character itself, other players, and the corpse of a dead one (D2's corpse is a
+	// second player unit in mode 0x11 with the character's name). `corpses` = player units other than this one.
+	int players = 0, corpses = 0;
+	bool self = false;
+	EachUnit(c->game, HashPlayers, [&](Unit* u) {
+		if (TypeOf(u) == 0) {
+			++players;
+			if (u == p) {
+				self = true;
+			} else if (ModeOf(u) == 17) {
+				++corpses;
+			}
+		}
+	});
+	long skippedCorpses = 0, skippedPenalties = 0, respawnsHeld = 0, respawns = 0;
+	const bool noCorpseOn = NoCorpseCounts(&skippedCorpses, &skippedPenalties, &respawnsHeld, &respawns);
+	Out("corpses %d players=%d self=%d | no corpse %s: skipped corpse calls=%ld penalty calls=%ld respawns held=%ld let=%ld xp=%u", corpses,
+	    players, self ? 1 : 0, noCorpseOn ? "on" : "off", skippedCorpses, skippedPenalties, respawnsHeld, respawns,
+	    static_cast<uint32_t>(Stat(p, 13)));
 	Out("skills left=%d right=%d", SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(p)), SkillIdOf(Fn<ActiveSkillFn>(RvaRightSkill)(p)));
 	PrintMissiles(c);
 	int mons = 0;
