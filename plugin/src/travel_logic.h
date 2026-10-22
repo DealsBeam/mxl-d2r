@@ -120,11 +120,11 @@ constexpr auto ContainsNoCase(const char* text, const char* word) noexcept -> bo
 	return false;
 }
 
-constexpr auto CubePanelState(const char* target, const char* command) noexcept -> int {
-	if (!ContainsNoCase(target, "cube")) {
+constexpr auto CubePanelState(const char* target, const char* command, const char* text = nullptr) noexcept -> int {
+	if (!ContainsNoCase(target, "cube") && !ContainsNoCase(text, "cube")) {
 		return 0;
 	}
-	if (ContainsNoCase(command, "close") || ContainsNoCase(command, "hide")) {
+	if (ContainsNoCase(command, "close") || ContainsNoCase(command, "hide") || ContainsNoCase(command, "unload")) {
 		return -1;
 	}
 	if (ContainsNoCase(command, "open") || ContainsNoCase(command, "show")) {

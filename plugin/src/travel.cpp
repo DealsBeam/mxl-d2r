@@ -100,7 +100,7 @@ std::atomic<uint32_t> g_xPresses{0}, g_rPresses{0}, g_cPresses{0};
 std::atomic<uint32_t> g_reveals{0}, g_revealCells{0}, g_transmutes{0}, g_transmuteBlocked{0};
 std::atomic<bool> g_cubeOpen{false};
 std::atomic<uint32_t> g_cubeMessages{0};
-constexpr uint32_t UiNames = 48, UiNameSize = 72;
+constexpr uint32_t UiNames = 96, UiNameSize = 96;
 char g_uiNames[UiNames][UiNameSize] = {};
 std::atomic<uint32_t> g_uiCount{0};
 char g_cubeLast[96] = "";
@@ -359,13 +359,13 @@ auto __cdecl OnUiMessage(const D2RL::PluginContext*, const D2RL::SharedEvents::U
 	if (event == nullptr || event->target == nullptr || event->command == nullptr) {
 		return D2RL::SharedEvents::UiMessageAction::Continue;
 	}
-	const int state = travel::CubePanelState(event->target, event->command);
+	const int state = travel::CubePanelState(event->target, event->command, event->text);
 	if (state != 0) {
 		g_cubeOpen.store(state > 0);
 	}
 	{  // the distinct messages seen, for finding the cube panel's names (harness `travel` prints them)
 		char key[UiNameSize];
-		std::snprintf(key, sizeof(key), "%s:%s", event->target, event->command);
+		std::snprintf(key, sizeof(key), "%s:%s(%s)", event->target, event->command, event->text != nullptr ? event->text : "");
 		const uint32_t have = g_uiCount.load();
 		bool known = false;
 		for (uint32_t i = 0; i < have && i < UiNames && !known; ++i) {
@@ -376,7 +376,7 @@ auto __cdecl OnUiMessage(const D2RL::PluginContext*, const D2RL::SharedEvents::U
 			g_uiCount.store(have + 1);
 		}
 	}
-	if (travel::ContainsNoCase(event->target, "cube") || travel::ContainsNoCase(event->command, "cube")) {
+	if (travel::ContainsNoCase(event->target, "cube") || travel::ContainsNoCase(event->command, "cube") || travel::ContainsNoCase(event->text, "cube")) {
 		const uint32_t n = g_cubeMessages.fetch_add(1);
 		if (n < 40) {  // the message names are not documented: the first ones go to the log (and `mxl`)
 			std::snprintf(g_cubeLast, sizeof(g_cubeLast), "%s:%s", event->target, event->command);
@@ -573,12 +573,15 @@ void TravelHotkeyReport(char* out, size_t outSize) noexcept {
 	}
 }
 
-void TravelUiMessages(char* out, size_t outSize) noexcept {
+void TravelUiMessages(const char* contains, char* out, size_t outSize) noexcept {
 	size_t used = 0;
 	out[0] = '\0';
 	const uint32_t n = g_uiCount.load();
 	for (uint32_t i = 0; i < n && i < UiNames && used + 1 < outSize; ++i) {
-		const int w = std::snprintf(out + used, outSize - used, "%s%s", i > 0 ? " " : "", g_uiNames[i]);
+		if (contains != nullptr && !travel::ContainsNoCase(g_uiNames[i], contains)) {
+			continue;
+		}
+		const int w = std::snprintf(out + used, outSize - used, "%s%s", used > 0 ? " " : "", g_uiNames[i]);
 		used = w > 0 && used + static_cast<size_t>(w) < outSize ? used + static_cast<size_t>(w) : outSize;
 	}
 }

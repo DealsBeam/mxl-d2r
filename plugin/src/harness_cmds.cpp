@@ -2368,7 +2368,7 @@ auto CmdTravel(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	TravelHotkeyReport(text, sizeof(text));
 	Out("travel %s", text);
 	char msgs[900];
-	TravelUiMessages(msgs, sizeof(msgs));
+	TravelUiMessages("Panel", msgs, sizeof(msgs));
 	Out("uimsgs %s", msgs);
 	return true;
 }

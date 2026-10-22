@@ -24,6 +24,6 @@ void TravelStatus(char* out, size_t outSize) noexcept;
 // Harness (harness_cmds.cpp, docs/testing.md "Harness commands").
 auto TravelAutomap(uint64_t* cells, int* layer, int* revealFlag, int* layers) noexcept -> bool;  // client thread; false = no automap yet
 void TravelHotkeyReport(char* out, size_t outSize) noexcept;                                      // bindings and counters
-void TravelUiMessages(char* out, size_t outSize) noexcept;                                         // distinct UI messages seen (target:command)
+void TravelUiMessages(const char* contains, char* out, size_t outSize) noexcept;                                         // distinct UI messages seen (target:command)
 auto TravelStashProbe(int page, char* out, size_t outSize) noexcept -> int;                       // 1 queued, 0 not possible; result by TravelStashResult
 auto TravelStashResult(char* out, size_t outSize) noexcept -> int;                                // 1 done ok, 0 done failed, -1 pending, -2 never queued
