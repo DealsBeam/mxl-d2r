@@ -350,6 +350,7 @@ class Validator:
         self.native_exceptions()
         self.string_package()
         self.alias_refs(names)
+        self.cube_outputs()
 
     def alias_refs(self, names: set[str]) -> None:
         """Aliases must be defined in the namespace list; every cubemain input / output and treasureclassex item that
@@ -383,6 +384,37 @@ class Validator:
                         self.add("error", t, header[ci], "names a Median-only unique / set item without the namespace; "
                                  f"it must be {strings_ns.PREFIX}<key> (or the alias for a key with a short alias)",
                                  r[0] if r else "-", v)
+
+    # What D2R resolves in a cubemain output cell: an item code, an item type code, a unique / set item index (the index
+    # cell as written: `medianxl:<key>` for a Median-only name), or one of its special words. Median's `void` names nothing:
+    # the recipe only destroys its inputs.
+    CUBE_OUTPUT_WORDS = {"useitem", "usetype", "Cow Portal", "void"}
+
+    def cube_outputs(self) -> None:
+        """Every cubemain output cell resolves to something D2R's compiler knows (bug #19: a quote left in an empty cell
+        and an unresolved name both give an empty output slot, which `game_checks.py all cowportals` finds only in game).
+        The cell is a name with optional `,qty=2` style modifiers, in quotes when it has a comma."""
+        tab = self.data.table("cubemain")
+        if not tab:
+            return
+        known = set(self.CUBE_OUTPUT_WORDS)
+        for t, col in (("armor", "code"), ("weapons", "code"), ("misc", "code"), ("itemtypes", "Code"),
+                       ("uniqueitems", "index"), ("setitems", "index")):
+            known |= self.data.values(t, col) or set()
+        header, rows = tab
+        cols = [ci for ci, c in enumerate(header) if strings_ns.is_reference("cubemain", c) and c.startswith("output")]
+        for r in rows:
+            for ci in cols:
+                v = r[ci].strip() if ci < len(r) else ""
+                if not v:
+                    continue
+                body = v[1:-1] if len(v) > 1 and v[0] == v[-1] == '"' else v
+                if '"' in body:
+                    self.add("error", "cubemain", header[ci], "stray quote in an output cell (D2R reads it as part of the name "
+                             "and leaves the slot empty)", r[0] if r else "-", v)
+                elif body.partition(",")[0] not in known:
+                    self.add("error", "cubemain", header[ci], "output D2R cannot resolve (not an item code, item type, "
+                             "unique / set index as the index cell reads, or special word)", r[0] if r else "-", v)
 
     def native_exceptions(self) -> None:
         """No key can stay native with a fixed id any more: in a namespaced mod an unqualified record is a `medianxl:`

@@ -28,15 +28,15 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 
 | Category | ported | partly | missing | deviation | unknown | total |
 |---|---|---|---|---|---|---|
-| Death and corpse | 2 | 0 | 3 | 0 | 4 | 9 |
+| Death and corpse | 6 | 0 | 1 | 0 | 2 | 9 |
 | Gold, stash and shared stash | 4 | 3 | 3 | 0 | 2 | 12 |
 | Inventory, cube and belt sizes | 3 | 0 | 0 | 0 | 2 | 5 |
-| Item rules | 7 | 3 | 4 | 2 | 2 | 18 |
-| Crafting and the cube | 3 | 0 | 2 | 0 | 2 | 7 |
+| Item rules | 10 | 3 | 1 | 2 | 2 | 18 |
+| Crafting and the cube | 4 | 0 | 1 | 0 | 2 | 7 |
 | Experience, party and level cap | 5 | 0 | 0 | 0 | 4 | 9 |
 | Difficulty, area levels and monster scaling | 7 | 1 | 0 | 0 | 2 | 10 |
 | Uber and quest content | 3 | 2 | 1 | 0 | 1 | 7 |
-| Skills, respec and caps | 5 | 1 | 3 | 0 | 4 | 13 |
+| Skills, respec and caps | 8 | 1 | 2 | 0 | 2 | 13 |
 | Mercenaries | 3 | 1 | 0 | 1 | 0 | 5 |
 | NPC services and town | 3 | 0 | 0 | 0 | 1 | 4 |
 | Waypoints and travel | 1 | 1 | 1 | 0 | 1 | 4 |
@@ -45,20 +45,20 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 | Multiplayer | 0 | 0 | 0 | 1 | 3 | 4 |
 | Hardcore | 1 | 0 | 1 | 0 | 0 | 2 |
 | Anything else Median documents as different | 1 | 0 | 0 | 2 | 1 | 4 |
-| **All** | **50** | **14** | **21** | **9** | **30** | **124** |
+| **All** | **61** | **14** | **14** | **9** | **26** | **124** |
 
 ## Top 10 gaps (by player impact)
 
 1. ~~**XP1, level cap 150**~~: fixed (lane gap-levelcap): the built `experience` table now carries Median's `MaxLvl 150` row, the engine reaches level 150 and stops there.
 2. **DC1, no player corpse**: D2R still makes a corpse that must be retrieved; Median re-equips gear in town and keeps the belt. Lane `no-corpse`.
 3. **SK10 and SK11, Hunter steady aim and Fire Sorceress Heat** (lane gap-classres, done): both are table driven and worked in the port except for two engine rules, now in the plugin. Steady Aim is a layered stat on a state (Steady Shot builds, Heartseeker and Cascade spend); the missing part was the "requires Steady Aim" gate (skill `restrict` modes 3-7, `skill_restrict.cpp`). Heat is the mana bar, drained by stat 297 through D2Sigma's regeneration; D2R's regeneration was missing that (`heat.cpp`). `docs/plugin-spec.md` "Skill restrictions", "Steady Aim", "Heat".
-4. **IT1 and IT2, durability and quantity**: Median removed durability and stack depletion; the port still wears items down and uses up throwing stacks.
-5. **IT3, auto-identify on pickup**: every unidentified drop needs a scroll in the port.
+4. ~~**IT1 and IT2, durability and quantity**~~ ported and verified (lane gap-items): items no longer wear down and throwing stacks are not used up.
+5. ~~**IT3, items drop identified**~~ ported and verified (lane gap-items): the generator pushes the identified flag for magic, set, rare and unique items, as Median does.
 6. **DC4 and DC3, death rules**: no 5 second respawn wait, and gold on death is untested.
 7. ~~**SK7, sprint and no stamina**~~: not a gap. Median's sprint is its charstats stamina (50 points, 5 seconds of running) and the port carries those columns; game check `sprint` confirms it.
 8. **CR4 and DC6, trophy challenge timers** (lane gap-classres, done): Median's timer is the duration of the states that carry the challenge stat (data, native in D2R); the plugin adds the void on death or zone change and a per-trophy cube window (`trophy_timer.cpp`). Open: nothing in the data says which skill is cast on a boss kill (see CR4).
 9. **MU2, WP2, UI4, Map Reveal, waypoint auto-activation, X/R/C hotkeys**: daily quality-of-life rules that every Median player expects.
-10. **GS5 and SK3, stash pages and free mana in town**: D2R's tab count applies (no Median multi-page stash), and skills still cost mana in town.
+10. **GS5, stash pages** (D2R's tab count applies, no Median multi-page stash). ~~SK3, free mana in town~~ is ported and verified (lane gap-items).
 
 Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), DC5 (Soulstealer heal rules), XP9 (Grit), HC1 (Hardcore to Softcore).
 
@@ -107,9 +107,9 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
-| IT1 | Items have no durability; repair, durability warnings and breakage are gone. | P2.4.0 ("Removed durability"), P2.7.0 | missing | `skills.txt` has `durability=1` on 125 skills; weapons and armour tables still carry durability values; no code removes it. Check: swing a weapon with `use`, read the durability stat; open Charsi |
-| IT2 | Thrown/quantity items are no longer used up by attacking or throwing; ammunition warnings gone. | P2.7.0 ("Quantity is no longer reduced by normal attack and throw") | missing | `noammo=1` on only 4 skills; no ammo code. Check: throw a stack and compare quantity |
-| IT3 | Items dropped by monsters are identified as soon as they are picked up; no identify scrolls. | P1.0.0 | missing | no auto-identify code. Check: pick up a rare/unique drop and read the identified flag in `state` |
+| IT1 | Items have no durability; repair, durability warnings and breakage are gone. | P2.4.0 ("Removed durability"), P2.7.0 | ported (verified) | plugin part `durability` (`item_rules.cpp`, off word `durability`): D2R's wear dispatcher `0x441b10` and the skill-use wear `0x5590c0` are no-ops, the equivalent of Median's NOP of the wear call (D2Game+0xdee28). `game_checks nodurability`: 600 wear steps, weapon 110 -> 110, armour 48 -> 48 (off word: 110 -> 101, 48 -> 16) |
+| IT2 | Thrown/quantity items are no longer used up by attacking or throwing; ammunition warnings gone. | P2.7.0 ("Quantity is no longer reduced by normal attack and throw") | ported (verified) | plugin part `quantity`: D2R's quantity use `0x439130` leaves the stack alone, the equivalent of Median's NOP of the `dec ebp` (D2Game+0xa16be). `game_checks nodurability`: 4 Throws, quantity 58 -> 58 (off word: 110 -> 109) |
+| IT3 | Items dropped by monsters are identified (Median: no identify scrolls). | P1.0.0 | ported (verified) | plugin part `autoid`: the magic, set, rare and unique generators of Median push 1 into `SetItemFlag(item, 0x10)` (D2Game `0x104c1`, `0x15443`, `0x13daa`, the unique picker; sigma-patch-audit.md item 1); the plugin calls D2R's `SetItemFlag` `0x36d8f0` after the item generator `0x442d60` for qualities 4-7. `game_checks autoid` (Andariel kills): 6 of 6 drops identified (off word: 0 of 6) |
 | IT4 | Repair All with a hotkey at the smith (before durability was removed). | P2.0.0 | deviation | superseded by IT1 |
 | IT5 | Ethereal and socket rolls, ethereal drop chance, ethereal durability penalty. | P1.1.0, D2Sigma | partly | `itemrolls`; listed (Ethereal roll approx, Socket roll verified) |
 | IT6 | Class-locked items. | D2Sigma | ported | verified, `classlock`; listed |
@@ -185,7 +185,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 |---|---|---|---|---|
 | SK1 | Skill points cap (max base level) and soft levels. | P1.0.0 | ported | D:skills |
 | SK2 | Akara respec with a confirmation dialog. | P1.6.0 | ported | check `respec`; listed (Akara respec confirm, done) |
-| SK3 | Skills cost no mana in town. | P2.1.0 | missing | no town-mana code. Check: cast a mana skill in town, read mana |
+| SK3 | Skills cost no mana in town. | P2.1.0 | ported (verified; mechanism differs) | plugin part `townmana`: the mana cost hook returns 0 at the charge sites when the caster is in a town; it needed a caster hook on `0x43acb0` because D2RLoader re-assembles the server charge function (docs/plugin-spec.md, Mana costs). `game_checks townmana`: town 5000 -> 5000, field -> 4993 (off word: 4993 in town) |
 | SK4 | Many skills castable in town (buffs, totems, warp, Shadow Refuge, Acid aura). | P1.1.0, P1.2.0, P1.7.0, P2.1.0 | unknown | skills.txt `town` column carried from Median; not tested. Check: `cast` each in town |
 | SK5 | Town Portal is an innate skill (no scrolls) with a 10 s cooldown, and a 1 second delay when opening. | P1.0.0, P2.2.0 | partly | D:skills town_portal srvdofunc 109, localdelay 250; the 1 s delay is not checked |
 | SK6 | Skill cooldowns are computed dynamically; skill groups no longer share cooldowns. | P1.0.0 | ported | D2Sigma's cooldown start: one timer per skill or per skills2 cooldown group, no unit-wide delay state; `cooldowns.cpp` ports it on D2R's cooldown starts. Check `cooldowns` (PASS 2026-10-22, Blast Wave (group 4, localdelay 500): 494 frames without and 390 with stat 309 = 100, the six other group skills got the same end frame; server start only, the client twin is not reached by the harness cast) |

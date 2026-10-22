@@ -965,6 +965,25 @@ handlers); `0x2e15a` = the end of the game frame function (the goblin / D2GS tic
 | `0x100bcd10` | 9: 0x4b17e 0x4b1b6 0x5568b 0x55955 0x9dd29 0xe176f 0xe1858 0xed3fe 0xed655 |
 
 
+## 19. Mercenary revive price, Act 5 quest experience, removed quest rewards (lane pa-quests, 2026-10-22)
+
+Median patches (docs/sigma-patch-audit.md items 8-10) ported in `hirelings.cpp` (`InstallMercRevive`, off word `mercrevive`) and
+`quests_rewards.cpp` (`InstallQuestXp` off word `questxp`, `InstallQuestRewards` off word `questrewards`). Entry bytes are checked before
+every hook, patched bytes before every patch; whole instructions, no rip-relative operand.
+
+| What | RVA | Entry bytes / patched bytes | Notes |
+|---|---|---|---|
+| Revive price (merc, not-classic flag, hireling id) -> gold | `0x3c1ad0` (hook) | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 41 8b f8` | D2R: `(level^2 / 2) x 15` capped by the hireling columns; Median `D2Hirelings 0x10067450`: level x 100 to 105, `(int)(pow(level - 90, 1.5) x 250)` above. Called at the mercenary's death (`0x4ffb90`, price stored and sent to the client) and again at charge time; the hook covers both. Harness `mercprice [level]` calls it. |
+| Rite of Passage experience | `0x550c20` (hook, function replaced) | `48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 54 41 56 41 57 48 83 ec 20` | D2R: 1.4M / 20M / 40M by difficulty. Replacement: client update `0x518620(game, player)`, then `0x44f2e0(game, player, level, 50000)`; none at level 130+. Harness `a5done` runs `0x54af20(game, player)` (the quest 39 completion that calls it). |
+| Qual-Kehk rune loop | `0x54c9ac` | `e8 7f ab fc ff` -> `b8 01 00 00 00` (call `0x517530` becomes `mov eax,1`) | the loop still counts a created item, nothing is created; `QualKehkHook` gives Median's runes. |
+| Akara ring | `0x5d9a6d` | `e8 be da f3 ff` -> `0f 1f 44 00 00` | the ring task `0x5d9a30`'s item creation. Griswold's Heart replaces it. |
+| Andariel chipped gems | `0x5e1fbd` and `0x5e1fc7` | `8d 7d 02` -> `31 ff 90`; `48 8b` -> `eb 56` | jumps over the two-gem loop (`edi = 0` as the standard gem roll after it expects). The standard gem drop `0x5e201f` stays (D2Sigma's nop covers the loop only). |
+| Prison of Ice item | `0x546cc0` (hook) | `48 89 5c 24 08 48 89 54 24 10 57 48 83 ec 30` | task node `+0x18` = item code; the hook writes `'amu '` before the original. The task is dispatched through the pointer table at `0x1d3d900`. |
+| Hellforge reward (quest 27) | `0x5e4540` (hook) | `40 53 55 48 83 ec 48` | called with the quest and the dying Hephasto (class 376): rolls Median's `Quest Hellforge` class (monstats row 257, `TreasureClass1` of the difficulty) once, clears quest `+0x23`, then the original runs without runes. |
+| Countess reward (quest 5) | `0x5e3010` (hook) | `48 8b c4 56 41 55 48 83 ec 58` | called by the quest 5 kill handler `0x5e10c0` (`TowerKillHook` records victim and killer) and by the retry task `0x5d98b0`. With a kill in progress and data `+0x118` set, `+0x119` clear: `DropBonusPerPlayer` of `Quest Countess` (row 266), `+0x119 = 1`. |
+
+Median-side corrections found on the way: D2Sigma's Andariel patch removes only the two chipped gems (the standard gem stays, the audit said "100 bytes nopped: the vanilla gift disappears"); the formula in the audit row game5-026 (`250*1.5^(level-90)`) is a misreading of `pow(level - 90, 1.5) * 250`.
+
 ## Unknown / next steps
 
 Solved in lane d2r-addresses-2 (sections 4, 5, 7-11): warp destination and the lockout refusal point, game frame, spawn, TC executor,
