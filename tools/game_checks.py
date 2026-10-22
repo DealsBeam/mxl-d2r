@@ -353,6 +353,13 @@ def items(st, code, page=None):
     return [i for i in st["items"] if str(i.get("code")) == code and (page is None or i.get("page") == page)]
 
 
+def ensure_cube():
+    """The cube checks put items in the Horadric Cube (`item <code> cube`), which fails with "placing failed" when the
+    character carries no cube (a fresh test character does not; an earlier check that removed it leaves none): give it one."""
+    if not items(hstate(), "box"):
+        H("item box inv")
+
+
 def ground_count(code):
     """Items of this code lying on the ground (`h dump ground` lists every item unit; mode 3 / 5 = on the ground): the quest
     bonus drops land there (one per player)."""
@@ -949,6 +956,7 @@ def check_cow():
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
     goto(1)
+    ensure_cube()
     H("cubeclear")
     H("item leg cube")
 
@@ -985,6 +993,7 @@ def check_goldcraft():
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
     goto(1)
+    ensure_cube()
     H("cubeclear")
     H("stat player 532 set 140")
     H("gold set 400000 100000")
@@ -1018,6 +1027,7 @@ def check_craftflags():
         add(n1, "BLOCKED", "not in a game")
         return add(n2, "BLOCKED", "not in a game")
     goto(1)
+    ensure_cube()
     H("cubeclear")
     cls0 = hstate()["player"]["class"]
     H("class 6")  # the recipe is for assassins
@@ -1802,6 +1812,7 @@ def check_dye():
     name = "Dye colour (stat 368): the item colour byte and palette"
     if not need_game():
         return add(name, "BLOCKED", "not in a game")
+    ensure_cube()
     H("cubeclear")
     ok, lines = H("item tow cube")
     m = re.search(r"item id=(\d+)", " ".join(lines))
@@ -1832,6 +1843,7 @@ def check_goldclient():
         return add(name, "BLOCKED", "not in a game")
     goto(1)
     close_menu()
+    ensure_cube()
     H("cubeclear")
     H("stat player 532 set 140")
     H("gold set 400000 100000")
@@ -1971,6 +1983,7 @@ def check_gameend():
         return add(n1, "BLOCKED", "not in a game")
     goto(1)
     close_menu()
+    ensure_cube()
     H("cubeclear")
     H("stat player 536 set 1000")
     H("item rx01 cube")
@@ -2023,6 +2036,15 @@ def check_statcols():
     close_menu()
     rows, bad = [], []
     base = {s: rd("player", s) for s in (0, 2)}
+    # hst (weapons.txt quest=10, the Horadric Staff) and hfh (quest=25, the Hell Forge Hammer) are quest items: D2R's place
+    # function refuses them (`equip`: "does not fit body location 4") once the character's quest state says the quest is
+    # done: quest 10 bit 0 for hst, quest 27 bits 0 / 1 for hfh (measured on a character whose quests the earlier checks had
+    # completed; not a data or namespace matter: the same build equips both on a fresh character). Clear the bits for the
+    # check, put them back afterwards.
+    qsaved = {q: _qbits(q) for q in (10, 27)}
+    for q in qsaved:
+        for i in range(16):
+            H("quest %d %d clear" % (q, i))
     try:
         # no weapon: both damage bonus rows are 0 (Median's handler returns 0 without a weapon)
         H("packclear")  # room in the backpack: an unequip into a full backpack fails and the hand stays occupied
@@ -2047,7 +2069,9 @@ def check_statcols():
                     bad.append("equip %s failed: %s" % (code, _l[:1]))
                     continue
                 time.sleep(1.2)
-                tot_s, tot_d = stat_of(H("cstat 0")[1]), stat_of(H("cstat 2")[1])
+                # the totals the panel reads include the weapon's own bonus (the quest uniques carry properties that scale
+                # with the character level: stat 2 reads 40 after `set 30` with hst on a level 20 character, `cstat` 30)
+                tot_s, tot_d = rd("player", 0), rd("player", 2)
                 r299, r300 = _panelrow(299), _panelrow(300)
                 if r299 is None or r300 is None:
                     bad.append("%s str %d dex %d: panelrow failed" % (code, sv, dv))
@@ -2093,6 +2117,8 @@ def check_statcols():
                 setstat("player", s, v)
         for slot in ("rhand", "rring"):
             H("unequip " + slot)
+        for q, bits in qsaved.items():
+            _qrestore(q, bits)
     add(name, "PASS" if not bad else "FAIL",
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
