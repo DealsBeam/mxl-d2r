@@ -34,7 +34,8 @@ auto NativeText(uint32_t id) noexcept -> bool {
 	const char* text = nullptr;
 	__try {
 		text = g_original(id);
-		return text != nullptr && text[0] != '\0';
+		// D2R answers an id it has no string for with "Missing string" (ns-research, docs/strings-namespace-research.md)
+		return text != nullptr && text[0] != '\0' && std::strcmp(text, "Missing string") != 0;
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		return false;
 	}

@@ -58,6 +58,9 @@ current-language text of the key (service call at lookup time, so a language cha
 the service cannot find it). Every other id goes to D2R. Ids are resolved lazily at the first menu build (the strings are
 loaded by then), never at `LoadPlugin`.
 
+D2R's lookup answers an id it has no string for with the text "Missing string" (ns-research); that counts as free. If no
+candidate looks free, the first ids of the range are taken unchecked.
+
 **Table shape.** A generated table says `{id, key}`: D2R's numeric id for a native string, or `id = 0` and the full key.
 `mxlstr::Ref` (strings_logic.h) is that pair.
 
