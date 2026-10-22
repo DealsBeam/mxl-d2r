@@ -14,7 +14,7 @@ craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resist
 hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols skilltree keybinds npcstrings
 automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills cowportals deathcrash nocorpse
 nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
-heat trophytimer.
+heat trophytimer skillscaling.
 """
 import ctypes
 import ctypes.wintypes as wt
