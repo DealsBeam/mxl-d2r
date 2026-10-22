@@ -50,6 +50,10 @@ inline constexpr int32_t Calc_mxfn = 164;  // formula function proxy
 inline constexpr int32_t MissCalc_msyn = 47;
 inline constexpr int32_t MissCalc_blvl = 48;
 
+// States Median's skill restriction 7 (plugin/src/skill_restrict.cpp) rules out (D2R state ids).
+inline constexpr int32_t StateMeleeDevotion = 671;  // Median 624
+inline constexpr int32_t StateProgressiveCold = 126;  // Median 126
+
 // Stats those codes read (Median itemstatcost row -> migrated id).
 inline constexpr int32_t StatSyn1 = 412;  // Median 383
 inline constexpr int32_t StatSyn2 = 422;  // Median 393

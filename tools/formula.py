@@ -263,6 +263,12 @@ class Renderer:
             if name == "mxl_itemstat":  # (bodyloc, stat)
                 return proxy_call((name, const(a[0]), self.ref("stat", const(a[1]))))
             return proxy_call((name, const(a[0])))  # tabpoints(tab)
+        if (self.ctx == "missiles" and name == "stat" and a[0].kind == "const" and a[1].kind == "const"
+                and const(a[1]) > 2):
+            # D2Sigma's missile stat(x, n): n above 2 is a stat parameter, not a mode (Heartseeker's charge counter
+            # reads stat 220 at layer 5). Same plugin function as the skills' statlayer(stat, 0, layer).
+            self.unsupported.add("mxl_statlayer")
+            return proxy_call(("mxl_statlayer", self.ref("stat", const(a[0])), 0, const(a[1])))
         if self.stub_mxl and name.startswith("mxl_"):
             self.unsupported.add(name)
             return "0"
