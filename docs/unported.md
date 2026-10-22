@@ -91,3 +91,49 @@ Behaviour of fields that were unnamed until 2026-10-22 ([sigma-tables.md](sigma-
 | Palette shift of missiles (missiles2 `PalShift`, 25 rows; `FUN_1008b100`) | the missile gets a palette shift when created | none in D2R HD (not palette based); `tools/effects_hd.py` scores the 21 rows whose shift moves the art's colour by the shifted colour (PL2 colour-variation tables, `tools/palshift.py`) and picks the vanilla HD effect of the nearest colour: 8 rows get a differently coloured effect; 13 rows have none within distance 0.3 | approx | custom art (last step): vampiric_icon_missile_submi_3, emissary_of_destruction_i_s_8 / _6 / _2, missiles_3457, thunderstone_4_missile_subm_4 / _3, megademoninferno_missile_hi, missiles_4571, missiles_4793, flying_polar_buffalo_error_222, countessfirewall_missile_2_2 / _3 (report: `work/mod/effects_hd.md`, paragraph PalShift) |
 | Loot filter fields (misc2/armor2/weapons2 `Flags` bit 0 `Filterable`, `Classifications`; `D2LootFilter.cpp`) | Median's own loot filter lists and rules | D2R has its own loot filter | deviation | no port planned |
 | Hell treasure class of objects (objects2 `Treasureclass_H`) | the Halloween chest (row 587) drops class 1106 on Hell | none: D2R's `objects.txt` has no per-difficulty treasure class column (chests drop by area), and the only reader is the Halloween chest's operate function 36 (`FUN_10096b40` charging 2300 of currency 102024, drop callback `FUN_10096080`: class `Treasureclass_[difficulty] + min(times opened, 6)`) which needs the unported Halloween currency and event ([ubers-events.md](subsystems/ubers-events.md) section 5) | open | checked: row 587 is the only objects2 row with `Treasureclass_H` (N and NM are 0 everywhere), the only reader is the Halloween chest's operate path, so there is no other object to port it for; blocked on that event, nothing to port on its own. The classes exist in the migrated `treasureclassex` as `Halloween Chest 1` to `7` (file rows 593-599; Median's 1106 is an index into D2Sigma's loaded table, not a file row), so the chest function only has to roll `Halloween Chest 1 + min(opened, 6)` |
+
+## Rules audit gaps
+
+Median gameplay rules found by [median-rules-audit.md](median-rules-audit.md) that no earlier section lists. The ID in the first column is the audit row (source and check idea are there). Gaps that sit inside an existing row are not repeated.
+
+| Area | Median | Port now | Status | Needs / notes |
+|---|---|---|---|---|
+| Level cap (audit XP1) | max character level 150 | `experience.txt` has 150 rows but Median's `MaxLvl` row lost its label and D2R's `MaxLvl 99` row is appended last, so the engine probably caps at 99 | open | `tools/txt_migrate.py` line 173 (`UNSIGNED_32_TABLES`) has no `MaxLvl` handling; fix the merge, then check XP above level 99 |
+| Player corpse (audit DC1) | no corpse; gear re-equipped in town, potions stay on the belt | D2R's corpse and its retrieval | open | lane `no-corpse` |
+| Respawn cooldown (audit DC4) | 5 second wait before reviving | revives at once | open | plugin hook on the revive path |
+| Gold on death (audit DC3) | no gold loss | unknown (experience loss is blank in `difficultylevels`) | verify | `gold set`, kill the player, `gold get` |
+| Hardcore death (audit DC9, HC1) | a dead Hardcore character converts to Softcore on Single Player | D2R's Hardcore death | open | needs D2R's death/save path; not looked at |
+| Soulstealer heal rules (audit DC5) | bosses heal only from killing players (10% max life); fire teleport and Chaos Orb heal 40% only on a kill | D2R monster code | verify | kill hook on bosses; test with a spawned boss |
+| Reset removes buffs (audit DC7) | skill/stat reset clears all buffs | `respec` check covers stats and skills only | verify | check `state` after respec |
+| Trophy challenge timer (audit CR4, DC6) | kill the boss and cube the charm within 10 s (some 25 s); death or zone change voids it | no timer op in the cube conditions | open | new cube op or a plugin timer; `docs/plugin-spec.md` "Cube conditions" |
+| Teleport gold pickup (audit GS2) | every teleport and warp skill picks up gold | not ported (`teleport.cpp` header) | open | hook after the teleport |
+| Stash pages (audit GS5) | multi-page personal and shared stash | grid size only; `install_mod.py` writes no stash tab setting | open | D2RLoader `d2rcore.stash.add_shared_tabs` ([services.md](services.md) L11) |
+| Shared stash in TCP/IP (audit GS6, MP2) | stability problems, fix attempts in 2.9 | D2R's shared stash file | verify | TCP/IP game with two profiles |
+| Stash sort and container buttons (audit GS7) | a sort button in the stash; a button that collects all container items | none (pSpell 18 right click only) | open | Median UI; PluginSDK panel or a D2R button |
+| Gamble refresh and filter (audit IT10) | refresh button (R), highlight filter, rings and amulets on the screen | stock only | open | Median UI |
+| Imbue/socket highlight (audit CR7) | eligible items are highlighted when using the reward | none | open | Median UI |
+| Signet of Learning cap (audit GS10) | +1 stat point each, at most 400 | pSpell 3 calc `min(1, 400 - stat 185)` | verify | `item` a signet, `use`, `stat player 185` |
+| Item durability (audit IT1) | removed in 2.4.0 | durability stats and the `durability` skill column are still there | open | zero the columns in the tables or hook the stat |
+| Quantity and ammo (audit IT2) | throwing/quantity items are not used up | `noammo` on 4 skills only | open | table change plus skill flags |
+| Auto-identify (audit IT3) | items are identified when picked up | D2R's identify | open | hook on pickup, or set the identified flag at drop |
+| Drop item level (audit IT16, DF10) | uses the area level of the monster, not the town | D2R's own | verify | kill after a town trip, read the item level |
+| Cube hotkey and Cow portal (audit CR5, CR6) | C transmutes; the Cow portal works in any town | D2R button only; recipe in `cubemain` | verify | press C; make the portal in Act 5 |
+| Stat point shift-click (audit XP6) | adds 25 points | D2R's 5/all | verify | shift-click a stat |
+| Free respec until level 50 (audit XP7) | unlimited after Den of Evil on Normal | Akara respec only | verify | respec twice at level 20 |
+| Grit (audit XP9) | Strength grants a damage-reduction stat | not mentioned in docs | verify | raise Strength and read the stat |
+| Steady aim and Heat (audit SK10, SK11) | Hunter steady aim; Fire sorceress Heat replaces mana | not mentioned in docs | verify | `cast` the skills, read mana and the stat |
+| Free mana in town (audit SK3) | skills cost no mana in town | none | open | hook on the mana spend |
+| Skills in town (audit SK4) | many buffs, totems and warps castable in town | `town` column carried from Median | verify | `cast` in town |
+| Skill cooldown groups (audit SK6) | cooldowns computed dynamically, groups separate | D2R's cooldowns | verify | two groups' cooldowns |
+| Sprint (audit SK7) | run toggle off; sprint about 5 s; stamina removed | none | open | plugin movement hook |
+| Melee skills without a target (audit SK8) | Shift attacks with no target for most melee skills | none | open | engine hook on the skill start |
+| Skill tree conveniences (audit SK9) | base/max level shown, Alt soft level, prerequisite arrows, Shift+Click max | none | open | Median UI |
+| NPC healing (audit NPC1) | all NPCs heal you | none | verify | talk to a vendor when hurt |
+| Waypoint auto-activation (audit WP2, WP3) | waypoints activate by walking over them, for every player | none | open | hook on the waypoint proximity |
+| Map Reveal (audit MU2) | R key or the UI reveals the map (with Cairn Stones, shrines, Staff altar) | none | open | plugin hook on the automap |
+| Area level HUD (audit MU3) | area level shown in the corner | none | verify | look for the option |
+| Hotkeys (audit UI4, UI5) | nopickup (X), Map Reveal (R), transmute (C); dangerous monster alert | none | open | plugin key handler |
+| Players X (audit DF7, MP3) | monster scaling with party size | D2R's scaling | verify | compare with Median's table |
+| Town portals disabled in zones (audit UQ5) | e.g. Edge of Nothingness corridor | cooldown only | verify | open a portal there |
+| Charm limit (audit IC5) | one charm of a type | D2R rule | verify | carry two |
+| D2 bugfix list (audit OT4) | percent overflows, 32,767 rollover, ghost state, whirlwind chance-to-cast, aura after death | D2R's code | verify | check each with the harness |
