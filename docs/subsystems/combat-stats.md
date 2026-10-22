@@ -58,7 +58,7 @@ Median's own damage rules are not in this module but in the skill do-functions: 
 | 0x10057530, 0x10057690 | hit attempt: line of sight / distance test (D2Common 11138), the to-hit roll, then the avoid check mapped to result flags (avoid 0x100, dodge 0x80, block 0x8000, evade clears the hit); the second form is the missile version | `0x44b2b0` (melee hit), `0x45bc40` (missile hit) | vanilla; **done** |
 | 0x100577c0 | likely the damage percent between two units: 100 normally; 25 (0x19) between two mercenary-class units, a monstats value for a pet owner, 17 (0x11) for monsters hitting players, 0x15e / 200 for monsters with a negative owner state | `difficultylevels.txt` `PlayerDamagePercentVS*`, `MercenaryDamagePercentVS*` | data (migrated columns); **done**; PvP check in 4 |
 | 0x10057a20 | absorb step of the damage block: the defender's absorb percent (cap 40) and flat stat cut the damage and the cut amount heals the defender (added to the block's absorbed total). Median runs every credited amount through the defender's stats 189 (divide, never below 1 point), 184 (percent off) and 417 (percent off, layer = damage type 1 fire / 2 lightning / 3 magic / 4 cold / 5 poison); the damage cut is unchanged | `0x450670` (called from the per-hit step `0x4523e0`) | **native hook, verified in game** (combat.cpp) |
-| 0x10057c10 | the same three stats applied to the damage fields of a block (divide / halve durations / percent off); **no caller** in D2Sigma or the patched D2Game | none | dead code, not ported |
+| 0x10057c10 | the same three stats applied to the damage fields of a block (divide / halve durations / percent off). **Live, corrected 2026-10-22**: the stub `0x1009b7e0` calls it, and D2Sigma patches D2Game rva `0xdc4ea` so it replaces the call to `6fcfbd00` (the per-type mitigation step of `SUnitDmg`, `6fcfc0b0`) | none | **missing**, see [sigma-patch-audit.md](../sigma-patch-audit.md) and [unported.md](../unported.md) |
 
 ### 1.3 D2Stats.cpp
 
@@ -181,8 +181,8 @@ guard flag 0x100000 of D2Sigma is not set (unknown meaning in D2R). Same off wor
   where the credit differs from the cut are logged (`combat: absorb of N healed M (layer L)`). Verified in game: absorb 40%
   with fire resist 0 against a fire bolt shooter, net loss 70 / 106 / 249 per 30 s with 446 layer 1 = 0 / 50 and no absorb
   (the test Barbarian also carries stat 369 = 7 from a source not found, which is why the credit is 7% lower in the log).
-  Median's second helper `0x10057c10` (the same stats on the damage fields) has no caller in D2Sigma or D2Game, so nothing
-  of it is needed.
+  Median's second helper `0x10057c10` (the same stats on the damage fields) is **not** dead code (corrected 2026-10-22, [sigma-patch-audit.md](../sigma-patch-audit.md)):
+  stub `0x1009b7e0` reaches it from D2Game rva `0xdc4ea`, so the stats also cut incoming damage; not ported.
 - **Mercenary caps: done, not exercised in game.** Resistances: the per-hit step tests the context flag `ctx+0x24`
   ("defender is a monster that is not a hireling"), which is 0 for mercenaries, so they already take the player branch and
   the patched 90 cap. Avoid / dodge / evade: D2Sigma caps them for "player or hireling" (`0x100bfad0` or `0x100bf9e0`), the

@@ -30,7 +30,7 @@ level-warp console command exists; the installed mod predates the fixes below).
 |---|---|---|
 | D2Drlg.cpp | 4 (`0x5c7e0`, `0x5c8c0`, `0x5c970`, `0x5c9c0`) | `0x5c9c0`: level record byte +3 (levels.bin rows are 0x220 bytes, `D2TxtRecords.h`); `0x5c970`: byte +0x14b (the lockout-group byte, ubers-events.md section 3); `0x5c8c0` / `0x5c7e0`: server enter / leave level wrappers around D2Common (they walk the level's room unit lists and send a small per-unit packet of type `0x0a`). No generation. |
 | D2DrlgLevel.cpp | 1 (`0x5cd00`) | level name lookup: D2Lang string of the level record, returned as a wide string. |
-| D2Landscape.cpp | 1 (`0x80170`) | client: when the level changes, play the level's sound environment: levels record +6 flag, +0x14c u16 -> a table with 0x82-byte rows (the sound environment). D2R plays its own `SoundEnv` column. |
+| D2Landscape.cpp | 1 (`0x80170`) | client: **not a sound lookup** (corrected 2026-10-22, [sigma-patch-audit.md](../sigma-patch-audit.md)). D2Sigma replaces 50 bytes of the per-frame game-screen update (D2Client rva `0x8b1c8`) that drew hard-coded backdrops for two levels. Levels record +6 (BlankScreen, 1 for levels 74, 161, 169, 171, 190-192, 197, 214, 272) fills the screen with a void, and +0x14c u16 picks a backdrop (summit clouds) for 5 levels. D2R already draws levels 120 and 74 right; the rest is cosmetic and **missing** (listed in [unported.md](../unported.md)). |
 | D2DrlgWarp.cpp, D2Dungeon.cpp | 2, 11 | entry requirements and the lockout clock: ported (dungeon_lockout.cpp, ubers-events.md). |
 
 Everything else Median does to levels is in its tables: `levels` (281 rows, up from D2R's 138), `lvlprest` (1,213),
