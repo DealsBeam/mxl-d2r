@@ -11,7 +11,7 @@ Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screens
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
 Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps classlock
-hiregates itemrolls dye goldclient bonusdrops summoner tooltip gameend trophy statcols skilltree keybinds npcstrings
+hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols skilltree keybinds npcstrings
 automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills cowportals deathcrash nocorpse
 nslong strings goblinname rewardsound statorder infopanel sprint steadyaim
 heat trophytimer.
@@ -2366,6 +2366,107 @@ def check_itemrolls():
     add(n3, "PASS" if not bad3 and e_ >= 40 else "FAIL",
         "%d items at item level %s: %d ethereal (%.2f%%), max durability %d -> %s..%s%s"
         % (n_, m3.group(3), e_, 100.0 * e_ / n_, dmax3, md3.group(7), md3.group(8), ("; " + "; ".join(bad3)) if bad3 else ""), [], [line, d3])
+
+
+# Sockets and automagic for every quality (docs/sigma-patch-audit.md item 2; D2Sigma 0x1007e240, qualities.txt MaxSock /
+# Automagics). Median: qualities 1-4 roll rand % 7 sockets, qualities 5-9 get the base's maximum without a die, and the
+# automagic roll (item level 100+, base with an auto prefix group) runs for every quality, sets and uniques included.
+AQ_BASES = ("60@", "6@C", "!90", "87@", "!14", "@43", "3@P")  # Median bases: 6 sockets, auto prefix group 406 with a row for the type, set and unique items
+AQ_NAMES = {1: "low", 2: "normal", 3: "superior", 4: "magic", 5: "set", 6: "rare", 7: "unique", 8: "crafted", 9: "tempered"}
+AQ_N = 3000
+
+
+def _aq_roll(code, quality, n=AQ_N):
+    """`itemroll` of one base and quality -> dict (n, failed, ilvl, hist {sockets: count}, quals {quality: count}, auto) or None."""
+    ok, line, lines = hv("itemroll %s %d q=%d ilvl=110" % (code, n, quality), "itemroll", 240)
+    m = re.search(r"n=(\d+) failed=(\d+) ilvl=(\d+) ethereal=(\d+) sockets=\[([^\]]*)\] qualities=\[([^\]]*)\] automagic=(\d+)", line)
+    if not (ok and m):
+        return None
+    pairs = lambda s: {int(a): int(b) for a, b in (p.split(":") for p in s.split())}
+    return {"n": int(m.group(1)), "failed": int(m.group(2)), "ilvl": int(m.group(3)), "hist": pairs(m.group(5)),
+            "quals": pairs(m.group(6)), "auto": int(m.group(7)), "line": " | ".join(lines), "code": code, "q": quality}
+
+
+def _aq_pick_base():
+    """First base that holds sockets (normal items reach 4+) and has an auto prefix group (normal items show automagic)."""
+    tried = []
+    for code in AQ_BASES:
+        r = _aq_roll(code, 2, 1500)
+        if r is None:
+            tried.append("%s -" % code)
+            continue
+        top = max(r["hist"]) if r["hist"] else 0
+        tried.append("%s top=%d auto=%d" % (code, top, r["auto"]))
+        if top >= 4 and r["auto"] > 0:
+            return code, top, tried
+    return None, 0, tried
+
+
+def check_allqualsockets():
+    name = "Sockets and automagic for every quality (Median MaxSock / Automagics)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    code, top, tried = _aq_pick_base()
+    if code is None:
+        return add(name, "BLOCKED", "no base with 4+ sockets and an auto prefix among %s" % ", ".join(tried))
+    rolls, log = {}, []
+    for q in range(1, 10):
+        r = _aq_roll(code, q)
+        for other in AQ_BASES:  # a base without a set / unique row of the right level gets a lower quality: try the next base
+            if r is not None and r["quals"].get(q, 0) >= 0.9 * r["n"] or other == code:
+                continue
+            r2 = _aq_roll(other, q)
+            if r2 is not None and r2["quals"].get(q, 0) >= 0.9 * r2["n"]:
+                r = r2
+                break
+        rolls[q] = r
+        log.append(r["line"] if r else "q=%d: no answer" % q)
+    bad, rows = [], []
+    for q in range(1, 10):
+        r = rolls[q]
+        if r is None:
+            bad.append("%s: itemroll gave no answer" % AQ_NAMES[q])
+            continue
+        n = r["n"]
+        made = r["quals"].get(q, 0)
+        if n < 100 or made < n * 0.9:
+            rows.append("%s: generator gave quality %s for %d of %d (not judged)" % (AQ_NAMES[q], r["quals"], n - made, n))
+            continue
+        hist = r["hist"]
+        if q <= 4:  # the die: 1/7 for 0 .. top-1, (7 - top)/7 for top
+            exp = {k: n / 7.0 for k in range(top)}
+            exp[top] = n * (7 - top) / 7.0
+            for k in range(top + 1):
+                sd = (exp[k] * (1 - exp[k] / n)) ** 0.5
+                if abs(hist.get(k, 0) - exp[k]) > 4 * sd:
+                    bad.append("%s: %d sockets %d (want %.0f +- %.0f)" % (AQ_NAMES[q], k, hist.get(k, 0), exp[k], 4 * sd))
+            rows.append("%s (%s): sockets %s" % (AQ_NAMES[q], r["code"], " ".join("%d:%d" % kv_ for kv_ in sorted(hist.items()))))
+        else:  # the base's maximum for every item
+            at_top = hist.get(top, 0)
+            die_made = sum(c for k, c in r["quals"].items() if k <= 4)  # a fallback to a die quality may have fewer
+            if n - at_top > die_made:
+                bad.append("%s: %d of %d items have the maximum of %d sockets, histogram %s" % (AQ_NAMES[q], at_top, n, top, hist))
+            rows.append("%s (%s): sockets %s" % (AQ_NAMES[q], r["code"], " ".join("%d:%d" % kv_ for kv_ in sorted(hist.items()))))
+    # automagic: D2R's switch applied it to 1-4, 6, 8, 9; Median's Automagics column adds 5 and 7 at the same rate
+    old = [q for q in (1, 2, 3, 4, 6, 8, 9) if rolls[q] and rolls[q]["quals"].get(q, 0) >= 0.9 * rolls[q]["n"]]
+    old_n = sum(rolls[q]["n"] for q in old)
+    old_a = sum(rolls[q]["auto"] for q in old)
+    p = old_a / float(old_n) if old_n else 0.0
+    rows.append("automagic: " + ", ".join("%s %d/%d" % (AQ_NAMES[q], rolls[q]["auto"], rolls[q]["n"]) for q in range(1, 10) if rolls[q]))
+    for q in (5, 7):
+        r = rolls[q]
+        if r is None or r["quals"].get(q, 0) < 0.9 * r["n"]:
+            continue
+        if r["auto"] == 0:
+            bad.append("%s: no automagic affix in %d items (other qualities %.1f%%)" % (AQ_NAMES[q], r["n"], 100 * p))
+            continue
+        sd = (p * (1 - p) / r["n"]) ** 0.5
+        if p > 0 and abs(r["auto"] / float(r["n"]) - p) > 5 * sd:
+            bad.append("%s: automagic rate %.1f%% against %.1f%% of the qualities D2R covers" % (AQ_NAMES[q], 100.0 * r["auto"] / r["n"], 100 * p))
+    add(name, "PASS" if not bad else "FAIL",
+        "base %s (max %d sockets; tried %s), %d items per quality at item level %d: %s%s"
+        % (code, top, ", ".join(tried), AQ_N, rolls[2]["ilvl"] if rolls[2] else 0, " | ".join(rows), ("; FAIL: " + "; ".join(bad)) if bad else ""),
+        [], log)
 
 
 def check_dye():
@@ -4796,7 +4897,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
-          ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
+          ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
           ("trophy", check_trophy), ("statcols", check_statcols),
           # the old "fix to test" rows of docs/bugs.md

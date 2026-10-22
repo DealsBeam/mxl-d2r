@@ -111,6 +111,15 @@ int main() {
 	Check(roll.n == 5 && roll.ethereal == 1 && roll.sockets[0] == 2 && roll.sockets[3] == 2 && roll.sockets[RollTally::MaxSockets] == 1 &&
 	          std::strcmp(sock, "0:2 3:2 8:1") == 0,
 	      "roll tally");
+	roll.AddQuality(2, false);
+	roll.AddQuality(7, true);
+	roll.AddQuality(7, false);
+	roll.AddQuality(99, true);
+	char qual[80];
+	roll.Qualities(qual, sizeof(qual));
+	Check(roll.automagic == 2 && roll.qualities[2] == 1 && roll.qualities[7] == 2 && roll.qualities[RollTally::MaxQuality] == 1 &&
+	          std::strcmp(qual, "2:1 7:2 10:1") == 0,
+	      "roll tally: qualities and automagic");
 
 	AvoidTally av;
 	const int results[] = {0, 0, 2, 4, 8, 0x10, 0x10, 0x40};
