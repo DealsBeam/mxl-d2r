@@ -10,6 +10,8 @@ weights, meshes) lives under `D:\mxl-3d\` and is never committed.
 | `model_to_glb.py` | D2R `.model` -> GLB (bind pose + albedo), runs in the 3D venv (needs trimesh) |
 | `render_glb.py` | `blender -b -P` 4-angle Workbench render strip of GLBs |
 | `donor_info.py`, `extract_anims.py`, `ai/clip_survey.py` | skeleton bone counts and real clip names of the D2R enemy units |
+| `rig_fit.py` | Wereowl mesh -> skinned to a D2R skeleton (profiles `wolf`, `goatman1`): capsule weights, per-role unposing; used by `tools/wereowl_models.py` |
+| `morph_shots.py` | in game: a Druid casts Wereowl (`cast 1364 self`) and the form is screenshot (neutral / walk / run / attack / cast / get hit), background input, slot lock held by the caller |
 | `ai/run_hunyuan.py`, `ai/run_triposg.py`, `ai/diso_stub.py` | Hunyuan3D-2 (mv / mini) and TripoSG shape generation on local weights (copies of what ran from `D:\mxl-3d\scripts`) |
 
 Environment notes (RX 9070 XT, Windows, build of 2026-10-22):

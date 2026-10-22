@@ -83,7 +83,7 @@ def encode_vertices(vtd, pos, nrm, uv, tris, bone_idx, weights, scale):
     return out
 
 
-def replace_with_mesh(tree, keep, pos, nrm, uv, tris, bone=None, bone_idx=None, weights=None, bones=None):
+def replace_with_mesh(tree, keep, pos, nrm, uv, tris, bone=None, bone_idx=None, weights=None, bones=None, drop_others=True):
     """Overwrite mesh `keep` (name) of `tree` with the geometry and drop all other meshes.
 
     Without bone_idx / weights the mesh is rigid to the bone `bone` (name in the donor skeleton). With them, `bones` are
@@ -131,10 +131,11 @@ def replace_with_mesh(tree, keep, pos, nrm, uv, tris, bone=None, bone_idx=None, 
     ed["bbMin"] = [float(x) for x in pos.min(0)]
     ed["bbMax"] = [float(x) for x in pos.max(0)]
     ed["VertexScale"] = float(scale)
-    tree["Meshes"] = [me]
-    tree["TriTopologies"] = [topo]
-    for mo in tree["Models"]:
-        mo["MeshBindings"] = [mb for mb in mo["MeshBindings"] if mb["Mesh"] is me]
+    if drop_others:
+        tree["Meshes"] = [me]
+        tree["TriTopologies"] = [topo]
+        for mo in tree["Models"]:
+            mo["MeshBindings"] = [mb for mb in mo["MeshBindings"] if mb["Mesh"] is me]
     return tree
 
 
@@ -146,6 +147,15 @@ def set_albedo(tree, mesh_name, path):
             mp["Map"]["Texture"]["FromFileName"] = path
             return
     raise KeyError("no AlbedoTexture map")
+
+
+def set_maps(tree, mesh_name, paths):
+    """Point maps of the mesh's first material at game paths: `paths` maps a usage (AlbedoTexture, ORMTexture, NormalTexture,
+    MaskTexture, ThicknessTexture) to `data/hd/...texture`; usages the material does not have are skipped."""
+    me = next(m for m in tree["Meshes"] if m["Name"] == mesh_name)
+    for mp in me["MaterialBindings"][0]["Material"]["Maps"]:
+        if mp["Usage"] in paths:
+            mp["Map"]["Texture"]["FromFileName"] = paths[mp["Usage"]]
 
 
 def load_model(path):
