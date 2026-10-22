@@ -532,7 +532,7 @@ Noticed and not fixed: the Wolf Stance tooltip shows a literal `%+d%%` (bugs.md 
 
 ### Travel: map reveal, waypoint auto-activation, hotkeys, stash pages (lane gap-travel, 2026-10-22, slot 1, background mode)
 
-Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261022-224236-s1\` (not committed; the run is `py -3 tools/game_checks.py --slot 1 all mapreveal wpauto hotkeys stashpages`). Plugin verbs: `mapcells`, `reveal`, `wpobj`, `travel`, `stashprobe` ([Harness commands](#harness-commands-gameplay-without-input-pluginsrcharness_cmdscpp)).
+Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261022-224210-s1\` (not committed; the run is `py -3 tools/game_checks.py --slot 1 all mapreveal wpauto hotkeys stashpages`). Plugin verbs: `mapcells`, `reveal`, `wpobj`, `travel`, `stashprobe` ([Harness commands](#harness-commands-gameplay-without-input-pluginsrcharness_cmdscpp)).
 
 | Row | Result | Note |
 |---|---|---|
