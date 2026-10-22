@@ -4150,6 +4150,99 @@ def check_townportal():
     goto(2)
 
 
+def _portal_ids():
+    return {o["id"] for o in hstate()["objs"] if o.get("class") in (59, 60, 600)}
+
+
+def check_funcslots():
+    """Bug #31: Median rows on 1.13c's srvdofunc 109 (MonFrenzy, flash, feral_strike, bloodlord1_skill) ran D2R's itemless Town
+    Portal (docs/function-slots.md); txt_migrate remaps them to D2R's own frenzy functions (srvdofunc 9, srvstfunc 67). The
+    player casts feral_strike and flash at a monster, monsters cast MonFrenzy, flash and bloodlord1_skill (`mcast`, mode as
+    monstats Sk<n>mode). PASS: no portal object ever appears (`h state`), the cast starts, and it does something (the target
+    loses life, a missile is seen, or the monster changes mode); the game keeps running."""
+    nm = "Function slots (bug #31): feral_strike, flash, MonFrenzy, bloodlord1_skill do not open a town portal"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    by_name, t, h = _skill_ids_by_name()
+    row = {r[0]: r for r in t[1:] if r}
+    sid = {n: by_name.get(n) for n in ("feral_strike", "flash", "MonFrenzy", "bloodlord1_skill", "town_portal")}
+    if None in sid.values():
+        return add(nm, "BLOCKED", "skills missing from the built skills.txt: %s" % [n for n, v in sid.items() if v is None])
+    fn = {n: (row[n][h.index("srvstfunc")], row[n][h.index("srvdofunc")]) for n in sid}
+    bad_data = [n for n in sid if n != "town_portal" and fn[n][1] == "109"]
+    fight_ready()
+    god(True)
+    base_portals = _portal_ids()
+    notes, log, problems, shots = [], [], [], []
+    if bad_data:
+        problems.append("built skills.txt still has srvdofunc 109 on %s" % bad_data)
+    # the player casts (setskill gives the skill; a monster skill has no class, the game does not check it)
+    for name in ("feral_strike", "flash"):
+        skill = sid[name]
+        kill_all_near()
+        H("spawn 18 1")
+        H("moveto nearest")
+        H("setskill %d 5" % skill)
+        H("missiles reset")
+        life0 = next((m["life"] for m in hstate()["mons"] if m.get("life")), None)
+        ok, cl, seen, dropped, mode_seen = False, [], 0, False, False
+        for _ in range(5):
+            H("moveto nearest")
+            time.sleep(0.3)
+            H("stat player 8 set %d" % (rd("player", 9) or 0))
+            ok, cl = H("cast %d nearest" % skill)
+            log += cl[:2]
+            t0 = time.time()
+            while time.time() - t0 < 1.8:
+                time.sleep(0.4)
+                st = hstate()
+                m = [re.search(r"seen=(\d+)", ln) for ln in H("missiles")[1] if ln.startswith("missiles ")]
+                seen = max(seen, int(m[0].group(1)) if m and m[0] else 0)
+                mode_seen = mode_seen or st["player"].get("mode") in (7, 8, 10)
+                dropped = dropped or any(x.get("life") is not None and life0 is not None and x["life"] < life0 for x in st["mons"])
+            if ok and (seen or dropped):
+                break
+        portals = _portal_ids() - base_portals
+        did = seen > 0 or dropped or mode_seen
+        notes.append("%s (srvstfunc %s, srvdofunc %s): cast %s, missiles seen %d, target life dropped %s, attack mode %s, new portals %s" % (
+            name, fn[name][0], fn[name][1], "OK" if ok else "FAIL", seen, dropped, mode_seen, sorted(portals)))
+        shots.append(sh("funcslots_%s" % name))
+        if portals:
+            problems.append("%s opened a portal object %s" % (name, sorted(portals)))
+        if not (ok and did):
+            problems.append("%s: cast %s, no attack or missile seen" % (name, "OK" if ok else "refused"))
+        kill_all_near()
+    # monsters cast through the AI's skill use
+    for cls, name, mode in ((127, "MonFrenzy", 7), (506, "bloodlord1_skill", 7), (1250, "flash", 10)):
+        clear_mons()
+        mid = spawn_id(cls)
+        if mid is None:
+            notes.append("%s: monster class %d could not be spawned (skipped)" % (name, cls))
+            continue
+        time.sleep(2)
+        ok, lines = H("mcast %d %d unit %d" % (sid[name], mode, mid))
+        text = " ".join(lines)
+        log += lines[:1]
+        m = re.search(r"unit mode (\d+) -> (\d+)", text)
+        time.sleep(1.2)
+        modes = [x.get("mode") for x in hstate()["mons"] if x.get("id") == mid]
+        portals = _portal_ids() - base_portals
+        notes.append("%s on class %d: mcast %s (%s), monster mode after %s, new portals %s" % (
+            name, cls, "OK" if ok else "FAIL", m.group(0) if m else text[:80], modes, sorted(portals)))
+        shots.append(sh("funcslots_mon_%s" % name))
+        if portals:
+            problems.append("monster %s opened a portal object %s" % (name, sorted(portals)))
+        if not ok:
+            problems.append("monster %s: mcast refused (%s)" % (name, text[:100]))
+        H("kill %d" % mid)
+    alive = hstate()["ok"]
+    god(False)
+    kill_all_near()
+    if not alive:
+        problems.append("the game is gone")
+    add(nm, "PASS" if not problems else "FAIL", ("%s | " % "; ".join(problems) if problems else "") + " | ".join(notes), shots, log)
+
+
 def check_potions():
     """Bug #10: Median's healing / mana / rejuvenation potions (item spell 22 -> D2R's timed potion). Two results: the life
     part (hp1, hp5, rvs, rvl: stat hpregen 74, life rises over a control wait) and the mana part (mp1, mp5: manarecoverybonus
@@ -7054,6 +7147,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("levelcap", check_levelcap),
           ("skillcaps", check_skillcaps),
           ("townportal", check_townportal),
+          ("funcslots", check_funcslots),
           ("potions", check_potions),
           ("itemskills", check_itemskills),
           ("cowportals", check_cowportals),

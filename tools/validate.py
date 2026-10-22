@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import art_fix  # noqa: E402
 from txt_migrate import TIMED_POTION_TOTAL_STATS  # noqa: E402
+from func_slots import POISON, TOWN_PORTAL  # noqa: E402
 
 import plugin_keys  # noqa: E402
 import strings_ns  # noqa: E402
@@ -144,6 +145,14 @@ class Validator:
         if not p.exists():
             return None
         return {l.split("\t")[0] for l in p.read_text("utf-8-sig").splitlines()[1:] if l}
+
+    def data_d2r_rows(self, table: str) -> dict[str, set[tuple[str, str]]]:
+        """column -> {(first cell, value)} of D2R's own table, for 'is this row D2R's own use of the value'."""
+        p = D2R / "global" / "excel" / ("base" if self.bank == "base" else "") / f"{table}.txt"
+        if not p.exists():
+            return {}
+        lines = [l.split("\t") for l in p.read_text("utf-8-sig", errors="replace").splitlines()]
+        return {c: {(r[0], r[i].strip()) for r in lines[1:] if len(r) > i} for i, c in enumerate(lines[0])}
 
     _vanilla: dict[tuple[str, str, str], set[str]] = {}
 
@@ -559,7 +568,21 @@ class Validator:
             for r in rows:
                 if r[h.index("charclass")] and not r[h.index("skilldesc")]:
                     self.add("error", "skills", "skilldesc", "class skill without a skilldesc", r[0], "")
-            # skill tree: one class skill per slot; class-less skills (item skills, monster skills) have none
+                # function slots D2R renumbered or reused (tools/func_slots.py POISON, docs/function-slots.md): a Median row on
+            # the 1.13c number runs another D2R function (srvdofunc 109 is D2R's itemless Town Portal: Feral Strike, Flash
+            # and MonFrenzy opened a portal). Allowed: D2R's own row with that value, and town_portal (-> 109 on purpose)
+            ref = self.data_d2r_rows("skills")
+            for col, slot in POISON:
+                if col not in h:
+                    continue
+                ci = h.index(col)
+                own = ref.get(col, set())
+                for r in rows:
+                    if len(r) > ci and r[ci].strip() == slot and (r[0], slot) not in own and r[0] != TOWN_PORTAL:
+                        # not self.add: it downgrades a value D2R's vanilla also uses, and every poisoned slot is one
+                        problem = f"slot {slot} is {POISON[(col, slot)]}; Median's 1.13c meaning needs the remapped slot (txt_migrate skill_rules)"
+                        self.findings[("error", "skills", col, problem)].append((r[0], slot))
+        # skill tree: one class skill per slot; class-less skills (item skills, monster skills) have none
             dsc = d.table("skilldesc")
             if dsc:
                 dh, drows = dsc
