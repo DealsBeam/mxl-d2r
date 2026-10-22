@@ -18,3 +18,6 @@ void SetCraftFlag(const void* player, int flag, bool game, bool on) noexcept;
 void CraftBind(uint64_t exeBase) noexcept;
 // The game with this pointer ended: its flags are dropped (registered with game_end.cpp by InstallCraftFlags).
 void CraftForgetGame(const void* game) noexcept;
+// The entry of D2R's cube output handler table for an output byte 1-4 (handler(game, player, slot)), or null when the table
+// does not hold D2R's Cow handler where expected. Found through the Cow handler, which is byte 1's.
+auto OutputHandlerSlot(uint64_t exeBase, int byte) noexcept -> uint64_t*;

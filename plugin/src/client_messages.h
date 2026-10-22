@@ -43,5 +43,14 @@ auto PluginMessagesOn() noexcept -> bool;
 auto SendPluginMessage(d2r::Unit* player, char kind, const uint8_t* data, size_t n) noexcept -> bool;
 // The same plugin message to every player in the game; returns how many got it. Game (server) thread.
 auto SendGamePluginMessage(d2r::Game* game, char kind, const uint8_t* data, size_t n) noexcept -> int;
+// Quest reward notice for `player` (Median's client messages 0x5f gem / 0x60 shrine / 0x61 armor reward, see
+// client_messages_logic.h): D2R's unit message through 0x491960, which the client part answers with Median's sound. Without
+// the client hook it is the text line "You have received: <what>" instead (SendClientNotice). Game (server) thread.
+auto SendRewardMessage(d2r::Unit* player, uint32_t message, const char* what, int count) noexcept -> bool;
+// True when the client handler of packet 0x2c is hooked (reward messages play their sound).
+auto RewardSoundsOn() noexcept -> bool;
+// Reward sounds the client part has played this session, and the message / sound row of the last one.
+void RewardSoundStats(int* played, int* lastMessage, int* lastSound) noexcept;
+
 // Plugin messages the client part has read this session.
 auto PluginMessagesReceived() noexcept -> int;

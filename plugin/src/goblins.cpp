@@ -22,8 +22,10 @@
 #include "client_messages_logic.h"
 #include "d2r.h"
 #include "goblins_logic.h"
+#include "strings.h"
 #include "testharness.h"
 #include "travel.h"
+#include "trophy_timer.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -151,15 +153,14 @@ void PlayerTick(Game* game, Unit* player, uint32_t frame, int32_t players) noexc
 		return;
 	}
 	const uint32_t n = g_spawned.fetch_add(1) + 1;
-	char notice[64];
-	clientmsg::GoblinAppears(notice, sizeof(notice));
-	SendClientMessage(player, notice, clientmsg::Yellow);
+	char notice[160];
+	GoblinAnnounce(player, monster, notice, sizeof(notice));
 	g_lastMonster = monster;
 	g_lastLevel = level;
 	if (n <= 20 && g_context != nullptr) {
 		char line[128];
-		std::snprintf(line, sizeof(line), "mxl-core: goblin %d spawned in level %d near player %u (frame %u)", monster, level,
-		              d2r::At<uint32_t>(player, UnitId), frame);
+		std::snprintf(line, sizeof(line), "mxl-core: goblin %d spawned in level %d near player %u (frame %u), notice \"%s\"", monster,
+		              level, d2r::At<uint32_t>(player, UnitId), frame, notice);
 		g_context->LogInfo(line);
 	}
 }
@@ -192,6 +193,7 @@ void FrameHook(Game* game) {
 	HarnessGameFrame(game);  // test harness gameplay commands (off in normal play)
 	TravelGameFrame(game, d2r::At<uint32_t>(game, GameFrame));  // waypoint auto-activation (every fifth frame)
 	FlushClientMessages(game);  // quest notices held until the NPC menu is up
+	TrophyTimerFrame(game);  // trophy challenge windows (trophy_timer.cpp)
 	const uint32_t frame = d2r::At<uint32_t>(game, GameFrame);
 	g_state.Touch(game, frame);
 	if (goblins::IsTickFrame(frame)) {
@@ -274,4 +276,11 @@ auto InstallGoblins(const D2RL::PluginContext* context, char* report, size_t rep
 void GoblinsStatus(char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize, "%u spawned (last %d in level %d), %u rolls, %u ticks, %u spawn failures", g_spawned.load(),
 	              g_lastMonster, g_lastLevel, g_rolls.load(), g_ticks.load(), g_failed.load());
+}
+
+auto GoblinAnnounce(void* player, int monster, char* out, size_t outSize) noexcept -> bool {
+	char suffix[64];
+	StringText(mxlstr::KeyGoblinAppears, clientmsg::GoblinAppearsSuffix, suffix, sizeof(suffix));
+	clientmsg::GoblinAppears(goblins::NameOf(monster), out, outSize, suffix);
+	return SendClientMessage(static_cast<Unit*>(player), out, clientmsg::Yellow);
 }

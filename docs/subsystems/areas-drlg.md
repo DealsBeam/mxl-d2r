@@ -30,7 +30,7 @@ level-warp console command exists; the installed mod predates the fixes below).
 |---|---|---|
 | D2Drlg.cpp | 4 (`0x5c7e0`, `0x5c8c0`, `0x5c970`, `0x5c9c0`) | `0x5c9c0`: level record byte +3 (levels.bin rows are 0x220 bytes, `D2TxtRecords.h`); `0x5c970`: byte +0x14b (the lockout-group byte, ubers-events.md section 3); `0x5c8c0` / `0x5c7e0`: server enter / leave level wrappers around D2Common (they walk the level's room unit lists and send a small per-unit packet of type `0x0a`). No generation. |
 | D2DrlgLevel.cpp | 1 (`0x5cd00`) | level name lookup: D2Lang string of the level record, returned as a wide string. |
-| D2Landscape.cpp | 1 (`0x80170`) | client: when the level changes, play the level's sound environment: levels record +6 flag, +0x14c u16 -> a table with 0x82-byte rows (the sound environment). D2R plays its own `SoundEnv` column. |
+| D2Landscape.cpp | 1 (`0x80170`) | client: **not a sound lookup** (corrected 2026-10-22, [sigma-patch-audit.md](../sigma-patch-audit.md)). D2Sigma replaces 50 bytes of the per-frame game-screen update (D2Client rva `0x8b1c8`) that drew hard-coded backdrops for two levels. Levels record +6 (BlankScreen, 1 for levels 74, 161, 169, 171, 190-192, 197, 214, 272) fills the screen with a void, and +0x14c u16 picks a backdrop (summit clouds) for 5 levels. D2R already draws levels 120 and 74 right; the rest is cosmetic and **missing** (listed in [unported.md](../unported.md)). |
 | D2DrlgWarp.cpp, D2Dungeon.cpp | 2, 11 | entry requirements and the lockout clock: ported (dungeon_lockout.cpp, ubers-events.md). |
 
 Everything else Median does to levels is in its tables: `levels` (281 rows, up from D2R's 138), `lvlprest` (1,213),
@@ -179,3 +179,57 @@ on a rebuilt copy: 0 problems). Warnings and info:
 | Plugin hooks | none needed |
 | Waypoint numbers >= 39 | save and engine fine (112 bits); panel patch lists every Median waypoint under its own act (up to 27 per tab, HD layout stride 100); tabs checked in game; travel click from a real waypoint object not checked |
 | Automap for type 50, low-coverage maps | open |
+| Maze level 184 (Maggot Lair) closes the game on arrival (bug #27) | fixed in the pipeline (`Position` cleared), checked in game, section 6 |
+| Per-level map memory for Layer above 99 (bug #24) | plugin `map_memory.cpp`, checked in game, section 6 |
+
+## 6. Maze entry rooms (bug #27) and map memory of layers above 99 (lane maze-mapmem, 2026-10-22)
+
+### 6.1 `cheat goto 184` closes the game
+
+Levels.txt `Position` (level record `+0x90`) is a switch of the level-entry finder `0x3da650`: when it is set the arrival spot
+comes from `0x3dac20`, a random room taken from a table of entry rooms that the maze generator fills while it builds the level
+(count at level `+0x200`, entries at `+0x34`, 0xc bytes each). D2R's mazes with `Position 1` (levels 54, 74, 125-127) have such
+rooms in their presets. Median sets `Position` on level 184 (Maggot Lair), whose presets have none: the table stays empty, the
+spot is (0, 0), no room is there and `0x3289a0` reads `[rdx+0x50]` of null (first-chance access violation at `0x1403289AA`, the
+game closes). The other Median mazes do not set it and load.
+
+Fix: `txt_migrate.fix_maze_positions` clears `Position` on a maze level (`DrlgType` 1) that has `Position 1` and an Id D2R
+lacks; the arrival then comes from the warp tile like in any other maze. `tools/area_audit.py` fails a Median-only maze with
+`Position` set. In game (slot 3): `cheat goto` reaches 184 and every other Median maze level.
+
+### 6.2 Map memory of Median's layers (up to 279)
+
+D2R keeps the explored rooms per character in `<char>.map` (index) and `.ma0-3` (one per game). A file is a table of 100 offsets
+(400 bytes) and nodes appended at the end each time a level is left:
+`[next][layer][word1][word2][size1..4][4 blobs]` (32-byte header; the blobs are the four room sets of the automap layer record).
+Save `0xd5fe0` and load `0xd5710` index the table with the layer on their stack (`local_1d8[100]`, `local_1d8[layer]`): a layer of
+100 or more is a read and write past the array, which with the self-loop of a cut chain (bug #24) hung the client. The first
+answer was `fold_level_layers`, giving 144 Median levels D2R's own layer of that id or 0 (shared rooms, "approx"). It is gone.
+
+The plugin keeps the file format and indexes by `layer % 100`; every node names its real layer (`map_memory_logic.h`):
+
+- **Save** (`0xd5fe0` replaced): `AppendNode` writes the same bytes as D2R (table created when missing, node at the end of the
+  file, previous last node of the chain linked to it) with the table index `layer % 100`. A chain that loops or leaves the file is
+  dropped and started again instead of followed for ever.
+- **Load** (`0xd5710` wrapped): the file is read and `LoadView` builds a copy in which the chain of the layer's table entry goes
+  through its own nodes only (layers 44, 144 and 244 share entry 44), with the nodes' layer renamed to the table index; the
+  record's layer is set to the table index while the original loader runs, then restored. The view is served by a hook on the file
+  read `0xa1e110` for that file and thread; the loader's own write (the chain cut, which for a node that is not first writes the
+  node's offset into itself) is swallowed on `0xa1e380`. A layer below 100 whose chain is clean and holds only itself (every file
+  D2R wrote) passes untouched. Files written by the fold build and files with a bad link or loop (bug #24) load.
+- The live automap layers are a linked list (`0xd5360`) with no limit of 100; the level switch `0xd1710` needed no change.
+- Entry bytes checked (build 93847, image `0x6ab3782c`): load `40 55 48 8d ac 24 f0 fd ff ff`, save `40 53 55 56 57 41 54 41 56 41 57`,
+  read `48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20`, write `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 20`; none rip-relative.
+- Off word `mapmem` leaves it out (the game then keeps its 100-chain table; with the fold gone that is a diagnosis switch, not for
+  play). The `mxl` console command prints `map memory on: ...`. Harness verb `h mapmem` (client side) prints the current layer, its
+  table index, the four room-set sizes, the file's node count for the layer (`nodes`), nodes of other layers in the same chain
+  (`foreign`), `clean` and the hook counters.
+- Unit test `plugin/tests/map_memory_test.cpp` (`mapmem_tests`): buckets, node layout (first node at 400), chaining, layers
+  44/144/244, 280 layers x 3 saves each seeing their own nodes, loops, links outside the file, short table, negative layer, a size
+  without data.
+
+In game (`game_checks all mapmem --slot 3`, MXL_MAPMEM default 134,147,184,12,139 = layers 101, 110, 140, 5, 105; 12 and 139 share
+chain 5): each level is explored by a short walk, left through the next `goto`, and visited again in reverse order. Every return found
+a clean chain with the layer's saved nodes (`nodes >= 1`; 12 and 139 saw each other's nodes as `foreign`) and at least the rooms it
+had on leaving (level 12: 23 on arrival, 52 after the walk, 52 on the return; 147: 41 -> 69 -> 69); the view counter rose for layers
+of 100 or more; no hang, no `Reading From` flood in the loader log.

@@ -15,6 +15,7 @@ int RunRequirementGatesTests();  // requirement_gates_test.cpp
 int RunHirelingsTests();  // hirelings_test.cpp
 int RunCombatTests();  // combat_test.cpp
 int RunStatColumnsTests();  // stat_columns_test.cpp
+int RunInfoPanelsTests();   // info_panels_test.cpp
 int RunItemsExtTests();  // items_ext_test.cpp
 int RunItemGenTests();  // item_gen_test.cpp
 int RunWaypointsTests();  // waypoints_test.cpp
@@ -22,6 +23,9 @@ int RunTravelTests();     // travel_test.cpp
 int RunMonsterAiTests();  // monster_ai_test.cpp
 int RunItemEventsTests();  // item_events_test.cpp
 int RunMonsterLooksTests();  // monster_looks_test.cpp
+int RunSkillRestrictTests();  // skill_restrict_test.cpp
+int RunHeatTests();  // heat_test.cpp
+int RunTrophyTimerTests();  // trophy_timer_test.cpp
 
 namespace {
 
@@ -131,6 +135,7 @@ int main() {
 	failures += RunHirelingsTests();
 	failures += RunCombatTests();
 	failures += RunStatColumnsTests();
+	failures += RunInfoPanelsTests();
 	failures += RunItemsExtTests();
 	failures += RunItemGenTests();
 	failures += RunWaypointsTests();
@@ -138,6 +143,9 @@ int main() {
 	failures += RunMonsterAiTests();
 	failures += RunItemEventsTests();
 	failures += RunMonsterLooksTests();
+	failures += RunSkillRestrictTests();
+	failures += RunHeatTests();
+	failures += RunTrophyTimerTests();
 	std::printf(failures == 0 ? "requirements: all tests passed\n" : "requirements: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }

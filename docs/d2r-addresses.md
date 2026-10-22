@@ -767,7 +767,25 @@ The creation function's callers do not all get a unit back (a value of 1 was see
 pointer; reading it unguarded killed the game on the first area change. The skill monster spawn `0x556560` is not the
 generic spawn (it is the do-function of a skill).
 
-## 16. Travel: waypoint auto-activation, map reveal, hotkeys, stash pages (lane gap-travel, 2026-10-22; plugin/src/travel.cpp)
+## 16. Player death, corpse, penalties and respawn (lane no-corpse, 2026-10-22; docs/subsystems/death.md, plugin/src/no_corpse.cpp)
+
+Found by matching Median's two NOPs in D2Game (D2Sigma table records RVA `0x79790` and `0x79ed6`) to the D2R functions with the same
+callers and assert strings (`D2Game\src\Player\PlrModes.cpp`, `Player.cpp`, `PlrMsg.cpp`).
+
+| What | Address | Signature | Entry bytes (build 93847) | Notes |
+|---|---|---|---|---|
+| Corpse creator | `0x42c110` | `void (Game*, Unit* player, int x, int y, room)` | `40 55 53 56 57 41 54 41 55 41 56 41 57 48 8d ac 24 18 f9 ff ff 48 81 ec e8 07 00 00` (28 bytes) | = 1.13c `0x6fc99210`: builds the corpse unit, moves every body-location item onto it, drops gold. Callers `0x42a689` (in `0x42a5e0`, Dead mode 0x11 enter) and `0x42e24e` (in `0x42de40`, mode-change dispatcher, mode 0 branch). Return unused. mxl-core replaces it by a no-op |
+| Death penalty | `0x424ac0` | `u64 (Game*, Unit* victim, Unit* killer)` | `40 53 56 57 48 83 ec 40 49 8b d8 48 8b f2 48 8b f9` (17 bytes; the `call` at +0x11 is rip-relative) | = 1.13c `0x6fc583a0`: calls the gold penalty `0x425cb0`, then (level > 1, killer a monster or a foreign player) lowers stat 13 by `(exp[level] - exp[level-1]) * pct / 100` (clamped at `exp[level-1]`), `0x486260` records the amount, `0x2f7d10(unit, 13, ..)` writes it. One caller: `0x42a441` in `0x429d10` (Death mode 0 enter). mxl-core replaces it by `return 0` |
+| Gold penalty | `0x425cb0` | `(Game*, Unit* victim, ...)` | `48 89 5c 24 10 55 56 57 41 54 41 55 41 56 41 57` | = 1.13c `0x6fc58180`; reached only through `0x424ac0`. Not hooked (the call above is) |
+| Gold drop helper | `0x424d90` | | | shared with other drops, not hooked |
+| Respawn request | `0x4b6160` | `int (Game*, Unit* player, packet, int)` | `40 55 41 55 41 56 48 8d 6c 24 b9 48 81 ec b0 00 00 00` (18 bytes; the next instruction is rip-relative) | = 1.13c `0x6fcf14b0`, client packet `0x41`. Unit mode (`0x34ab60`) must be `0x11`; Hardcore branch tests `[client + 0x5658] & 0x800` (log at `0xa21be0`, returns 1); normal branch: reads max life / mana / stamina (`0x2f4d20`, `0x2f4e20`, `0x2f4f20`), sets stats 6, 8, 10 (`0x2f7d10`), notifies the client (`0x4f3ad0`), moves the character to the act's town (`0x42d2c0`), clears state `0x36` (`0x3354c0`), returns 0. mxl-core's `respawnwait` hooks it |
+| Game frame | `game + 0x170` | u32 | | server frame, 25 per second (harness `state` frame=) |
+| Player units | `game + 0x446 * 8 + (id & 0x7f) * 8` | hash table | | type 0 units (the table before monsters `0x4c6`); a D2 corpse is a second player unit in mode `0x11` |
+
+Level / experience stats: 12 / 13; gold 14, bank 15, `0xaf` gold lost (written by the penalty). The mode table entries for the player are
+unchanged by the port.
+
+## 17. Travel: waypoint auto-activation, map reveal, hotkeys, stash pages (lane gap-travel, 2026-10-22; plugin/src/travel.cpp)
 
 How Median does it (D2Sigma.dll 1.13c, 32-bit, RVAs of the dump in `ghidra\D2Sigma.dll`):
 

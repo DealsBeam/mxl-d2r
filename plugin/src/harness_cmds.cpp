@@ -14,17 +14,27 @@
 #include "d2r.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
+#include "info_panels.h"
 #include "mxl_hirelings.h"
+#include "no_corpse.h"
 #include "item_events.h"
 #include "npc_actions.h"
 #include "item_gen.h"
+#include "map_memory.h"
+#include "level_types.h"
+#include "monster_looks.h"
+#include "skill_tree.h"
 #include "quests_act1.h"
 #include "stat_columns.h"
+#include "strings.h"
+#include "strings_probe.h"
 #include "testharness.h"
 #include "travel.h"
 #include "travel_logic.h"
 #include "waypoints.h"
 #include "waypoints_logic.h"
+
+#include <D2RLPlugin/api.h>
 
 #define NOMINMAX
 #include <windows.h>
@@ -62,10 +72,12 @@ constexpr uint64_t RvaUnitClass = 0x349860;     // (unit, file, line)
 constexpr uint64_t RvaUnitMode = 0x34ab60;
 constexpr uint64_t RvaUnitRoom = 0x34b440;
 constexpr uint64_t RvaRoomLevel = 0x2efc10;
+constexpr uint64_t RvaPortalLevel = 0x34ad40;   // (portal object) -> destination level (word)
 constexpr uint64_t RvaClientUnit = 0x484c90;    // (client, 0) -> player unit
 constexpr uint64_t RvaNpcRecord = 0x3971a0;     // (dataFlag, class) -> NPC table row or null
 constexpr uint64_t RvaDistance = 0x325140;      // (unit, unit) -> distance
 constexpr uint64_t RvaKill = 0x44db20;          // (game, victim, killer unit, 1): the unit death function
+constexpr uint64_t RvaAddExperience = 0x44f2e0; // (game, unit, old level, amount): adds stat 13 and runs the level-ups (items_ext.cpp)
 constexpr uint64_t RvaSpawn = 0x4929e0;         // (game, room, x, y, class, 1, radius, 0, 0)
 constexpr uint64_t RvaInRoom = 0x38dfb0;        // (room, x, y)
 constexpr uint64_t RvaTravel = 0x4f2e40;        // (game, player, level, 0): the NPC travel / waypoint warp
@@ -133,7 +145,7 @@ constexpr uint64_t RvaMenuOpenFlag = 0x2a486a4, RvaMenuNpcValid = 0x2a48760, Rva
 constexpr uint64_t RvaMenuTable = 0x2a48830, RvaMenuCount = 0x2a48838;
 // offsets
 constexpr int GameClients = 0x138, ClientNext = 0x628, ClientState = 0x04, GameFrame = 0x170, GameDifficulty = 0x104;
-constexpr int HashMonsters = 0x4c6, HashItems = 0x5c6, HashObjects = 0x546, HashMissiles = 0x646;  // game + (base + (id & 0x7f)) * 8
+constexpr int HashPlayers = 0x446, HashMonsters = 0x4c6, HashItems = 0x5c6, HashObjects = 0x546, HashMissiles = 0x646;  // game + (base + (id & 0x7f)) * 8
 constexpr int UnitNextInHash = 0x158, UnitClass = 0x04, UnitId = 0x08, UnitMode = 0x0c;
 constexpr int StatLife = 6, StatMana = 8, StatLevel = 12, StatGold = 14, StatGoldBank = 15, StatDurability = 0x48;
 
@@ -149,10 +161,12 @@ using UnitClassFn = int32_t (*)(Unit*, const char*, int32_t);
 using UnitModeFn = int32_t (*)(Unit*);
 using UnitRoomFn = void* (*)(Unit*);
 using RoomLevelFn = int32_t (*)(void*);
+using PortalLevelFn = uint16_t (*)(Unit*);
 using ClientUnitFn = Unit* (*)(void*, int32_t);
 using NpcRecordFn = void* (*)(uint32_t, int32_t);
 using DistanceFn = uint32_t (*)(Unit*, Unit*);
 using KillFn = void (*)(Game*, Unit*, Unit*, int32_t);
+using AddExperienceFn = void (*)(Game*, Unit*, int32_t, int32_t);
 using SpawnFn = Unit* (*)(Game*, void*, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, uint16_t);
 using InRoomFn = void* (*)(void*, int32_t, int32_t);
 using TravelFn = void (*)(Game*, Unit*, int32_t, int32_t);
@@ -416,14 +430,35 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 		DescribeItem(c, it);
 	});
 	Out("items %d", items);
+	// Player-type units in the game: the character itself, other players, and the corpse of a dead one (D2's corpse is a
+	// second player unit in mode 0x11 with the character's name). `corpses` = player units other than this one.
+	int players = 0, corpses = 0;
+	bool self = false;
+	EachUnit(c->game, HashPlayers, [&](Unit* u) {
+		if (TypeOf(u) == 0) {
+			++players;
+			if (u == p) {
+				self = true;
+			} else if (ModeOf(u) == 17) {
+				++corpses;
+			}
+		}
+	});
+	long skippedCorpses = 0, skippedPenalties = 0, respawnsHeld = 0, respawns = 0;
+	const bool noCorpseOn = NoCorpseCounts(&skippedCorpses, &skippedPenalties, &respawnsHeld, &respawns);
+	Out("corpses %d players=%d self=%d | no corpse %s: skipped corpse calls=%ld penalty calls=%ld respawns held=%ld let=%ld xp=%u", corpses,
+	    players, self ? 1 : 0, noCorpseOn ? "on" : "off", skippedCorpses, skippedPenalties, respawnsHeld, respawns,
+	    static_cast<uint32_t>(Stat(p, 13)));
 	Out("skills left=%d right=%d", SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(p)), SkillIdOf(Fn<ActiveSkillFn>(RvaRightSkill)(p)));
 	PrintMissiles(c);
 	int mons = 0;
 	EachUnit(c->game, HashMonsters, [&](Unit* u) {
-		if (TypeOf(u) == 1 && IsAlive(u) && DistTo(p, u) < 40 && mons < 12) {
+		if (TypeOf(u) == 1 && IsAlive(u) && DistTo(p, u) < 40 && mons < 60) {
 			++mons;
-			Out("mon id=%u class=%d mode=%d dist=%.0f npc=%d life=%d/%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u),
-			    Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(u)) != nullptr ? 1 : 0, Stat(u, StatLife) >> 8, Stat(u, 7) >> 8);
+			int32_t mx = 0, my = 0;
+			d2r::UnitXY(u, &mx, &my);
+			Out("mon id=%u class=%d mode=%d dist=%.0f npc=%d life=%d/%d mx=%d my=%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u),
+			    Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(u)) != nullptr ? 1 : 0, Stat(u, StatLife) >> 8, Stat(u, 7) >> 8, mx, my);
 		}
 	});
 	int objs = 0;
@@ -432,7 +467,13 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 			++objs;
 			int32_t ox = 0, oy = 0;
 			d2r::UnitXY(u, &ox, &oy);
-			Out("obj id=%u class=%d mode=%d dist=%.0f at %d,%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u), ox, oy);
+			const int32_t ocls = ClassOf(u);
+			if (ocls == 59 || ocls == 60 || ocls == 600) {  // portals: where they lead (D2R level id)
+				Out("obj id=%u class=%d mode=%d dist=%.0f at %d,%d dest=%d", IdOf(u), ocls, ModeOf(u), DistTo(p, u), ox, oy,
+				    static_cast<int>(Fn<PortalLevelFn>(RvaPortalLevel)(u)));
+			} else {
+				Out("obj id=%u class=%d mode=%d dist=%.0f at %d,%d", IdOf(u), ocls, ModeOf(u), DistTo(p, u), ox, oy);
+			}
 		}
 	});
 	char goblins[160] = "";
@@ -616,9 +657,18 @@ auto CmdStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long who = 0, stat = 0, layer = 0, value = 0;
 	int next = 3;
 	if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &stat)) {
-		return Fail(c, "usage: stat player|merc|mon:<id>|m<monster id>|<item unit id>|<item code> <stat> [layer] [set <value>]");
+		return Fail(c, "usage: stat player|merc|mon:<id>|m<monster id>|<item unit id>|<item code> <stat> [layer] [set <value>] | scan [max layer]");
 	}
-	if (t.n > next && !hcmd::LowerEq(t.tok[next], "set")) {
+	const bool scan = t.n > next && hcmd::LowerEq(t.tok[next], "scan");
+	if (scan) {
+		long long maxLayer = 262143;  // skill id << 6 | level stays below this for ids up to 4095
+		if (t.n > next + 1 && !hcmd::ParseInt(t.tok[next + 1], &maxLayer)) {
+			return Fail(c, "stat: scan needs a number");
+		}
+		next = t.n;
+		layer = maxLayer;
+	}
+	if (!scan && t.n > next && !hcmd::LowerEq(t.tok[next], "set")) {
 		if (!hcmd::ParseInt(t.tok[next], &layer)) {
 			return Fail(c, "stat: layer must be a number");
 		}
@@ -645,6 +695,22 @@ auto CmdStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	}
 	if (unit == nullptr) {
 		return Fail(c, "stat: unit not found");
+	}
+	if (scan) {  // every layer of the stat that reads non-zero: which skill an item property or oskill really carries
+		int shown = 0, total = 0;
+		for (long long l = 0; l <= layer; ++l) {
+			const int32_t v = Stat(unit, static_cast<int>(stat), static_cast<int>(l));
+			if (v == 0) {
+				continue;
+			}
+			++total;
+			if (shown < 40) {
+				Out("scan %s %lld:%lld = %d", t.tok[1], stat, l, v);
+				++shown;
+			}
+		}
+		Out("scan %s %lld: %d layers non-zero (up to %lld)", t.tok[1], stat, total, layer);
+		return true;
 	}
 	if (set) {
 		Fn<SetStatFn>(RvaSetStat)(unit, static_cast<int>(stat), static_cast<int32_t>(value), static_cast<int>(layer));
@@ -794,6 +860,107 @@ auto CmdSysmsg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `rewardmsg <0x5f|0x60|0x61>`: the quest reward client message to the player through D2R's unit message (0x491960), the
+// path Jerhyn / Cain / Ormus / Akara use. The client plays Median's sound (`rewardsnd`).
+auto CmdRewardMsg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long msg = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &msg)) {
+		return Fail(c, "usage: rewardmsg <95|96|97 or 0x5f|0x60|0x61>");
+	}
+	if (!RewardSoundsOn()) {
+		return Fail(c, "rewardmsg: the client hook for packet 0x2c is off");
+	}
+	if (!SendRewardMessage(c->player, static_cast<uint32_t>(msg), "Reward", 1)) {
+		return Fail(c, "rewardmsg: not sent (no such reward message or no client)");
+	}
+	Out("rewardmsg 0x%llx sent", msg);
+	return true;
+}
+
+// Client side: `rewardsnd` prints how many reward sounds (messages 0x5f-0x61) the client has played, the last message and
+// the sound row it played (217 gem, 2608 shrine stand-in, 230 armor).
+auto CmdRewardSound(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	int played = 0, message = 0, sound = 0;
+	RewardSoundStats(&played, &message, &sound);
+	Out("rewardsnd hook=%d played=%d last message=0x%x sound=%d", RewardSoundsOn() ? 1 : 0, played, message, sound);
+	(void)c;
+	return true;
+}
+
+// Client side: `infopanel [close <n>]` prints the help panels' presentation state (0 unknown, 1 closed, 2 open, -1 none) and
+// the open requests the client part has handled; `close <n>` closes one.
+auto CmdInfoPanel(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 0;
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "close")) {
+		if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &n)) {
+			return Fail(c, "usage: infopanel close <panel>");
+		}
+		Out("infopanel close %lld %s", n, InfoPanelClose(static_cast<int>(n)) ? "ok" : "failed");
+		return true;
+	}
+	int asked = 0, opened = 0, failed = 0;
+	InfoPanelCounts(&asked, &opened, &failed);
+	Out("infopanel state0=%d state1=%d asked=%d opened=%d failed=%d", InfoPanelState(0), InfoPanelState(1), asked, opened, failed);
+	return true;
+}
+
+// Client side: `statorder` prints the Advanced Stats list as the panel built it last (stat_columns.cpp, Median's order):
+// "statorder ordered=1 rebuilds=N rows=M", then the rows, a section label as [Label] and a stat as its D2R stat id.
+// `statorder open` / `close` opens or closes the character sheet through D2R's panel messages, `statorder adv` presses its
+// Advanced Stats button (the sheet must be open; the button's own onClickMessage).
+auto CmdStatOrder(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 2 && (hcmd::LowerEq(t.tok[1], "open") || hcmd::LowerEq(t.tok[1], "close") || hcmd::LowerEq(t.tok[1], "adv"))) {
+		const bool adv = hcmd::LowerEq(t.tok[1], "adv");
+		const char* command = adv ? "ToggleAdvancedStats" : hcmd::LowerEq(t.tok[1], "open") ? "OpenPanel" : "ClosePanel";
+		const int rc = adv ? HarnessUiAction("CharacterStatsPanelMessage", command, "") : HarnessUiAction("PanelManager", command, "CharacterStatsPanel");
+		Out("statorder %s rc=%d", command, rc);
+		return rc == 0;
+	}
+	bool ordered = false;
+	int rebuilds = 0;
+	int32_t ids[256];
+	const int rows = StatOrderRows(&ordered, &rebuilds, ids, 256);
+	Out("statorder ordered=%d rebuilds=%d rows=%d", ordered ? 1 : 0, rebuilds, rows);
+	char line[400] = "";
+	size_t n = 0;
+	for (int i = 0; i < rows && i < 256; ++i) {
+		const char* label = StatOrderLabel(ids[i]);
+		char item[64];
+		if (label[0] != '\0') {
+			std::snprintf(item, sizeof(item), "[%s] ", label);
+		} else {
+			std::snprintf(item, sizeof(item), "%d ", ids[i]);
+		}
+		const size_t len = std::strlen(item);
+		if (n + len >= sizeof(line)) {
+			Out("statorder rows %s", line);
+			n = 0;
+			line[0] = '\0';
+		}
+		std::memcpy(line + n, item, len + 1);
+		n += len;
+	}
+	if (n != 0) {
+		Out("statorder rows %s", line);
+	}
+	(void)c;
+	return true;
+}
+
+// `goblinsay <monster class>`: the goblin "<name> appears!" line for that variant to the player (the line a spawn sends).
+auto CmdGoblinSay(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long cls = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &cls)) {
+		return Fail(c, "usage: goblinsay <monster class>");
+	}
+	char text[96];
+	if (!GoblinAnnounce(c->player, static_cast<int>(cls), text, sizeof(text))) {
+		return Fail(c, "goblinsay: not sent (messages off or no client)");
+	}
+	Out("goblinsay %lld: %s", cls, text);
+	return true;
+}
+
 auto CmdTile(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Unit* tile = nullptr;
 	double best = 1e18;
@@ -891,6 +1058,19 @@ auto CmdKill(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	const int32_t cls = ClassOf(victim);
 	Fn<KillFn>(RvaKill)(c->game, victim, c->player, 1);
 	Out("kill id=%u class=%d: mode now %d (0 or 12 = dead)", id, cls, ModeOf(victim));
+	return true;
+}
+
+// `xp <amount>`: the experience award of a kill without the monster (D2R's own function, so the level-ups, the stat and skill
+// points and the level cap are the engine's). Prints the numbers a level cap check reads.
+auto CmdXp(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long amount = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &amount) || amount < 0 || amount > 0x7fffffff) {
+		return Fail(c, "usage: xp <amount>");
+	}
+	Fn<AddExperienceFn>(RvaAddExperience)(c->game, c->player, Stat(c->player, StatLevel), static_cast<int32_t>(amount));
+	Out("xp level=%d experience=%u statpoints=%d skillpoints=%d", Stat(c->player, StatLevel),
+	    static_cast<uint32_t>(Stat(c->player, 13)), Stat(c->player, 4), Stat(c->player, 5));
 	return true;
 }
 
@@ -1170,6 +1350,77 @@ auto CmdCuberec(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 			n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " %02x", rec[i]);
 		}
 		Out("%s", line);
+	}
+	return true;
+}
+
+// `cubeslots <first> <count>`: which of the three output slots (record + 0x5a + 0x5b * i) of recipes first..first+count-1 hold
+// anything (a digit 0-7: bit i = slot i is filled), 50 recipes a line. A slot's tail holds -1 defaults even when the output
+// cell was empty, so only its first 0x0e bytes count (quantity / code / type word and the special-output byte at +0x0d).
+auto CmdCubeSlots(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long first = 0, count = 0;
+	if (t.n < 3 || !hcmd::ParseInt(t.tok[1], &first) || !hcmd::ParseInt(t.tok[2], &count) || first < 0 || count < 1 || count > 20000) {
+		return Fail(c, "usage: cubeslots <first recipe> <count>");
+	}
+	char line[80];
+	int n = 0;
+	long long lineFirst = first;
+	for (long long i = first; i < first + count; ++i) {
+		const uint8_t* rec = Fn<CubeRecordFn>(RvaCubeRecord)(c->dataFlag, static_cast<int32_t>(i));
+		int mask = 0;
+		if (rec == nullptr) {
+			return Fail(c, "cubeslots: no record %lld", i);
+		}
+		for (int slot = 0; slot < 3; ++slot) {
+			const uint8_t* s = rec + 0x5a + 0x5b * slot;
+			for (int k = 0; k < 0x0e; ++k) {
+				if (s[k] != 0) {
+					mask |= 1 << slot;
+					break;
+				}
+			}
+		}
+		line[n++] = static_cast<char>('0' + mask);
+		if (n == 50 || i == first + count - 1) {
+			line[n] = '\0';
+			Out("cubeslots %lld %s", lineFirst, line);
+			n = 0;
+			lineFirst = i + 1;
+		}
+	}
+	return true;
+}
+
+// `cubeout <recipe> [slot]`: the executor's output dispatch (0x526d3c) for the special-output slots of a recipe (byte at slot
+// +0x0d, 1-4 = portals), without inputs or conditions: handler table 0x1d3bfc0 entry byte-1, called (game, player, slot).
+// Prints `cubeout <recipe> slot <i> byte <b>` per slot it called; look at `state` for the portal it opened.
+auto CmdCubeOut(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long index = 0, only = -1;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &index) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &only))) {
+		return Fail(c, "usage: cubeout <recipe index> [slot 0-2]");
+	}
+	const uint8_t* rec = Fn<CubeRecordFn>(RvaCubeRecord)(c->dataFlag, static_cast<int32_t>(index));
+	if (rec == nullptr) {
+		return Fail(c, "cubeout: no such record");
+	}
+	using OutputFn = int64_t (*)(Game*, Unit*, const uint8_t*);
+	int called = 0;
+	for (int slot = 0; slot < 3; ++slot) {
+		const uint8_t* s = rec + 0x5a + 0x5b * slot;
+		const uint8_t byte = s[0x0d];
+		if ((only >= 0 && slot != only) || byte < 1 || byte > 4) {
+			continue;
+		}
+		const uint64_t* entry = OutputHandlerSlot(g_base, byte);
+		if (entry == nullptr || *entry == 0) {
+			return Fail(c, "cubeout: no handler for output byte %d in the table", byte);
+		}
+		reinterpret_cast<OutputFn>(*entry)(c->game, c->player, s);
+		Out("cubeout %lld slot %d byte %d", index, slot, byte);
+		++called;
+	}
+	if (called == 0) {
+		return Fail(c, "cubeout: recipe %lld has no portal output slot", index);
 	}
 	return true;
 }
@@ -1477,7 +1728,10 @@ auto CmdCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		return Fail(c, "cast: the player has no skill %lld (setskill %lld 1 first)", id, id);
 	}
 	// Both cast calls use the player's active left skill (the unit one also walks into range first): select it.
-	if (SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(c->player)) != id && SelectSkill(c, id, true) != id) {
+	// A right-button-only skill (rightskill 1: the itemless Town Portal) cannot be the left skill: select it as the right
+	// one, and for a cast at a position go on without a selection (the call takes the skill record itself).
+	if (SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(c->player)) != id && SelectSkill(c, id, true) != id &&
+	    SelectSkill(c, id, false) != id && (tg.kind == hcmd::CastTarget::Unit || tg.kind == hcmd::CastTarget::Nearest)) {
 		return Fail(c, "cast: the game would not select skill %lld (a passive, or not usable as an active skill)", id);
 	}
 	const int manaBefore = Stat(c->player, StatMana) >> 8;
@@ -1810,20 +2064,25 @@ auto FlagsOf(Unit* item) noexcept -> uint32_t {
 	return data != nullptr ? d2r::At<uint32_t>(data, ItemFlagsOffset) : 0;
 }
 
-// `hit <target ref> phys|fire|ltng|magic|cold <amount> [attacker ref]`: one hit of that damage through D2R's hit and apply
+// `hit <target ref> phys|fire|ltng|magic|cold|pois|life|mana|stam|clen|flen|plen <amount> [attacker ref] [stagger]`: one hit of that damage through D2R's hit and apply
 // steps (0x44ce80, 0x44a9b0; the same pair the area damage hook uses), so the resist step 0x4523e0 and the absorb step
 // 0x450670 run. The amount goes into the damage block's field as is. Attacker: the player; for the player as target the
-// nearest live monster (else the player itself).
+// nearest live monster (else the player itself). `stagger` sets the result flag 4 (hit recovery) between the two steps, so the
+// target enters its GetHit mode even when its hit recovery would not (bosses): the monster's last-mode field then reads 3 after it.
+// `field=` is the element's field right after the hit step (what is left of `amount` after resist, absorb and Median's stats
+// 184 / 189 / 417); for clen / flen / plen (cold, freeze and poison length) it is the shortened duration.
 auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	struct Elem {
 		const char* name;
 		int offset;
 		int hitClass;
 	};
-	static const Elem elems[] = {{"phys", 0x18, 0}, {"fire", 0x20, 0x20}, {"ltng", 0x2c, 0x40}, {"magic", 0x30, 0}, {"cold", 0x34, 0x30}};
+	static const Elem elems[] = {{"phys", 0x18, 0}, {"fire", 0x20, 0x20}, {"ltng", 0x2c, 0x40}, {"magic", 0x30, 0}, {"cold", 0x34, 0x30},
+	                          {"pois", 0x38, 0}, {"life", 0x120, 0}, {"mana", 0x124, 0}, {"stam", 0x128, 0}, {"clen", 0x118, 0},
+	                          {"flen", 0x11c, 0}, {"plen", 0x3c, 0}};
 	long long amount = 0;
 	if (t.n < 4 || !hcmd::ParseInt(t.tok[3], &amount) || amount < 0) {
-		return Fail(c, "usage: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker ref]");
+		return Fail(c, "usage: hit <player|merc|mon:id> phys|fire|ltng|magic|cold|pois|life|mana|stam|clen|flen|plen <amount> [attacker ref] [stagger]");
 	}
 	const Elem* elem = nullptr;
 	for (const Elem& e : elems) {
@@ -1835,8 +2094,14 @@ auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (elem == nullptr || target == nullptr) {
 		return Fail(c, "hit: unknown element or target (%s)", t.tok[1]);
 	}
+	bool stagger = false;
+	int n = t.n;
+	if (n > 4 && hcmd::LowerEq(t.tok[n - 1], "stagger")) {
+		stagger = true;
+		--n;
+	}
 	Unit* attacker = nullptr;
-	if (t.n > 4) {
+	if (n > 4) {
 		attacker = ResolveRef(c, t.tok[4]);
 	} else if (target == c->player) {
 		attacker = NearestMonster(c, -1, false);
@@ -1859,10 +2124,14 @@ auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	}
 	const int32_t before = Stat(target, StatLife);
 	Fn<HitUnitFn>(RvaHitUnit)(c->game, attacker, target, 1, d.b);
+	const int32_t fieldAfter = DmgField<int32_t>(d, elem->offset);
+	if (stagger) {
+		DmgField<uint16_t>(d, 0x04) |= 4;
+	}
 	Fn<ApplyDamageFn>(RvaApplyDamage)(c->game, attacker, target, d.b);
 	const int32_t after = Stat(target, StatLife);
-	Out("hit target=%s elem=%s amount=%lld life=%d->%d lost=%d absorbed=%d result=0x%x", t.tok[1], elem->name, amount, before, after,
-	    hcmd::LifeLost(before, after), DmgField<int32_t>(d, 0x130), static_cast<unsigned>(DmgField<uint16_t>(d, 0x04)));
+	Out("hit target=%s elem=%s amount=%lld life=%d->%d lost=%d absorbed=%d result=0x%x field=%d", t.tok[1], elem->name, amount, before, after,
+	    hcmd::LifeLost(before, after), DmgField<int32_t>(d, 0x130), static_cast<unsigned>(DmgField<uint16_t>(d, 0x04)), fieldAfter);
 	DamageDestroy(d);
 	return true;
 }
@@ -2047,11 +2316,23 @@ auto CmdReq(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
-// Client side (UI thread): `cstat <stat> [layer]` reads a stat of the client's copy of the player (what the screen shows).
+// Client side (UI thread): `cstat <stat> [layer] [set <value>]` reads a stat of the client's copy of the player (what the screen
+// shows); `set` writes it there (the server's copy is not touched: a stat set on the server's unit does not reach the client).
 auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
-	long long stat = 0, layer = 0;
-	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &stat) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &layer))) {
-		return Fail(c, "usage: cstat <stat> [layer]");
+	long long stat = 0, layer = 0, value = 0;
+	int next = 2;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &stat)) {
+		return Fail(c, "usage: cstat <stat> [layer] [set <value>]");
+	}
+	if (t.n > next && !hcmd::LowerEq(t.tok[next], "set")) {
+		if (!hcmd::ParseInt(t.tok[next], &layer)) {
+			return Fail(c, "cstat: layer must be a number");
+		}
+		++next;
+	}
+	const bool set = t.n > next && hcmd::LowerEq(t.tok[next], "set");
+	if (set && (t.n <= next + 1 || !hcmd::ParseInt(t.tok[next + 1], &value))) {
+		return Fail(c, "cstat: set needs a number");
 	}
 	if (g_playerId == 0) {
 		return Fail(c, "cstat: no player seen yet");
@@ -2059,6 +2340,9 @@ auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	Unit* unit = Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(g_playerId), 0);
 	if (unit == nullptr) {
 		return Fail(c, "cstat: no client player unit");
+	}
+	if (set) {
+		Fn<SetStatFn>(RvaSetStat)(unit, static_cast<int>(stat), static_cast<int32_t>(value), static_cast<int>(layer));
 	}
 	Out("cstat %lld:%lld = %d", stat, layer, Stat(unit, static_cast<int>(stat), static_cast<int>(layer)));
 	return true;
@@ -2103,16 +2387,260 @@ auto CmdPanelRow(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// Client side (UI thread): `mapmem` prints the automap layer of the current level (layer, table index, the sizes of its four
+// room sets) and what the character's map file holds for it (nodes of this layer, nodes of other layers sharing the chain),
+// with the counters of the map memory hooks (map_memory.cpp).
+auto CmdMapMem(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	MapMemoryInfo info;
+	if (!MapMemoryProbe(&info)) {
+		return Fail(c, "mapmem: no automap layer is current");
+	}
+	Out("mapmem layer=%d bucket=%d cells=%llu,%llu,%llu,%llu file=%s size=%u nodes=%d foreign=%d clean=%d loads=%ld saves=%ld views=%ld resets=%ld",
+	    info.layer, info.bucket, static_cast<unsigned long long>(info.cells[0]), static_cast<unsigned long long>(info.cells[1]),
+	    static_cast<unsigned long long>(info.cells[2]), static_cast<unsigned long long>(info.cells[3]), info.haveFile ? "read" : "none",
+	    info.fileSize, info.nodes, info.foreign, info.clean ? 1 : 0, info.loads, info.saves, info.views, info.resets);
+	return true;
+}
+
+// --- lane bug-backlog-b: verbs for the old "fix to test" rows of docs/bugs.md ----------------------------------------
+
+// Client side (UI thread): `skilltab [n]` the selected tab of the skill tree panel (bug #3), or select tab n through the
+// hooked setter (the panel is the one the setter last saw: click any tab first).
+auto CmdSkillTab(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n > 1) {
+		long long tab = 0;
+		if (!hcmd::ParseInt(t.tok[1], &tab) || tab < 0 || tab > 8) {
+			return Fail(c, "usage: skilltab [0-8]");
+		}
+		if (!SkillTreeSetTab(static_cast<int32_t>(tab))) {
+			return Fail(c, "skilltab: the tab setter has not run yet (open the skill tree and click a tab)");
+		}
+	}
+	Out("skilltab current=%d setter_calls=%u", SkillTreeCurrentTab(), SkillTreeSetterCalls());
+	return true;
+}
+
+// The text without D2R's colour codes (0xff or UTF-8 c3 bf, then 'c' and a digit) and control characters.
+void PlainText(const char* raw, char* out, size_t outSize) noexcept {
+	size_t n = 0;
+	for (size_t i = 0; raw[i] != '\0' && n + 1 < outSize; ++i) {
+		const unsigned char ch = static_cast<unsigned char>(raw[i]);
+		const size_t lead = ch == 0xff ? 1 : (ch == 0xc3 && static_cast<unsigned char>(raw[i + 1]) == 0xbf ? 2 : 0);
+		if (lead != 0 && raw[i + lead] == 'c' && raw[i + lead + 1] != '\0') {
+			i += lead + 1;
+			continue;
+		}
+		out[n++] = ch < 0x20 ? ' ' : static_cast<char>(ch);
+	}
+	out[n] = '\0';
+}
+
+// Client side: `strids <id>...` the text the client's string table gives for string ids (bug #7: Median's keys must not answer with
+// another key's text). `strids 45` is GheedIntroGossip1.
+auto CmdStrIds(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: strids <string id>...");
+	}
+	for (int i = 1; i < t.n; ++i) {
+		long long id = 0;
+		if (!hcmd::ParseInt(t.tok[i], &id) || id < 0 || id > 0xffff) {
+			return Fail(c, "strids: %.12s is not a string id (0..65535)", t.tok[i]);
+		}
+		const char* text = Fn<const char* (*)(uint32_t)>(0x3e2b730)(static_cast<uint32_t>(id));
+		char plain[300];
+		PlainText(text != nullptr ? text : "(null)", plain, sizeof(plain));
+		Out("str %lld = [%s]", id, plain);
+	}
+	return true;
+}
+
+// Client side: `hover` the unit the hover name builder last ran for (bug #22: a monster under the cursor).
+auto CmdHover(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	uint32_t id = 0, type = 0, cls = 0;
+	const uint64_t age = MonsterLooksHovered(&id, &type, &cls);
+	if (age == 0xffffffffffffffffULL) {
+		return Fail(c, "hover: nothing was hovered since the game started (or monster looks / name colours are off)");
+	}
+	Out("hover id=%u type=%u class=%u age_ms=%llu", id, type, cls, static_cast<unsigned long long>(age));
+	return true;
+}
+
+// Client side: `automap [type]` Median's automap rows of level types 36-51 (bug #15): the row range, how many of its rows the hooked
+// lookup resolves to a cel the atlas has (< 1499), and how many lookups the game itself made for the type so far.
+auto CmdAutomap(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long only = -1;
+	if (t.n > 1 && !hcmd::ParseInt(t.tok[1], &only)) {
+		return Fail(c, "usage: automap [level type]");
+	}
+	for (int32_t type = 36; type <= 51; ++type) {
+		if (only >= 0 && type != only) {
+			continue;
+		}
+		int32_t first = 0, end = 0;
+		uint32_t calls = 0, hits = 0;
+		LevelTypeCounters(type, &calls, &hits);
+		if (!LevelTypeRows(type, &first, &end)) {
+			Out("automap type=%d rows=0 (no Median AutoMap rows) game_lookups=%u hits=%u", type, calls, hits);
+			continue;
+		}
+		int ok = 0, bad = 0, unreadable = 0;
+		for (int32_t i = first; i < end; ++i) {
+			int32_t tile = 0, startSeq = 0, cels = 0;
+			uint32_t style = 0, cel0 = 0;
+			if (!LevelTypeRowTable(i, &tile, &style, &startSeq, &cels, &cel0)) {
+				++unreadable;
+				continue;
+			}
+			const uint64_t cel = LevelTypeProbe(type, tile, style == 0xff ? 0 : style, startSeq);
+			if (cel < 1499) {
+				++ok;
+			} else {
+				++bad;
+			}
+		}
+		Out("automap type=%d rows=%d resolved=%d bad=%d unreadable=%d game_lookups=%u hits=%u", type, end - first, ok, bad, unreadable, calls, hits);
+		if (only >= 0) {  // one type asked for: the (tile type, style) pairs the game looked for in vain, and the rows' own pairs
+			for (int m = 0;; ++m) {
+				int32_t mt = 0, ms = 0;
+				if (!LevelTypeMiss(type, m, &mt, &ms)) {
+					break;
+				}
+				Out("  miss tile=%d style=%d", mt, ms);
+			}
+			for (int32_t i = first; i < end && i < first + 12; ++i) {
+				int32_t tile = 0, startSeq = 0, cels = 0;
+				uint32_t style = 0, cel0 = 0;
+				if (LevelTypeRowTable(i, &tile, &style, &startSeq, &cels, &cel0)) {
+					Out("  row %d tile=%d style=%u seq=%d", i, tile, style, startSeq);
+				}
+			}
+		}
+	}
+	return true;
+}
+
+// `levelact <level id>...`: the act D2R's level table gives each level (the key / scroll portals link only levels of the same act).
+auto CmdLevelAct(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: levelact <level id>...");
+	}
+	for (int i = 1; i < t.n; ++i) {
+		long long id = 0;
+		if (!hcmd::ParseInt(t.tok[i], &id) || id < 0 || id > 0xffff) {
+			return Fail(c, "levelact: %.12s is not a level id", t.tok[i]);
+		}
+		Out("levelact %lld = %d", id, static_cast<int>(Fn<uint8_t (*)(uint32_t, int32_t)>(0x3e2b5c8)(c->dataFlag, static_cast<int32_t>(id))));
+	}
+	return true;
+}
+
+// `shop [npc class]`: the inventory of the nearest vendor (the server builds it when a player opens the trade panel: `interact <npc>`,
+// then `menu <Trade line>`); bug #18 buys through the panel itself (a right click), see tools/game_checks.py check_vendors.
+auto CmdShop(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long cls = -1;
+	if (t.n > 1 && !hcmd::ParseInt(t.tok[1], &cls)) {
+		return Fail(c, "usage: shop [npc class]");
+	}
+	Unit* npc = NearestMonster(c, cls, true);
+	if (npc == nullptr) {
+		return Fail(c, "shop: no such NPC alive in this area");
+	}
+	Out("shop npc id=%u class=%d", IdOf(npc), ClassOf(npc));
+	int items = 0;
+	EachItemOf(npc, [&](Unit* it) {
+		++items;
+		if (items <= 60) {
+			DescribeItem(c, it);
+		}
+	});
+	Out("shop items %d", items);
+	return true;
+}
+
+// Client side: the plugin's own string ids (strings.h). `mstr <full key>` reads the key through the localization service,
+// takes (or finds) the plugin id for it and reads the text back through D2R's numeric lookup, the way the NPC menu does.
+auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: mstr <full key, e.g. medianxl:AkaraMenu1b>");
+	}
+	char service[512];
+	char viaId[512];
+	const bool found = StringLookup(t.tok[1], service, sizeof(service));
+	const mxlstr::Ref ref{0, t.tok[1]};
+	const uint16_t id = StringId(ref);
+	StringProbeId(id, viaId, sizeof(viaId));
+	Out("mstr %s service=%s text=\"%s\" id=%u (0x%x) via D2R lookup=\"%s\" ids=%d", t.tok[1], found ? "ok" : "missing", service, id,
+	    id, viaId, StringIdCount());
+	return id != 0;
+}
+
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
-	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
+	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
-	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
+	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
-	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | automap (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
-	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] | avoid <ref> melee|missile|evade [n] | "
-	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | stat merc|mon:<id> <stat>");
+	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
+	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | levelact <id>..");
+	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | "
+	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
+	Out("backlog verbs: stat <ref> <stat> scan [max layer] | cubeslots <first> <count> | cubeout <recipe> [slot] (portal outputs) | state (portal dest=)");
 	return true;
+}
+
+// Client side: strings through D2RLoader's localization service and D2R's own numeric lookup (docs/strings-namespace-research.md).
+//   str key <full key>      getStringByKey ("medianxl:Key", "d2r:strCancel"; a bare key searches the plugin's own "mxl-core")
+//   str id <n>              getStringById (original game IDs only)
+//   str native <n>          D2R's numeric lookup (the thunk the NPC menu uses) for id n (0..65535)
+//   str find <text>         every id 0..65535 whose native text contains <text> (case-insensitive, at most 40 listed)
+auto CmdStr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 3) {
+		return Fail(c, "usage: str key <full key> | id <n> | native <n> | find <text>");
+	}
+	char text[1024];
+	if (hcmd::LowerEq(t.tok[1], "key")) {
+		const int rc = StringsProbeKey(t.tok[2], text, sizeof(text));
+		Out("str key %s result=%d text=\"%s\"", t.tok[2], rc, text);
+		return rc == 0;
+	}
+	long long id = 0;
+	if (hcmd::LowerEq(t.tok[1], "id") || hcmd::LowerEq(t.tok[1], "native")) {
+		if (!hcmd::ParseInt(t.tok[2], &id) || id < 0 || id > 0xffffffffLL) {
+			return Fail(c, "str: bad id");
+		}
+		if (hcmd::LowerEq(t.tok[1], "id")) {
+			const int rc = StringsProbeId(static_cast<uint32_t>(id), text, sizeof(text));
+			Out("str id %lld result=%d text=\"%s\"", id, rc, text);
+			return rc == 0;
+		}
+		const bool ok = StringsProbeNative(static_cast<uint32_t>(id), text, sizeof(text));
+		Out("str native %lld %s text=\"%s\"", id, ok ? "ok" : "unreadable", text);
+		return ok;
+	}
+	if (hcmd::LowerEq(t.tok[1], "find")) {
+		char needle[128];
+		std::snprintf(needle, sizeof(needle), "%s", t.tok[2]);
+		for (char* p = needle; *p != '\0'; ++p) {
+			if (*p >= 'A' && *p <= 'Z') *p = static_cast<char>(*p + 32);
+		}
+		int hits = 0;
+		for (uint32_t i = 0; i <= 0xffff; ++i) {
+			if (!StringsProbeNative(i, text, sizeof(text)) || text[0] == '\0') {
+				continue;
+			}
+			char original[1024];
+			std::snprintf(original, sizeof(original), "%s", text);
+			for (char* p = text; *p != '\0'; ++p) {
+				if (*p >= 'A' && *p <= 'Z') *p = static_cast<char>(*p + 32);
+			}
+			if (std::strstr(text, needle) != nullptr && ++hits <= 40) {
+				Out("str find %u (0x%x) text=\"%s\"", i, i, original);
+			}
+		}
+		Out("str find \"%s\": %d hits", needle, hits);
+		return hits > 0;
+	}
+	return Fail(c, "usage: str key <full key> | id <n> | native <n> | find <text>");
 }
 
 // Client side (UI thread): the NPC menu the 0x27 packet opened.
@@ -2171,6 +2699,236 @@ auto CmdMenu(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	const uint8_t res = reinterpret_cast<MenuHandlerFn>(handler)(static_cast<uint8_t>(c->dataFlag));
 	Out("menu line %s handler 0x%llx returned %u", t.tok[1], static_cast<unsigned long long>(handler), static_cast<unsigned>(res));
 	return true;
+}
+
+// --- `text`: the display string the game resolves (lane ns-verify, game_checks.py "strings") ---------------------------------
+// The string lookup the NPC menu uses (npc_actions.cpp): D2RCore's thunk, u16 string id -> UTF-8 text. Table rows hold the same
+// u16 references, so reading a row's name field and resolving it here is what the player sees, whatever the loader assigned.
+constexpr uint64_t RvaStringThunk = 0x3e2b730;  // (u32 id) -> const char*
+using StringFn = const char* (*)(uint32_t);
+const D2RL::PluginContext* g_textContext = nullptr;
+
+// D2R colour codes removed, newlines written as the two characters \n. A colour code is 0xff 'c' <char> (UTF-8 c3 bf) in the files;
+// the loaded strings hold it as one private-use character (UTF-8 ee 81 be) followed by the colour character.
+void CleanText(const char* raw, char* text, size_t cap) noexcept {
+	size_t n = 0;
+	for (size_t i = 0; raw != nullptr && raw[i] != '\0' && n + 2 < cap; ++i) {
+		if (static_cast<unsigned char>(raw[i]) == 0xee && static_cast<unsigned char>(raw[i + 1]) == 0x81 && static_cast<unsigned char>(raw[i + 2]) == 0xbe &&
+		    raw[i + 3] != '\0') {
+			i += 3;
+			continue;
+		}
+		const size_t lead = static_cast<unsigned char>(raw[i]) == 0xff ? 1 : (static_cast<unsigned char>(raw[i]) == 0xc3 && static_cast<unsigned char>(raw[i + 1]) == 0xbf ? 2 : 0);
+		if (lead != 0 && raw[i + lead] == 'c' && raw[i + lead + 1] != '\0') {
+			i += lead + 1;
+			continue;
+		}
+		if (raw[i] == '\n') {
+			text[n++] = '\\';
+			text[n++] = 'n';
+			continue;
+		}
+		if (raw[i] == '\r') {
+			continue;
+		}
+		text[n++] = raw[i];
+	}
+	text[n] = '\0';
+}
+
+// One answer line: `<head> len=<bytes of the cleaned text> fnv=<FNV-1a of it> raw=<first bytes> = [<first 200 bytes>]`. A long text
+// (an NPC speech) does not fit one line, so the caller compares the length and the hash.
+void PrintText(const char* head, const char* raw) noexcept {
+	static char text[4096];
+	CleanText(raw, text, sizeof(text));
+	uint32_t h = 2166136261u;
+	size_t len = 0;
+	for (; text[len] != '\0'; ++len) {
+		h = (h ^ static_cast<unsigned char>(text[len])) * 16777619u;
+	}
+	char hex[16] = "";
+	for (int i = 0; i < 6 && raw != nullptr && raw[i] != '\0'; ++i) {
+		std::snprintf(hex + 2 * i, sizeof(hex) - 2 * static_cast<size_t>(i), "%02x", static_cast<unsigned>(static_cast<unsigned char>(raw[i])));
+	}
+	Out("%s len=%zu fnv=%08x raw=%s = [%.200s]", head, len, static_cast<unsigned>(h), hex, text);
+}
+
+auto TableByName(const char* name, D2RL::DataTables::TableId* id) noexcept -> bool {
+	using T = D2RL::DataTables::TableId;
+	static const struct {
+		const char* name;
+		T id;
+	} tables[] = {{"itemstatcost", T::ItemStatCost}, {"skilldesc", T::SkillDesc}, {"skills", T::Skills}, {"levels", T::Levels},
+	              {"monstats", T::MonStats}, {"superuniques", T::SuperUniques}, {"uniqueitems", T::UniqueItems},
+	              {"setitems", T::SetItems}, {"sets", T::Sets}, {"magicaffixes", T::MagicAffixes}, {"items", T::Items},
+	              {"itemtypes", T::ItemTypes}, {"runes", T::Runes}, {"shrines", T::Shrines}, {"objects", T::Objects},
+	              {"states", T::States}, {"npc", T::Npc}, {"uniqueprefix", T::UniquePrefix}, {"uniquesuffix", T::UniqueSuffix},
+	              {"uniqueappellation", T::UniqueAppellation}};
+	for (const auto& e : tables) {
+		if (hcmd::LowerEq(name, e.name)) {
+			*id = e.id;
+			return true;
+		}
+	}
+	return false;
+}
+
+// A compiled row by `<index>`, `code:<abcd>` (Items, ItemTypes) or `id:<n>` (Skills, Levels, ...) on the data table service;
+// the bank is the token at bankTok (1 classic, 2 lod, 3 rotw; default 3).
+auto FindTextRow(Ctx* c, const hcmd::Tokens& t, int tableTok, int bankTok, D2RL::DataTables::RowView* row) noexcept -> bool {
+	const D2RL::DataTableService* svc = nullptr;
+	if (g_textContext == nullptr || g_textContext->QueryService(&svc) != D2RL::ServiceQueryResult::Success || svc == nullptr ||
+	    !D2RL::HasDataTableServiceField(svc, D2RL::DataTableServiceRequiredSize)) {
+		return Fail(c, "text: no data table service");
+	}
+	D2RL::DataTables::TableId table = D2RL::DataTables::TableId::Unknown;
+	if (t.n <= tableTok + 1 || !TableByName(t.tok[tableTok], &table)) {
+		return Fail(c, "text: unknown table %.30s", t.n > tableTok ? t.tok[tableTok] : "?");
+	}
+	long long bank = 3;
+	if (bankTok < t.n && (!hcmd::ParseInt(t.tok[bankTok], &bank) || bank < 1 || bank > 3)) {
+		return Fail(c, "text: bank is 1, 2 or 3");
+	}
+	const auto b = static_cast<D2RL::DataTables::Bank>(bank);
+	const char* ref = t.tok[tableTok + 1];
+	*row = {};
+	row->structSize = D2RL::DataTables::RowViewSize;
+	D2RL::DataTables::Result r = D2RL::DataTables::Result::NotFound;
+	long long n = 0;
+	if (std::strncmp(ref, "code:", 5) == 0) {
+		char cc[4] = {' ', ' ', ' ', ' '};  // codes are padded with spaces
+		for (int i = 0; i < 4 && ref[5 + i] != '\0'; ++i) {
+			cc[i] = ref[5 + i];
+		}
+		r = svc->findRowByCode(g_textContext, b, table, D2RL::DataTables::MakeFourCC(cc[0], cc[1], cc[2], cc[3]), row);
+	} else if (std::strncmp(ref, "id:", 3) == 0 && hcmd::ParseInt(ref + 3, &n)) {
+		r = svc->findRowById(g_textContext, b, table, static_cast<uint32_t>(n), row);
+	} else if (hcmd::ParseInt(ref, &n) && n >= 0) {
+		r = svc->getRow(g_textContext, b, table, static_cast<uint32_t>(n), row);
+	} else {
+		return Fail(c, "text: row is <index>, code:<abcd> or id:<n>");
+	}
+	if (r != D2RL::DataTables::Result::Success || row->row == nullptr) {
+		return Fail(c, "text: %.20s %.20s bank %lld: row lookup result %u", t.tok[tableTok], ref, bank, static_cast<unsigned>(r));
+	}
+	return true;
+}
+
+// `text id <n>` | `text key <full key>` | `text row <table> <index|code:abcd|id:n> <offset hex> [bank 1-3]` |
+// `text cstr <table> <row> <offset hex> [bank]`: a cell kept as characters in the row,
+// `text scan <table> <row> [bank]`: the resolved text of a string id (the client's own lookup), of a loader key (`d2r:Key`,
+// `medianxl:Key`: the Localization service), of the u16 string reference at a byte offset of a compiled table row, or every
+// row field that resolves (to find the offset of a name field).
+auto CmdText(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	const auto lookup = Fn<StringFn>(RvaStringThunk);
+	char text[256];
+	if (t.n >= 3 && hcmd::LowerEq(t.tok[1], "id")) {
+		long long id = 0;
+		if (!hcmd::ParseInt(t.tok[2], &id) || id < 0 || id > 0xffff) {
+			return Fail(c, "text id: a string id 0..65535");
+		}
+		char head[64];
+		std::snprintf(head, sizeof(head), "text id %lld", id);
+		PrintText(head, lookup(static_cast<uint32_t>(id)));
+		return true;
+	}
+	if (t.n >= 3 && hcmd::LowerEq(t.tok[1], "key")) {
+		const D2RL::LocalizationService* svc = nullptr;
+		if (g_textContext == nullptr || g_textContext->QueryService(&svc) != D2RL::ServiceQueryResult::Success || svc == nullptr ||
+		    !D2RL::HasLocalizationServiceField(svc, sizeof(D2RL::LocalizationService))) {
+			return Fail(c, "text key: no localization service");
+		}
+		static char raw[4096];
+		raw[0] = '\0';
+		uint32_t need = 0;
+		char key[160];  // a harness argument has no spaces: `^` stands for one
+		std::snprintf(key, sizeof(key), "%s", t.tok[2]);
+		for (char* k = key; *k != '\0'; ++k) {
+			if (*k == '^') {
+				*k = ' ';
+			}
+		}
+		const auto r = svc->getStringByKey(g_textContext, key, raw, sizeof(raw), &need);
+		char head[200];
+		std::snprintf(head, sizeof(head), "text key %.100s result=%u", key, static_cast<unsigned>(r));
+		PrintText(head, raw);
+		return r == D2RL::Localization::Result::Success;
+	}
+	if (t.n >= 5 && hcmd::LowerEq(t.tok[1], "row")) {
+		char* end = nullptr;
+		const unsigned long long off = std::strtoull(t.tok[4], &end, 16);
+		if (end == t.tok[4] || *end != '\0') {
+			return Fail(c, "text row: offset in hex");
+		}
+		D2RL::DataTables::RowView row;
+		if (!FindTextRow(c, t, 2, 5, &row)) {
+			return false;
+		}
+		if (off + 2 > row.rowSize || (off & 1) != 0) {
+			return Fail(c, "text row: offset 0x%llx outside the %u byte row", off, row.rowSize);
+		}
+		const uint16_t id = d2r::At<uint16_t>(row.row, static_cast<int>(off));
+		char head[96];
+		std::snprintf(head, sizeof(head), "text row %.20s %.20s +0x%llx id=%u", t.tok[2], t.tok[3], off, static_cast<unsigned>(id));
+		PrintText(head, lookup(id));
+		return true;
+	}
+	if (t.n >= 5 && hcmd::LowerEq(t.tok[1], "cstr")) {  // a localization cell kept as characters in the row (Levels: LevelName)
+		char* end = nullptr;
+		const unsigned long long off = std::strtoull(t.tok[4], &end, 16);
+		if (end == t.tok[4] || *end != '\0') {
+			return Fail(c, "text cstr: offset in hex");
+		}
+		D2RL::DataTables::RowView row;
+		if (!FindTextRow(c, t, 2, 5, &row)) {
+			return false;
+		}
+		if (off >= row.rowSize) {
+			return Fail(c, "text cstr: offset 0x%llx outside the %u byte row", off, row.rowSize);
+		}
+		const auto* bytes = static_cast<const char*>(row.row);
+		char cell[80] = "";
+		for (size_t i = 0; i + 1 < sizeof(cell) && off + i < row.rowSize && bytes[off + i] != '\0'; ++i) {
+			cell[i] = bytes[off + i];
+		}
+		Out("text cstr %.20s %.20s +0x%llx = [%s]", t.tok[2], t.tok[3], off, cell);
+		return true;
+	}
+	if (t.n >= 4 && hcmd::LowerEq(t.tok[1], "scan")) {
+		D2RL::DataTables::RowView row;
+		if (!FindTextRow(c, t, 2, 4, &row)) {
+			return false;
+		}
+		Out("text scan %s %s size 0x%x index %u", t.tok[2], t.tok[3], row.rowSize, row.rowIndex);
+		int shown = 0;
+		for (uint32_t o = 0; o + 2 <= row.rowSize && shown < 200; o += 2) {
+			const uint16_t id = d2r::At<uint16_t>(row.row, static_cast<int>(o));
+			if (id < 256 || id == 0xffff) {
+				continue;
+			}
+			CleanText(lookup(id), text, sizeof(text));
+			if (text[0] != '\0') {
+				Out("  +0x%x id=%u [%.90s]", o, static_cast<unsigned>(id), text);
+				++shown;
+			}
+		}
+		// printable text kept in the row itself (a key stored as characters rather than as a string reference)
+		const auto* bytes = static_cast<const uint8_t*>(row.row);
+		for (uint32_t o = 0; o < row.rowSize;) {
+			uint32_t e = o;
+			while (e < row.rowSize && bytes[e] >= 0x20 && bytes[e] < 0x7f) {
+				++e;
+			}
+			if (e - o >= 4 && e < row.rowSize && bytes[e] == 0) {
+				Out("  +0x%x text [%.60s]", o, reinterpret_cast<const char*>(bytes + o));
+				o = e + 1;
+			} else {
+				o = e + 1;
+			}
+		}
+		return true;
+	}
+	return Fail(c, "usage: text id <n> | key <full key> | row <table> <index|code:abcd|id:n> <offset hex> [bank] | cstr <table> <row> <offset hex> [bank] | scan <table> <row> [bank]");
 }
 
 // `evtrace on|off|clear|dump [slot name] [n]`: logs D2RLoader's unit-event entry points (register / unregister / has / clear /
@@ -2352,14 +3110,14 @@ auto CmdEvTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 }
 
 // Client side (UI thread): the automap (layers, cells, the debug reveal flag) and the travel counters (waypoint auto-activation,
-// hotkeys, map reveal). `automap` is what the mapreveal check compares before and after a reveal.
-auto CmdAutomap(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+// hotkeys, map reveal). `mapcells` is what the mapreveal check compares before and after a reveal.
+auto CmdMapCells(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	uint64_t cells = 0;
 	int layer = -1, flag = 0, layers = 0;
 	if (!TravelAutomap(&cells, &layer, &flag, &layers)) {
-		return Fail(c, "automap: not available (no game yet)");
+		return Fail(c, "mapcells: not available (no game yet)");
 	}
-	Out("automap cells=%llu layer=%d layers=%d debugflag=%d", static_cast<unsigned long long>(cells), layer, layers, flag);
+	Out("mapcells cells=%llu layer=%d layers=%d debugflag=%d", static_cast<unsigned long long>(cells), layer, layers, flag);
 	return true;
 }
 
@@ -2432,14 +3190,15 @@ struct Verb {
 };
 const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false}, {"waypoint", CmdWaypoint, false},
-    {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
-    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
+    {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
+    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
-    {"automap", CmdAutomap, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
+    {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {
@@ -2481,6 +3240,10 @@ struct Job {
 Job g_job;
 
 }  // namespace
+
+void HarnessCmdsContext(const D2RL::PluginContext* context) noexcept {
+	g_textContext = context;
+}
 
 void HarnessCmdsInit(uint64_t exeBase) noexcept {
 	g_base = exeBase;

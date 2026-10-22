@@ -14,5 +14,6 @@ void HarnessEcho(const char* line) noexcept;  // appends a console line to mxl-t
 // Gameplay commands (harness_cmds.cpp): "h <verb> ..." lines of the console mailbox. Server-side verbs run on the game
 // thread inside HarnessGameFrame, which goblins.cpp calls after the server frame 0x406550.
 void HarnessCmdsInit(uint64_t exeBase) noexcept;
+void HarnessCmdsContext(const D2RL::PluginContext* context) noexcept;  // text verb: data table and localization services
 auto HarnessCommand(const char* line) noexcept -> int;  // UI thread; 1 ok, 0 failed, -2 crashed, -3 timed out
 void HarnessGameFrame(void* game) noexcept;             // game thread; cheap no-op while the harness is off

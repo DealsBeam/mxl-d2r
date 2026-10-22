@@ -33,10 +33,10 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 | Inventory, cube and belt sizes | 3 | 0 | 0 | 0 | 2 | 5 |
 | Item rules | 7 | 3 | 4 | 2 | 2 | 18 |
 | Crafting and the cube | 3 | 0 | 2 | 0 | 2 | 7 |
-| Experience, party and level cap | 4 | 1 | 0 | 0 | 4 | 9 |
+| Experience, party and level cap | 5 | 0 | 0 | 0 | 4 | 9 |
 | Difficulty, area levels and monster scaling | 7 | 1 | 0 | 0 | 2 | 10 |
 | Uber and quest content | 3 | 2 | 1 | 0 | 1 | 7 |
-| Skills, respec and caps | 4 | 1 | 4 | 0 | 4 | 13 |
+| Skills, respec and caps | 5 | 1 | 3 | 0 | 4 | 13 |
 | Mercenaries | 3 | 1 | 0 | 1 | 0 | 5 |
 | NPC services and town | 3 | 0 | 0 | 0 | 1 | 4 |
 | Waypoints and travel | 1 | 1 | 1 | 0 | 1 | 4 |
@@ -45,18 +45,18 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 | Multiplayer | 0 | 0 | 0 | 1 | 3 | 4 |
 | Hardcore | 1 | 0 | 1 | 0 | 0 | 2 |
 | Anything else Median documents as different | 1 | 0 | 0 | 2 | 1 | 4 |
-| **All** | **48** | **15** | **22** | **9** | **30** | **124** |
+| **All** | **50** | **14** | **21** | **9** | **30** | **124** |
 
 ## Top 10 gaps (by player impact)
 
-1. **XP1, level cap 150**: the built `experience` table probably caps the engine at 99, so the whole Median endgame (levels 100-150, area levels up to 150) is out of reach. A data merge fix, `tools/txt_migrate.py` line 173.
+1. ~~**XP1, level cap 150**~~: fixed (lane gap-levelcap): the built `experience` table now carries Median's `MaxLvl 150` row, the engine reaches level 150 and stops there.
 2. **DC1, no player corpse**: D2R still makes a corpse that must be retrieved; Median re-equips gear in town and keeps the belt. Lane `no-corpse`.
-3. **SK10 and SK11, Hunter steady aim and Fire Sorceress Heat**: class-defining resources that the docs and plugin never mention. Unknown whether the tables alone carry them; if not, those builds do not work.
+3. **SK10 and SK11, Hunter steady aim and Fire Sorceress Heat** (lane gap-classres, done): both are table driven and worked in the port except for two engine rules, now in the plugin. Steady Aim is a layered stat on a state (Steady Shot builds, Heartseeker and Cascade spend); the missing part was the "requires Steady Aim" gate (skill `restrict` modes 3-7, `skill_restrict.cpp`). Heat is the mana bar, drained by stat 297 through D2Sigma's regeneration; D2R's regeneration was missing that (`heat.cpp`). `docs/plugin-spec.md` "Skill restrictions", "Steady Aim", "Heat".
 4. **IT1 and IT2, durability and quantity**: Median removed durability and stack depletion; the port still wears items down and uses up throwing stacks.
 5. **IT3, auto-identify on pickup**: every unidentified drop needs a scroll in the port.
 6. **DC4 and DC3, death rules**: no 5 second respawn wait, and gold on death is untested.
-7. **SK7, sprint and no stamina**: Median replaces running with a 5 second sprint; the port keeps D2R's run and stamina.
-8. **CR4 and DC6, trophy challenge timers**: no timer op in the cube, no void on death or zone change, so the cube cannot enforce the time limit.
+7. ~~**SK7, sprint and no stamina**~~: not a gap. Median's sprint is its charstats stamina (50 points, 5 seconds of running) and the port carries those columns; game check `sprint` confirms it.
+8. **CR4 and DC6, trophy challenge timers** (lane gap-classres, done): Median's timer is the duration of the states that carry the challenge stat (data, native in D2R); the plugin adds the void on death or zone change and a per-trophy cube window (`trophy_timer.cpp`). Open: nothing in the data says which skill is cast on a boss kill (see CR4).
 9. **MU2, WP2, UI4, Map Reveal, waypoint auto-activation, X/R/C hotkeys**: daily quality-of-life rules that every Median player expects.
 10. **GS5 and SK3, stash pages and free mana in town**: D2R's tab count applies (no Median multi-page stash), and skills still cost mana in town.
 
@@ -66,12 +66,12 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
-| DC1 | Dying leaves no player corpse to retrieve. Gear is re-equipped automatically in town and the belt keeps its potions. | P1.0.0 ("Gear is automatically re-equipped in town after death. Potions no longer vacate your belt") | missing | no corpse code on main; D2R still makes the corpse. Lane `no-corpse` is fixing it. After it lands: kill the player with `hit`, respawn, `state` shows no corpse unit and gear and belt are intact |
-| DC2 | No experience loss on death. | P1.0.0 | ported (unverified) | D:difficultylevels `DeathExpPenalty` is blank in the built mod (D2R has 0/5/10). Check: kill the player on Nightmare, `stat player 13` before and after |
-| DC3 | No gold loss on death. | P1.0.0 | unknown | no gold-on-death code or table value; whether D2R 3.3 takes gold at all was not checked. Check: `gold set 100000 0`, kill the player, `gold get` |
-| DC4 | Respawning after death has a 5 second cooldown (replaces the loss penalties; discourages suicide-rushing). | P1.0.0 | missing | no respawn delay in plugin or data; D2R revives at once. Check: time the revive after a kill |
+| DC1 | Dying leaves no player corpse to retrieve. Gear is re-equipped automatically in town and the belt keeps its potions. | P1.0.0 ("Gear is automatically re-equipped in town after death. Potions no longer vacate your belt") | ported (game check `nocorpse` PASS, lane no-corpse; docs/subsystems/death.md) | was: no corpse code on main; D2R still made the corpse. The corpse creator `0x42c110` is now a no-op, so gear and the belt are never taken off (the belt's potions were not tested: the harness cannot fill a belt). Check used: kill the player with `hit`, respawn, `state` shows no corpse unit and gear and belt are intact |
+| DC2 | No experience loss on death. | P1.0.0 | ported (verified by the lane no-corpse check: no experience change on death with or without the hook; the hook also removes the penalty call for any later non-blank value) | D:difficultylevels `DeathExpPenalty` is blank in the built mod (D2R has 0/5/10). Check: kill the player on Nightmare, `stat player 13` before and after |
+| DC3 | No gold loss on death. | P1.0.0 | ported (verified: D2R takes and drops ALL carried gold on death; with the lane no-corpse hooks carried gold and bank are unchanged) | was: no gold-on-death code or table value. Evidence docs/subsystems/death.md section 7. Check: `gold set 100000 0`, kill the player, `gold get` |
+| DC4 | Respawning after death has a 5 second cooldown (replaces the loss penalties; discourages suicide-rushing). | P1.0.0 | ported (plugin part `respawnwait`, 125 frames; no Median code found for it, rule from the patch note) | was: no respawn delay in plugin or data; D2R revived at once. Check: Esc 45 frames after the death is held, respawn at 275 frames works. Check: time the revive after a kill |
 | DC5 | Soulstealer bosses heal (10% of max life) only when they kill a player, not minions; fire teleport and Chaos Orb heal the boss only if they kill a player (40%). | P1.1.0, P2.1.0, P2.8.0, P2.13.0 | unknown | boss kill hooks are D2Sigma monster code the monsters-ai triage never listed; nothing in `plugin/src` besides the goblin kill hook. Check: let a spawned Soulstealer boss kill the harness player and read its life before and after |
-| DC6 | Dying, or entering another zone, voids an active trophy challenge. | P2.10.0 ("Dying or entering another zone with a trophy challenge will void the one you've already started") | unknown | the dungeon lockout clock is ported (`lockout`, `lockclock`, `reenter`) but nothing ties death or zone change to a challenge. See CR4 |
+| DC6 | Dying, or entering another zone, voids an active trophy challenge. | P2.10.0 ("Dying or entering another zone with a trophy challenge will void the one you've already started") | ported | `trophy_timer.cpp`: the stat 202 (D2R 378) window is voided on death (mode 0 / 17) or an area change, with a chat line, and the cube refuses the recipe. `game_checks trophytimer` (zone change, death). See CR4 |
 | DC7 | Resetting skills and stats removes every active buff. | P1.6.0 | unknown | check `respec` covers stats and skills only. Check: buff, respec at Akara, `state` states |
 | DC8 | Monsters flagged "no monster corpses" (labyrinth modifier, Twisted Clawstorms, Corrupted Barbarians) leave none; others do. | P1.0.0, P1.6.0, P2.11.0 | ported | monstats corpse data migrates unchanged |
 | DC9 | A Hardcore character that dies converts to Softcore on Single Player. | P1.6.0 ("Fixed bugs with the Hardcore to Softcore conversion on Single Player") | missing | no hardcore code; D2R deletes or locks the character. See HC1 |
@@ -133,7 +133,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | CR1 | About 7500 recipes: item designs, upgrades, runeword and honorific rerolls, shrinecrafting. | P1.0.0, P2.0.0 | ported | D:cubemain from `txt_migrate`; check `cubemain` |
 | CR2 | Median cube conditions (ops 29-42: gold payment, craft guards, class conditions). | D2Sigma | ported | `cube_conditions.cpp`; `docs/plugin-spec.md` |
 | CR3 | Craft guard flags: once per game or per character. | D2Sigma | ported | ops 38, 39, 41 |
-| CR4 | Trophy challenge charms: kill the boss and cube the charm within the limit (10 seconds unless stated, e.g. 25 s); death or zone change voids it. | P2.10.0 | missing | no timer op in the cube conditions (`docs/plugin-spec.md` "Cube conditions"). Check: kill the trophy boss, wait 15 s, cube |
+| CR4 | Trophy challenge charms: kill the boss and cube the charm within the limit (10 seconds unless stated, e.g. 25 s); death or zone change voids it. | P2.10.0 | ported (kill trigger open) | Median has no cube timer op: the recipes (op 6, param 202) compare the stat that 15 timed aura states put on the player (`auralencalc` 250 frames = 10 s), so the timer is the state duration. Ported: the cube condition on stat 378 also needs the plugin's window (in time per trophy, same area, alive; `docs/plugin-spec.md` "Trophy timer"), `game_checks trophytimer` (in time passes, 12 s later refused). Open: which skill a boss kill casts is in no table, so the real kill path is untested (the check sets the stat) |
 | CR5 | Cube transmute hotkey 'C'. | P1.0.0 | partly | D2Sigma `0x69820` transmutes while the cube panel is open. `travel.cpp` registers an InputService action (default C) that calls the panel's Transmute `0x2cd720`, only while the panel is open (UI messages). `game_checks hotkeys`: C with the cube closed is counted and ignored (PASS); see `docs/unported.md` "Cube hotkey" for the open-cube press |
 | CR6 | The "Cow Level" portal can be made in any Act town. | P1.0.0 | unknown | recipe is in D:cubemain; the town restriction check was not looked at. Check: make the portal in Act 5 |
 | CR7 | Imbue, socket and personalize rewards highlight the eligible items. | P2.0.0 | missing | Median UI |
@@ -142,7 +142,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
-| XP1 | The maximum character level is 150. | P1.0.0 | partly | D:experience has rows to level 150, but Median's `MaxLvl` row lost its label (decoded as level -1, `4294967295`) and D2R's `MaxLvl 99 99 ...` row is appended last, so the engine probably still caps at 99. `tools/txt_migrate.py` line 173 `UNSIGNED_32_TABLES = {"experience"}` has no `MaxLvl` handling. Check: `level set 120` or run a kill `xp` test above 99 |
+| XP1 | The maximum character level is 150. | P1.0.0 | ported | fixed in lane gap-levelcap: `tools/txt_migrate.py` relabels Median's `MaxLvl` row, so it replaces D2R's `MaxLvl 99` row (it was decoded as level -1 / `4294967295` and D2R's row was appended last, capping the engine at 99). Verified: `levelcap` check (levels 99, 120, 149, 150; the level stops at 150; stat and skill points per `charstats`; Save and Exit and Play keeps level 150; `docs/testing.md`) |
 | XP2 | Reworked experience formula; level 100 by the start of Hell; no huge gaps at 121-125. | P1.0.0 | ported (unverified) | D:experience rows and ExpRatio |
 | XP3 | Skill and stat points per level. | P1.0.0 | ported | D:charstats `SkillsPerLevel`, `StatPerLevel` |
 | XP4 | Kill experience: reworked level-difference penalty. | P2.9.0 | ported (unverified) | inline hook `0x44fef0`, check `xp`; listed (`docs/services.md` I3) |
@@ -189,11 +189,11 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | SK4 | Many skills castable in town (buffs, totems, warp, Shadow Refuge, Acid aura). | P1.1.0, P1.2.0, P1.7.0, P2.1.0 | unknown | skills.txt `town` column carried from Median; not tested. Check: `cast` each in town |
 | SK5 | Town Portal is an innate skill (no scrolls) with a 10 s cooldown, and a 1 second delay when opening. | P1.0.0, P2.2.0 | partly | D:skills town_portal srvdofunc 109, localdelay 250; the 1 s delay is not checked |
 | SK6 | Skill cooldowns are computed dynamically; skill groups no longer share cooldowns. | P1.0.0 | unknown | D2Sigma engine feature; D2R's cooldown. Check: two groups' cooldowns |
-| SK7 | Run/walk toggle disabled; Sprint replaces running (about 5 seconds, much faster); stamina removed. | P1.0.0 | missing | no sprint code; `stamina` data is carried. Check: hold the run key, measure speed and duration |
+| SK7 | Run/walk toggle is renamed "Toggle Sprint"; a sprint lasts about 5 seconds and is much faster than walking. The patch note's "stamina removed" means the vitality and level stamina gains, not the stamina bar. | P1.0.0, patch strings, D:charstats | ported (verified) | Median's sprint is data: `charstats` stamina 50, WalkVelocity 10, RunVelocity 15 (Barbarian 14), RunDrain 60, StaminaPerLevel and StaminaPerVitality blank, built identical to Median's. D2Game's drain (RunDrain x2 per frame, forced to walk at 0) is vanilla 1.13c code in both games; there is no sprint state or skill and no cooldown timer (the bar refilling is the cooldown). Game check `sprint`: run from full drains 100 raw per frame = 5.1 s, run/walk speed 1.44 (data 1.40), walking from empty refills, a run starts at 2 points of stamina, R toggles run and walk. Not comparable: Median's stamina regen rate (unpublished) |
 | SK8 | Most melee skills can be used with Shift without a target. | P2.3.0 | missing | no code. Check: shift-click a Great Hunt with no target |
 | SK9 | Skill tree UI: base/max levels, Alt shows soft level, prerequisite arrows, Shift+Click maxes a skill. | P2.0.0 | missing | Median UI, no panel code |
-| SK10 | Druid bow "steady aim" pseudo-resource. | P1.7.0 | unknown | not mentioned in docs; may be table driven. Check: `cast` a Hunter skill, read the stat |
-| SK11 | Fire Sorceress "Heat" replaces mana (degenerates outside town). | P2.13.0 | unknown | not mentioned in docs. Check: cast a Fire skill, read mana and the heat stat |
+| SK10 | Druid bow "steady aim" pseudo-resource. | P1.7.0 | ported | stat 220 layer 5 on state `sk1296_state`: Steady Shot +1 (cap 6), Heartseeker -1 per hit, Cascade all; the "requires" gate is the new restrict mode 5 (`skill_restrict.cpp`). `game_checks steadyaim` (4 shots read 1-2-3-4, Heartseeker usable only with charges, spends to 0) |
+| SK11 | Fire Sorceress "Heat" replaces mana (degenerates outside town). | P2.13.0 | ported (no UI relabel) | stat 297 (Molten Core's loss rate) turns D2R's mana regeneration into a drain, negative 297 from fire skills builds it, none in town (`heat.cpp`). `game_checks heat`. The bar is still labelled mana; Emberstep was not cast in the test |
 | SK12 | Skill synergies, attack rating, block and speed formulas. | W:Skills | ported | `docs/formulas.md`, D:skills calcs |
 | SK13 | Frame rate caps (FCR/IAS/FRW values that crashed fixed). | P1.0.0 | ported (unverified) | `docs/subsystems/stat-screen.md` |
 

@@ -19,3 +19,9 @@ Environment notes (RX 9070 XT, Windows, build of 2026-10-22):
   `diffusers<0.36`.
 - TripoSG imports `diso` (CUDA extension). `ai/diso_stub.py` is a stand-in; run with `use_flash_decoder=False` (skimage marching cubes).
 - Not installed: the Hunyuan texture stage (CUDA rasterizer), `diso`, `rembg`, `gradio`.
+
+## Sprite direction ring (Median 16-direction DCCs)
+Found by sprite-to-sprite similarity (`ai/ring.py`): angular order is `0 9 5 10 1 11 6 12 2 13 7 14 3 15 4 8`, 22.5 degrees per step.
+Four steps = 90 degrees, so Hunyuan2mv's (front, left, back, right) quads are `4,5,6,7` (best), `8,10,12,14`, `0,1,2,3`, `9,11,13,15`.
+Experiment (lane wereowl-3d): the rotated quads, extra seeds, voxel-voting ensembles and a vertical 1/cos(30) stretch of the inputs
+did not beat `4,5,6,7`; the other 12 directions are for texturing and checking, not for more shape passes.
