@@ -14,6 +14,7 @@
 #include "d2r.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
+#include "info_panels.h"
 #include "mxl_hirelings.h"
 #include "item_events.h"
 #include "npc_actions.h"
@@ -815,6 +816,64 @@ auto CmdRewardSound(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	int played = 0, message = 0, sound = 0;
 	RewardSoundStats(&played, &message, &sound);
 	Out("rewardsnd hook=%d played=%d last message=0x%x sound=%d", RewardSoundsOn() ? 1 : 0, played, message, sound);
+	(void)c;
+	return true;
+}
+
+// Client side: `infopanel [close <n>]` prints the help panels' presentation state (0 unknown, 1 closed, 2 open, -1 none) and
+// the open requests the client part has handled; `close <n>` closes one.
+auto CmdInfoPanel(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 0;
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "close")) {
+		if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &n)) {
+			return Fail(c, "usage: infopanel close <panel>");
+		}
+		Out("infopanel close %lld %s", n, InfoPanelClose(static_cast<int>(n)) ? "ok" : "failed");
+		return true;
+	}
+	int asked = 0, opened = 0, failed = 0;
+	InfoPanelCounts(&asked, &opened, &failed);
+	Out("infopanel state0=%d state1=%d asked=%d opened=%d failed=%d", InfoPanelState(0), InfoPanelState(1), asked, opened, failed);
+	return true;
+}
+
+// Client side: `statorder` prints the Advanced Stats list as the panel built it last (stat_columns.cpp, Median's order):
+// "statorder ordered=1 rebuilds=N rows=M", then the rows, a section label as [Label] and a stat as its D2R stat id.
+// `statorder open` / `close` / `toggle` opens or closes the panel through D2R's panel messages.
+auto CmdStatOrder(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 2 && (hcmd::LowerEq(t.tok[1], "open") || hcmd::LowerEq(t.tok[1], "close") || hcmd::LowerEq(t.tok[1], "toggle"))) {
+		const char* command = hcmd::LowerEq(t.tok[1], "open") ? "OpenPanel" : hcmd::LowerEq(t.tok[1], "close") ? "ClosePanel" : "TogglePanel";
+		const int rc = HarnessUiAction("PanelManager", command, "AdvancedStatsPanel");
+		Out("statorder %s rc=%d", command, rc);
+		return rc == 0;
+	}
+	bool ordered = false;
+	int rebuilds = 0;
+	int32_t ids[256];
+	const int rows = StatOrderRows(&ordered, &rebuilds, ids, 256);
+	Out("statorder ordered=%d rebuilds=%d rows=%d", ordered ? 1 : 0, rebuilds, rows);
+	char line[400] = "";
+	size_t n = 0;
+	for (int i = 0; i < rows && i < 256; ++i) {
+		const char* label = StatOrderLabel(ids[i]);
+		char item[64];
+		if (label[0] != '\0') {
+			std::snprintf(item, sizeof(item), "[%s] ", label);
+		} else {
+			std::snprintf(item, sizeof(item), "%d ", ids[i]);
+		}
+		const size_t len = std::strlen(item);
+		if (n + len >= sizeof(line)) {
+			Out("statorder rows %s", line);
+			n = 0;
+			line[0] = '\0';
+		}
+		std::memcpy(line + n, item, len + 1);
+		n += len;
+	}
+	if (n != 0) {
+		Out("statorder rows %s", line);
+	}
 	(void)c;
 	return true;
 }
@@ -2150,7 +2209,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] | avoid <ref> melee|missile|evade [n] | "
-	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | stat merc|mon:<id> <stat>");
+	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | statorder [open|close|toggle] (client) | infopanel [close <n>] (client) | stat merc|mon:<id> <stat>");
 	return true;
 }
 
@@ -2403,7 +2462,7 @@ const Verb Verbs[] = {
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
-    {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
+    {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"cstat", CmdClientStat, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true}, {"panelrow", CmdPanelRow, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
 };
 

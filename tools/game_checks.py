@@ -2143,6 +2143,130 @@ def check_statcols():
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
+def _statorder():
+    """`statorder` -> (ordered, rebuilds, rows) with rows a list of ("L", label) / ("S", D2R stat id)."""
+    ok, lines = H("statorder")
+    head = next((l for l in lines if l.startswith("statorder ordered=")), "")
+    m = re.search(r"ordered=(\d) rebuilds=(\d+) rows=(\d+)", head)
+    if not ok or not m:
+        return None
+    rows = []
+    for l in lines:
+        if l.startswith("statorder rows "):
+            rows += [("L", a) if a else ("S", int(b)) for a, b in re.findall(r"\[([^\]]+)\]|(-?\d+)", l[len("statorder rows "):])]
+    return int(m.group(1)) == 1, int(m.group(2)), rows
+
+
+def check_statorder():
+    name = "Stat pages: the Advanced Stats list in Median's order, under its section labels (stat_columns.cpp, mxl_statorder.h)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    import stat_screen
+    goto(1)
+    close_menu()
+    ids = stat_screen.stat_ids()
+    names = stat_screen.stat_names()
+    expected = [("L", h) if h is not None else ("S", ids[s]) for h, s in stat_screen.section_order()]
+    always = {ids[names.index(n)] for n in stat_screen.ALWAYS_LISTED}
+    probe = 143  # item_absorbfire: under "Damage Absorb", listed while it is not 0
+    base = rd("player", probe)
+    bad, shots = [], []
+    try:
+        setstat("player", probe, 0)
+        H("statorder close")
+        time.sleep(1)
+        rc = H("statorder open")
+        time.sleep(3)
+        first = _statorder()
+        if first is None:
+            return add(name, "FAIL", "`statorder` gave no answer")
+        ordered, rebuilds, rows = first
+        shots.append(sh("statorder_open"))
+        if not ordered:
+            bad.append("the rebuild hook is off (D2R's order)")
+        if rebuilds < 1:
+            bad.append("the panel built no list (open: %s)" % (rc[1][:1],))
+        # the built list is a subsequence of Median's order: labels in sheet order, stats under their own label
+        it = iter(expected)
+        if not all(any(x == e for e in it) for x in rows):
+            bad.append("rows are not in Median's order: %s" % (rows[:12],))
+        labels = [r[1] for r in rows if r[0] == "L"]
+        if not labels or labels[0] != "General":
+            bad.append("the list does not start with the General label: %s" % (labels[:3],))
+        missing = sorted(always - {r[1] for r in rows if r[0] == "S"})
+        if missing:
+            bad.append("always listed boxes missing: %s" % (missing,))
+        if ("S", probe) in rows:
+            bad.append("stat %d is listed at 0" % probe)
+        # a stat that becomes non-zero makes the update rebuild the list: the stat appears, under Damage Absorb
+        n0 = rebuilds
+        setstat("player", probe, 25)
+        time.sleep(2.5)
+        second = _statorder()
+        if second is None or ("S", probe) not in second[2]:
+            bad.append("stat %d does not appear when set to 25" % probe)
+        else:
+            if second[1] <= n0:
+                bad.append("no rebuild after the stat changed (%d -> %d)" % (n0, second[1]))
+            below = [r for r in second[2][:second[2].index(("S", probe))] if r[0] == "L"]
+            if not below or below[-1][1] != "Damage Absorb":
+                bad.append("stat %d is not under Damage Absorb (%s)" % (probe, below[-1:] if below else None))
+            shots.append(sh("statorder_stat"))
+        setstat("player", probe, 0)
+        time.sleep(2.5)
+        third = _statorder()
+        if third is None or ("S", probe) in third[2]:
+            bad.append("stat %d stays listed after it went back to 0" % probe)
+        add(name, "PASS" if not bad else "FAIL",
+            "panel opened with `statorder open` (PanelManager OpenPanel AdvancedStatsPanel): %d rows, %d rebuilds, labels %s; "
+            "%s. The grouping on the sheet is read from the screenshots (statorder_open.png, statorder_stat.png)" % (
+                len(rows), rebuilds, labels, "; ".join(bad) if bad else "order = Median's, always boxes listed, a changed stat rebuilds the list"),
+            shots, [str(r) for r in rows[:40]])
+    finally:
+        if base is not None:
+            setstat("player", probe, base)
+        H("statorder close")
+
+
+def check_infopanel():
+    name = "Infographic help panel: right click on the catalyst of disenchantment opens it (info_panels.cpp, plugin message 'I')"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    H("remove 3o[ 5")
+    ok, made = H("item 3o[ inv")
+    if not ok:
+        return add(name, "BLOCKED", "could not create the catalyst (3o[): %s" % made)
+    H("infopanel close 0")
+    time.sleep(0.5)
+    _, before = H("infopanel")
+    ok, used = H("use 3o[")
+    st, last, shots = None, "", []
+    for _ in range(10):  # the open request crosses the hidden chat packet and the UI thread queue
+        time.sleep(1)
+        _, lines = H("infopanel")
+        last = lines[0] if lines else ""
+        m = re.search(r"state0=(-?\d+) .*opened=(\d+) failed=(\d+)", last)
+        if m and int(m.group(1)) == 2:
+            st = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            break
+    time.sleep(1)
+    shots.append(sh("infopanel_open"))
+    _, closed = H("infopanel close 0")
+    time.sleep(1)
+    _, after = H("infopanel")
+    state_after = re.search(r"state0=(-?\d+)", after[0] if after else "")
+    _, held = H("state")
+    kept = any("3o[" in ln for ln in held)
+    H("remove 3o[ 5")
+    good = ok and st is not None and st[1] >= 1 and st[2] == 0 and state_after and int(state_after.group(1)) == 1 and kept
+    add(name, "PASS" if good else "FAIL",
+        "`use 3o[`: %s; panel state after the right click %s (2 = open), `infopanel` before: %s, after close: %s; the catalyst is kept: %s. "
+        "The text is read from the screenshot (infopanel_open.png)" % (used[0] if used else "-", last, before[0] if before else "-",
+                                                                         after[0] if after else "-", kept), shots, made + used)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -2152,7 +2276,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
-          ("trophy", check_trophy), ("statcols", check_statcols)]
+          ("trophy", check_trophy), ("statcols", check_statcols), ("statorder", check_statorder), ("infopanel", check_infopanel)]
 
 
 def write_report(extra=""):

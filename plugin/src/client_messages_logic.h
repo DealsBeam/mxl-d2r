@@ -107,6 +107,7 @@ inline auto ParsePluginMessage(const char* text, char* kind, uint8_t* out, size_
 // Kinds in use.
 constexpr char PluginKindNpcPage = 'N';  // the server answers a click on an NPC page line: which entries are open (npc_actions)
 constexpr char PluginKindTimer = 'T';    // the dungeon clock of the level the player stands in (dungeon_lockout)
+constexpr char PluginKindInfo = 'I';     // open a help panel (info_panels): one byte, the panel index
 
 // Little endian field writers / readers for the payloads.
 inline void Put16(uint8_t* p, uint16_t v) noexcept { p[0] = static_cast<uint8_t>(v); p[1] = static_cast<uint8_t>(v >> 8); }

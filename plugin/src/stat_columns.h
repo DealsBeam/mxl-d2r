@@ -17,6 +17,13 @@ auto InstallStatColumns(const D2RL::PluginContext* context, char* report, size_t
 // player). `stat` is a D2R stat id; fills the displayed value (stat >> ValShift, what decides whether an advdisplay 2 row is
 // listed) and the row text. False when the stat has no record or the functions are not hooked.
 auto StatColumnsProbe(d2r::Unit* unit, int32_t stat, int64_t* value, char* text, size_t textSize) noexcept -> bool;
+// The Advanced Stats list in Median's order (docs/subsystems/stat-screen.md): the number of times the panel built it, the number
+// of rows of the last build, and (up to `capacity`) their record ids: D2R stat ids, section labels from stat_order::HeaderBase
+// up (the label's position in mxl_statorder.h is the id minus that). Returns the row count; false in `ordered` when the
+// rebuild is not hooked.
+auto StatOrderRows(bool* ordered, int* rebuilds, int32_t* ids, int capacity) noexcept -> int;
+// The text of the label with this record id, "" for other ids.
+auto StatOrderLabel(int32_t id) noexcept -> const char*;
 // The Strength / Dexterity bonus of the unit's wielded weapon (the records' StrBonus / DexBonus as D2R's damage code reads
 // them); false without a weapon.
 auto StatColumnsWeapon(d2r::Unit* unit, int32_t* strBonus, int32_t* dexBonus) noexcept -> bool;
