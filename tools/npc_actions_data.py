@@ -8,7 +8,9 @@ Sources (extract/mxl, the compiled tables; layout in docs/subsystems/npc-hirelin
   npcactions.bin  31 rows x 52 bytes: i32 type, i32 requirement row, i32 flags, 10 x i32 values
 
 Median string ids become D2R ids through work/mod/strings_idkeys.json (Median id -> key) and the string JSONs in
-work/mod/data/local/lng/strings (key -> D2R id): the client menu looks lines up by D2R id. Re-run this after
+extract/d2r/93847/data/local/lng/strings (key -> D2R id): the client menu looks lines up by D2R id. Strings in the
+`medianxl` namespace (docs/strings-namespace.md; idkeys value `medianxl:<key>`) have no numeric id: the id is 0 and
+the full key goes into labelKey / promptKey, which the plugin resolves at run time. Re-run this after
 tools/tbl2json.py changes the ids (build.py runs it after sigma_data.py). NPC class ids are the Median monstats
 rows; the NPC rows go through work/named/idmap.json (vanilla NPCs map to themselves).
 
@@ -22,6 +24,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+NAMESPACE = "medianxl"  # tools/strings_ns.py
 NPC_ROW = 336
 ACTION_ROW = 52
 SLOT_BASE = 0x50
@@ -42,7 +45,8 @@ def table(bins: Path, name: str, row: int) -> list[bytes]:
 def d2r_string_ids(root: Path) -> tuple[dict[str, str], dict[str, int]]:
     idkeys = json.loads((root / "work" / "mod" / "strings_idkeys.json").read_text("utf-8"))
     by_key: dict[str, int] = {}
-    for f in glob.glob(str(root / "work" / "mod" / "data" / "local" / "lng" / "strings" / "*.json")):
+    # D2R's own strings/ files (the mod ships none, its overrides keep D2R's ids)
+    for f in glob.glob(str(root / "extract" / "d2r" / "93847" / "data" / "local" / "lng" / "strings" / "*.json")):
         for e in json.loads(Path(f).read_text("utf-8-sig")):
             by_key.setdefault(e["Key"], e["id"])
     return idkeys, by_key
@@ -62,13 +66,16 @@ def main() -> int:
     npcs = table(bins, "npcext", NPC_ROW)
     actions = table(bins, "npcactions", ACTION_ROW)
 
-    def d2r_label(median_id: int) -> int:
+    def d2r_label(median_id: int) -> tuple[int, str | None]:
+        """(D2R string id, namespaced full key): a native string has an id and no key, a namespaced one the reverse."""
         if median_id == NO_STRING:
-            return 0
+            return 0, None
         key = idkeys.get(str(median_id))
+        if key is not None and key.startswith(NAMESPACE + ":"):
+            return 0, key
         if key is None or key not in by_key:
             raise SystemExit(f"string {median_id} has no D2R id (key {key!r}); run tools/tbl2json.py first")
-        return by_key[key]
+        return by_key[key], None
 
     out = [HEADER, "#pragma once", "", "#include <cstdint>", "", "namespace mxl_npc {", "",
            "// npcactions (D2Sigma's NPC action table): type, requirement row (mxl_requirements.h), flags, up to ten values.",
@@ -85,10 +92,11 @@ def main() -> int:
     out += ["// Menu slots of the NPCs that have any. kind = npcRow * 16 + slot is what the client sends (packet 0x38 kind",
             "// 0x10 + kind). label = D2R string id of the entry text (0 = none). sub: 10 = an entry of the submenu opened",
             "// by the top-level slot before it, 0 = a top-level entry. confirm: the client asks Yes / No first, with the text",
-            "// `prompt` (D2R string id, 0 = none), before it sends the kind.",
+            "// `prompt` (D2R string id, 0 = none), before it sends the kind. A string in the `medianxl` namespace has no D2R id:",
+            "// label / prompt are 0 and labelKey / promptKey hold its full key (\"medianxl:<key>\"; plugin/src/strings.h StringId).",
             "struct Slot {", "\tint32_t npcRow;", "\tint32_t slot;", "\tuint16_t npcClass;", "\tint32_t requirement;",
             "\tint32_t action;", "\tuint16_t label;", "\tuint16_t sub;", "\tuint16_t prompt;",
-            "\tbool confirm;", "};"]
+            "\tbool confirm;", "\tconst char* labelKey;", "\tconst char* promptKey;", "};"]
     rows = []
     for n, r in enumerate(npcs):
         cls = struct.unpack_from("<i", r, 0)[0]
@@ -101,8 +109,12 @@ def main() -> int:
                 continue
             rows.append((n, s, cls, req, act, d2r_label(lab), sub, d2r_label(prompt), confirm))
     out += [f"inline constexpr int32_t SlotCount = {len(rows)};", "inline constexpr Slot Slots[SlotCount] = {"]
-    for n, s, cls, req, act, lab, sub, prompt, confirm in rows:
-        out.append(f"    {{{n}, {s}, {cls}, {req}, {act}, {lab}, {sub}, {prompt}, {'true' if confirm else 'false'}}},")
+    def cstr(key: str | None) -> str:
+        return "nullptr" if key is None else json.dumps(key)
+
+    for n, s, cls, req, act, (lab, lab_key), sub, (prompt, prompt_key), confirm in rows:
+        out.append(f"    {{{n}, {s}, {cls}, {req}, {act}, {lab}, {sub}, {prompt}, {'true' if confirm else 'false'}, "
+                   f"{cstr(lab_key)}, {cstr(prompt_key)}}},")
     out += ["};", "", "}  // namespace mxl_npc", ""]
     args.out.write_text("\n".join(out), encoding="utf-8")
     print(f"npc actions: {len(actions)} actions, {len(rows)} menu slots on {len({r[2] for r in rows})} NPCs -> {args.out}")

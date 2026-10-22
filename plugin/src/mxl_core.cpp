@@ -26,6 +26,7 @@
 #include "mana_costs.h"
 #include "craft_flags.h"
 #include "client_messages.h"
+#include "strings.h"
 #include "game_end.h"
 #include "cube_conditions.h"
 #include "quests_act1.h"
@@ -78,6 +79,7 @@ char g_goblinsReport[192] = "off: not the expected game image";
 char g_monsterAiReport[192] = "off: not the expected game image";
 char g_monsterLooksReport[256] = "off: not the expected game image";
 char g_npcReport[256] = "off: not the expected game image";
+char g_stringsReport[256] = "off: not the expected game image";
 char g_hirelingsReport[192] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
 char g_reqGatesReport[256] = "off: not the expected game image";
@@ -239,6 +241,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "npc actions %s", g_npcReport);
 	Say(command, line);
+	std::snprintf(line, sizeof(line), "strings %s", g_stringsReport);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "requirement gates %s", g_reqGatesReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "hirelings %s", g_hirelingsReport);
@@ -303,6 +307,14 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			InstallClientMessages(context, g_clientMsgReport, sizeof(g_clientMsgReport));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: client messages %s", g_clientMsgReport);
+		context->LogInfo(line);
+		// Median's strings by key (the `medianxl` namespace) and the plugin's own ids for D2R's NPC menu: before the users below.
+		if (Off("strings")) {
+			std::snprintf(g_stringsReport, sizeof(g_stringsReport), "%s", OffNote);
+		} else {
+			InstallStrings(context, g_stringsReport, sizeof(g_stringsReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: strings %s", g_stringsReport);
 		context->LogInfo(line);
 		// Off unless asked for (bug #22, 2026-10-14): D2RLoader 1.3.1 already syncs more than 512 states ("wide
 		// states", D2RCore SendChangedWideStateStats) and reads both arrays at D2R's own offsets (+0xaf0, then the

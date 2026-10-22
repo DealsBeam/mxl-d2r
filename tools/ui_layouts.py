@@ -39,6 +39,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import strings_ns  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "work" / "mod" / "data" / "global" / "ui" / "layouts"
 BASE = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "ui" / "layouts"
@@ -665,18 +668,24 @@ def main() -> int:
     if "--out" in sys.argv:
         OUT = Path(sys.argv[sys.argv.index("--out") + 1])
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "waypointspaneloriginalhd.json").write_text(waypoint_panel(), encoding="utf-8")
+    group2, native = strings_ns.load_group2(), strings_ns.d2r_keys()
+
+    def write(name: str, text: str) -> None:
+        # the mod runs in the `medianxl` namespace: D2R's own text is `@d2r:<key>`, Median-only text `@medianxl:<key>`
+        (OUT / name).write_text(strings_ns.qualify_layout(text, group2, native), encoding="utf-8")
+
+    write("waypointspaneloriginalhd.json", waypoint_panel())
     for name, text in classic_layouts().items():
-        (OUT / name).write_text(text, encoding="utf-8")
-    (OUT / "characterstatspanelhd.json").write_text(char_sheet(), encoding="utf-8")
-    (OUT / "skillstreepanelhd.json").write_text(skill_tree(), encoding="utf-8")
-    (OUT / "skillstreepanel.json").write_text(classic_skill_tree(), encoding="utf-8")
-    (OUT / "playerinventoryoriginallayouthd.json").write_text(inventory_original(), encoding="utf-8")
-    (OUT / "playerinventoryexpansionlayouthd.json").write_text(inventory_expansion(), encoding="utf-8")
-    (OUT / "horadriccubelayouthd.json").write_text(cube(), encoding="utf-8")
-    (OUT / "bankexpansionlayouthd.json").write_text(stash(), encoding="utf-8")
-    (OUT / "tradelayouthd.json").write_text(trade(), encoding="utf-8")
-    (OUT / "vendorpanellayouthd.json").write_text(vendor(), encoding="utf-8")
+        write(name, text)
+    write("characterstatspanelhd.json", char_sheet())
+    write("skillstreepanelhd.json", skill_tree())
+    write("skillstreepanel.json", classic_skill_tree())
+    write("playerinventoryoriginallayouthd.json", inventory_original())
+    write("playerinventoryexpansionlayouthd.json", inventory_expansion())
+    write("horadriccubelayouthd.json", cube())
+    write("bankexpansionlayouthd.json", stash())
+    write("tradelayouthd.json", trade())
+    write("vendorpanellayouthd.json", vendor())
     print(f"skillstreepanel(hd).json: {TABS} tabs; inventory and cube 15 x 10, stash 14 x 14, trade 7 x 15 x 2, stores 15 x 15 on Median's panels, waypoint panel stride {WAYPOINT_STRIDE}")
     return 0
 
