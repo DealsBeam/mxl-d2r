@@ -55,6 +55,8 @@
 #include "testharness.h"
 #include "travel.h"
 #include "waypoints.h"
+#include "collide_types.h"
+#include "skill_starts.h"
 #include "whirlwind.h"
 
 #include <windows.h>
@@ -112,6 +114,8 @@ char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
 char g_itemGenReport[320] = "off: not the expected game image";
 char g_waypointsReport[256] = "off: not the expected game image";
+char g_collideReport[256] = "off: not the expected game image";
+char g_skillStartsReport[256] = "off: not the expected game image";
 char g_clientMsgReport[192] = "off: not the expected game image";
 char g_travelReport[448] = "off: not the expected game image";
 int g_missileHitsInstalled = 0;
@@ -319,6 +323,10 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "waypoints %s", g_waypointsReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "collide types %s", g_collideReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "skill starts %s", g_skillStartsReport);
 	Say(command, line);
 	{
 		char status[448];
@@ -684,6 +692,26 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				std::snprintf(g_waypointsReport + used, sizeof(g_waypointsReport) - used, "; %s", panel);
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: waypoints %s", g_waypointsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("skillstarts")) {
+				std::snprintf(g_skillStartsReport, sizeof(g_skillStartsReport), "%s", OffNote);
+			} else {
+				const int started = InstallSkillStarts(context, g_skillStartsReport, sizeof(g_skillStartsReport));
+				std::snprintf(g_skillStartsReport + std::strlen(g_skillStartsReport), sizeof(g_skillStartsReport) - std::strlen(g_skillStartsReport),
+				              " (%d/2)", started);
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: skill starts %s", g_skillStartsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("collidetypes")) {
+				std::snprintf(g_collideReport, sizeof(g_collideReport), "%s", OffNote);
+			} else {
+				InstallCollideTypes(context, g_collideReport, sizeof(g_collideReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: collide types %s", g_collideReport);
 			context->LogInfo(line);
 		}
 		{
