@@ -18,6 +18,7 @@ int RunStatColumnsTests();  // stat_columns_test.cpp
 int RunItemsExtTests();  // items_ext_test.cpp
 int RunItemGenTests();  // item_gen_test.cpp
 int RunWaypointsTests();  // waypoints_test.cpp
+int RunTravelTests();     // travel_test.cpp
 int RunMonsterAiTests();  // monster_ai_test.cpp
 int RunItemEventsTests();  // item_events_test.cpp
 int RunMonsterLooksTests();  // monster_looks_test.cpp
@@ -133,6 +134,7 @@ int main() {
 	failures += RunItemsExtTests();
 	failures += RunItemGenTests();
 	failures += RunWaypointsTests();
+	failures += RunTravelTests();
 	failures += RunMonsterAiTests();
 	failures += RunItemEventsTests();
 	failures += RunMonsterLooksTests();

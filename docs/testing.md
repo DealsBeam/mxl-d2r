@@ -327,6 +327,11 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `panelrow <stat>` | the Advanced Stats panel's row functions (`0x14eb1b0` value, `0x14eb250` text, hooked by `stat_columns.cpp`) on a stand-in panel of the player unit for a D2R stat id: prints `panelrow <stat> value=<displayed value> text=[...]` (colour codes removed) and `panelrow weapon strbonus=N dexbonus=N` (or `none`) |
 | `cstat <stat> [layer]` | (client side, UI thread) the stat of the client's copy of the player: what the screen shows, to compare with `stat player` after an update packet |
 | `sysmsg <type> <colour> <text...>` | one chat packet 0x26 to the player (docs/d2r-addresses.md section 13): type 4 = message-log line, 5 = overhead bubble; colour byte 0-11 |
+| `automap` | (client side) the automap's cell count (sum of the four element counts of every layer), current layer, layer count and the debug flag byte `0x2a2add4` |
+| `reveal` | (client side) the R hotkey's work without the key: D2R's debug Reveal Automap `0xd42b0`, flag byte restored; fails when the part is off or no local player exists |
+| `wpobj` | every waypoint object of the game (class, position, distance, level, whether it is within 36 sub-tiles) and the player's level and waypoint number |
+| `travel` | (client side) the hotkey bindings (key and modifier as D2RLoader reports them), counters (waypoints activated, scans, reveals, key presses, transmutes, cube open / closed) and the distinct UI messages seen (`uimsgs`) |
+| `stashprobe <tab>` / `stashprobe result` | queues, on the game thread, a rune created by ItemService in shared stash tab `<tab>` and destroyed again; `result` answers `1 page=<n> create=0 ...` when the tab took the item, `0` when it refused |
 
 Where the answers cannot come from a call they come from the screenshot: the NPC popup text (`cain_menu.png`) and
 D2R's own cheat output.

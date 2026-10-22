@@ -23,6 +23,7 @@
 #include "d2r.h"
 #include "goblins_logic.h"
 #include "testharness.h"
+#include "travel.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -189,6 +190,7 @@ void FrameHook(Game* game) {
 		return;
 	}
 	HarnessGameFrame(game);  // test harness gameplay commands (off in normal play)
+	TravelGameFrame(game, d2r::At<uint32_t>(game, GameFrame));  // waypoint auto-activation (every fifth frame)
 	FlushClientMessages(game);  // quest notices held until the NPC menu is up
 	const uint32_t frame = d2r::At<uint32_t>(game, GameFrame);
 	g_state.Touch(game, frame);

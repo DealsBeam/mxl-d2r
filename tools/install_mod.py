@@ -5,6 +5,7 @@
                                     inside the folder MPQ; a copy also sits at the mod root)
   d2rloader/metadata.json           schemaVersion 1, no "namespace" (native string loading, see docs/strings.md)
   d2rloader/config/d2rloader.toml   [d2rcore.save_format] mode = "extended" (Median's wider item/stat IDs)
+                                    [d2rcore.stash] add_shared_tabs = 7 (Median's stash has 10 pages, D2R 3 normal tabs)
   MedianXL.mpq/data/...             copy of work/mod/data (folder-style MPQ) + global/dataversionbuild.txt
                                     + Median's classic tiles/maps (global/tiles)
 
@@ -26,6 +27,32 @@ MXL_GLOBAL = ROOT / "extract" / "mxl" / "data" / "global"
 MXL_TILES = MXL_GLOBAL / "tiles"
 PLUGIN = ROOT / "build" / "plugin" / "Release" / "mxl-core.dll"
 D2R_FILELIST =ROOT / "extract" / "d2r" / "93847" / "filelist.txt"  # written by gfx_placeholders.py
+
+
+STASH_PAGES = 10  # Median's stash panel counts "n / 10" in both modes (plugin/src/travel_logic.h MedianStashPages)
+VANILLA_SHARED_TABS = 3  # normal shared tabs of D2R before D2RLoader adds any (travel_logic.h VanillaSharedTabs)
+
+
+def ensure_toml_key(text: str, section: str, key: str, value: str) -> str:
+    """Return `text` with `key = value` in [section]. An uncommented key already there is the user's and is kept; a
+    commented template line (D2RLoader writes `# key = default`) is replaced; a missing section is appended."""
+    lines = text.splitlines()
+    head = f"[{section}]"
+    start = next((i for i, l in enumerate(lines) if l.strip() == head), None)
+    if start is None:
+        return text.rstrip("\n") + f"\n\n{head}\n{key} = {value}\n"
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
+    for i in range(start + 1, end):
+        bare = lines[i].strip()
+        if bare.startswith(key) and bare[len(key):].lstrip().startswith("="):
+            return text  # set by hand: leave it
+    for i in range(start + 1, end):
+        bare = lines[i].strip().lstrip("#").strip()
+        if lines[i].strip().startswith("#") and bare.startswith(key) and bare[len(key):].lstrip().startswith("="):
+            lines[i] = f"{key} = {value}"
+            return "\n".join(lines) + "\n"
+    lines.insert(start + 1, f"{key} = {value}")
+    return "\n".join(lines) + "\n"
 
 
 def main() -> int:
@@ -125,6 +152,12 @@ def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, d
     toml = d2rl / "config" / "d2rloader.toml"
     if not toml.exists():  # never overwrite a config someone edited
         toml.write_text('[d2rcore.save_format]\nmode = "extended"\n', encoding="utf-8")
+    # only this key is ours to add; the rest of an edited config stays as it is
+    text = toml.read_text(encoding="utf-8")
+    added = ensure_toml_key(text, "d2rcore.stash", "add_shared_tabs", str(max(0, STASH_PAGES - VANILLA_SHARED_TABS)))
+    if added != text:
+        toml.write_text(added, encoding="utf-8")
+        print(f"d2rloader.toml: add_shared_tabs = {STASH_PAGES - VANILLA_SHARED_TABS} (Median's {STASH_PAGES} stash pages)")
 
     files = sum(1 for _ in data.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in data.rglob("*") if p.is_file()) / 1e6
