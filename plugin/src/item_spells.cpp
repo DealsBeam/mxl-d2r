@@ -40,6 +40,7 @@
 #include "d2r.h"
 #include "items_ext_logic.h"
 #include "mxl_items.h"
+#include "strings.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -452,7 +453,11 @@ auto TrophyOf(const mxl_items::SigmaItem& entry) noexcept -> const mxl_items::Tr
 
 // The right click on a trophy: its challenge text in the chat log, the title in gold.
 void RevealTrophy(d2r::Unit* player, const mxl_items::Trophy& trophy) noexcept {
-	items_ext::ForEachTrophyLine(trophy.text, [player](const char* line, bool title) {
+	char text[2048];
+	if (!StringLookup(trophy.key, text, sizeof(text))) {
+		return;  // no localization service: nothing to print
+	}
+	items_ext::ForEachTrophyLine(mxlstr::SkipLeadingNumberLine(text), [player](const char* line, bool title) {
 		SendClientMessage(player, line, title ? clientmsg::Tan : clientmsg::White);
 	});
 }
@@ -536,6 +541,16 @@ auto SrvDoLevelPortal(d2r::Game* game, d2r::Unit* unit, int32_t skillId, int32_t
 	}
 	const int32_t target = LinkableLevel(game, unit, d2r::EvalCalc(game, unit, skill, d2r::SkCalc1, skillId, level));
 	return target != 0 && OpenPortal(game, unit, target, ObjectRedPortal) ? 1 : 0;
+}
+
+// D2Sigma's cube output byte 1 (handler 0x58d20): a red portal next to the player to Median level `median`. D2R's own
+// handler for that byte only knows the Cow Level (craft_flags.cpp swaps it for this one for the other levels).
+auto CubeLevelPortal(d2r::Game* game, d2r::Unit* player, int32_t median) noexcept -> bool {
+	if (game == nullptr || player == nullptr || g_createPortal == nullptr) {
+		return false;
+	}
+	const int32_t level = LinkableLevel(game, player, median);
+	return level != 0 && OpenPortal(game, player, level, ObjectRedPortal);
 }
 
 // D2Sigma missile hit 30 (0x1008d220 -> D2Objects.cpp 0x10097870 / 0x100976d0): a portal where the missile is, to

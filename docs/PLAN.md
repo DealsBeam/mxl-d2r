@@ -20,7 +20,7 @@ Median XL tables fit the 32,768-row limits (largest: cubemain 7,500, missiles 5,
 - [~] Sigma table schemas: tooling + structure for all 37 tables; 32 named or partly named, 27 complete (2026-10-21). See [sigma-tables.md](sigma-tables.md)
 - [x] `tools/formula.py`: all 17,116 formulas decoded from bytecode, 11,329 table cells rewritten with D2R names. See [formulas.md](formulas.md)
 - [x] `tools/txt_migrate.py`: all tables in D2R layout, merged with D2R's rows, both banks -> `work/mod/`. See [txt-migrate.md](txt-migrate.md)
-- [x] `tools/tbl2json.py`: 21,268 strings -> D2R JSON (native loading, both string folders). See [strings.md](strings.md)
+- [x] `tools/tbl2json.py`: 21,268 strings -> D2R JSON (hybrid: native overrides plus the `medianxl` namespace, both string folders). See [strings.md](strings.md)
 
 - [x] `tools/validate.py` + `tools/build.py`: D2R-schema validation; 2 errors left (Median's own broken formulas). See [validation.md](validation.md)
 
@@ -30,6 +30,7 @@ Next: Phase 2 (install into D2R, `d2rl compile`, first boot).
 ## Phase 2: Data port
 - [x] `tools/install_mod.py`: mod installed at `<game>/mods/MedianXL` (folder MPQ, own save folder, extended saves)
 - [x] First boot 2026-10-21 (unattended, `-txt` compiles all 380 tables at start; no manual compile needed)
+- [x] Strings, hybrid (2026-10-22): keys D2R has stay native overrides (group 1), Median-only keys move to the D2RLoader `medianxl` namespace (group 2, `medianxl:<key>` in cells, no numeric ids, so no id collisions), the keys that do not fit a fixed-size field stay native (exceptions); plugins read text by key; validate.py checks cells and the plugin's keys. See [strings.md](strings.md), [strings-namespace.md](strings-namespace.md)
 Migrate 94 standard tables, `d2rl init` / `d2rl compile`, boot with `-txt`, enable extended saves.
 
 ## Phase 3: Triage D2Sigma

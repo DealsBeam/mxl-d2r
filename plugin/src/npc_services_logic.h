@@ -96,6 +96,17 @@ constexpr auto ExpectOf(int i) noexcept -> Expect {
 	return e;
 }
 
+// The gate (quest + 1) a Median travel slot wants D2R's NPC table to hold, or -1 when the table is fine. Only a line that D2R
+// already gates (so it also grants the destination's waypoint) with the same destination moves, to the quest bit 0 Median's
+// row reads (D2R's packet handler tests bit 0 of the gate's quest): Tyrael, whose D2R gate is quest 26 (Terror's End done) and
+// Median's quest 28 (set by the first walk through the portal).
+constexpr auto TravelGateFix(const Expect& e, const D2rNpc& npc) noexcept -> int32_t {
+	if (e.service != Service::Travel || !npc.found || npc.dest != e.dest || e.quest < 0 || e.bit != 0 || npc.gate == 0) {
+		return -1;
+	}
+	return npc.gate != e.quest + 1 ? e.quest + 1 : -1;
+}
+
 // Compares one expectation with the game's entries.
 constexpr auto Judge(const Expect& e, const D2rNpc& npc, const D2rFix& fix) noexcept -> Verdict {
 	if (!npc.found) {

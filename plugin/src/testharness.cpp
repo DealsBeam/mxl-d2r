@@ -7,6 +7,8 @@
 // become `jmp [rip+0]; dq hook`, the trampoline holds the copied 16 bytes and a jump back to stub+16.
 #include "testharness.h"
 
+#include "strings_probe.h"
+
 #include <windows.h>
 
 #include <cstdint>
@@ -915,6 +917,8 @@ auto InstallTestHarness(const D2RL::PluginContext* context, char* report, size_t
 		g_isInGame = reinterpret_cast<IsInGameFn>(GetProcAddress(core, "IsInGame"));
 	}
 	HarnessCmdsInit(context->exeBase);
+	StringsProbeInit(context, context->exeBase);
+	HarnessCmdsContext(context);
 	g_running = 1;
 	g_thread = CreateThread(nullptr, 0, TraceThread, nullptr, 0, nullptr);
 	if (g_titleText[0] != L'\0') {
