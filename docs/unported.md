@@ -2,7 +2,7 @@
 
 Rule (owner, 2026-10-21): the port follows Median XL, not D2R, wherever the two differ (respecs, drops, caps, ...).
 Anything that cannot be done yet is listed here instead of being dropped. Each lane appends its gaps. Things removed or
-deferred on purpose (classic mode G, terror zones) are in [PLAN.md](PLAN.md) "Removed or deferred for now".
+deferred on purpose (classic mode G, 16:9 legacy graphics, terror zones) are in [PLAN.md](PLAN.md) "Removed or deferred for now".
 
 Status: **open** (not ported), **approx** (works, but not exactly as Median), **deviation** (deliberately different,
 with the reason), **verify** (ported, Median behaviour not yet confirmed in game), **verified** (confirmed in game by an automated check of

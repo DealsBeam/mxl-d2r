@@ -149,6 +149,14 @@ Everything else follows Median XL (owner, 2026-10-21); gaps and approximations a
   as "custom art, last".
 - **Classic graphics mode (G):** no classic-only work until all HD work is done. The classic panels already merged stay
   as they are.
+- **16:9 legacy graphics (G)** (owner, 2026-10-22: later, after HD and after the classic pass): today the G view is
+  D2R's 4:3 legacy image with side bars; the 3D view is already 16:9 and the server already sends the wider area, so it
+  is client drawing only. Steps: find the legacy canvas size, letterbox step and camera centre in D2R (research lane
+  first: a few constants = cheap, sizes baked in many places or hard-sized buffers = expensive); widen canvas, camera,
+  tile / wall / unit culling and the mouse-to-world mapping; fix fixed 800-wide buffers; classic bottom bar (800-wide
+  art: centre with filler pieces), classic panels, automap and message log positions; an off word in mxl-core-off.txt
+  keeps 4:3. A cosmetic deviation from Median (800 x 600); old 1.13c widescreen hacks show the approach, their code
+  does not apply.
 - **Terror zones** (D2R's "desecrated zones": "Corrupted tremors strike ..." messages, hourly zones with boosted monster
   level, experience and drops): off. tools/terror_zones.py writes D2R's desecratedzones.json with every
   ladder_enabled / non_ladder_enabled flag false into the mod.
