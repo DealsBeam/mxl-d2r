@@ -44,6 +44,14 @@ For each Median monster whose art D2R lacks (1,206; the 23 that fully borrow a D
 Result (2026-10-21): 790 high, 316 medium, 85 low confidence (low = nothing in the name; mostly bosses and odd names).
 Output about 490 units and 420 colour tables.
 
+Art provenance (tools/art_provenance.py, 2026-10-22): before the scoring, a Median monster whose COF parts are D2R DCC
+animations (exact or recoloured, compared per part and variant) takes that vanilla unit as donor, with the recolour as the
+tint. Of 4,211 Median monster DCCs 110 are exact and 11 recolours (Median-only: 45 and 11 of 4,130); the rest is new art. 34
+monster rows moved to a provenance donor (33 exact, 1 recolour: observer x15 -> vampire1, the R% wanderers -> darkwanderer,
+sapling_guard -> overseer1, treewarden_2 -> thornhulk1, ...); the old scoring remains for everything else. `--no-provenance`.
+In game (slot 3, 2026-10-22): `h spawn` of observer, lost_traveler, sapling_guard, treewarden_2, wereowl_4, lilith_2 and
+dimensional_gate loaded and drew with no new error class (screenshots in `checks-20261022-174622-s3`, not committed).
+
 ## 3. In game (background mode, build 93847)
 `cheat goto` + `cheat mspawn <id>`: new units load, multi-part donors draw whole, scale and colour apply. Before/after
 screenshots (not committed): `%USERPROFILE%\mxl-d2r-runs\hd-monsters-before-after-1.png` and `-2.png` (cabalist as a robed

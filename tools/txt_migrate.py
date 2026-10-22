@@ -32,6 +32,9 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import strings_ns  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 NAMED = ROOT / "work" / "named"
 D2R = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "excel"
@@ -78,6 +81,9 @@ MAX_ITEMS_PER_SET = 6  # D2R and D2RLoader
 # table (0x236fe30) has slots 0-19 and 16-19 are empty, so 16 is usable but does nothing without mxl-core.
 SIGMA_ITEM_SPELLS = set(range(12, 22))
 SIGMA_TARGETED_SPELLS = {14, 20}  # dyes, mystic orbs: applied to a clicked item
+# Stats D2R's timed potion handler (0x57ecb0) scales itself for the duration (stat 74 hpregen, 26 manarecovery, 6 hitpoints,
+# 8 mana: the calc is the total amount); it stores every other stat as calc / len.
+TIMED_POTION_TOTAL_STATS = {"hpregen", "manarecovery", "hitpoints", "mana"}
 SIGMA_HELP_SPELLS = {13, 21}  # right-click shows the item's help text (help_tooltips)
 SIGMA_KEPT_SPELLS = {13, 18, 21}  # not used up (also keys with calc3 set)
 PLUGIN_SPELL = 16
@@ -171,6 +177,10 @@ SIGNED_BYTE = {"monstats": {"coldeffect", "coldeffect(N)", "coldeffect(H)", "spa
 # EMinLev5, ...). Written as the signed value they hold, so D2R's text parser cannot clamp them to 2147483647.
 # experience.txt holds real unsigned 32-bit values (D2R's own Warlock column).
 UNSIGNED_32_TABLES = {"experience"}
+# experience.txt's first row holds the maximum level per class (Median: 150, patch notes 1.0.0). The .bin decoder lost
+# its label (Level -1, printed 4294967295), so it matched no D2R row: D2R's own "MaxLvl 99" row was appended last and the
+# engine kept the cap at 99. Relabelled, it overrides D2R's row (the Warlock column, which Median has not, stays D2R's).
+EXPERIENCE_MAXLVL_KEY = "4294967295"
 ID_COMMENT_COLUMNS = {"*id", "*hcidx", "*index"}
 
 
@@ -641,10 +651,7 @@ class Migrator:
         import stat_screen
         wanted = set(stat_screen.advanced_stat_rows())
         always = set(stat_screen.ALWAYS_LISTED)
-        texts: dict[str, str] = {}  # string key -> enUS, from the files tbl2json.py wrote
-        for f in (OUT / "data" / "local" / "lng" / "strings").glob("*.json"):
-            for e in json.loads(f.read_text("utf-8-sig")):
-                texts[e.get("Key", "")] = e.get("enUS", "")
+        texts = strings_ns.effective_texts()  # key -> enUS: D2R's text with Median's overrides, and Median's own keys
         found: set[str] = set()
         fixed = 0
         for bank in ("base", ""):
@@ -908,6 +915,8 @@ class Migrator:
             h, rows = read_tsv(p)
             ps, ic, cc, ci = h.index("pSpell"), h.index("spellicon"), h.index("code"), h.index("calc1")
             sd, sdm, c3 = h.index("spelldescstr"), h.index("spelldesc"), h.index("calc3")
+            ln = h.index("len")
+            stats = [(h.index(f"stat{k}"), h.index(f"calc{k}")) for k in (1, 2, 3)]
             n = 0
             for r in rows:
                 if not is_record(r):
@@ -915,6 +924,13 @@ class Migrator:
                 if r[ps] in to_d2r:
                     r[ps] = to_d2r[r[ps]]
                     n += 1
+                    # D2R's timed potion (0x57ecb0) treats a stat's calc as the TOTAL over the potion's duration and stores
+                    # calc / len (hp and mana, stat 74, 26, 6, 8, are scaled for it), where D2Sigma's potion 22 adds the calc
+                    # as it is while the state lasts: Median's manarecoverybonus 100 / 200 would end as 100 / 175 = 0 and
+                    # 200 / 175 = 1. Multiplied by len (a second potion within the duration averages the stat, so it stays).
+                    for sc, cc_ in stats:
+                        if r[sc] and r[sc] not in TIMED_POTION_TOTAL_STATS and r[cc_] and r[ln]:
+                            r[cc_] = f"({r[cc_]})*({r[ln]})"
                 elif r[ps].isdigit() and int(r[ps]) in SIGMA_ITEM_SPELLS:
                     if bank == "base":
                         self.sigma_items.append((r[cc], int(r[ps]), r[ci]))
@@ -943,15 +959,15 @@ class Migrator:
         """D2Sigma's item spells 13 and 21 (arcane shards, catalysts, oils, ...) only show a help panel on right-click
         (packet 0x27 with the item's spelldescstr; D2R has no such packet). item_spells sets spelldesc 1 so D2R shows
         the text in the tooltip instead; here the panel's leading layout number line ("90\\n") is dropped from those
-        strings (both string folders, every language)."""
+        strings (every language; a D2R key through its `d2r:<key>` override record)."""
         lead = re.compile(r"^\s*\d+\s*\n")
         n = 0
         for folder in ("strings", "strings-legacy"):
-            for p in sorted((OUT / "data" / "local" / "lng" / folder).glob("*.json")):
+            for p in sorted((OUT / "data" / "local" / "lng" / folder).rglob("*.json")):  # medianxl/{median,overrides}.json
                 recs = json.loads(p.read_text("utf-8-sig"))
                 changed = False
                 for e in recs:
-                    if e.get("Key") in self.help_keys:
+                    if e.get("Key", "").removeprefix(strings_ns.D2R_PREFIX) in self.help_keys:
                         for lang, text in e.items():
                             if lang not in ("id", "Key") and isinstance(text, str) and lead.match(text):
                                 e[lang] = lead.sub("", text, count=1)
@@ -1278,31 +1294,13 @@ class Migrator:
             if held.strip() and stat_name in stat_id and calc1.isdigit() and cap.isdigit():
                 containers.append(f"    {{{code32(code)}, {code32(held.strip())}, {stat_id[stat_name]}, {calc1}, {cap}}},"
                                   f"  // {esc(code)} holds {esc(held.strip())}")
-        # Trophy challenges: the help text each trophy replaced in its tooltip, one C string per item (UTF-8 as octal
-        # escapes: the colour code byte 0xC3 0xBF must not run into a following hex digit)
-        texts: dict[str, str] = {}
-        for f in sorted((OUT / "data" / "local" / "lng" / "strings").glob("*.json")):
-            for e in json.loads(f.read_text("utf-8-sig")):
-                if isinstance(e.get("enUS"), str):
-                    texts.setdefault(e["Key"], e["enUS"])
-        lead = re.compile(r"^\s*\d+\s*\n")
+        # Trophy challenges: the full string key of the help text each trophy replaced, one C string per item. The plugin
+        # reads the text in the active language through the localization service when the item is revealed
+        # (docs/strings-namespace.md "Plugin uses"); a Median-only key is `medianxl:<key>`.
+        import strings_ns
+        group2 = strings_ns.load_group2()
 
-        def c_text(key: str) -> str:
-            text = lead.sub("", texts.get(key, ""), count=1).strip("\n")
-            out = []
-            for b in text.encode("utf-8"):
-                ch = chr(b)
-                if ch == "\n":
-                    out.append("\\n")
-                elif ch in '\\"':
-                    out.append("\\" + ch)
-                elif 0x20 <= b < 0x7f:
-                    out.append(ch)
-                else:
-                    out.append("\\%03o" % b)
-            return '"' + "".join(out) + '"'
-
-        trophies = [f"    {{{code32(code)}, {c_text(key)}}},  // {esc(code)} {key}" for code, key in self.trophies]
+        trophies = [f'    {{{code32(code)}, "{strings_ns.qualify(key, group2)}"}},  // {esc(code)} {key}' for code, key in self.trophies]
         level_ids = self.median_ids("levels")
         levels = [str(level_ids.get(i, -1)) for i in range(max(level_ids) + 1)]
         lines = ["// Generated by tools/txt_migrate.py (item_spell_tables); do not edit.", "#pragma once", "",
@@ -1337,9 +1335,10 @@ class Migrator:
                   "// amount per item, maximum.",
                   "struct Container {", "\tuint32_t code;", "\tuint32_t held;", "\tint32_t stat;", "\tint32_t amount;",
                   "\tint32_t max;", "};", "inline constexpr Container Containers[] = {", *containers, "};",
-                  "", "// Trophy items (misc2 InteractString): the tooltip says \"right click to reveal\", the right click prints",
-                  "// this text, lines separated by \\n (English; the string table has no other language of it).",
-                  "struct Trophy {", "	uint32_t code;", "	const char* text;", "};",
+                  "", "// Trophy items (misc2 InteractString): the tooltip says \"right click to reveal\", the right click prints the challenge",
+                  "// text, lines separated by \\n. `key` is its full string key (\"medianxl:<key>\"); the plugin reads the text in the active",
+                  "// language through the localization service (strings.h) when the item is revealed.",
+                  "struct Trophy {", "	uint32_t code;", "	const char* key;", "};",
                   "inline constexpr Trophy Trophies[] = {", *trophies, "};",
                   f"inline constexpr int32_t ItemTypeWeapon = {types['weap']};",
                   f"inline constexpr int32_t ItemTypeArmor = {types['armo']};",
@@ -1829,7 +1828,9 @@ class Migrator:
     def idkeys(self) -> dict[str, str]:
         if not hasattr(self, "_idkeys"):
             p = OUT / "strings_idkeys.json"
-            self._idkeys = {k: v for k, v in json.loads(p.read_text("utf-8")).items() if v.startswith("mxl_")} if p.exists() else {}
+            # group 2 keys are listed as medianxl:<key> (tbl2json), so the placeholder keys are medianxl:mxl_<id>
+            self._idkeys = {k: v for k, v in json.loads(p.read_text("utf-8")).items()
+                            if strings_ns.bare(v).startswith("mxl_")} if p.exists() else {}
         return self._idkeys
 
     def column_map(self, table: str, mh: list[str], dh: list[str]) -> dict[str, str]:
@@ -1850,6 +1851,88 @@ class Migrator:
                 if mc in mh and dc in dh:
                     out[dc] = mc
         return out
+
+    def namespace_cells(self) -> None:
+        """The last pass: every localization cell that names a Median-only (group 2) key becomes `medianxl:<key>`,
+        in both banks (docs/strings-namespace.md). Unqualified cells mean D2R's own `d2r:` strings, so group 1 keys
+        (keys of D2R's string files, whose text tbl2json overwrites in place) stay as they are. Only the columns of
+        strings_ns.LOCALIZATION are looked at, numbers are never touched, and a row is edited cell by cell so the
+        rest of the file stays byte for byte as written by migrate().
+
+        A key whose `medianxl:<key>` does not fit the field of one of its cells (uniqueitems / setitems index, levels
+        LevelWarp: strings_ns "short aliases") gets an alias `mxlname_<n>`; the alias replaces the key in every cell
+        that names it, localization cells and references alike.
+
+        A unique / set item is named by its index in cubemain inputs / outputs and treasureclassex items. The index
+        cell reads `medianxl:<key>` now, so those references are qualified the same way (strings_ns.qualify_reference):
+        an unqualified name matches no item."""
+        group2 = strings_ns.load_group2()
+        self.prefixed: Counter = Counter()
+        self.retargeted: Counter = Counter()
+        files = [(bank, p) for bank in ("base", "") for p in sorted((OUT / "data" / "global" / "excel" / bank).glob("*.txt"))]
+        if Migrator._schema is None:
+            import validate
+            Migrator._schema = validate.Schema()
+
+        def loc_columns(table: str, header: list[str]) -> list[int]:
+            return [i for i, c in enumerate(header)
+                    if strings_ns.is_localization(table, c) and not strings_ns.is_range_column(table, c)]
+
+        def limit(table: str, column: str) -> int | None:
+            typ = (Migrator._schema.field(table, column) or {}).get("type")
+            return typ.get("dataLength") if isinstance(typ, dict) else None
+
+        # which keys do not fit
+        long_keys = set()
+        item_names = set()  # Median-only indexes of uniqueitems / setitems
+        for _bank, path in files:
+            if path.stem not in strings_ns.LOCALIZATION:
+                continue
+            lines = path.read_bytes().decode("utf-8").split("\r\n")
+            header = lines[0].split("\t")
+            for i in loc_columns(path.stem, header):
+                lim = limit(path.stem, header[i])
+                for line in lines[1:]:
+                    cells = line.split("\t")
+                    if i < len(cells) and cells[i] in group2 and path.stem in ("uniqueitems", "setitems"):
+                        item_names.add(cells[i])
+                    if lim and i < len(cells) and cells[i] in group2 and len(strings_ns.PREFIX + cells[i]) > lim:
+                        long_keys.add(cells[i])
+        self.aliases = strings_ns.plan_aliases(long_keys)
+        clash = {a for a in self.aliases.values() if a in group2 or a in strings_ns.d2r_keys()}
+        if clash:
+            raise SystemExit(f"txt_migrate: alias names already used as strings: {sorted(clash)}")
+        strings_ns.write_aliases(self.aliases)
+        group2 = strings_ns.load_group2()
+
+        for bank, path in files:
+            table = path.stem
+            lines = path.read_bytes().decode("utf-8").split("\r\n")
+            header = lines[0].split("\t")
+            cols = loc_columns(table, header) if table in strings_ns.LOCALIZATION else []
+            refs = {i for i, c in enumerate(header) if strings_ns.is_reference(table, c)}
+            changed = False
+            for n in range(1, len(lines)):
+                if not cols and not refs:
+                    break
+                cells = lines[n].split("\t")
+                if cells[0] == "Expansion":
+                    continue
+                for i, cell in enumerate(cells):
+                    if i in cols:
+                        new = strings_ns.qualify(cell, group2, self.aliases)
+                    elif i in refs and cell:
+                        new = strings_ns.qualify_reference(cell, item_names, self.aliases)
+                    else:
+                        continue
+                    if new != cell:
+                        cells[i] = new
+                        counter = self.prefixed if i in cols else self.retargeted
+                        counter[(bank or "rotw", table, header[i])] += 1
+                        changed = True
+                lines[n] = "\t".join(cells)
+            if changed:
+                path.write_text("\r\n".join(lines), encoding="utf-8", newline="")
 
     def migrate(self, table: str) -> None:
         mh, mrows = read_tsv(NAMED / f"{table}.txt")
@@ -1878,6 +1961,8 @@ class Migrator:
                 if r[li] not in ("", "0"):
                     r[ri] = f"{r[ri] or 0}+{r[li]}*lvl"
             mh = [("*LevRange" if c == "LevRange" else c) for c in mh]
+        if table == "experience":
+            mrows = [["MaxLvl", *r[1:]] if r[0] == EXPERIENCE_MAXLVL_KEY else r for r in mrows]
         banks = {"base": D2R / "base" / f"{table}.txt", "rotw": D2R / f"{table}.txt"}
         banks = {k: v for k, v in banks.items() if v.exists()}
         if not banks:
@@ -1898,7 +1983,8 @@ class Migrator:
             def median_value(dc: str, v: str) -> str:
                 # string keys Median only had as numbers are mxl_<id> after tools/tbl2json.py
                 if dc in string_cols and v.isdigit() and v in self.idkeys:
-                    return self.idkeys[v]
+                    # the bare key: every pass below sees plain keys, namespace_cells() qualifies the cells at the end
+                    return strings_ns.bare(self.idkeys[v])
                 # the first decoder wrote a few small numbers as raw control characters ("")
                 if v and dc in self._int_cols.get(table, ()) and len(v) == 1 and ord(v) < 32:
                     return str(ord(v))
@@ -2048,9 +2134,24 @@ def main() -> int:
     m.automap_tables()
     m.extra_calc_codes()
     m.formula_proxies()
+    m.namespace_cells()
     if m.dangling:
         m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]
         m.report += [f"- {t}: {n} cells" for t, n in sorted(m.dangling.items())]
+    m.report += ["", "## Cells written as `medianxl:<key>` (Median-only strings, docs/strings-namespace.md)", "",
+                 "| Table | Column | rotw bank | base bank |", "|---|---|---|---|"]
+    for t, c in sorted({(t, c) for (_b, t, c) in m.prefixed}):
+        m.report.append(f"| {t} | {c} | {m.prefixed[('rotw', t, c)]} | {m.prefixed[('base', t, c)]} |")
+    m.report.append(f"| **total** | | {sum(v for k, v in m.prefixed.items() if k[0] == 'rotw')} | "
+                    f"{sum(v for k, v in m.prefixed.items() if k[0] == 'base')} |")
+    if m.aliases:
+        m.report += ["", "## Short aliases (the key does not fit its fixed-size field, tools/strings_ns.py)", "",
+                     "| Key | Alias |", "|---|---|"]
+        m.report += [f"| {k} | `{strings_ns.PREFIX}{a}` |" for k, a in m.aliases.items()]
+    m.report += ["", "Reference cells (unique / set item names) written as `medianxl:<key>`:", "",
+                 "| Table | Column | rotw bank | base bank |", "|---|---|---|---|"]
+    for t, c in sorted({(t, c) for (_b, t, c) in m.retargeted}):
+        m.report.append(f"| {t} | {c} | {m.retargeted[('rotw', t, c)]} | {m.retargeted[('base', t, c)]} |")
     m.report += ["", "## Overflow: Median values with no D2R column (kept in work/mod/overflow/<table>.txt)", ""]
     for t, (cols, n) in sorted(m.overflow.items()):
         m.report.append(f"- **{t}** ({n} rows): " + ", ".join(f"{c} ({m.dropped[t][c]})" for c in cols))

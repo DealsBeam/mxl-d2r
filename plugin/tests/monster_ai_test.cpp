@@ -148,6 +148,67 @@ int RunMonsterAiTests() {
 		d = Run(in, c, {true, false, true});
 		Check(d.kind == Kind::Attack && d.onEnemy, "skill 4 missing: the attack on the enemy");
 	}
+	{  // the controlled branch (last-mode field GetHit): asm 0x1004a912..
+		Check(IsControlledMode(3) && IsControlledMode(0x13) && !IsControlledMode(0) && !IsControlledMode(2) && !IsControlledMode(0x14),
+		      "controlled gate is the last mode 3 or 0x13");
+		const auto Ctrl = [](Input in) {
+			in.controlled = true;
+			return in;
+		};
+		Ctl c;
+		// never idles: far and idle walks (the live path waits 15), and the phase engages
+		Decision d = Run(Ctrl(MakeInput(60, false, true, 5, 7)), c, {}, &asked);
+		Check(d.kind == Kind::Walk && asked.empty() && c.phase == 1, "controlled, far, idle: walk and engage (no wait 15)");
+		// the mark keeps the largest distance under 30
+		c = Ctl{};
+		Run(Ctrl(MakeInput(25, false, true, 5, 7)), c, {false});
+		Check(c.mark == 25, "mark takes a distance under 30");
+		Run(Ctrl(MakeInput(12, false, true, 5, 7)), c, {false});
+		Check(c.mark == 25, "mark keeps the largest distance");
+		Run(Ctrl(MakeInput(40, false, true, 5, 7)), c, {});
+		Check(c.mark == 25, "mark ignores 30 and over");
+		// in reach: no aip1 roll; the 30% roll picks the skills, else the plain attack on the target
+		c = Ctl{};
+		d = Run(Ctrl(MakeInput(2, true, true, 10, 7)), c, {false}, &asked);
+		Check(d.kind == Kind::Attack && !d.onEnemy && asked.size() == 1 && asked[0] == 30, "controlled reach, 30% fails: attack the target, one roll");
+		d = Run(Ctrl(MakeInput(2, true, true, 10, 7)), c, {true, true}, &asked);
+		Check(d.kind == Kind::Skill && d.skill == 1 && !d.onEnemy && asked.size() == 2 && asked[1] == 50,
+		      "controlled reach, 30% passes, 50% passes: skill 1 on the target");
+		d = Run(Ctrl(MakeInput(2, true, true, 10, 7)), c, {true, false});
+		Check(d.kind == Kind::Skill && d.skill == 4 && d.onEnemy, "controlled reach, 30% passes, 50% fails: skill 4 on the enemy");
+		d = Run(Ctrl(MakeInput(2, true, false, 0, 7)), c, {true, false});
+		Check(d.kind == Kind::Skill && d.skill == 4 && !d.onEnemy, "controlled reach: skill 4 without an enemy aims at the target");
+		d = Run(Ctrl(MakeInput(2, true, true, 10, 6)), c, {true}, &asked);
+		Check(d.kind == Kind::Attack && !d.onEnemy && asked.size() == 1, "controlled reach: aip5 bit 1 off, the plain attack");
+		d = Run(Ctrl(MakeInput(2, true, true, 99, 7)), c, {true, false});
+		Check(d.kind == Kind::Skill && d.skill == 4 && d.onEnemy, "controlled reach: no enemy-distance limit");
+		// out of reach inside aip3: the aip2 roll fails exactly as the live path does
+		c = Ctl{};
+		d = Run(Ctrl(MakeInput(30, false, true, 5, 7)), c, {false});
+		Check(d.kind == Kind::Walk && c.phase == 1, "controlled near, aip2 fails, 30: walk");
+		d = Run(Ctrl(MakeInput(5, false, true, 5, 7)), c, {false, true});
+		Check(d.kind == Kind::Charge, "controlled near, aip2 fails, under 9, 50% passes: charge");
+		// the aip4 rolls of skills 2 / 3 are inverted: the skill is taken when the roll FAILS
+		c = Ctl{};
+		d = Run(Ctrl(MakeInput(30, false, true, 5, 7)), c, {true, false}, &asked);
+		Check(d.kind == Kind::Skill && d.skill == 2 && c.cd == SkillCooldown && asked.size() == 2 && asked[1] == 15,
+		      "controlled: skill 2 when the aip4 roll fails");
+		c = Ctl{};
+		d = Run(Ctrl(MakeInput(30, false, true, 5, 7)), c, {true, true, false}, &asked);
+		Check(d.kind == Kind::Skill && d.skill == 3 && c.cd == SkillCooldown && asked.size() == 3, "controlled: skill 3 when its aip4 roll fails");
+		c = Ctl{};
+		d = Run(Ctrl(MakeInput(30, false, true, 15, 7)), c, {true, true, true, false}, &asked);
+		Check(d.kind == Kind::Attack && !d.onEnemy && c.cd == 0 && asked.size() == 4 && asked[3] == 75,
+		      "controlled: both aip4 rolls pass, so no skill; the shared 75% roll follows (fail: attack the target)");
+		c = Ctl{};
+		c.cd = 5;
+		d = Run(Ctrl(MakeInput(30, false, true, 15, 7)), c, {true, true, true}, &asked);
+		Check(d.kind == Kind::Skill && d.skill == 1 && d.onEnemy && c.cd == 4 && asked[1] == 75, "controlled, under cooldown: skips the aip4 rolls");
+		// the live path is unchanged when the gate is off
+		c = Ctl{};
+		d = Run(MakeInput(30, false, true, 5, 7), c, {true, true}, &asked);
+		Check(d.kind == Kind::Skill && d.skill == 2, "live path: skill 2 when the aip4 roll passes");
+	}
 	{  // fallback mapping for D2R's Andariel think
 		const DrAips a = FallbackAips(25, 95);
 		Check(a.aip1 == 25 && a.aip2 == 3 && a.aip3 == 25 && a.aip4 == 95, "fallback keeps aip1 and aip4, aip2 3, aip3 25");

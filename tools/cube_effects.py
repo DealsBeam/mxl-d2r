@@ -2,7 +2,8 @@
 
 Reads extract/mxl/data/global/excel/cubemain.bin (4-byte count, 0x148-byte records; output slots at +0x4c, +0xa0,
 +0xf4, 0x54 bytes each; byte at slot +8, word at slot +6). D2R's cubemain.txt cannot carry these bytes.
-Row numbers equal the migrated cubemain rows. Usage: py -3 tools/cube_effects.py [path to cubemain.bin]
+Also the portal outputs (byte 1, param = a Median level number): D2R's handler for that byte always opens the Cow Level, so
+the plugin carries the recipe -> level pairs (Portals). Row numbers equal the migrated cubemain rows. Usage: py -3 tools/cube_effects.py [path to cubemain.bin]
 """
 import struct
 import sys
@@ -24,12 +25,14 @@ def main() -> int:
     if 4 + count * 0x148 != len(data):
         print(f"{src}: size does not match {count} records of 0x148")
         return 1
-    out, stat = [], Counter()
+    out, portals, stat = [], [], Counter()
     for row in range(count):
         rec = 4 + row * 0x148
         for slot in range(3):
             s = rec + 0x4c + 0x54 * slot
             kind = data[s + 8]
+            if kind == 1:
+                portals.append((row, struct.unpack_from("<H", data, s + 6)[0], slot))
             if kind in KINDS:
                 param = struct.unpack_from("<H", data, s + 6)[0]
                 out.append((row, kind, param))
@@ -41,9 +44,14 @@ def main() -> int:
              "struct Effect {", "\tint32_t recipe;", "\tint32_t kind;", "\tint32_t param;", "};",
              "inline constexpr Effect Effects[] = {"]
     lines += [f"    {{{r}, {k}, {p}}}," for r, k, p in out]
+    lines += ["};", "",
+              "// Median's portal outputs (byte 1): recipe row, output slot, Median level number of the destination.",
+              "struct Portal {", "	int32_t recipe;", "	int32_t slot;", "	int32_t level;", "};",
+              "inline constexpr Portal Portals[] = {"]
+    lines += [f"    {{{r}, {sl}, {p}}}," for r, p, sl in portals]
     lines += ["};", "", "}  // namespace mxl_cube", ""]
     (ROOT / "plugin" / "src" / "mxl_cube_effects.h").write_text("\n".join(lines), encoding="utf-8")
-    print(f"{count} records, {len(out)} effects: {dict(sorted(stat.items()))}")
+    print(f"{count} records, {len(out)} effects: {dict(sorted(stat.items()))}, {len(portals)} portals")
     return 0
 
 

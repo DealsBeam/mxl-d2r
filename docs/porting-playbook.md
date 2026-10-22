@@ -95,7 +95,15 @@ name list), the rule tables inside `txt_migrate.py`.
 
 ## 4. Strings, saves, test characters
 
-- Strings: `.tbl` to D2R JSON in both string folders (`docs/strings.md`).
+- Strings: **start with a D2RLoader string namespace** for the mod (`docs/strings.md`, `docs/strings-namespace.md`). Split
+  the mod's keys into those D2R's own files already have (group 1: the mod's text goes into `d2r:<key>` records without id in one override file, e.g. `lng/strings/<mod>/overrides.json`, one
+  record per key and only for keys D2R's `strings/` files have; never copies of D2R's files, an unqualified record of a namespaced
+  mod belongs to the mod's namespace; plain keys in table cells) and the rest (group 2: `<mod>:<key>` entries in
+  `lng/strings/<mod>/*.json` without ids, `<mod>:<key>` in table cells, `@<mod>:<key>` in layouts). Never append the mod's
+  own strings to D2R's files with new numeric ids: D2R has its own ids in the same range and they collide silently
+  (bug #7). Fixed-size fields (`LevelWarp` 39, item index 31 characters) must hold the whole `namespace:key`: keep the
+  keys that do not fit native with a fixed id. Plugins read text by key through the localization service. Make the
+  validator check both the cells and the keys the plugin source uses before anything is booted.
 - Saves (`docs/save-format.md`): v105 `.d2s`, checksum at +0xc, plus D2RLoader's `<name>.d2rl` sidecar with two
   SHA-256 hashes. **After any edit update checksum, size, both hashes**, or the character silently disappears.
   Stats ("gf") use 16-bit IDs and CSvBits widths; class skills ("if") are one byte per class skill in ID order.

@@ -80,7 +80,7 @@ Pure rule: `SummonerFirstBranch(roll, aip3) = roll < aip3` (tested).
 Parameterised by `aip1..aip5` (current difficulty) and `Skill1..4`: `aip5` bit 1 = skill 1 allowed (the ranged skill, with skill 4 as its alternative), bit 2 = skill 2,
 bit 4 = skill 3 (the last two are used with the cooldown below); `aip1` the in-reach skill chance, `aip2` the approach-skill gate, `aip3` the engage distance,
 `aip4` the chance of skill 2 / 3. Three scratch ints in the control block (Sigma `ctl[5..7]` = D2R `ctl+0x44/+0x48/+0x4c`, zeroed whenever the AI is set): phase
-(0 idle, 1 engaged), a mark (controlled-monster branch only), a cooldown counted down once per think. Read from the assembly (D2Sigma `0x1004a820`, 0x6a0 bytes), ported as `monster_ai::Andariel()` with an injected roll so every branch is unit tested in the order of Median's rolls:
+(0 idle, 1 engaged), a mark (the controlled branch only; stored, never used), a cooldown counted down once per think. Read from the assembly (D2Sigma `0x1004a820`, 0x6a0 bytes), ported as `monster_ai::Andariel()` with an injected roll so every branch is unit tested in the order of Median's rolls:
 
 - the cooldown (`ctl+0x4c`) counts down by one when it is not zero;
 - **target in reach**: phase := 1, the unit seed is reseeded (`lo := lo * 0x6ac690c5 + hi; hi := 0x29a`, Sigma `0xc03f0`), then `aip1`%: pass -> with skill 1 allowed, an enemy
@@ -90,16 +90,25 @@ bit 4 = skill 3 (the last two are used with the cooldown below); `aip1` the in-r
   distance < `aip3`: phase := 1 and `aip2`%: fail -> distance > 20 walk, 9..20 attack or wait 50%, under 9 a 50% roll charges (mode 8 action on the target) else attack or wait 50%;
   pass -> skill 2 (`aip5` bit 2), then skill 3 (bit 4), each needing cooldown <= 0 and an `aip4`% roll, cooldown := 11, on the target; else with skill 1 allowed and an enemy within 20: 75% fails -> attack,
   passes -> 50% picks skill 1 (pass) or skill 4 (fail) on the enemy; else walk.
+- **controlled** (the unit just recovered from a hit, see below): the same think with the differences listed in "Decode items" (never idles, a 30% in-reach skill roll, the inverted `aip4` rolls).
 - "attack" is the mode-4 action (`0x4a78e0(game, unit, 4, target)`), "wait" `0x4a6d10`, skills `0x4a7bc0(game, unit, mode, skill, target, 0, 0, 0)`, "walk" `0x4a7270(unit, 1, 0, 0)` + `0x4a8740(game, unit, target, 7)` (what D2R's own Andariel does),
   "charge" `0x4a78e0(game, unit, 8, target)` (D2R's AIs use mode 8 the same way, e.g. `0x5ae373`).
 - A skill the row does not name (`Skill` < 0) turns into the plain attack on the same aim; its `aip5` bit counts as off.
 
 **Decode items that were open, now resolved**
 - *Nearest-enemy distance*: `0x595f80 (game, unit, int* outDistance, u32* aux) -> Unit*` (the unit is the return value, `outDistance` is `0x7fffffff` when none; the old table entry "u8 difficulty" was a misread of the first stack slot).
-- *Monster data `+0x54`*: Median's first test `unit.data+0x54 in {3, 0x13}` (with the unit being a monster) selects a "controlled monster" copy of the logic that queues the attack through the raw action queue and tracks the nearest distance in `ctl[6]`. It looks like a
-  pet / summon kind (not confirmed against a data table); none of the 47 `andariel_ai` rows is ever a pet, so the branch is **not ported**.
-- *Hit-point percentage call* (Sigma import `0x1016714c`): only used in phase 2 (`ctl[5] == 2`, a charge while below 75% hit points, with the run/walk speed ratio written to monster data `+0x1c`). Nothing in the function ever sets the phase to 2, and no other code does (`ctl[5]` is zeroed whenever the AI is set), so phase 2 and the skill chooser `0x1004aef0`
-  that only it calls are **dead code in Median too**. Not ported (a monster with the phase 0/1 logic above behaves exactly as Median's does).
+- *Monster data `+0x54` (D2R `+0x68`), the gate of the "controlled monster" branch*: Median's first test is `unit.type == 1` (`0x100bfa20`) and `unit.data+0x54 in {3, 0x13}`. It is **not** a pet or summon kind: the field is the monster's **last mode**, written by the unit-mode setter on every mode change
+  (Sigma `D2Game` copy; D2R: the mode-set function that calls `0x543900` at `0x4476a3`) with the mode being left, except a change out of mode 1 (neutral); a stored value >= 0x10 is turned back into value - 0x10 on the next change. D2R's hit apply step (`0x44a9b0`) also stores `0x13` through the same setter (getter
+  `0x5437b0`, setter `0x543900`: `[unit+0x10] + 0x68`, bounds-checked for a monster) at `0x44aca7` (when one of three special-case ids `0xf3`, `0x14d`, `0x2c1` matches) and `0x44ad2e` (result flag bit 14). So the value is 3 from the end of a hit recovery (GetHit, mode 3) until the monster leaves its next non-neutral mode (an attack animation): a "just recovered from a hit" state. D2R keeps the same field at `+0x68` of
+  the monster data (Sigma `+0x54`), with the same meaning and the same two values, so the gate is portable: **ported** (`Input::controlled`, `monster_ai::IsControlledMode`). The branch is the same logic with these differences (asm `0x1004a912..0x1004ab76`, shares the out-of-reach "attack or wait", charge, walk and 75% / 50% tails with the live path):
+  - the phase is forced to 1 on the first think, so the unit **never idles** (out of reach past `aip3` it walks, the live path waits 15 while the phase is 0);
+  - `ctl[6]` ("mark", D2R `ctl+0x48`) keeps the largest distance seen under 30. Nothing reads it but the dead phase 2 below; it is stored anyway;
+  - **in reach**: no `aip1` roll and no 33% wait. A 30% roll (the live path takes the skills when it *fails*) with skill 1 allowed picks, by a 50% roll, skill 1 **on the target** or skill 4 on the enemy (no "enemy within 20" limit; Median passes a null enemy to the skill when the search found none, the port aims at the target); otherwise the plain attack on the target;
+  - **out of reach inside `aip3`, `aip2` passes**: the `aip4` rolls of skill 2 and 3 are **inverted** (the skill is taken when the roll fails, then the other when its roll fails too; both passing falls to the shared 75% / 50% skill 1 / 4 tail).
+  Not carried over: the in-reach attack is queued through Median's raw action queue with a flag byte `0x64` (`0x65` for a monster whose flags `& [0x101dc390]`), preceded by D2Common ordinal 11103 `(unit, 0)` (sets `unit+0xa8 -> +0x10` to 0); D2R's mode-4 action primitive `0x4a78e0` has no such flag and no twin of the ordinal was found, so the port uses the primitive. The flag byte is a Median-side
+  attack-type tag; no D2R behaviour was seen to depend on it.
+- *Hit-point percentage call* (Sigma import `0x1016714c`): only used in phase 2 (`ctl[5] == 2`, a charge while below 75% hit points, with the run/walk speed ratio written to monster data `+0x1c`). Phase 2 is **dead code in Median too**: there is no store of 2 to `ctl[5]` anywhere in `D2AI.cpp` (the stores are `mov [ebp+0x14], 0/1` and the Mosquito init, which writes a frame count into the same slot for a different AI), the control block is zeroed whenever
+  the AI is set, and the skill chooser `0x1004aef0` plus the walk-ratio code are reachable only from the phase 2 branch (`0x1004aa65`, `0x1004ab84`, `0x1004adc5`..`0x1004ae9c`). **Not ported, documented**: a monster with the phase 0 / 1 logic above behaves exactly as Median's does.
 
 **Plugin wiring**: the getter `0x4a36c0` is detoured; when the original returns entry 0 and the unit is a monster whose monstats `+0x52` is 155, the plugin's entry `{kind 1, init 0, think, alt 0}` is returned instead. The table cannot grow
 (`0x2396e90 + 0x9b * 0x20` is the mode table), and the getter is the only reader (section 1), so redirecting it is the safe route; replacing D2R's Andariel think instead would change the 26 vanilla users.
@@ -127,7 +136,9 @@ The three behaviours that differ from D2R (section 4 `andariel_ai`, section 3 Su
 ## 7. In-game checks
 
 1. Andariel (Act 1 boss, Median `andariel`): attacks and moves (not frozen), uses `andariel_skill` / `andariel_skill_2`; Maghda, Zoltun Kulle, Radament
-   likewise. A monster that stands still means the AI id is out of range again (check `monster_ai_report.md`, `validate_report.md`).
+   likewise. `py -3 tools/game_checks.py all medianai` spawns each of the 47 `andariel_ai` classes (read from the built monstats) next to the god-mode player and
+   compares the `mxl` counters (thinks, waits, walks, attacks, skills, charges) and the monster's modes; `medianai_ctl` forces a hit recovery with `hit mon:<id> phys 1280 stagger`
+   and expects the `controlled thinks` counter to rise (it stays 0 before the hit). A monster that stands still means the AI id is out of range again (check `monster_ai_report.md`, `validate_report.md`).
 2. Summoner in the Arcane Sanctuary: casts, flees when you are adjacent, the Act 2 quest still fires (init `0x5a0b80`).
 3. Hire a Rogue / Desert Mercenary: fights and follows (AI Hireable alt `0x5af320`).
 4. Spot check a Bone Prison / totem / Target Dummy (Idle) stays inert.

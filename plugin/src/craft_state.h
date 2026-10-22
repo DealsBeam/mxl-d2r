@@ -72,6 +72,35 @@ inline auto EffectsFor(int32_t recipe) noexcept -> Range {
 	return {lo, hi};
 }
 
+// The Median level number a recipe's portal output (byte 1) opens, or 0 when the recipe has none in that output slot.
+// Row 2 opens the Cow Level, the others other Median levels (D2R's handler for the byte only knows the Cow Level).
+inline auto PortalLevel(int32_t recipe, int32_t slot) noexcept -> int32_t {
+	for (const auto& p : mxl_cube::Portals) {
+		if (p.recipe == recipe && p.slot == slot) {
+			return p.level;
+		}
+	}
+	return 0;
+}
+
+// Where an output slot pointer lies inside the cubemain records: `first` is record 0, the slot is
+// record + 0x5a + 0x5b * i (docs/d2r-addresses.md, section 1). False when the pointer is not an output slot.
+inline auto SlotOf(uintptr_t first, uintptr_t slot, int32_t count, int32_t* recipe, int32_t* index) noexcept -> bool {
+	constexpr uintptr_t Record = 0x16c, SlotStart = 0x5a, SlotSize = 0x5b;
+	if (slot < first) {
+		return false;
+	}
+	const uintptr_t delta = slot - first;
+	const uintptr_t inside = delta % Record;
+	if (inside < SlotStart || (inside - SlotStart) % SlotSize != 0 || (inside - SlotStart) / SlotSize > 2 ||
+	    delta / Record >= static_cast<uintptr_t>(count)) {
+		return false;
+	}
+	*recipe = static_cast<int32_t>(delta / Record);
+	*index = static_cast<int32_t>((inside - SlotStart) / SlotSize);
+	return true;
+}
+
 // Median's gold payment (D2Craft.cpp 0x10059120): the cost comes from carried gold, and when that is not enough the
 // carried gold goes to 0 and the rest comes from the bank. Nothing goes below 0.
 struct Gold {

@@ -772,8 +772,8 @@ UI = {  # fractions of the 1600 x 900 client rect, measured 2026-10-21
     "name_box": (0.500, 0.830),         # hero select: Character Name
     "create_ok": (0.893, 0.930),        # hero select: Create (enters the game, Normal)
     "save_exit": (0.500, 0.440),        # Esc menu: Save and Exit
-    "skill_tab0": (0.686, 0.190),       # skill tree: first of 8 tabs
-    "skill_tab_dx": 0.0290,             # skill tree: tab spacing
+    "skill_tab0": (0.683, 0.190),       # skill tree: first of 8 tabs
+    "skill_tab_dx": 0.0259,             # skill tree: tab spacing
 }
 
 

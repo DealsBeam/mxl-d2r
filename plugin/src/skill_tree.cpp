@@ -53,6 +53,8 @@ using LocalSlotFn = int32_t (*)();
 using SlotUnitFn = void* (*)(int32_t slot);
 
 uint64_t g_base = 0;
+void* g_lastPanel = nullptr;  // the panel the tab setter was last called with (harness verb `skilltab`)
+uint32_t g_setterCalls = 0;
 TabSetterFn g_tabSetter = nullptr;
 LocalSlotFn g_localSlot = nullptr;
 SlotUnitFn g_slotUnit = nullptr;
@@ -71,6 +73,8 @@ void TabSetterHook(void* panel, int32_t tab) {
 	if (g_tabSetter == nullptr) {
 		return;
 	}
+	g_lastPanel = panel;
+	++g_setterCalls;
 	const int32_t tabs = tab >= CommonTabs ? LocalTabs() : CommonTabs;
 	if (tab >= tabs) {  // a tab this class does not have
 		const uint64_t ret = reinterpret_cast<uint64_t>(_ReturnAddress());
@@ -203,3 +207,17 @@ auto InstallSkillTree(const D2RL::PluginContext* context, char* report, size_t r
 	std::snprintf(report, reportSize, "on: %d sites + tab setter hook, 9 pages (8 for classes without a 9th; page n = tab n, no item-skills tab)", staged);
 	return true;
 }
+
+auto SkillTreeCurrentTab() noexcept -> int32_t {
+	return g_base == 0 ? -1 : *reinterpret_cast<const int32_t*>(g_base + CurrentTabRva);
+}
+
+auto SkillTreeSetTab(int32_t tab) noexcept -> bool {
+	if (g_lastPanel == nullptr || g_tabSetter == nullptr) {
+		return false;
+	}
+	TabSetterHook(g_lastPanel, tab);
+	return true;
+}
+
+auto SkillTreeSetterCalls() noexcept -> uint32_t { return g_setterCalls; }
