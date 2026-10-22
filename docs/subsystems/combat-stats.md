@@ -108,7 +108,7 @@ D2R's dispatcher (`0x3d4620`) looks the entry up in the 8-byte table at **0x2386
 ends the property when it is empty, so before this lane those slots did nothing.
 
 **propertiesext** (437 rows x one int32; `work/sigma/propertiesext.txt`; `tools/sigma_tables.py` names the field
-`i32_0x00`): the **default parameter** of a property. It is read by the three wrappers above: if the property row's
+`DefaultParam`): the **default parameter** of a property. It is read by the three wrappers above: if the property row's
 ext value is a valid row (`FUN_100af700`: below a table count at D2TxtRecords +0xba0, likely the skills) and the property in the item or monster
 property slot has parameter 0, the parameter becomes the ext value. Only four rows are non-zero: Median
 `item_mana_bytime_2` (548), `properties_360` (548), `item_mana_bytime_3` (547), `properties_362` (547) - the skills

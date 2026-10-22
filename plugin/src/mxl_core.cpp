@@ -105,7 +105,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai npc reqgates hirelings skilltree combat itemevents props runewords xp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
+// items missiles mana itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai npc reqgates hirelings skilltree combat itemevents props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0),
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -446,6 +446,10 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				std::snprintf(g_waypointsReport, sizeof(g_waypointsReport), "%s", OffNote);
 			} else {
 				VerifyWaypoints(context->exeBase, g_waypointsReport, sizeof(g_waypointsReport));
+				char panel[160];
+				InstallWaypointPanel(context, panel, sizeof(panel));
+				const size_t used = std::strlen(g_waypointsReport);
+				std::snprintf(g_waypointsReport + used, sizeof(g_waypointsReport) - used, "; %s", panel);
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: waypoints %s", g_waypointsReport);
 			context->LogInfo(line);
@@ -489,10 +493,11 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		{
 			const bool rw = !Off("runewords");
 			const bool xp = !Off("xp");
-			if (!rw && !xp) {
+			const bool party = !Off("partyxp");
+			if (!rw && !xp && !party) {
 				std::snprintf(g_itemsExtReport, sizeof(g_itemsExtReport), "%s", OffNote);
 			} else {
-				InstallItemsExt(context, rw, xp, g_itemsExtReport, sizeof(g_itemsExtReport));
+				InstallItemsExt(context, rw, xp, party, g_itemsExtReport, sizeof(g_itemsExtReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: items %s", g_itemsExtReport);
 			context->LogInfo(line);

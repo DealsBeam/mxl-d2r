@@ -484,4 +484,7 @@ inline constexpr TabSkill Skills[] = {
     {1, 9, 1702},  // paragon_of_sanctity_7
 };
 
+// Skill tree tabs per player class (the highest skilldesc page of its skills, at least 8).
+inline constexpr int32_t ClassTabs[7] = {8, 9, 8, 8, 8, 8, 8};
+
 }  // namespace mxl_tabs

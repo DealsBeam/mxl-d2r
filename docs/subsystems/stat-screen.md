@@ -16,14 +16,15 @@ type, each creating a `StatScreen:ContentItem` text component at the row's x, y 
 | +1 u32 | type | 1 label, 2 stat value, 4 resistance (colour by cap), 0x12 stat with the unit's class as layer ("+N to <class> skills"), 0x15 stat / 10 (life regeneration, stat 74), 0x17 Strength / Dexterity damage bonus (below), 0x19 stat >> ValShift capped at `min(value, stat 205 + 60)` (evade / dodge / avoid, with the "/ 60%" label beside); 0x0d-0x0f page 0's name, class, vitals |
 | +5 u16, +7 u16 | x, y | position |
 | +9 u16 | label | string id (table * 10000 + index, so 26390 = expansionstring 6390; 5382 = none) of a type 1 row |
-| +11 u8, +12 u8 | font, colour | colour 1 red (section headers), 4 gold (column headers), 6 white |
+| +11 u8, +12 u8 | color, font | `Color` (text colour code, component +0x1c) and `Font` (font id, component +0x70: 6 on the value rows, 1 on the section headers, 4 on the column headers); the first reading had the two swapped |
 | +13 u16 | stat | Median's itemstatcost row of a value row |
 | +15 u16 | layer | the stat's parameter (0 on pages 1 and 2) |
 | +17 u8 | base | 1 = `GetBaseStat` instead of the total (Strength / Dexterity / ... "base" column) |
 | +18 u8 | percent | 1 = append "%" |
 | +19 u32 | align | 0 right, 1 left, 2 centre |
 | +23 u16 | tooltip | string id shown when hovering a label (Median's explanations) |
-| +29 u32 | cap | 0 none, 40 on the absorb percentages: `min(value, cap)` |
+| +25 u32 | min | `Min`: zero in every row |
+| +29 u32 | max | `Max` (was called cap): 0 none, 40 on the absorb percentages: `min(value, max)` |
 
 Type 0x17 (rows 115 and 117, "Str. / Dex. Damage Bonus") is not a stat: stats 299 / 300 are placeholders for what
 `FUN_1005c290` (D2Damage.cpp) computes from the unit's Strength / Dexterity and two per-class factors of its charstats

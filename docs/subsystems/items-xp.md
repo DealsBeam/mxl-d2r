@@ -23,7 +23,7 @@ count helpers; the item modules are D2Game's code compiled into Sigma with a han
   slots instead of 7, **Jewel padding** of the rune list), the **kill-experience penalty**, the **party split of kill
   experience**, a handful of **item event functions** (ids 11, 12, 32, 33, 34 and the monster immunity checks of 15/16)
   and the **item generation** details (ethereal roll, socket roll, item level 100+).
-- **Shipped here** (plugin `items_ext.cpp`, `tools/items_data.py`, off words `runewords` and `xp`, no version bump):
+- **Shipped here** (plugin `items_ext.cpp`, `tools/items_data.py`, off words `runewords`, `xp` and `partyxp`, no version bump):
   runeword properties 8-13 (197 of 237 runewords had lost properties), Jewel padding in the runeword matcher, and the
   kill-experience penalty. Everything else is classified in the tables and left for the next lane with a spec.
 - **Nothing in these modules gates the ubers or the endgame areas** (that was ubers-events.md). The generator keeps
@@ -85,10 +85,10 @@ the dispatcher is reached from the property function `0x3d4620`). Only 1 + 1 sta
 
 | Address | What it does | Bucket | Status | Content |
 |---|---|---|---|---|
-| 0x7e0f0 | byte 0 of the qualities row for a quality below 10 (`work/sigma/qualities.txt`, 5-byte rows [0] used here, [1] 1 for qualities 1-3 = runewords allowed (section 3), [2] 25 for most qualities, [4] 1 from quality 5) | a | open | |
+| 0x7e0f0 | byte 0 of the qualities row for a quality below 10 (`work/sigma/qualities.txt`, 5-byte rows: `Automagics` [0] used here, `Runeword` [1] 1 for qualities 1-3 = runewords allowed (section 3), `EthChance` [2] 25 for most qualities, `MaxSock` [4] 1 from quality 5) | a | open | |
 | 0x7e120 | Median's ethereal roll after generation: items with durability (`0x7fff0`: base flags, stat 0x49 non-zero, not indestructible stat 0x98) of item type 45 or 50: if a 1000-sided die passes, or the item is already ethereal, or the generator flag 4 is set, `0x7fdd0` makes it ethereal (flag `0x400000` set, `0x100000` cleared, +25 percent on type 45's five stats or on stat 0x1f) and durability and maximum durability become 75 percent (minimum 1). **Confirmed by the disassembly**: the die is `rand(1000) <= word [qualities row + 2]` (25 for qualities 1-4, 6, 7, 0 for 5, 8, 9: about 2.6 percent), the +25 is `value + value * 25 / 100`, the tail call `0x7fd70` is the durability step; the call is only reached for item level 100+ (it replaces 1.13c's call inside that branch). D2R's own branch (`0x442d60`) lets 5 in 100 through to `0x3d3510` (+50 percent, then durability / 2 + 1) | c | **shipped** (`ethereal`) | ethereal drops |
 | 0x7e3b0 | thunk for 7e120, patched over the call at D2Game `0x10c88`: 1.13c's own branch of the generator `0x10a20` for item level above 99. read | | | |
-| 0x7e240 | Median's version of the call 1.13c makes for quality 1-3 items at D2Game `0x106b0` / `0x10ca9` (old target `0x6fc2ec90`): a socket roll. **Read (disassembled; the decompiler had mixed up the registers)**: base flag `+0x137` (can have sockets), quality row byte 4 (`FixedRoll`) clear, generator flag 8 clear, then `rand() % 7` is the count: none for a remainder of 0 (1 in 7), else the remainder 1-6 through `0x800b0` (stat 0xc2, clipped to what the item holds). For `FixedRoll` qualities (5-9) the same function gives 6 sockets (clipped), unless a unique's row flag `0x10` is set; the 1.13c call sites only reach it for qualities 1-3, so that branch is dead in practice | c | **shipped** (`sockets`) | sockets on normal items |
+| 0x7e240 | Median's version of the call 1.13c makes for quality 1-3 items at D2Game `0x106b0` / `0x10ca9` (old target `0x6fc2ec90`): a socket roll. **Read (disassembled; the decompiler had mixed up the registers)**: base flag `+0x137` (can have sockets), quality row byte 4 (`MaxSock`) clear, generator flag 8 clear, then `rand() % 7` is the count: none for a remainder of 0 (1 in 7), else the remainder 1-6 through `0x800b0` (stat 0xc2, clipped to what the item holds). For `MaxSock` qualities (5-9) the same function gives 6 sockets (clipped), unless a unique's row flag `0x10` is set; the 1.13c call sites only reach it for qualities 1-3, so that branch is dead in practice | c | **shipped** (`sockets`) | sockets on normal items |
 | 0x7e3c0, 0x7e3e0 | pick one of two 1.13c functions by the flags `0x1000000` / `0x10000000` (thunks to D2Game) | | | |
 | 0x7e400 | qualities row accessor (table at +0x68, 5-byte rows) | a | n/a | |
 | 0x7e450, 0x7e830 | read / set-clear a mask in the item data flags (+0x18) | | | |
@@ -230,8 +230,22 @@ Off words `classlock`, `ethereal`, `sockets`, `dyes`. All four were read in the 
   lring`). Use a ring.
   Monster stat 373 (Median `0xbd`, immune to open wounds and crushing blow) is a data stat on the monster; it is the same
   stat as Median 189 of the absorb credit (combat-stats.md section 2.4).
-- **Party experience (0x5e830): not done, multiplayer only.** Solo play is identical; Median pays every member in range the
-  full award, 1.13c splits by weights. The share loop in the kill function `0x44ece0` was not read.
+- **Party experience (0x5e830): shipped (off word `partyxp`), multiplayer only, not run in game with two players.** Solo
+  play is identical. Median overwrites the 1.13c share function `0xde8f0` (patch table `0xde8f0` = `E9` to thunk `0x5e910`)
+  and pays every collected member the monster's full experience through the per-member award (`0xdc030`: cap, level gap
+  penalty, ExpRatio, stat 0x55; hirelings capped) and the add (`0xde6d0`), with no division and no weighting; it also
+  widens the collect range from `0x1900` to `0x7d00` squared units (80 to about 179; patch table `0xdafcb`).
+  D2R's version: the kill function is `0x44a3b0` (not `0x44ece0`, which is the per-member award `(game, unit, level,
+  monster level, xp)`); it collects with the party iterator `0x506f90(game, killer, callback, ctx)` and callback `0x44fd50`
+  into a 0x70-byte stack context (monster `+0`, units[8] `+8`, levels[8] `+0x48`, count `+0x68`, level sum `+0x6c`) and
+  splits inline at `0x44a62e..0x44a6d7`: pool `xp + (n-1) * xp * 0x59 / 256`, member share `level * pool / sum`
+  (n = 1: the killer gets the full xp). `0x44a3b0` tests `count <= 0` after the iterator (`0x44a5e2`) and then skips the
+  split. The port hooks `0x506f90` (15 stolen bytes, whole instructions): after the original it checks the callback is
+  `0x44fd50`, pays each collected unit `0x44ece0(game, unit, level, monster level, base stat 13 of the monster)` then
+  `0x44f2e0(game, unit, level, amount)`, and sets the count to 0. The range immediate at `0x44fe7b` (`cmp ebx,0x1900`) is
+  patched to `0x7d00` (expected bytes checked). The collect callback also skips members with flag `+0x124 & 0x10000`
+  where 1.13c tested `+0xc6 & 1`; not compared. D2R's table of the vanilla numbers (xp 1000, two level-80 players: pool
+  1347, 673 each; three: 565 each; levels 60 and 90: 538 / 808) is in `items_ext_test.cpp`.
 
 ## 5b. Item events on D2R (lane p4ev, 2026-10-22)
 
@@ -309,7 +323,7 @@ references by raw bytes, which finds callers in code Ghidra did not disassemble)
 | Runeword properties 8-13 | c + data | shipped: `items_data.py`, `items_ext.cpp` |
 | Runeword Jewel padding | c | shipped |
 | Kill experience penalty | c | shipped |
-| Party experience split | c | open (multiplayer) |
+| Party experience split | c | shipped (`partyxp`, hook `0x506f90` + range `0x44fe7b`); two-player run open |
 | Item events 11/12/32/33/34, immunity of 15/16 | c | shipped (`itemevents`: D2RCore handler table, section 5b); func 32 has no consumer |
 | Class lock stat 463 | c | shipped (`classlock`, hook `0x36bc50`) |
 | Ethereal / socket generation | c | shipped (`ethereal`, `sockets`; hooks `0x442d60`, `0x3d3510`, `0x441fc0`) |

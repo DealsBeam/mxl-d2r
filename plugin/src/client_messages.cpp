@@ -33,6 +33,16 @@ constexpr uint8_t ClientOfEntry[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0
 // 0x477a30: mov [rsp+0x18],rbx / push rbp rsi rdi r14 r15 / sub rsp,0x190 (15 bytes)
 constexpr uint8_t SendChatEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec};
 
+// The client's packet table (24-byte entries {handler, size, 0}, index = packet id, docs/d2r-addresses.md section 13): the
+// reader of the chat packet 0x26 is entry 0x26. Its handler gets the packet buffer; the plugin's own messages are taken out
+// in front of it (plugin messages in client_messages_logic.h).
+constexpr uint64_t PacketTableRva = 0x22bbc40;
+constexpr uint64_t ChatReaderRva = 0x12c190;
+constexpr int PacketTableEntry = 24;
+// 0x12c190: mov [rsp+0x10],rbx / mov [rsp+0x18],rsi / push rdi / sub rsp,0x190 (15 bytes)
+constexpr uint8_t ChatReaderEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x81, 0xec, 0x90};
+
+using ChatReaderFn = void (*)(uint8_t* packet);
 using ClientOfFn = void* (*)(Unit* player);
 using SendChatFn = void (*)(void* client, const uint8_t* record);
 using ClientUnitFn = Unit* (*)(void* client, int32_t zero);
@@ -43,6 +53,9 @@ ClientUnitFn g_clientUnit = nullptr;
 constexpr int MenuOpenFlagRva = 0x2a486a4;  // client: u32, 1 while the NPC menu is up (harness_cmds.cpp reads the same)
 uint64_t g_base = 0;
 std::atomic<int> g_sent{0}, g_failed{0};
+ChatReaderFn g_chatOriginal = nullptr;
+PluginMessageFn g_pluginHandlers[256] = {};
+std::atomic<int> g_pluginReceived{0};
 
 // Notices held for a later server frame (SendClientNotice).
 struct Held {
@@ -83,6 +96,59 @@ auto Send(Unit* player, uint8_t type, uint8_t colour, const char* text) noexcept
 	}
 }
 
+// The client's chat reader: a plugin message goes to its handler, everything else to D2R.
+auto TakePluginMessage(uint8_t* packet) noexcept -> bool {
+	__try {
+		if (packet[0] != clientmsg::ChatPacketId || packet[1] != clientmsg::TypeHidden) {
+			return false;
+		}
+		size_t nameLen = 0;
+		while (nameLen <= clientmsg::ChatNameMax && packet[10 + nameLen] != 0) {
+			++nameLen;
+		}
+		if (nameLen > clientmsg::ChatNameMax) {
+			return false;
+		}
+		char kind = 0;
+		uint8_t data[clientmsg::PluginPayloadMax];
+		size_t n = 0;
+		if (!clientmsg::ParsePluginMessage(reinterpret_cast<const char*>(packet + 11 + nameLen), &kind, data, sizeof(data), &n)) {
+			return false;
+		}
+		g_pluginReceived.fetch_add(1);
+		PluginMessageFn fn = g_pluginHandlers[static_cast<uint8_t>(kind)];
+		if (fn != nullptr) {
+			fn(data, n);
+		}
+		return true;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_failed.fetch_add(1);
+		return true;
+	}
+}
+
+void ChatReaderHook(uint8_t* packet) {
+	if (!TakePluginMessage(packet)) {
+		g_chatOriginal(packet);
+	}
+}
+
+// Replaces the handler pointer of table entry 0x26 when it still points at D2R's reader. True when it did.
+auto HookChatReader(uint64_t base) noexcept -> bool {
+	auto* entry = reinterpret_cast<uint64_t*>(base + PacketTableRva + clientmsg::ChatPacketId * PacketTableEntry);
+	if (*entry != base + ChatReaderRva || !Matches(base + ChatReaderRva, ChatReaderEntry, sizeof(ChatReaderEntry))) {
+		return false;
+	}
+	DWORD old = 0;
+	if (!VirtualProtect(entry, sizeof(uint64_t), PAGE_READWRITE, &old)) {
+		return false;
+	}
+	g_chatOriginal = reinterpret_cast<ChatReaderFn>(*entry);
+	*entry = reinterpret_cast<uint64_t>(&ChatReaderHook);
+	VirtualProtect(entry, sizeof(uint64_t), old, &old);
+	return true;
+}
+
 }  // namespace
 
 auto InstallClientMessages(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
@@ -95,7 +161,11 @@ auto InstallClientMessages(const D2RL::PluginContext* context, char* report, siz
 		g_clientUnit = reinterpret_cast<ClientUnitFn>(base + ClientUnitRva);
 		g_base = base;
 	}
-	std::snprintf(report, reportSize, "%s", ok ? "on: chat packet 0x26 to one player" : "off: entry bytes of 0x48fde0 / 0x477a30 differ");
+	const bool reader = ok && HookChatReader(base);
+	std::snprintf(report, reportSize, "%s",
+	              !ok ? "off: entry bytes of 0x48fde0 / 0x477a30 differ"
+	                  : (reader ? "on: chat packet 0x26 to one player, plugin messages read on the client"
+	                            : "on: chat packet 0x26 to one player; plugin messages off (chat reader entry differs)"));
 	return ok;
 }
 
@@ -199,6 +269,29 @@ auto SendGameMessage(d2r::Game* game, const char* text, uint8_t colour) noexcept
 	return sent;
 }
 
+auto SendGamePluginMessage(d2r::Game* game, char kind, const uint8_t* data, size_t n) noexcept -> int {
+	if (game == nullptr || g_clientUnit == nullptr) {
+		return 0;
+	}
+	int sent = 0;
+	int guard = 0;
+	__try {
+		for (auto* client = d2r::At<uint8_t*>(game, GameClients); client != nullptr && guard < 64;
+		     client = d2r::At<uint8_t*>(client, ClientNext), ++guard) {
+			if (d2r::At<int32_t>(client, ClientState) != 4) {
+				continue;
+			}
+			Unit* unit = g_clientUnit(client, 0);
+			if (unit != nullptr && SendPluginMessage(unit, kind, data, n)) {
+				++sent;
+			}
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_failed.fetch_add(1);
+	}
+	return sent;
+}
+
 auto SendClientChat(Unit* player, uint8_t type, uint8_t colour, const char* text) noexcept -> bool {
 	return Send(player, type, colour, text);
 }
@@ -206,4 +299,43 @@ auto SendClientChat(Unit* player, uint8_t type, uint8_t colour, const char* text
 void ClientMessageCounts(int* sent, int* failed) noexcept {
 	*sent = g_sent.load();
 	*failed = g_failed.load();
+}
+
+void SetPluginMessageHandler(char kind, PluginMessageFn fn) noexcept {
+	g_pluginHandlers[static_cast<uint8_t>(kind)] = fn;
+}
+
+auto PluginMessagesOn() noexcept -> bool {
+	return g_chatOriginal != nullptr;
+}
+
+auto SendPluginMessage(Unit* player, char kind, const uint8_t* data, size_t n) noexcept -> bool {
+	if (g_clientOf == nullptr || g_sendChat == nullptr || player == nullptr) {
+		return false;
+	}
+	__try {
+		if (d2r::At<int32_t>(player, d2r::UnitType) != 0) {
+			return false;
+		}
+		void* client = g_clientOf(player);
+		if (client == nullptr) {
+			g_failed.fetch_add(1);
+			return false;
+		}
+		uint8_t record[clientmsg::ChatRecordSize];
+		if (!clientmsg::BuildPluginMessage(record, d2r::At<uint32_t>(player, 0x08), kind, data, n)) {
+			g_failed.fetch_add(1);
+			return false;
+		}
+		g_sendChat(client, record);
+		g_sent.fetch_add(1);
+		return true;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		g_failed.fetch_add(1);
+		return false;
+	}
+}
+
+auto PluginMessagesReceived() noexcept -> int {
+	return g_pluginReceived.load();
 }
