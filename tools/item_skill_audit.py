@@ -21,6 +21,7 @@ from collections import Counter, defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from strings_ns import bare  # noqa: E402  (the built tables qualify string-key cells as `medianxl:<key>`; the named ones are bare)
 
 NAMED = os.path.join(ROOT, "work", "named")
 BUILT = os.path.join(ROOT, "work", "mod", "data", "global", "excel")
@@ -79,20 +80,20 @@ def kinds_and_stats():
 def name_oracles():
     """Median row -> name from the named tables, and name -> built id (skills: *Id column, monsters: row number)."""
     sn = read(os.path.join(NAMED, "skills.txt"))
-    median_skill = {i: r[0] for i, r in enumerate(sn[1:]) if r and r[0]}
+    median_skill = {i: bare(r[0]) for i, r in enumerate(sn[1:]) if r and r[0]}
     sb = read(os.path.join(BUILT, "skills.txt"))
     idc = sb[0].index("*Id")
     built_skill = {}
     for r in sb[1:]:
         if r and r[0] and r[idc].isdigit():
-            built_skill.setdefault(r[0], int(r[idc]))
+            built_skill.setdefault(bare(r[0]), int(r[idc]))
     mn = read(os.path.join(NAMED, "monstats.txt"))
-    median_mon = {i: r[0] for i, r in enumerate(mn[1:]) if r and r[0]}
+    median_mon = {i: bare(r[0]) for i, r in enumerate(mn[1:]) if r and r[0]}
     mb = read(os.path.join(BUILT, "monstats.txt"))
     built_mon = {}
     for i, r in enumerate(mb[1:]):
         if r and r[0]:
-            built_mon.setdefault(r[0], i)
+            built_mon.setdefault(bare(r[0]), i)
     return median_skill, built_skill, median_mon, built_mon
 
 
@@ -106,6 +107,7 @@ def audit():
                 defaults[r[1]] = int(r[2])
     checked, bad, samples = Counter(), [], defaultdict(list)
     unmapped = Counter()
+    audit.wanted = set()  # tables whose Median rows carry a skill / monster parameter at all (a row the build lost still counts)
 
     def expect(kind, value):
         if kind == "monster":
@@ -123,16 +125,19 @@ def audit():
         built_rows = defaultdict(list)
         for i, r in enumerate(bt[1:]):
             if r and r[0]:
-                built_rows[r[0]].append((i, r))
+                built_rows[bare(r[0])].append((i, r))
         seen = Counter()
         for r in nt[1:]:
             if not r or not r[0] or r[0] == "Expansion":
                 continue
-            nth = seen[r[0]]
-            seen[r[0]] += 1
-            if nth >= len(built_rows.get(r[0], [])):
+            key = bare(r[0])  # rows are matched by their name cell, whatever the namespace prefix
+            nth = seen[key]
+            seen[key] += 1
+            if any(c < len(r) and r[c] and kinds.get(r[c]) and r[p].isdigit() for c, p, _lo, _hi in ng if p is not None and p < len(r)):
+                audit.wanted.add(table)
+            if nth >= len(built_rows.get(key, [])):
                 continue  # a Median row the build dropped (disabled / replaced): nothing to compare
-            index, br = built_rows[r[0]][nth]
+            index, br = built_rows[key][nth]
             for (ncode, npar, nlo, nhi), (bcode, bpar, blo, bhi) in zip(ng, bg):
                 code = r[ncode] if ncode < len(r) else ""
                 if not code or code != br[bcode]:

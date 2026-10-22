@@ -6,8 +6,9 @@
 //    every player in the game. A player within PickupRadius of a waypoint object of his own level (objects.txt OperateFn 23) who
 //    lacks that level's waypoint number gets the bit set with 0x3d6890, the engine's own setter. The waypoint panel needs nothing
 //    else: the object's operate function 0x58fe00 sends the whole record (packet 0x63) when he clicks the waypoint.
-// 2. Hotkeys through D2RLoader's InputService (Median's table, D2Sigma 0x1d9110): X toggles Median's no-pickup flag (here:
-//    the switch of 1.), R reveals the map, C transmutes while the Horadric Cube panel is open. They appear in the Controls menu.
+// 2. Hotkeys through D2RLoader's InputService (Median's table, D2Sigma 0x1d9110): the auto pickup toggle (Median's no-pickup flag,
+//    here the switch of 1.), the map reveal and the transmute while the Horadric Cube panel is open. Default keys X, L and K (see
+//    travel_logic.h: R and C are D2R's run toggle and Character screen). They appear in the Controls menu.
 // 3. Map reveal (audit MU2). D2R has the debug menu's "Reveal Automap" (0xd42b0): a breadth-first walk over the rooms joined to the
 //    player's room that adds each room's tiles and preset objects to the automap layer (visitor 0xd2240), and then flips the debug
 //    flag byte 0x2a2add4. The hotkey calls it on the UI thread and writes the flag back. Median reveals every level of the act
@@ -91,12 +92,12 @@ UnitByIdFn g_unitById = nullptr;
 bool g_wpautoOn = false;
 bool g_mapRevealOn = false;
 bool g_hotkeysOn = false;
-std::atomic<bool> g_pickupOn{true};  // the X toggle
+std::atomic<bool> g_pickupOn{true};  // the auto pickup hotkey
 std::atomic<uint32_t> g_activated{0};
 std::atomic<uint32_t> g_scans{0};
 std::atomic<int> g_lastLevel{-1};
 std::atomic<int> g_lastNumber{-1};
-std::atomic<uint32_t> g_xPresses{0}, g_rPresses{0}, g_cPresses{0};
+std::atomic<uint32_t> g_pickupPresses{0}, g_revealPresses{0}, g_transmutePresses{0};
 std::atomic<uint32_t> g_reveals{0}, g_revealCells{0}, g_transmutes{0}, g_transmuteBlocked{0};
 std::atomic<bool> g_cubeOpen{false};
 std::atomic<uint32_t> g_cubeMessages{0};
@@ -301,18 +302,18 @@ auto __cdecl OnAction(const D2RL::PluginContext* context, const D2RL::Input::Act
 	const auto which = static_cast<int>(reinterpret_cast<intptr_t>(userData));
 	switch (which) {
 	case 0:  // X
-		g_xPresses.fetch_add(1);
+		g_pickupPresses.fetch_add(1);
 		g_pickupOn.store(!g_pickupOn.load());
-		context->LogInfo(g_pickupOn.load() ? "mxl-core: auto pickup on (X)" : "mxl-core: auto pickup off (X)");
+		context->LogInfo(g_pickupOn.load() ? "mxl-core: auto pickup on (hotkey)" : "mxl-core: auto pickup off (hotkey)");
 		return D2RL::Input::ActionResult::Handled;
 	case 1:  // R
-		g_rPresses.fetch_add(1);
+		g_revealPresses.fetch_add(1);
 		if (g_mapRevealOn && g_threads != nullptr) {
 			g_threads->runOnUiThread(context, RevealOnUi, nullptr);
 		}
 		return D2RL::Input::ActionResult::Handled;
 	case 2:  // C
-		g_cPresses.fetch_add(1);
+		g_transmutePresses.fetch_add(1);
 		if (g_threads != nullptr) {
 			g_threads->runOnUiThread(context, TransmuteOnUi, nullptr);
 		}
@@ -538,9 +539,9 @@ auto TravelRevealNow() noexcept -> int {
 }
 
 void TravelStatus(char* out, size_t outSize) noexcept {
-	std::snprintf(out, outSize, "%u waypoints activated (last: number %d, level %d, %u scans, pickup %s) | reveals %u (+%u cells) | keys X %u R %u C %u | transmutes %u (blocked %u, cube %s)",
+	std::snprintf(out, outSize, "%u waypoints activated (last: number %d, level %d, %u scans, pickup %s) | reveals %u (+%u cells) | keys pickup %u reveal %u transmute %u | transmutes %u (blocked %u, cube %s)",
 	              g_activated.load(), g_lastNumber.load(), g_lastLevel.load(), g_scans.load(), g_pickupOn.load() ? "on" : "off", g_reveals.load(),
-	              g_revealCells.load(), g_xPresses.load(), g_rPresses.load(), g_cPresses.load(), g_transmutes.load(), g_transmuteBlocked.load(),
+	              g_revealCells.load(), g_pickupPresses.load(), g_revealPresses.load(), g_transmutePresses.load(), g_transmutes.load(), g_transmuteBlocked.load(),
 	              g_cubeOpen.load() ? "open" : "closed");
 }
 

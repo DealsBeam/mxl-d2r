@@ -388,23 +388,40 @@ def goblins_counts(st):
     return (int(m.group(1)), int(m.group(2))) if m else (None, None)
 
 
+def player_dead(p):
+    """The server's player unit is dead: mode 0 / 17, or life 0."""
+    life = str(p.get("life", "1")).split("/")[0]
+    return p.get("mode") in (0, 17) or life == "0"
+
+
 def revive_if_dead(timeout=20):
-    """A dead test character (player mode 0 / 17, life 0) closes the game on `cheat goto`: press Esc (D2R respawns
-    the character in town with full life, as a window message) and wait for it. Returns True when it was dead."""
-    def dead(p):
-        life = str(p.get("life", "1")).split("/")[0]
-        return p.get("mode") in (0, 17) or life == "0"
+    """A dead test character (player mode 0 / 17) closes the game on `cheat goto` and ignores hits, menus and hiring. Returns True
+    when it was dead.
+    Two kinds of death. A real one (life 0, the client shows the death state): Esc is the respawn request (the plugin holds it
+    back for 5 s), pressed every 3 s. A harness-made one: a check that sets the life stat (`stat player 6`) after the character
+    died leaves the server unit in mode 17 with life above 0 while the client believes the character is alive (a screenshot shows
+    it standing, Esc opens the pause menu instead and `state` stops answering for 15 s); no respawn request can come from the
+    client then. Save and Exit + Play loads the character in the town, which is what a respawn does."""
     p = hstate()["player"]
-    if not p or not dead(p):
+    if not p or not player_dead(p):
         return False
-    g.log("the test character is dead (mode %s): Esc to respawn in town" % p.get("mode"))
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        g.press("esc")
-        time.sleep(3)
-        p = hstate()["player"]
-        if p and not dead(p):
-            break
+    life = str(p.get("life", "0")).split("/")[0]
+    g.log("the test character is dead (mode %s, life %s)" % (p.get("mode"), life))
+    if life == "0":
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            g.press("esc")
+            time.sleep(3)
+            st = hstate()
+            if not st["player"]:  # `state` does not answer: Esc paused the game (the character was not dead for the client)
+                break
+            if not player_dead(st["player"]):
+                return True
+    p = hstate()["player"]
+    if p and not player_dead(p):
+        return True
+    g.log("no respawn request is possible (the client does not know the death): Save and Exit + Play")
+    leave_and_reenter(menu_open=not hstate()["player"])  # `state` silent: the pause menu is already open
     return True
 
 
@@ -437,20 +454,26 @@ def wait_menu(timeout=60):
     return None
 
 
-def npc_menu(npc_class, spawn=True):
-    """Stand next to an NPC (spawn it when it is not loaded), talk, wait for the menu. Returns the menu lines."""
-    ok, lines = H("interact %d" % npc_class)  # the town's own NPC: its speech ends with the menu
-    if not ok and spawn:
-        H("spawn %d" % npc_class)
-        ok, lines = H("interact %d" % npc_class)
-    if not ok:
-        return None
-    menu = wait_menu(40)
-    if menu is None:  # the first click of a speech can be lost: talk again
+def npc_menu(npc_class, spawn=True, attempts=4):
+    """Stand next to an NPC (spawn it when it is not loaded), talk, wait for the menu. Returns the menu lines.
+    The menu opens when the NPC's speech has played, and the click that starts the speech can be lost (the first talk of a long
+    speech, an NPC that is still walking, an earlier menu still open): every attempt closes what is open, talks again and waits
+    a shorter time; a dead character (it cannot talk) is revived first."""
+    revive_if_dead()
+    for attempt in range(attempts):
         close_menu()
-        H("interact %d" % npc_class)
-        menu = wait_menu(40)
-    return menu
+        ok, lines = H("interact %d" % npc_class)  # the town's own NPC: its speech ends with the menu
+        if not ok and spawn:
+            H("spawn %d" % npc_class)
+            time.sleep(1)
+            ok, lines = H("interact %d" % npc_class)
+        if not ok:
+            time.sleep(2)
+            continue
+        menu = wait_menu(30 if attempt == 0 else 15)
+        if menu is not None:
+            return menu
+    return None
 
 
 def close_menu():
@@ -552,6 +575,7 @@ def check_respec():
     # the read-back can differ from the value set when the test character wears strength items left by earlier runs:
     # compare against what the game reports, not against fixed numbers
     spent = stat_of(H("stat player 0")[1])
+    base_stats = [stat_of(H("stat player %d" % i)[1]) for i in range(4)]  # strength, energy, dexterity, vitality before the respec
     menu = npc_menu(148)
     if not menu:
         return add(name, "BLOCKED", "Akara's menu did not open (menu list: %s)" % menu)
@@ -580,6 +604,7 @@ def check_respec():
         return add(name, "FAIL", "after No, the menu did not come back with the plugin line: %s" % menu, [shot, confirm_shot], ml + no_out)
     idx = int(re.search(r"line (\d+)", plugin_lines[0]).group(1))
     m = mxl_mark()
+    unused0 = stat_of(H("stat player 4")[1])
     ok, ml2 = H("menu %d" % idx)
     time.sleep(1.5)
     _, c2 = H("menu confirm")
@@ -587,22 +612,29 @@ def check_respec():
     time.sleep(1)
     _, after0 = H("stat player 0")
     _, after4 = H("stat player 4")
+    after_stats = [stat_of(H("stat player %d" % i)[1]) for i in range(4)]
     lines = [ln for ln in mxl_lines_since(m) if "npc actions" in ln]
     s0 = stat_of(after0)
     s4 = stat_of(after4)
     _, q = H("quest 41 dump")
     done = any("done" in ln for ln in lines)
-    # the character's strength goes back to the class start (Barbarian 30) and every point spent comes back as unused points
-    refunded = spent - s0 if s0 is not None else None
+    # Every base stat goes back to the class start (Barbarian: strength 30, ...) and every point spent comes back as unused points:
+    # the refund is the sum over all four stats, not strength alone (a character that has spent points on dexterity, vitality and
+    # energy gets those back too). Item bonuses sit on both sides of a stat's difference, so before - after is the base refund.
+    refunded = sum(b - a for b, a in zip(base_stats, after_stats)) if None not in base_stats + after_stats else None
     asked2 = any("open" in ln for ln in c2)
-    add(name, "PASS" if (asked and declined and asked2 and ok and done and s0 is not None and s0 < spent and refunded >= 60 and s4 == base4 + refunded) else "FAIL",
+    add(name, "PASS" if (asked and declined and asked2 and ok and done and s0 is not None and s0 < spent and refunded is not None
+                         and refunded >= 60 and s4 == unused0 + refunded) else "FAIL",
         "menu lines %s; the click opens the Yes / No page (%s) and No leaves strength at %s (%s); after Yes strength %s -> %s "
-        "(Barbarian start 30), unused stat points %d -> %s (%s refunded); log `%s`; quest 41 %s" % (
-            [ln.strip() for ln in menu[1:]], asked, spent, declined, spent, s0, base4, s4, refunded,
+        "(Barbarian start 30), stats 0-3 %s -> %s, unused stat points %s -> %s (%s refunded over the four stats); log `%s`; quest 41 %s" % (
+            [ln.strip() for ln in menu[1:]], asked, spent, declined, spent, s0, base_stats, after_stats, unused0, s4, refunded,
             lines[-1][-60:] if lines else "none", q[0]),
         [shot, confirm_shot], menu + ml + c1 + no_out + ml2 + c2 + yes_out + lines)
     close_menu()
-    H("stat player 4 set %d" % base4)  # the refund raised the unused points: the saved test character keeps the old number
+    for i, v in enumerate(base_stats):  # the respec reset every stat and raised the unused points: the saved test character keeps its numbers
+        if v is not None:
+            H("stat player %d set %d" % (i, v))
+    H("stat player 4 set %d" % base4)
 
 
 def messages_sent():
@@ -1588,11 +1620,14 @@ def check_item_events():
     log += l
     if mid is None:
         return add(nm, "BLOCKED", "no monster could be spawned")
+    H("stat m%d 6 0 set 700000" % mid)  # a monster of the area's level has a few points of life, fewer than the 50 the event takes
     a = life_of(mid)
     H("evtrace fire 3 player m%d" % mid)
     b = life_of(mid)
-    thorns = ok and a is not None and b is not None and a - b == 50 * 256
-    notes.append("thorns 50: monster life %s -> %s (%s)" % (a, b, "-50 points" if thorns else "WRONG"))
+    # the monster is next to the character and may attack in the same second: its own hit fires the event as well, so the loss
+    # is one 50 or more (never a fraction of one)
+    thorns = ok and a is not None and b is not None and a - b >= 50 * 256 and (a - b) % (50 * 256) == 0
+    notes.append("thorns 50: monster life %s -> %s (%s)" % (a, b, "-%d points" % ((a - b) // 256) if thorns else "WRONG"))
     H("kill nearest")
     # life on kill: stat 265 = 50 (D2RCore function 33 -> D2R function 28), +50 points to a character at 100 life
     # (the character's own gear may heal on a kill too: the gain is measured against a kill without the ring)
@@ -1605,8 +1640,16 @@ def check_item_events():
     H("stat player 6 0 set 25600")
     ok2, l2 = H("evtrace fire 9 player m%d" % mid)
     life = stat_of(H("stat player 6")[1])
+    for _ in range(8):  # the heal may land a few frames after the event call returns: read again until it is whole (or 1.6 s have passed)
+        if life is not None and base is not None and life - base >= 50 * 256:
+            break
+        time.sleep(0.2)
+        life = stat_of(H("stat player 6")[1])
     heal = ok and ok2 and base is not None and life is not None and 50 * 256 <= life - base < 50 * 256 + 2000  # plus a little regeneration
     notes.append("life on kill 50: player life 25600 -> %s without the ring, %s with it (%s)" % (base, life, "+50 points" if heal else "WRONG"))
+    # The measurement needed a character at 100 life; everything after it (cast on kill volleys, the wild monsters of the area) does
+    # not, and a character left at 100 life dies: the server unit then stays dead (mode 17) for every later check. Life back up.
+    H("stat player 6 0 set 700000")
     H("kill nearest")
     # cast on kill: stat 376 layer 36 * 64 + 5 (Fire Bolt level 5, 100 %): a missile (class 58) appears, the skill need not be known
     H("unequip lring")
@@ -1817,7 +1860,7 @@ def check_median_ai():
         H("kill %d" % mid)  # by id: the listing can be full of unkillable summons (Malthael's dark nephalems, class 1239)
         if not alive:
             break
-    clear_mons()
+    clean_area()
     god(False)
     add(name, "PASS" if not bad and users else "FAIL", "%d of %d users acted%s%s | %s" % (
         len(users) - len(bad) - len(skipped), len(users), (" (FAILED: %s)" % ", ".join(bad)) if bad else "",
@@ -1862,9 +1905,9 @@ def check_median_ai_controlled():
     alive = hstate()["ok"]
     before = c1["controlled"] - c0["controlled"]
     after = c2["controlled"] - c1["controlled"]
-    god(False)
     shot = sh("medianai_controlled")
-    kill_all_near()
+    clean_area()
+    god(False)
     good = alive and before == 0 and after > 0 and c2["thinks"] > c1["thinks"]
     add(name, "PASS" if good else "FAIL",
         "controlled thinks before the first hit +%d (must be 0), after the hits +%d (must be > 0); thinks %d -> %d; controlled thinks after each staggering hit %s; monster modes right after the hits %s; game alive %s" % (
@@ -1964,6 +2007,35 @@ def spawn_attacker(cls=1):
     return ("mon:%s" % m.group(1)) if m else None
 
 
+def leftover_monsters():
+    """Live monsters `h state` lists around the player that are not town NPCs (it lists at most 60 within 40 units)."""
+    st = hstate()
+    return [m for m in st["mons"] if not m.get("npc") and m.get("mode") not in (0, 12)] if st["ok"] else []
+
+
+def clean_area():
+    """Kill every monster that can be killed around the player. What survives (the dark nephalems Malthael's AI summons in `medianai`,
+    class 1239, are unkillable) stays in the level for the rest of the game and kills a later check's character the moment it
+    arrives (a level 150 character died within two seconds of `cheat goto 2`): only a new game removes it. Save and Exit + Play puts
+    the character in town, and the area is entered again."""
+    st = hstate()
+    area = st["player"].get("area") if st["ok"] else None
+    if area in (None, 1):
+        return
+    clear_mons()
+    kill_all_near()
+    left = leftover_monsters()
+    if left:
+        g.log("clean_area: %d monsters cannot be killed (%s): a new game clears the level" % (
+            len(left), ", ".join(str(m.get("class")) for m in left[:6])))
+        revive_if_dead()  # what survives may have killed the character meanwhile; a dead one has no pause menu (Esc respawns it in the town)
+        if not leave_and_reenter():
+            return
+        goto(area)
+        close_menu()
+        kill_all_near()
+
+
 def fight_ready():
     """Outside the town (damage and avoidance run there), no god mode, no leftovers of the earlier check."""
     god(False)
@@ -1971,7 +2043,7 @@ def fight_ready():
     if st["player"].get("area") != 2:
         goto(2)
     close_menu()
-    kill_all_near()
+    clean_area()
 
 
 def have_merc():
@@ -1980,23 +2052,43 @@ def have_merc():
 
 
 def ensure_merc():
-    """A hired mercenary (Kashya, act 1 Rogue) standing next to the player in the field."""
+    """A hired mercenary (Kashya, act 1 Rogue) standing next to the player in the field. Starts from any state of the character: a
+    dead character is revived first (it cannot hire), the old mercenary may be dead or missing (the hire replaces it), gold is
+    set, the hire quest is set, and when the server refuses one list entry the next free one is tried."""
+    revive_if_dead()
     if not have_merc():
-        goto(1)
-        close_menu()
-        H("gold set 20000 0")
-        H("quest 2 0 set")  # Kashya hires once Blood Raven is dead (Median's gate is the quest alone)
-        for _ in range(2):
-            ok, _l = H("hire 150 0")
-            if ok:
+        for attempt in range(3):
+            if hstate()["player"].get("area") != 1:
+                goto(1)
+            close_menu()
+            H("gold set 20000 0")
+            H("quest 2 0 set")  # Kashya hires once Blood Raven is dead (Median's gate is the quest alone)
+            hired = False
+            for n in range(6):  # `hire` counts the free entries of the list (hired / unavailable ones are skipped)
+                ok, lines = H("hire 150 %d" % n)
+                if ok:
+                    hired = True
+                    break
+                g.log("ensure_merc: attempt %d, free entry %d: %s" % (attempt, n, " | ".join(lines)[-200:]))
+                if any("no such NPC" in ln for ln in lines):
+                    H("spawn 150")  # the hirer is not loaded yet
+                    time.sleep(2)
+                elif any("no free entry" in ln for ln in lines):
+                    break
+                else:
+                    time.sleep(1)
+            if hired or have_merc():
                 break
-            H("spawn 150")  # the hirer is not loaded yet
-            time.sleep(1)
+            time.sleep(2)
     if not have_merc():
         return False
     if hstate()["player"].get("area") != 2:
         goto(2)
     for _ in range(30):  # the mercenary follows a few seconds after the player's area change
+        if player_dead(hstate()["player"]):  # killed on arrival: revive (new game) and come back
+            revive_if_dead()
+            goto(2)
+            kill_all_near()
         if H("stat merc 7")[0]:
             setstat("merc", 7, BIG_LIFE)  # a spawned monster would kill a level-4 mercenary before the check starts
             setstat("merc", 6, BIG_LIFE)
@@ -2027,20 +2119,28 @@ def check_resistcap():
     amount, bad, rows = 100000, [], []
     for ref, attacker in (("player", atk), ("merc", atk)):  # never the nearest monster: that is the hired mercenary
         saved = {s: rd(ref, s) for e in elems for s in e[1:]}
+        # Median's stat 184 (D2R 369) cuts the damage after the resistance, and an item of the character can carry it (the level 32
+        # test character wields a weapon with 25%, so every hit did 75% of the cap's share): `stat set` writes the base value, so what
+        # is left after zeroing it is what the gear gives, and the expectation is the cap's share cut by that.
+        setstat(ref, 369, 0)
+        cut = rd(ref, 369) or 0
         for elem, res, mx in elems:
             for add_max, want in cases:
                 setstat(ref, res, 200)
                 setstat(ref, mx, add_max)
                 r = hit(ref, elem, amount, attacker)
                 got = r[0] / amount if r else None
+                want_cut = _reduce(round(want * amount), cut) / amount
                 rows.append("%s %s max+%d: %s%%" % (ref, elem, add_max, "-" if got is None else "%.1f" % (got * 100)))
-                if got is None or abs(got - want) > 0.006:
-                    bad.append("%s %s max+%d took %s (want %d%%)" % (ref, elem, add_max, rows[-1].split(": ")[1], round(want * 100)))
+                if got is None or abs(got - want_cut) > 0.006:
+                    bad.append("%s %s max+%d took %s (want %.1f%%: cap share %d%%, stat 184 from other sources %d%%)" % (
+                        ref, elem, add_max, rows[-1].split(": ")[1], want_cut * 100, round(want * 100), cut))
         for s, v in saved.items():
             setstat(ref, s, v or 0)
+        setstat(ref, 369, 0)
     H("kill nearest 1")
     add(name, "PASS" if not bad else "FAIL",
-        "resist 200 against a 100000-unit hit (damage taken): %s" % ("; ".join(rows) if not bad else "; ".join(bad)),
+        "resist 200 against a 100000-unit hit (damage taken; the cap's share cut by the gear's stat 184, if any): %s" % ("; ".join(rows) if not bad else "; ".join(bad)),
         [sh("resistcap")], rows)
 
 
@@ -2599,18 +2699,31 @@ def check_goldclient():
         % (s1[0], a, s2[0], b), [], l1 + l2)
 
 
-def leave_and_reenter():
-    """Esc menu -> Save and Exit -> character select -> Play (the same character)."""
-    g.key("esc")
-    time.sleep(1.5)
+def leave_and_reenter(menu_open=False):
+    """Esc menu -> Save and Exit -> character select -> Play (the same character). `menu_open`: the pause menu is already up."""
+    if not menu_open:
+        g.key("esc")
+        time.sleep(1.5)
     g.click(*g.UI["save_exit"])
     time.sleep(9)
     STATE["in_game"] = False
     left = not g.in_game()
-    if not left:
+    if not left:  # the click did not leave the game (a dead character has no pause menu): the game goes on
+        STATE["in_game"] = True
         return False
     time.sleep(2)
     return enter_game()
+
+
+def clear_quest_bits(q, only=None):
+    """Clear the set bits of quest record `q` (the game's current difficulty) through the harness; `only` limits it to those bits."""
+    _, lines = H("quest %d dump" % q)
+    m = re.search(r"bits0-15 ([01]{16})", " ".join(lines))
+    if not m:
+        return
+    for bit, v in enumerate(m.group(1)):
+        if v == "1" and (only is None or bit in only):
+            H("quest %d %d clear" % (q, bit))
 
 
 def check_bonusdrops():
@@ -2619,17 +2732,23 @@ def check_bonusdrops():
         return add(name, "BLOCKED", "not in a game")
     fight_ready()
     H("difficulty 1")
-    H("quest 47 1 clear")
-    H("quest 47 2 clear")
+    # D2R's quest engine only runs a quest's kill handler while the quest is open, and the first kill completes it (the quest
+    # words 13 Summoner / 25 Izual stay set in the saved character); the catalyst flags are bits 1 / 2 of quest 47. Whatever an
+    # earlier run or check left there, the quests are reopened before every kill and the flag cleared before the first one:
+    # the second kill then reaches the hook with the flag set, which is what must hand out nothing.
+    clear_quest_bits(47, {1, 2})
     out = []
     ok = True
-    for cls, code, bit in ((250, "0o[", 1), (256, "jcat", 2)):
+    for cls, code, bit, quest in ((250, "0o[", 1, 13), (256, "jcat", 2, 25)):
+        clear_quest_bits(quest)
+        clear_quest_bits(47, {bit})
         before = ground_count(code)
         H("spawn %d" % cls)
         H("kill nearest %d" % cls)
         time.sleep(1)
         n1 = ground_count(code) - before
         _, q = H("quest 47 %d get" % bit)
+        clear_quest_bits(quest)  # the first kill completed the quest: reopen it so that the hook runs again with the flag set
         H("spawn %d" % cls)
         H("kill nearest %d" % cls)
         time.sleep(1)
@@ -2645,6 +2764,8 @@ def check_summoner():
     if not need_game():
         return add(n1, "BLOCKED", "not in a game")
     fight_ready()
+    # fight_ready's clean_area removed what an earlier check left in Blood Moor: Malthael's dark nephalems of `medianai` (class 1239)
+    # cannot be killed and kept the Summoner from casting ("modes [1]"); a new game clears them.
     god(True)
     notes, ok_all = [], True
     for cls, label in ((250, "Summoner"), (2053, "MosquitoNest")):
@@ -3364,8 +3485,11 @@ def check_vendors():
         if not near or near[0].get("dist", 99) > 6:
             H("spawn %d" % cls)  # out of reach (behind a wall) or not loaded: a copy next to the character
             time.sleep(4)  # the client has to learn the new unit before it can talk to it
-        H("interact %d" % cls)
-        menu = wait_menu(60)
+        menu = npc_menu(cls)  # talks again when the first click was lost (retries, closes a menu that is still open)
+        if menu is None:  # the unit may be one the client cannot talk to (out of reach): a copy next to the character
+            H("spawn %d" % cls)
+            time.sleep(4)
+            menu = npc_menu(cls)
         if menu is None:
             bad.append("%s: no menu" % nm)
             continue
@@ -3705,6 +3829,119 @@ def check_nocorpse():
     The plugin counts the calls it swallowed (`h state`: skipped corpse calls / penalty calls): they must have risen, or the
     death never reached the two functions and nothing was tested."""
     nm = "No corpse on death (Median): no corpse unit, gear and belt kept, gold and xp unchanged, respawn after 5 s in town"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    fight_ready()
+    pids = sorted(g.game_pids())
+
+    def snap():
+        st = hstate()
+        eq = sorted((str(i.get("code")), i.get("body")) for i in st["items"] if i.get("body", 0) > 0)
+        m = re.search(r"corpses (\d+) players=(\d+) self=(\d)", " ".join(st["lines"]))
+        sk = re.search(r"no corpse (\w+): skipped corpse calls=(\d+) penalty calls=(\d+) respawns held=\d+ let=\d+ xp=(\d+)", " ".join(st["lines"]))
+        rh = re.search(r"respawns held=(\d+) let=(\d+)", " ".join(st["lines"]))
+        p = st["player"]
+        return {"gold": p.get("gold"), "bank": p.get("bank"), "area": p.get("area"), "mode": p.get("mode"), "eq": eq,
+                "corpses": int(m.group(1)) if m else None, "players": int(m.group(2)) if m else None,
+                "self": int(m.group(3)) if m else None, "on": sk.group(1) == "on" if sk else None,
+                "skc": int(sk.group(2)) if sk else None, "skp": int(sk.group(3)) if sk else None,
+                "xp": int(sk.group(4)) if sk else None, "level": p.get("level"), "ground_gold": ground_count("gld"),
+                "frame": p.get("frame"), "held": int(rh.group(1)) if rh else None, "let": int(rh.group(2)) if rh else None}
+
+    level0, xp0 = rd("player", 12), rd("player", 13)
+    H("unequip lring")
+    H("unequip amulet")
+    ok1, _l1 = H("equip rin lring")
+    ok2, _l2 = H("equip amu amulet")
+    H("unequip belt")
+    ok3, _l3 = H("equip 629 belt")  # a belt (Median code 629): the belt's potions would go to the corpse in D2 (audit DC1); the harness cannot fill a belt
+    H("gold set 23456 7890")
+    if level0 is not None and level0 < 2:
+        setstat("player", 12, 20)  # the experience penalty only exists above level 1
+    setstat("player", 13, 1000000000)
+    atk = spawn_attacker(1)
+    if atk is None or not (ok1 and ok2 and ok3):
+        return add(nm, "BLOCKED", "no attacker monster" if atk is None else "could not equip the three test items")
+    before = snap()
+    setstat("player", 7, BIG_LIFE)
+    setstat("player", 6, 256 * 100)
+    ok, line, lines = hv("hit player phys 2000000000 %s" % atk, "hit")
+    for _ in range(12):  # the death animation (mode 0) runs a second or two; the corpse creator is called on the way into mode 0x11
+        time.sleep(1)
+        if hstate()["player"].get("mode") == 17:
+            break
+    dead = snap()
+    shot_dead = sh("nocorpse_dead")
+    g.press("esc")  # too early: the respawn request must be held back (audit DC4)
+    time.sleep(1)
+    early = snap()
+    waited = 0
+    while waited < 15 and (hstate()["player"].get("frame") or 0) - (dead["frame"] or 0) < 130:  # 125 frames = 5 s, plus a margin
+        time.sleep(1)
+        waited += 1
+    survived = sorted(g.game_pids()) == pids and hstate()["ok"]
+    revived = revive_if_dead()
+    time.sleep(2)
+    after = snap()
+    shot_after = sh("nocorpse_respawned")
+    alive = after["mode"] not in (0, 17)
+
+    def same(a, b):
+        return a["eq"] == b["eq"] and a["gold"] == b["gold"] and a["bank"] == b["bank"] and a["xp"] == b["xp"]
+
+    problems = []
+    if before["on"] is not True:
+        problems.append("plugin part nocorpse is not on: %s" % before["on"])
+    if before["self"] != 1:
+        problems.append("the unit scan does not see the character itself (self=%s): the corpse count means nothing" % before["self"])
+    if len(before["eq"]) < 2:
+        problems.append("fewer than two equipped items before the death: %s" % before["eq"])
+    if dead["mode"] not in (0, 17):
+        problems.append("the character did not die (mode %s): %s" % (dead["mode"], line[:90]))
+    if not survived:
+        problems.append("the game process did not survive")
+    if (dead["skc"] or 0) <= (before["skc"] or 0) or (dead["skp"] or 0) <= (before["skp"] or 0):
+        problems.append("the death did not reach the corpse creator / penalty hooks (skipped calls %s/%s -> %s/%s)" %
+                        (before["skc"], before["skp"], dead["skc"], dead["skp"]))
+    for label, snapshot in (("dead", dead), ("after respawn", after)):
+        if snapshot["corpses"] != before["corpses"]:  # a corpse from an earlier death in the save (made before the part) is not new
+            problems.append("%s: %s corpse unit(s) in the game, %s before the death" % (label, snapshot["corpses"], before["corpses"]))
+        if not same(before, snapshot):
+            problems.append("%s: equipment / gold / bank / xp changed: %s -> %s" % (label, {k: before[k] for k in ("eq", "gold", "bank", "xp")},
+                                                                                {k: snapshot[k] for k in ("eq", "gold", "bank", "xp")}))
+        # The piles are counted in the area the character stands in: after the respawn that is the town, whose ground is not the
+        # level the character died in (the count there says nothing about the death), so only the same area is compared.
+        if snapshot["area"] == before["area"] and snapshot["ground_gold"] != before["ground_gold"]:
+            problems.append("%s: gold piles on the ground %s -> %s" % (label, before["ground_gold"], snapshot["ground_gold"]))
+    if not revived or not alive:
+        problems.append("respawn failed (revived %s, mode %s)" % (revived, after["mode"]))
+    if early["mode"] not in (0, 17):
+        problems.append("respawn at once was not held back (mode %s a second after the death)" % early["mode"])
+    if (early["held"] or 0) <= (before["held"] or 0):
+        problems.append("the plugin did not count a held respawn request (held %s -> %s): was Esc a respawn request?" % (before["held"], early["held"]))
+    if (after["let"] or 0) <= (before["let"] or 0):
+        problems.append("the respawn after the wait did not pass the hook (let through %s -> %s)" % (before["let"], after["let"]))
+    if after["area"] is None or after["area"] not in (1, 40, 75, 103, 109):
+        problems.append("not in a town after the respawn (area %s)" % after["area"])
+    add(nm, "FAIL" if problems else "PASS",
+        "%s | killed by a hit of 2e9 from a spawned monster (%s); before: items %s gold %s bank %s xp %s; dead (mode %s): corpses %s (before: %s), "
+        "gold %s xp %s, hooks swallowed corpse %s->%s penalty %s->%s calls; after Esc: mode %s area %s, corpses %s, items %s gold %s bank %s xp %s, "
+        "ground gold piles %s->%s; respawn held %s->%s, let %s->%s, frames dead->early Esc->respawn %s->%s->%s" %
+        ("; ".join(problems) if problems else "all unchanged", line[:70], before["eq"], before["gold"], before["bank"], before["xp"],
+         dead["mode"], dead["corpses"], before["corpses"], dead["gold"], dead["xp"], before["skc"], dead["skc"], before["skp"], dead["skp"],
+         after["mode"], after["area"], after["corpses"], after["eq"], after["gold"], after["bank"], after["xp"],
+         before["ground_gold"], after["ground_gold"], before["held"], after["held"], before["let"], after["let"],
+         dead["frame"], early["frame"], after["frame"]), [shot_dead, shot_after], lines)
+    # put the test character back
+    H("unequip lring")
+    H("unequip amulet")
+    H("unequip belt")
+    setstat("player", 13, xp0 if xp0 is not None else 0)
+    if level0 is not None:
+        setstat("player", 12, level0)
+    setstat("player", 6, rd("player", 7) or BIG_LIFE)
+
+
 
 def _excel(name):
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "mod", "data", "global", "excel", "base", name + ".txt")
@@ -4334,122 +4571,22 @@ def check_deathcrash():
     nm = "Player death (bug #12): killed by a monster, the game survives, respawn works"
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
+    # Outside the town and alive: a player in a town cannot be hurt (the hit is ignored, result 0) and a dead one cannot die again.
+    # The check before this one (nocorpse) ends with a respawn, in the town.
+    revive_if_dead()
     fight_ready()
     pids = sorted(g.game_pids())
-
-    def snap():
-        st = hstate()
-        eq = sorted((str(i.get("code")), i.get("body")) for i in st["items"] if i.get("body", 0) > 0)
-        m = re.search(r"corpses (\d+) players=(\d+) self=(\d)", " ".join(st["lines"]))
-        sk = re.search(r"no corpse (\w+): skipped corpse calls=(\d+) penalty calls=(\d+) respawns held=\d+ let=\d+ xp=(\d+)", " ".join(st["lines"]))
-        rh = re.search(r"respawns held=(\d+) let=(\d+)", " ".join(st["lines"]))
-        p = st["player"]
-        return {"gold": p.get("gold"), "bank": p.get("bank"), "area": p.get("area"), "mode": p.get("mode"), "eq": eq,
-                "corpses": int(m.group(1)) if m else None, "players": int(m.group(2)) if m else None,
-                "self": int(m.group(3)) if m else None, "on": sk.group(1) == "on" if sk else None,
-                "skc": int(sk.group(2)) if sk else None, "skp": int(sk.group(3)) if sk else None,
-                "xp": int(sk.group(4)) if sk else None, "level": p.get("level"), "ground_gold": ground_count("gld"),
-                "frame": p.get("frame"), "held": int(rh.group(1)) if rh else None, "let": int(rh.group(2)) if rh else None}
-
-    level0, xp0 = rd("player", 12), rd("player", 13)
-    H("unequip lring")
-    H("unequip amulet")
-    ok1, _l1 = H("equip rin lring")
-    ok2, _l2 = H("equip amu amulet")
-    H("unequip belt")
-    ok3, _l3 = H("equip 629 belt")  # a belt (Median code 629): the belt's potions would go to the corpse in D2 (audit DC1); the harness cannot fill a belt
-    H("gold set 23456 7890")
-    if level0 is not None and level0 < 2:
-        setstat("player", 12, 20)  # the experience penalty only exists above level 1
-    setstat("player", 13, 1000000000)
-    atk = spawn_attacker(1)
-    if atk is None or not (ok1 and ok2 and ok3):
-        return add(nm, "BLOCKED", "no attacker monster" if atk is None else "could not equip the three test items")
-    before = snap()
-    setstat("player", 7, BIG_LIFE)
-    setstat("player", 6, 256 * 100)
-    ok, line, lines = hv("hit player phys 2000000000 %s" % atk, "hit")
-    for _ in range(12):  # the death animation (mode 0) runs a second or two; the corpse creator is called on the way into mode 0x11
-        time.sleep(1)
-        if hstate()["player"].get("mode") == 17:
-            break
-    dead = snap()
-    shot_dead = sh("nocorpse_dead")
-    g.press("esc")  # too early: the respawn request must be held back (audit DC4)
-    time.sleep(1)
-    early = snap()
-    waited = 0
-    while waited < 15 and (hstate()["player"].get("frame") or 0) - (dead["frame"] or 0) < 130:  # 125 frames = 5 s, plus a margin
-        time.sleep(1)
-        waited += 1
-    survived = sorted(g.game_pids()) == pids and hstate()["ok"]
-    revived = revive_if_dead()
-    time.sleep(2)
-    after = snap()
-    shot_after = sh("nocorpse_respawned")
-    alive = after["mode"] not in (0, 17)
-
-    def same(a, b):
-        return a["eq"] == b["eq"] and a["gold"] == b["gold"] and a["bank"] == b["bank"] and a["xp"] == b["xp"]
-
-    problems = []
-    if before["on"] is not True:
-        problems.append("plugin part nocorpse is not on: %s" % before["on"])
-    if before["self"] != 1:
-        problems.append("the unit scan does not see the character itself (self=%s): the corpse count means nothing" % before["self"])
-    if len(before["eq"]) < 2:
-        problems.append("fewer than two equipped items before the death: %s" % before["eq"])
-    if dead["mode"] not in (0, 17):
-        problems.append("the character did not die (mode %s): %s" % (dead["mode"], line[:90]))
-    if not survived:
-        problems.append("the game process did not survive")
-    if (dead["skc"] or 0) <= (before["skc"] or 0) or (dead["skp"] or 0) <= (before["skp"] or 0):
-        problems.append("the death did not reach the corpse creator / penalty hooks (skipped calls %s/%s -> %s/%s)" %
-                        (before["skc"], before["skp"], dead["skc"], dead["skp"]))
-    for label, snapshot in (("dead", dead), ("after respawn", after)):
-        if snapshot["corpses"] != before["corpses"]:  # a corpse from an earlier death in the save (made before the part) is not new
-            problems.append("%s: %s corpse unit(s) in the game, %s before the death" % (label, snapshot["corpses"], before["corpses"]))
-        if not same(before, snapshot):
-            problems.append("%s: equipment / gold / bank / xp changed: %s -> %s" % (label, {k: before[k] for k in ("eq", "gold", "bank", "xp")},
-                                                                                {k: snapshot[k] for k in ("eq", "gold", "bank", "xp")}))
-        if snapshot["ground_gold"] != before["ground_gold"]:
-            problems.append("%s: gold piles on the ground %s -> %s" % (label, before["ground_gold"], snapshot["ground_gold"]))
-    if not revived or not alive:
-        problems.append("respawn failed (revived %s, mode %s)" % (revived, after["mode"]))
-    if early["mode"] not in (0, 17):
-        problems.append("respawn at once was not held back (mode %s a second after the death)" % early["mode"])
-    if (early["held"] or 0) <= (before["held"] or 0):
-        problems.append("the plugin did not count a held respawn request (held %s -> %s): was Esc a respawn request?" % (before["held"], early["held"]))
-    if (after["let"] or 0) <= (before["let"] or 0):
-        problems.append("the respawn after the wait did not pass the hook (let through %s -> %s)" % (before["let"], after["let"]))
-    if after["area"] is None or after["area"] not in (1, 40, 75, 103, 109):
-        problems.append("not in a town after the respawn (area %s)" % after["area"])
-    add(nm, "FAIL" if problems else "PASS",
-        "%s | killed by a hit of 2e9 from a spawned monster (%s); before: items %s gold %s bank %s xp %s; dead (mode %s): corpses %s (before: %s), "
-        "gold %s xp %s, hooks swallowed corpse %s->%s penalty %s->%s calls; after Esc: mode %s area %s, corpses %s, items %s gold %s bank %s xp %s, "
-        "ground gold piles %s->%s; respawn held %s->%s, let %s->%s, frames dead->early Esc->respawn %s->%s->%s" %
-        ("; ".join(problems) if problems else "all unchanged", line[:70], before["eq"], before["gold"], before["bank"], before["xp"],
-         dead["mode"], dead["corpses"], before["corpses"], dead["gold"], dead["xp"], before["skc"], dead["skc"], before["skp"], dead["skp"],
-         after["mode"], after["area"], after["corpses"], after["eq"], after["gold"], after["bank"], after["xp"],
-         before["ground_gold"], after["ground_gold"], before["held"], after["held"], before["let"], after["let"],
-         dead["frame"], early["frame"], after["frame"]), [shot_dead, shot_after], lines)
-    # put the test character back
-    H("unequip lring")
-    H("unequip amulet")
-    H("unequip belt")
-    setstat("player", 13, xp0 if xp0 is not None else 0)
-    if level0 is not None:
-        setstat("player", 12, level0)
-    setstat("player", 6, rd("player", 7) or BIG_LIFE)
-
-
-
     atk = spawn_attacker(1)
     if atk is None:
         return add(nm, "BLOCKED", "no attacker monster")
     setstat("player", 7, BIG_LIFE)
     setstat("player", 6, 256 * 100)
-    ok, line, lines = hv("hit player phys 2000000000 %s" % atk, "hit")
+    for _ in range(5):  # the hit's own line (life, result) is read before the engine applies it; the player's mode tells whether it landed
+        ok, line, lines = hv("hit player phys 2000000000 %s" % atk, "hit")
+        time.sleep(1.5)
+        if player_dead(hstate()["player"]):
+            break
+        setstat("player", 6, 256 * 100)  # ignored (the character had just arrived in the area): hit again
     time.sleep(3)
     p = hstate()["player"]
     shot_dead = sh("death")
@@ -4475,10 +4612,18 @@ def check_itemskills():
     n2 = "Item property skill parameters (bug #16): uniques in game carry the named skill"
     import item_skill_audit as audit
     checked, bad, samples = audit.audit()
-    add(n1, "PASS" if not bad and sum(checked.values()) > 5000 else "FAIL",
-        "%d skill / monster parameters in %d Median property tables compared with the skill's name (named/skills.txt, built "
-        "skills.txt); mismatches %d%s" % (sum(checked.values()), len({t for t, _ in checked}), len(bad),
-                                          (": " + "; ".join(str(b) for b in bad[:4])) if bad else ""))
+    # The pass criterion is the mismatches. The audit matches rows by their name cell with the `medianxl:` prefix stripped
+    # (strings_ns.bare); a prefix it fails to strip would leave rows unmatched and shrink the count (3844 instead of ~6000)
+    # without a mismatch, so the table coverage is the sanity check: every table whose Median rows carry a skill / monster
+    # parameter must have contributed some (the count itself depends on the data and is not a criterion).
+    tables = {t for t, _ in checked}
+    present = sorted(audit.audit.wanted)
+    silent = [t for t in present if t not in tables]
+    add(n1, "PASS" if not bad and checked and not silent else "FAIL",
+        "%d skill / monster parameters in %d of %d Median property tables compared with the skill's name (named/skills.txt, built "
+        "skills.txt, rows matched by bare name cell); mismatches %d%s%s" % (sum(checked.values()), len(tables), len(present), len(bad),
+                                                                          (": " + "; ".join(str(b) for b in bad[:4])) if bad else "",
+                                                                          ("; tables with no parameter compared: %s" % ", ".join(silent)) if silent else ""))
     if not need_game():
         return add(n2, "BLOCKED", "not in a game")
     goto(1)
@@ -5161,8 +5306,9 @@ def _charstats_row(cls):
 
 
 def _sample():
+    """(frame, x, y, mode, stamina raw) of one `state` reply, so the pairs of samples compare the stamina of known server frames."""
     p = hstate()["player"]
-    return (p.get("frame", 0), p.get("x", 0), p.get("y", 0), p.get("mode", -1), rd("player", 10) or 0)
+    return (p.get("frame", 0), p.get("x", 0), p.get("y", 0), p.get("mode", -1), p.get("stamina", 0))
 
 
 def _sprint_leg(stam0, walk, max_s, stop_exhausted=False):
@@ -5189,15 +5335,27 @@ def _sprint_leg(stam0, walk, max_s, stop_exhausted=False):
 
 
 def _pairs(rows, mode):
-    return [(a, b) for a, b in zip(rows, rows[1:]) if a[3] == mode and b[3] == mode and b[0] > a[0]]
+    """Consecutive samples that are both in `mode` (a number, or a tuple of modes that count as one: 1 and 5 are both standing)."""
+    modes = mode if isinstance(mode, tuple) else (mode,)
+    return [(a, b) for a, b in zip(rows, rows[1:]) if a[3] in modes and b[3] in modes and b[0] > a[0]]
 
 
 def _speed(rows, mode):
-    """Units per frame over the consecutive samples that are both in this mode; (speed, frames)."""
-    pr = _pairs(rows, mode)
-    frames = sum(b[0] - a[0] for a, b in pr)
-    dist = sum(((b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2) ** 0.5 for a, b in pr)
-    return (dist / frames if frames else 0.0), frames
+    """Units per frame in this mode; (speed, frames in the mode). The positions are whole units and the samples a few frames apart, so
+    a single pair is off by a quarter: the speed is the distance between the ends of an unbroken stretch of samples in the mode (at
+    least 12 frames), and the fastest stretch counts (one that turns a corner or is held up by an obstacle reads low)."""
+    frames = sum(b[0] - a[0] for a, b in _pairs(rows, mode))
+    stretches, cur = [], []
+    for r in rows:
+        if r[3] == mode and (not cur or r[0] > cur[-1][0]):
+            cur.append(r)
+            continue
+        stretches.append(cur)
+        cur = [r] if r[3] == mode else []
+    stretches.append(cur)
+    per = [((s[-1][1] - s[0][1]) ** 2 + (s[-1][2] - s[0][2]) ** 2) ** 0.5 / (s[-1][0] - s[0][0]) for s in stretches
+           if len(s) > 1 and s[-1][0] - s[0][0] >= 12]
+    return (max(per) if per else 0.0), frames
 
 
 def _drain(rows):
@@ -5206,11 +5364,49 @@ def _drain(rows):
     return per[len(per) // 2] if per else 0.0
 
 
+# The stamina stats the sprint check depends on: max (11), recovery bonus (28), drain percent (154), the skill percents (162 / 163) and
+# the per-level / by-time gains (241 / 242 / 294 / 295). A character with gear, passives or a high level carries values in them (the level
+# 150 test character ran for minutes on its stamina and never ran dry), so the check sets Median's own (charstats: 50 points,
+# nothing per level or vitality, no bonuses) and puts the character's numbers back afterwards.
+SPRINT_STAMINA_STATS = (28, 154, 162, 163, 241, 242, 294, 295)
+
+
 def check_sprint():
-    name = "Sprint (SK7): run lasts about 5 s on 50 stamina, faster than walking, no cooldown timer, stamina refills while walking"
     if not need_game():
-        return add(name, "BLOCKED", "not in a game")
+        return add("Sprint (SK7)", "BLOCKED", "not in a game")
+    revive_if_dead()
     fight_ready()
+    kept = {s: rd("player", s) for s in (10, 11) + SPRINT_STAMINA_STATS}
+    try:
+        cs = _charstats_row(hstate()["player"].get("class", 0))
+        own_max = int(cs["stamina"]) * STAMINA_POINT
+    except Exception:
+        own_max = 50 * STAMINA_POINT
+    for s in SPRINT_STAMINA_STATS:
+        setstat("player", s, 0)
+    setstat("player", 11, own_max)
+    setstat("player", 10, own_max)
+    try:
+        _check_sprint()
+    finally:
+        for s in SPRINT_STAMINA_STATS + (11, 10):
+            if kept.get(s) is not None:
+                setstat("player", s, kept[s])
+
+
+def _check_sprint():
+    """Median's stamina rules (audit SK7 and sigma-patch-audit item 15; plugin part `stamina`, D2Sigma 0x100a1f90), asserted per
+    frame and exactly. With the character's stamina bonuses zeroed (the wrapper) and 50 points of maximum (12800 raw):
+      standing (mode 1 / 5)      +max/256 = +50 raw per frame
+      walking, attacking, ...    +75% of that = +37 raw per frame (D2R's own step gives 50% = 25)
+      running (mode 3)           no regeneration, and the run's own drain: RunDrain x 2 = 120 raw per frame (D2Game 0x77bb0), so
+                                 a run from full lasts ceil(12800 / 120) = 107 frames = 4.3 s and then falls back to walking
+      state 136 (Stamina Shrine) fills the bar
+      no cooldown: a run starts with two points of stamina and the bar is the only limit
+    Every sample is one `state` reply: frame, mode and stamina of the same server frame. Two consecutive samples in the same mode
+    must differ by exactly rate x frames; a pair whose mode changed in between and came back (a walk that stopped for a frame and was
+    ordered again) lies strictly between its mode's rate and the neighbouring rates, and is counted as such, not as a pass."""
+    name = "Sprint (SK7) / stamina rules (audit item 15): run 107 frames on 50 stamina, 120 drain, no regeneration while running, standing 50, walking 37 per frame, no cooldown"
     p0 = hstate()["player"]
     try:
         cs = _charstats_row(p0.get("class", 0))
@@ -5218,89 +5414,162 @@ def check_sprint():
         return add(name, "BLOCKED", "work/mod charstats.txt not readable: %r" % (e,))
     walk_v, run_v, run_drain = int(cs["WalkVelocity"]), int(cs["RunVelocity"]), int(cs["RunDrain"])
     full = rd("player", 11) or 0
+    stand_rate = full >> 8                      # max / 256 raw per frame (stat 28 is zero here)
+    walk_rate = stand_rate * 75 // 100          # 75% in every other mode
+    run_rate = -2 * run_drain                   # no regeneration, drain RunDrain x 2
     bad, notes, log = [], [], []
 
-    # 1. a run from full stamina: the drain per frame, the length it gives, the speed
+    def judge(label, rows, mode, rate, others, capped_at=None, need=8, allow_straddle=True):
+        """Pairs of consecutive samples that are both in `mode` (and not at the bar's end, where the cap hides the step): exact when the
+        stamina changed by rate x frames, a straddle when it lies strictly inside the band between `rate` and one of `others` (the
+        mode changed and changed back between the samples), wrong otherwise."""
+        exact = straddle = wrong = frames = 0
+        for a, b in _pairs(rows, mode):
+            d, n = b[4] - a[4], b[0] - a[0]
+            if capped_at is not None and (a[4] + max(rate, 0) * n >= capped_at or b[4] >= capped_at):
+                continue
+            if rate < 0 and (a[4] + rate * n <= 0 or b[4] <= 0):
+                continue
+            frames += n
+            if d == rate * n:
+                exact += 1
+            elif any(min(rate, o) * n < d < max(rate, o) * n for o in others):
+                straddle += 1
+            else:
+                wrong += 1
+        notes.append("%s: %d consecutive samples in mode %d change by exactly %d raw per frame (%d frames), %d straddle a mode change, %d wrong" % (
+            label, exact, mode, rate, frames, straddle, wrong))
+        if wrong or exact < need or (not allow_straddle and straddle):
+            bad.append("%s: %d exact / %d straddling / %d wrong pairs (rule %d raw per frame in mode %d)" % (label, exact, straddle, wrong, rate, mode))
+        return exact
+
+    # 1. a run from full stamina: drain 120 per frame, no regeneration, 107 frames, forced back to walking at the end
     run = _sprint_leg(full, False, 14, stop_exhausted=True)
     log += ["run  " + " ".join(map(str, r)) for r in run]
-    drain = _drain(run)
-    secs = full / drain / 25 if drain else 0
-    want_drain = run_drain * 2  # D2Game 0x77bb0: RunDrain * 2 per frame, scaled by the stamina drain stat 154
-    run_speed, run_frames = _speed(run, 3)
-    exhausted = any(r[3] == 2 and r[4] < STAMINA_POINT * 2 for a, r in zip(run, run[1:]) if a[3] == 3)
-    notes.append("run: stamina %d.. drains %.0f raw/frame (RunDrain %d x2 = %d) = %.1f s from full, %d frames seen, speed %.3f units/frame" % (
-        full >> 8, drain, run_drain, want_drain, secs, run_frames, run_speed))
-    if not run_frames or abs(drain - want_drain) > 0.25 * want_drain:
-        bad.append("run drain %.0f raw/frame, charstats RunDrain %d wants %d" % (drain, run_drain, want_drain))
-    if not 3.0 <= secs <= 6.5:
-        bad.append("a run from full lasts %.1f s (Median: about 5 s)" % secs)
+    judge("running", run, 3, run_rate, (stand_rate, walk_rate), need=5)
+    run_frames = sum(b[0] - a[0] for a, b in _pairs(run, 3))
+    exhausted = any(r[3] == 2 and r[4] < STAMINA_POINT * 2 for r in run)
+    want_frames = -(-full // -run_rate)
+    notes.append("run from %d: %d frames seen running of the %d (= %.1f s) the bar allows" % (full >> 8, run_frames, want_frames, want_frames / 25))
     if not exhausted:
         bad.append("the run was never forced back to walking when the stamina ran out")
+    run_speed, _ = _speed(run, 3)
 
-    # 2. the walk speed against the run speed
-    walk = _sprint_leg(full, True, 5)
+    # 2. walking: +75% of the standing step, from empty (the bar is not full, so the cap hides nothing), no minimum stamina
+    walk_from_empty = _sprint_leg(0, True, 3.5)
+    log += ["empty " + " ".join(map(str, r)) for r in walk_from_empty]
+    judge("walking from empty", walk_from_empty, 2, walk_rate, (stand_rate, 0), capped_at=full, need=8)
+    gained = max((r[4] for r in walk_from_empty if r[3] == 2), default=0) - (walk_from_empty[0][4] if walk_from_empty else 0)
+    if gained < STAMINA_POINT:
+        bad.append("no stamina came back while walking from empty (gain %d)" % gained)
+    walk = _sprint_leg(full, True, 5)  # speed only: the bar is full
     log += ["walk " + " ".join(map(str, r)) for r in walk]
     walk_speed, walk_frames = _speed(walk, 2)
     ratio, want_ratio = (run_speed / walk_speed if walk_speed else 0), run_v / walk_v
-    notes.append("walk speed %.3f units/frame over %d frames; run/walk %.2f (charstats %d/%d = %.2f)" % (
-        walk_speed, walk_frames, ratio, run_v, walk_v, want_ratio))
+    notes.append("walk speed %.3f units/frame over %d frames; run %.3f; run/walk %.2f (charstats %d/%d = %.2f)" % (
+        walk_speed, walk_frames, run_speed, ratio, run_v, walk_v, want_ratio))
     if not walk_frames or abs(ratio - want_ratio) > 0.15 * want_ratio:
         bad.append("run/walk speed %.2f, charstats wants %.2f" % (ratio, want_ratio))
 
-    # 3. empty: walking refills the stamina without standing still
-    empty = _sprint_leg(0, True, 3.5)
-    log += ["empty " + " ".join(map(str, r)) for r in empty]
-    gain = [b[4] - a[4] for a, b in _pairs(empty, 2) if a[4] < STAMINA_POINT]
-    walked = max((r[4] for r in empty if r[3] == 2), default=0) - (empty[0][4] if empty else 0)
-    notes.append("walking from empty: stamina +%d raw over %.1f s, %d steps that started under one point gained" % (
-        walked, 3.5, sum(1 for d in gain if d > 0)))
-    if walked < STAMINA_POINT or not any(d > 0 for d in gain):
-        bad.append("no stamina came back while walking from empty (gain %d)" % walked)
-
-    # 4. no cooldown: one point of stamina is enough for a run to start; refilling takes the stamina's own time
+    # 3. standing: +50 per frame, no stamina threshold, refilled from empty in max / 50 = 256 frames. The character is idle, so
+    # every pair is one mode and none may straddle.
     setstat("player", 10, STAMINA_POINT * 2)
-    here = _sample()
-    H("move %d %d" % (here[1], here[2] + 30))
-    modes = {_sample()[3] for _ in range(2)}
-    notes.append("with 2 points of stamina a run starts: modes %s" % sorted(modes))
-    if 3 not in modes:
-        bad.append("a run did not start with 2 points of stamina (modes %s)" % sorted(modes))
     here = _sample()
     H("move %d %d walk" % (here[1], here[2]))
     time.sleep(1.5)
     setstat("player", 10, 0)
     refill = []
-    t0, f0 = time.time(), _sample()[0]
+    t0 = time.time()
     while time.time() - t0 < 16:
         r = _sample()
         refill.append(r)
         if r[4] >= full:
             break
+        time.sleep(0.2)
     log += ["refill " + " ".join(map(str, r)) for r in refill]
-    frames_full = (refill[-1][0] - f0) if refill else 0
-    notes.append("standing refill 0 -> %d points: %.1f s (%d frames)" % (refill[-1][4] >> 8 if refill else -1, frames_full / 25, frames_full))
-    if not refill or refill[-1][4] < full or not 6 <= frames_full / 25 <= 16:
-        bad.append("standing refill took %.1f s / reached %s" % (frames_full / 25, refill[-1][4] if refill else None))
+    judge("standing refill", refill, 1, stand_rate, (walk_rate, 0), capped_at=full, need=8, allow_straddle=False)
+    first = refill[0] if refill else None
+    frames_full = (refill[-1][0] - first[0]) if first else 0
+    # From the first sample (stamina s0) the bar needs ceil((max - s0) / 50) frames; the last sample is the first at the maximum, so
+    # it can come later than that by the gap to the sample before it, never earlier.
+    need = -(-(full - first[4]) // stand_rate) if first else 0
+    gap = (refill[-1][0] - refill[-2][0]) if len(refill) > 1 else 0
+    notes.append("standing refill %d -> %d points: %d frames (= %.1f s; the rule needs %d from the first sample, up to %d with the sampling gap)" % (
+        first[4] >> 8 if first else -1, refill[-1][4] >> 8 if refill else -1, frames_full, frames_full / 25, need, need + gap))
+    if not refill or refill[-1][4] < full or not need <= frames_full <= need + gap:
+        bad.append("standing refill took %d frames, the rule %d..%d, reached %s" % (frames_full, need, need + gap, refill[-1][4] if refill else None))
 
-    # 5. the key: R (toggle sprint) makes a click-to-move run, R again walks. The toggle is restored.
+    # 4. no cooldown: two points of stamina are enough for a run to start (the first direction that is free; the points last only
+    # a few frames, so sample at once)
+    modes = set()
+    for dx, dy in [(int(dx * k), int(dy * k)) for k in (1.0, 0.5, 0.25) for dx, dy in SPRINT_DIRS]:  # a cramped spot: shorter paths
+        setstat("player", 10, STAMINA_POINT * 2)
+        here = _sample()
+        H("move %d %d" % (here[1] + dx, here[2] + dy))
+        modes = {_sample()[3] for _ in range(4)}
+        if 3 in modes:
+            break
+        H("move %d %d walk" % (here[1], here[2]))
+        time.sleep(0.5)
+    notes.append("with 2 points of stamina a run starts: modes %s" % sorted(modes))
+    if 3 not in modes:
+        bad.append("a run did not start with 2 points of stamina (modes %s)" % sorted(modes))
+    here = _sample()
+    H("move %d %d walk" % (here[1], here[2]))
+    time.sleep(1.0)
+
+    # 5. state 136 (the Stamina Shrine, "infinite stamina") fills the bar
+    setstat("player", 10, 0)
+    ok, ls = H("setstate player 136 1")
+    time.sleep(1.0)
+    filled = rd("player", 10) or 0
+    H("setstate player 136 0")
+    notes.append("state 136: stamina 0 -> %d of %d after 1 s" % (filled >> 8, full >> 8))
+    if not ok or filled < full:
+        bad.append("state 136 left the stamina at %d of %d" % (filled, full))
+
+    # 6. the key: R (toggle sprint) makes a click-to-move run, R again walks. The toggle is restored. The click needs open ground
+    # around the character, which the field the earlier checks left it in may not have (trees, a cliff): the town is open on every side.
+    goto(1)
     setstat("player", 10, full)
     keyrun = {}
+    # Screen points in the directions the legs walked (world offset to isometric screen, the character is in the middle of the
+    # window), then a spread of fixed points: a character in a cramped spot has only a few free ways out.
+    # A `state` reply takes about 0.6 s, so a click that walks 8 units (190 px) is over before the first sample: the far points come first
+    # (30 units and more: two seconds of walking), then the near ones.
+    click_points = [(0.12, 0.50), (0.88, 0.50), (0.50, 0.12), (0.50, 0.80), (0.20, 0.20), (0.80, 0.80), (0.20, 0.80), (0.80, 0.20)]
+    for dx, dy in SPRINT_DIRS:
+        u, v = dx - dy, (dx + dy) / 2.0
+        n = (u * u + v * v) ** 0.5
+        click_points.append((0.5 + u / n * 190 / 1600.0, 0.5 + v / n * 190 / 900.0))
+    click_points += [(0.80, 0.50), (0.20, 0.50), (0.50, 0.85), (0.50, 0.15), (0.65, 0.65), (0.35, 0.35), (0.65, 0.30), (0.35, 0.70),
+                     (0.58, 0.50), (0.42, 0.50)]
     for label in ("on", "off"):
         g.press_bg("r", hold=0.1)
         time.sleep(0.3)
-        for fx, fy in ((0.80, 0.50), (0.20, 0.50), (0.50, 0.85), (0.50, 0.15)):  # a click on a wall does not move
+        for fx, fy in click_points:  # a click on a wall does not move; the point depends on where the character stands
             g.click_bg(fx, fy)
-            keyrun[label] = _sample()[3]
-            if keyrun[label] in (2, 3):
+            for _ in range(3):  # the order reaches the server a few frames after the click
+                time.sleep(0.1)
+                smp = _sample()
+                keyrun[label] = smp[3]
+                log.append("R %s click %.3f,%.3f -> frame %d x %d y %d mode %d" % ((label, fx, fy) + (smp[0], smp[1], smp[2], smp[3])))
+                if keyrun[label] in (2, 3, 6):
+                    break
+            if keyrun[label] in (2, 3, 6):
                 break
         time.sleep(2.5)
-    notes.append("key R: click-to-move mode %s after the first press (3 = run), %s after the second (2 = walk)" % (keyrun["on"], keyrun["off"]))
-    if keyrun["on"] != 3 or keyrun["off"] != 2:
-        bad.append("toggle key R gave modes %s / %s (want 3 / 2)" % (keyrun["on"], keyrun["off"]))
+    # The run toggle is the character's own setting (it survives a restart), so the check does not know which way the first press goes:
+    # the two presses must give one run and one walk, and the second press puts the character's toggle back.
+    notes.append("key R: click-to-move mode %s after the first press, %s after the second (3 = run, 2 or 6 in the town = walk; one of each, the toggle ends where it began)" % (
+        keyrun["on"], keyrun["off"]))
+    if sorted(2 if m == 6 else m for m in (keyrun["on"], keyrun["off"])) != [2, 3]:  # 6 is walking in the town
+        bad.append("toggle key R gave modes %s / %s (want one run and one walk)" % (keyrun["on"], keyrun["off"]))
     setstat("player", 10, full)
+    shot = sh("sprint")
+    goto(2)  # back to the field the next check starts from (standing there is mode 1, in the town it is mode 5)
     add(name, "PASS" if not bad else "FAIL", "; ".join(notes) if not bad else "; ".join(bad) + " | " + "; ".join(notes),
-        [sh("sprint")], log)
-
+        [shot], log)
 
 
 def mapcells():
@@ -5444,13 +5713,14 @@ def check_wpauto():
 
 
 def travel_counts():
-    """`h travel` -> dict: x r c presses, reveals, transmutes, blocked, registered bindings text, pickup state, cube state."""
+    """`h travel` -> dict: pickup / reveal / transmute key presses, reveals, transmutes, blocked, registered bindings text, pickup
+    state, cube state."""
     ok, lines = H("travel")
     line = next((l for l in lines if l.startswith("travel ")), "")
     d = {"line": line}
-    m = re.search(r"keys X (\d+) R (\d+) C (\d+)", line)
+    m = re.search(r"keys pickup (\d+) reveal (\d+) transmute (\d+)", line)
     if m:
-        d.update(x=int(m.group(1)), r=int(m.group(2)), c=int(m.group(3)))
+        d.update(pickup_n=int(m.group(1)), reveal_n=int(m.group(2)), transmute_n=int(m.group(3)))
     m = re.search(r"reveals (\d+)", line)
     d["reveals"] = int(m.group(1)) if m else None
     m = re.search(r"transmutes (\d+) \(blocked (\d+), cube (\w+)\)", line)
@@ -5462,47 +5732,119 @@ def travel_counts():
     return d
 
 
+def plugin_key_bindings(bindings):
+    """{logical id: virtual key} from the `travel` line's registered bindings ("mxl_pickup_toggle: key 0x58 modifier 0 | ...")."""
+    return {m.group(1): int(m.group(2), 16) for m in re.finditer(r"(mxl_\w+): key 0x([0-9a-f]+) modifier 0", bindings)}
+
+
+def d2r_key_bindings():
+    """{virtual key: [D2R action ids]} from the test character's own key file (`<character>.key` next to the save: D2R's key
+    bindings; a six-byte header, then records of five 16-bit words: virtual key (65535 = unbound), slot (0 primary, 1 secondary), 0,
+    action id, 0). None when the file does not exist."""
+    path = os.path.join(SAVES, g.CHAR_NAME + ".key")
+    if not os.path.exists(path):
+        return None
+    d = open(path, "rb").read()
+    w = struct.unpack("<%dH" % (len(d) // 2), d[:len(d) // 2 * 2])
+    out = {}
+    for i in range(3, len(w) - 4, 5):
+        if w[i] != 65535:
+            out.setdefault(w[i], []).append(w[i + 3])
+    return out
+
+
+HOTKEY_DEFAULTS = {"mxl_pickup_toggle": 0x58, "mxl_map_reveal": 0x4c, "mxl_transmute": 0x4b}  # X, L, K (plugin/src/travel_logic.h)
+HOTKEY_COUNTERS = ("pickup_n", "reveal_n", "transmute_n", "reveals", "transmutes", "blocked")
+
+
 def check_hotkeys():
-    name = "Hotkeys X / R / C: window-message key presses reach the plugin's actions"
+    name = "Hotkeys (auto pickup X, map reveal L, transmute K): one press, one action; none on a D2R key (R run toggle, C Character screen)"
     if not need_game():
         return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
     goto(3)
     time.sleep(2)
     t0 = travel_counts()
-    if "x" not in t0:
+    if "pickup_n" not in t0:
         return add(name, "BLOCKED", "no travel status line: %s" % t0["line"][:100], [], [t0["line"]])
     log = [t0["line"]]
     res, bad = [], []
-    # X toggles auto pickup
-    g.press("x")
+    bound = plugin_key_bindings(t0["bindings"])
+    if set(bound) != set(HOTKEY_DEFAULTS):
+        return add(name, "FAIL", "registered bindings %s, expected %s" % (t0["bindings"], sorted(HOTKEY_DEFAULTS)), [], log)
+    keyname = {i: chr(k).lower() for i, k in bound.items()}
+
+    def moved(before, after):
+        """The counters that changed between two `travel` reads."""
+        return [k for k in HOTKEY_COUNTERS if after.get(k) != before.get(k)]
+
+    # 1. the registered keys: the plugin's defaults (unless the player rebound them in the Controls menu) and not one of them
+    # bound by a D2R action. D2R's bindings come from the character's key file (the other keys D2R uses are in it too).
+    for ident, want in HOTKEY_DEFAULTS.items():
+        if bound[ident] != want:
+            bad.append("%s is bound to %s, the default is %s" % (ident, chr(bound[ident]), chr(want)))
+    d2r = d2r_key_bindings()
+    if d2r is None:
+        res.append("D2R key file not found (static conflict check skipped)")
+    else:
+        for ident, key in bound.items():
+            if key in d2r:
+                bad.append("%s key %s is also bound by D2R action(s) %s: one press does both" % (ident, chr(key), d2r[key]))
+        res.append("plugin keys %s, D2R's own key file binds %d keys and none of these (D2R: R = action %s, the run toggle; C = action %s, the Character screen)" % (
+            {i: chr(k) for i, k in bound.items()}, len(d2r), d2r.get(ord("R")), d2r.get(ord("C"))))
+    for key in (ord("R"), ord("C")):
+        if key in bound.values():
+            bad.append("a plugin action is on %s, a D2R key" % chr(key))
+    # 2. auto pickup key: toggles the flag, nothing else moves
+    g.press(keyname["mxl_pickup_toggle"])
     time.sleep(0.6)
     t1 = travel_counts()
-    g.press("x")
+    g.press(keyname["mxl_pickup_toggle"])
     time.sleep(0.6)
     t2 = travel_counts()
-    x_ok = t1.get("x") == t0["x"] + 1 and t1["pickup"] != t0["pickup"] and t2.get("x") == t0["x"] + 2 and t2["pickup"] == t0["pickup"]
-    res.append("X: presses %s->%s->%s, pickup %s->%s->%s" % (t0.get("x"), t1.get("x"), t2.get("x"), t0["pickup"], t1["pickup"], t2["pickup"]))
+    m1 = moved(t0, t1)
+    x_ok = (t1["pickup_n"] == t0["pickup_n"] + 1 and t1["pickup"] != t0["pickup"] and t2["pickup_n"] == t0["pickup_n"] + 2 and
+            t2["pickup"] == t0["pickup"] and m1 == ["pickup_n"])
+    res.append("%s (auto pickup): presses %s->%s->%s, pickup %s->%s->%s, counters moved by the first press: %s" % (
+        keyname["mxl_pickup_toggle"].upper(), t0["pickup_n"], t1["pickup_n"], t2["pickup_n"], t0["pickup"], t1["pickup"], t2["pickup"], m1))
     if not x_ok:
-        bad.append("X")
-    # R reveals the map
+        bad.append("auto pickup key")
+    # 3. map reveal key: one reveal, no transmute, no pickup toggle
     a0 = mapcells()
-    g.press("r")
+    g.press(keyname["mxl_map_reveal"])
     time.sleep(1.5)
     t3 = travel_counts()
     a1 = mapcells()
-    r_ok = t3.get("r") == t2.get("r") + 1 and t3["reveals"] == t2["reveals"] + 1
-    res.append("R: presses %s->%s, reveals %s->%s, cells %s->%s" % (t2.get("r"), t3.get("r"), t2["reveals"], t3["reveals"],
-                                                                    a0 and a0["cells"], a1 and a1["cells"]))
+    m3 = moved(t2, t3)
+    r_ok = t3["reveal_n"] == t2["reveal_n"] + 1 and t3["reveals"] == t2["reveals"] + 1 and set(m3) == {"reveal_n", "reveals"} and t3["pickup"] == t2["pickup"]
+    res.append("%s (map reveal): presses %s->%s, reveals %s->%s, cells %s->%s, counters moved: %s" % (
+        keyname["mxl_map_reveal"].upper(), t2["reveal_n"], t3["reveal_n"], t2["reveals"], t3["reveals"], a0 and a0["cells"], a1 and a1["cells"], m3))
     if not r_ok:
-        bad.append("R")
-    # the cube item lies in the inventory; shots of the inventory show where its cell is (for opening the panel)
+        bad.append("map reveal key")
+    # 4. D2R's own keys: a press of R (run / walk toggle) or C (Character screen) must leave every plugin counter alone. C's panel
+    # is in the screenshot; Esc closes it again.
+    g.press("r")
+    time.sleep(0.5)
+    g.press("c")
+    time.sleep(1.2)
+    char_shot = sh("hotkeys_c_charscreen")
+    t5 = travel_counts()
+    g.press("esc")
+    time.sleep(0.6)
+    g.press("r")  # R is D2R's run toggle and the character keeps it: put it back
+    time.sleep(0.4)
+    m5 = moved(t3, t5)
+    res.append("R and C pressed: plugin counters moved %s (must be none: the plugin has no action on D2R's run toggle and Character screen)" % (m5 or "none"))
+    if m5 or t5["pickup"] != t3["pickup"]:
+        bad.append("R / C moved a plugin counter: %s" % m5)
+    # 5. the transmute key: closed cube -> counted and blocked, open cube -> transmutes once
     okb, lb = H("item box inv")
     log += lb
     mark = mxl_mark()
     g.press("i")
     time.sleep(1.2)
     inv_shot = sh("hotkeys_inventory")
-    g.click(0.711, 0.453, "right")  # the cube item's cell in the 1600 x 900 inventory (hotkeys_inventory.png)
+    g.click(0.677, 0.452, "right")  # the cube item (inventory cell 0,0, 2 x 2 cells) in the 1600 x 900 inventory (hotkeys_inventory.png)
     time.sleep(1.5)
     cube_shot = sh("hotkeys_cube")
     msgs = [l for l in mxl_lines_since(mark) if "cube ui message" in l]
@@ -5510,34 +5852,38 @@ def check_hotkeys():
     t_open = travel_counts()
     g.press("esc")  # one Esc closes the cube panel and the inventory with it (a second one would open the game menu)
     time.sleep(0.6)
-    # C with no cube open: counted, not transmuted
-    g.press("c")
+    t6 = travel_counts()
+    g.press(keyname["mxl_transmute"])
     time.sleep(0.8)
-    t4 = travel_counts()
-    c_closed = t4.get("c") == t3.get("c") + 1 and t4["transmutes"] == t3["transmutes"]
-    res.append("C (cube closed): presses %s->%s, transmutes %s->%s (blocked %s)" % (t3.get("c"), t4.get("c"), t3["transmutes"], t4["transmutes"], t4.get("blocked")))
+    t7 = travel_counts()
+    m7 = moved(t6, t7)
+    c_closed = t7["transmute_n"] == t6["transmute_n"] + 1 and t7["transmutes"] == t6["transmutes"] and "reveal_n" not in m7 and "pickup_n" not in m7
+    res.append("%s (transmute), cube closed: presses %s->%s, transmutes %s->%s (blocked %s), counters moved: %s" % (
+        keyname["mxl_transmute"].upper(), t6["transmute_n"], t7["transmute_n"], t6["transmutes"], t7["transmutes"], t7.get("blocked"), m7))
     if not c_closed:
-        bad.append("C closed")
-    log += [t1["line"], t2["line"], t3["line"], t4["line"], t0["bindings"]]
-    open_note = "C with the cube open: not driven (the plugin did not see the cube panel open; ui messages: %s)" % (msgs[:3] or "none")
+        bad.append("transmute key, cube closed")
+    log += [t1["line"], t2["line"], t3["line"], t5["line"], t7["line"], t0["bindings"]]
+    open_note = "transmute with the cube open: not driven (the plugin did not see the cube panel open; ui messages: %s)" % (msgs[:3] or "none")
     if t_open.get("cube") == "open":
         g.press("i")  # open it again for the key
         time.sleep(1.0)
-        g.click(0.711, 0.453, "right")
+        g.click(0.677, 0.452, "right")
         time.sleep(1.2)
-        t5 = travel_counts()
-        g.press("c")
+        t8 = travel_counts()
+        g.press(keyname["mxl_transmute"])
         time.sleep(1.0)
-        t6 = travel_counts()
-        c_open = t6.get("transmutes") == t5.get("transmutes", 0) + 1 and t6.get("c") == t5.get("c") + 1
-        log += [t_open["line"], t5["line"], t6["line"]]
-        open_note = "C with the cube open: presses %s->%s, transmutes %s->%s (cube %s; ui message %s)" % (
-            t5.get("c"), t6.get("c"), t5.get("transmutes"), t6.get("transmutes"), t5.get("cube"), msgs[:1])
+        t9 = travel_counts()
+        m9 = moved(t8, t9)
+        c_open = t9.get("transmutes") == t8.get("transmutes", 0) + 1 and t9["transmute_n"] == t8["transmute_n"] + 1 and "reveal_n" not in m9 and "pickup_n" not in m9
+        log += [t_open["line"], t8["line"], t9["line"]]
+        open_note = "transmute with the cube open: presses %s->%s, transmutes %s->%s (cube %s; ui message %s)" % (
+            t8["transmute_n"], t9["transmute_n"], t8.get("transmutes"), t9.get("transmutes"), t8.get("cube"), msgs[:1])
         if not c_open:
-            bad.append("C open")
+            bad.append("transmute key, cube open")
         g.press("esc")
         time.sleep(0.5)
-    add(name, "PASS" if not bad else "FAIL", "; ".join(res) + "; " + open_note + ("; failed: %s" % bad if bad else ""), [sh("hotkeys"), inv_shot, cube_shot], log)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(res) + "; " + open_note + ("; failed: %s" % bad if bad else ""),
+        [sh("hotkeys"), inv_shot, cube_shot, char_shot], log)
 
 
 def check_stashpages():
@@ -6022,7 +6368,7 @@ def check_manarules():
         stand.append(_sample())
         time.sleep(0.2)
     log += ["stand " + " ".join(map(str, r)) for r in stand]
-    rate, frames = per_frame(stand, 1)
+    rate, frames = per_frame(stand, (1, 5))  # 5 (town neutral) is what a character has in the field until it moves after arriving
     notes.append("standing: %s raw/frame over %d frames (Median %d = max %d / 256 x (100+%d)%%)" % (
         ("%.1f" % rate) if rate is not None else "?", frames, step, point, bonus))
     if rate is None or abs(rate - step) > 0.05 * step:

@@ -60,9 +60,12 @@ int RunTravelTests() {
 	Check(travel::Decide(true, true, 112, false) == D::NoWaypoint, "number past the record");
 	Check(travel::Decide(true, true, 111, false) == D::Activate, "the last number in the record");
 
-	// hotkeys: Median's table, X / R / C
+	// hotkeys: Median's table names; X / L / K (not D2R's run toggle R or Character screen C)
 	Check(travel::HotkeyCount == 3, "three hotkeys");
-	Check(travel::Hotkeys[0].key == 'X' && travel::Hotkeys[1].key == 'R' && travel::Hotkeys[2].key == 'C', "X, R, C");
+	Check(travel::Hotkeys[0].key == 'X' && travel::Hotkeys[1].key == 'L' && travel::Hotkeys[2].key == 'K', "X, L, K");
+	for (int i = 0; i < travel::HotkeyCount; ++i) {
+		Check(travel::Hotkeys[i].key != 'R' && travel::Hotkeys[i].key != 'C', "no default on D2R's run toggle or Character screen");
+	}
 	for (int i = 0; i < travel::HotkeyCount; ++i) {
 		const char* id = travel::Hotkeys[i].id;
 		bool lowerAscii = id != nullptr && id[0] != '\0';

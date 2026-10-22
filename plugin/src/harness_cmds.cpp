@@ -436,10 +436,10 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	void* room = Fn<UnitRoomFn>(RvaUnitRoom)(p);
 	int32_t x = 0, y = 0;
 	d2r::UnitXY(p, &x, &y);
-	Out("player id=%u class=%d level=%d life=%d/%d mana=%d area=%d x=%d y=%d mode=%d gold=%d bank=%d difficulty=%d frame=%u",
+	Out("player id=%u class=%d level=%d life=%d/%d mana=%d area=%d x=%d y=%d mode=%d gold=%d bank=%d difficulty=%d frame=%u stamina=%d maxstamina=%d",
 	    IdOf(p), ClassOf(p), Stat(p, StatLevel), Stat(p, StatLife) >> 8, Stat(p, 7) >> 8, Stat(p, StatMana) >> 8,
 	    room != nullptr ? Fn<RoomLevelFn>(RvaRoomLevel)(room) : -1, x, y, ModeOf(p), Stat(p, StatGold), Stat(p, StatGoldBank),
-	    static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)), d2r::At<uint32_t>(c->game, GameFrame));
+	    static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)), d2r::At<uint32_t>(c->game, GameFrame), Stat(p, 10), Stat(p, 11));  // raw, x256: the sprint check reads frame and stamina in one reply
 	int items = 0;
 	EachItem(c, [&](Unit* it) {
 		++items;

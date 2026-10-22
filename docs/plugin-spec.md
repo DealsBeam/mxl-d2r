@@ -969,9 +969,9 @@ the `mxl` line says why).
 * **Map reveal** (`mapreveal`). D2R's debug "Reveal Automap" `0xd42b0` on the UI thread, then the debug flag byte `0x2a2add4` is put back.
   Starts from the player's room (the rooms joined to it); in game the automap layer list grew from 1 to 25 layers. Median's `0x887c0` walks every
   level of the act once. Not ported: the once-per-game limit (the reveal can be repeated).
-* **Hotkeys** (`hotkeys`). Three InputService actions (category "Median XL", ids `mxl_pickup_toggle` X, `mxl_map_reveal` R,
-  `mxl_transmute` C, in the Controls menu, rebindable). X flips the switch that gates the auto-activation; R queues the reveal on
-  the UI thread; C queues the cube panel's Transmute `0x2cd720` on the UI thread when a UiMessageListener has seen the Horadric
+* **Hotkeys** (`hotkeys`). Three InputService actions (category "Median XL", ids `mxl_pickup_toggle` X, `mxl_map_reveal` L,
+  `mxl_transmute` K, in the Controls menu, rebindable; none on D2R's own keys: R is its run toggle, C the Character screen, V another action). X flips the switch that gates the auto-activation; L queues the reveal on
+  the UI thread; K queues the cube panel's Transmute `0x2cd720` on the UI thread when a UiMessageListener has seen the Horadric
   Cube panel open. Counters and the last UI messages are in the `mxl` command (`travel` lines) and the harness verb `travel`.
 * **Stash pages** are not code: `tools/install_mod.py` writes `d2rcore.stash.add_shared_tabs = 7` into the mod's `d2rloader.toml`
   (3 normal tabs + 7 = Median's 10 pages), only when the key is not set by hand.

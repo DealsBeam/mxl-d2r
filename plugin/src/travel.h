@@ -1,4 +1,4 @@
-// Median's travel conveniences on D2R: waypoint auto-activation, the map reveal hotkey, the X / R / C hotkeys.
+// Median's travel conveniences on D2R: waypoint auto-activation, map reveal, and the auto pickup / map reveal / transmute hotkeys (X, L, K).
 // travel_logic.h has the rules and the evidence (Median's D2AutoPickup.cpp, hotkey table, stash page text); travel.cpp the game side.
 #pragma once
 
