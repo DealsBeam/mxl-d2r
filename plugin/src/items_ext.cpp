@@ -12,11 +12,21 @@
 // Experience. D2R's kill experience goes through 0x44fef0 (player level, monster level, experience) with 1.13c's two
 // 11-entry percent tables. Median's replacement (D2Experience.cpp 0x1005e7b0) is a formula, see items_ext_logic.h.
 //
+// Party experience. D2R's kill function 0x44a3b0 collects the party members near the monster with the party iterator
+// 0x506f90 (callback 0x44fd50 fills a context: monster, units[8], levels[8], count, level sum) and then pools and splits
+// the experience by level inline. Median (D2Experience.cpp 0x5e830) pays every collected member the whole award instead.
+// The hook runs the iterator, then does Median's loop (the per-member award 0x44ece0 and the add 0x44f2e0, which are the
+// functions the inline code calls) and sets the count to 0, which makes the kill function skip its own split. The collect
+// range constant at 0x44fe7b goes from 0x1900 to 0x7d00 as in Median's patch table.
+//
 // Entry bytes checked against the dump of build 93847; whole instructions, no rip-relative.
 #include "items_ext.h"
 
 #include "d2r.h"
 #include "items_ext_logic.h"
+
+#define NOMINMAX
+#include <windows.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -48,6 +58,19 @@ constexpr uint64_t FirstNodeRva = 0x388c10;       // (inventory) -> first node
 constexpr uint64_t NodeUnitRva = 0x38aab0;        // (node) -> unit
 constexpr uint64_t NextNodeRva = 0x38aba0;        // (node) -> next node
 constexpr uint64_t GetStatRva = 0x2f5020;         // (unit, stat, layer)
+constexpr uint64_t PartyIterateRva = 0x506f90;    // (game, killer, callback, ctx): collects the party members
+constexpr uint64_t PartyCollectRva = 0x44fd50;    // the callback the kill function passes
+constexpr uint64_t PartyRangeRva = 0x44fe7b;      // imm32 of `cmp ebx,0x1900`: squared distance of a member to the monster
+constexpr uint64_t MemberAwardRva = 0x44ece0;     // (game, unit, level, monster level, xp) -> award
+constexpr uint64_t AddExperienceRva = 0x44f2e0;   // (game, unit, old level, amount)
+constexpr uint64_t BaseStatRva = 0x2f48c0;        // (unit, stat, layer) base value
+constexpr int32_t StatLevel = 12;
+constexpr int32_t StatExperience = 13;  // of a monster: its experience
+// The context the kill function builds on its stack (0x70 bytes, zeroed).
+constexpr int PartyMonster = 0x00;
+constexpr int PartyUnits = 0x08;   // Unit* x 8
+constexpr int PartyLevels = 0x48;  // int32 x 8
+constexpr int PartyCount = 0x68;   // int32
 
 constexpr int RunesRecordSize = 0xe8;
 constexpr int RunesRuneClass = 0x5c;   // int32 x 6: item class ids of the runes
@@ -126,6 +149,16 @@ int g_extended = 0;
 int g_refused = 0;
 int g_xpChanged = 0;
 int g_xpSeen = 0;
+int g_partyPaid = 0;
+using PartyIterateFn = void (*)(void* game, Unit* killer, void* callback, uint8_t* ctx);
+using MemberAwardFn = int32_t (*)(void* game, Unit* unit, int32_t level, int32_t monsterLevel, int32_t xp);
+using AddExperienceFn = void (*)(void* game, Unit* unit, int32_t oldLevel, int32_t amount);
+using BaseStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
+PartyIterateFn g_partyOriginal = nullptr;
+MemberAwardFn g_memberAward = nullptr;
+AddExperienceFn g_addExperience = nullptr;
+BaseStatFn g_baseStat = nullptr;
+uint64_t g_collectAddress = 0;
 
 // 0x3d44c0: push rbp / push rdi / push r15 / sub rsp,0x60 / mov r15,rdx / mov rdi,rcx
 constexpr uint8_t RunewordEntry[] = {0x40, 0x55, 0x57, 0x41, 0x57, 0x48, 0x83, 0xec, 0x60, 0x4c, 0x8b, 0xfa, 0x48, 0x8b, 0xf9};
@@ -133,6 +166,12 @@ constexpr uint8_t RunewordEntry[] = {0x40, 0x55, 0x57, 0x41, 0x57, 0x48, 0x83, 0
 constexpr uint8_t MatchEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7c, 0x24, 0x20, 0x55};
 // 0x44fef0: sub rsp,0x28 / movsxd r9,r8d / cmp edx,ecx (then jg rel32)
 constexpr uint8_t XpEntry[] = {0x48, 0x83, 0xec, 0x28, 0x4d, 0x63, 0xc8, 0x3b, 0xd1};
+
+// 0x506f90: mov [rsp+8],rbx / mov [rsp+0x10],rbp / mov [rsp+0x18],rsi / push rdi / push r14 / push r15 / sub rsp,0x30
+constexpr uint8_t PartyEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18,
+                                  0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x30};
+// 0x44fe79: cmp ebx,0x1900 / ja: the immediate is what changes
+constexpr uint8_t PartyRangeBytes[] = {0x00, 0x19, 0x00, 0x00};
 
 auto Matches(uint64_t base, uint64_t rva, const uint8_t* bytes, size_t size) noexcept -> bool {
 	return std::memcmp(reinterpret_cast<const void*>(base + rva), bytes, size) == 0;
@@ -303,14 +342,44 @@ int32_t XpPenaltyHook(int32_t playerLevel, int32_t monsterLevel, int32_t xp) {
 	return result;
 }
 
+// The party iterator, then Median's award for the kill function's collect callback.
+void PartyIterateHook(void* game, Unit* killer, void* callback, uint8_t* ctx) {
+	g_partyOriginal(game, killer, callback, ctx);
+	if (reinterpret_cast<uint64_t>(callback) != g_collectAddress || ctx == nullptr) {
+		return;  // another caller of the iterator
+	}
+	__try {
+		const int32_t count = *reinterpret_cast<int32_t*>(ctx + PartyCount);
+		auto* monster = *reinterpret_cast<Unit**>(ctx + PartyMonster);
+		if (count < 1 || count > 8 || monster == nullptr) {
+			return;
+		}
+		const int32_t xp = items_ext::MedianPartyAward(g_baseStat(monster, StatExperience, 0));
+		const int32_t monsterLevel = g_baseStat(monster, StatLevel, 0);
+		auto* units = reinterpret_cast<Unit**>(ctx + PartyUnits);
+		auto* levels = reinterpret_cast<int32_t*>(ctx + PartyLevels);
+		for (int32_t i = 0; i < count; ++i) {
+			if (units[i] == nullptr) {
+				continue;
+			}
+			const int32_t amount = g_memberAward(game, units[i], levels[i], monsterLevel, xp);
+			g_addExperience(game, units[i], levels[i], amount);
+			++g_partyPaid;
+		}
+		*reinterpret_cast<int32_t*>(ctx + PartyCount) = 0;  // the kill function skips its pool and split
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+	}
+}
+
 }  // namespace
 
-auto InstallItemsExt(const D2RL::PluginContext* context, bool runewords, bool xp, char* report, size_t reportSize) noexcept
+auto InstallItemsExt(const D2RL::PluginContext* context, bool runewords, bool xp, bool party, char* report, size_t reportSize) noexcept
 	-> bool {
 	g_context = context;
 	const uint64_t base = context->exeBase;
 	const char* rw = "left out";
 	const char* xs = "left out";
+	const char* ps = "left out";
 	bool ok = true;
 	if (runewords) {
 		if (!Matches(base, RunewordApplyRva, RunewordEntry, sizeof(RunewordEntry)) ||
@@ -360,8 +429,27 @@ auto InstallItemsExt(const D2RL::PluginContext* context, bool runewords, bool xp
 			ok = ok && hooked;
 		}
 	}
-	std::snprintf(report, reportSize, "%s: runewords (%d rows with properties 8-13: 0x3d44c0; Jewel padding: 0x372260) %s, kill experience penalty (0x44fef0) %s",
-	              ok ? "on" : "partial", mxl_runewords::ExtraCount, rw, xs);
+	if (party) {
+		if (!Matches(base, PartyIterateRva, PartyEntry, sizeof(PartyEntry)) ||
+		    !Matches(base, PartyRangeRva, PartyRangeBytes, sizeof(PartyRangeBytes))) {
+			ps = "off: entry bytes of 0x506f90 / 0x44fe7b differ";
+			ok = false;
+		} else {
+			g_collectAddress = base + PartyCollectRva;
+			g_memberAward = reinterpret_cast<MemberAwardFn>(base + MemberAwardRva);
+			g_addExperience = reinterpret_cast<AddExperienceFn>(base + AddExperienceRva);
+			g_baseStat = reinterpret_cast<BaseStatFn>(base + BaseStatRva);
+			const bool hooked = context->InstallInlineHook(PartyIterateRva, PartyEntry, sizeof(PartyEntry),
+			                                               reinterpret_cast<void*>(&PartyIterateHook),
+			                                               reinterpret_cast<void**>(&g_partyOriginal));
+			const bool range = context->PatchWriteU32(PartyRangeRva, PartyRangeBytes, sizeof(PartyRangeBytes),
+			                                          items_ext::MedianPartyRangeSq);
+			ps = hooked && range ? "hooked (whole award to every member, range 179)" : hooked ? "hooked, range NOT widened" : "NOT hooked";
+			ok = ok && hooked && range;
+		}
+	}
+	std::snprintf(report, reportSize, "%s: runewords (%d rows with properties 8-13: 0x3d44c0; Jewel padding: 0x372260) %s, kill experience penalty (0x44fef0) %s, party experience (0x506f90) %s",
+	              ok ? "on" : "partial", mxl_runewords::ExtraCount, rw, xs, ps);
 	return ok;
 }
 

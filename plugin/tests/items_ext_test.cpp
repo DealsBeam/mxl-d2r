@@ -30,6 +30,12 @@ int RunItemsExtTests() {
 	Check(PenalizedXp(2000000000, 60, 54) == 1800000000, "64-bit product, no overflow");
 	Check(PenalizedXp(7, 60, 54) == 6 && PenalizedXp(1, 60, 20) == 0, "truncation toward zero");
 
+	// party experience: D2R pools and splits by level (the numbers of the RE notes), Median pays everyone the whole award
+	Check(VanillaPartyAward(1000, 2, 80, 160) == 673 && VanillaPartyAward(1000, 3, 80, 240) == 565, "vanilla split, equal levels");
+	Check(VanillaPartyAward(1000, 2, 60, 150) == 538 && VanillaPartyAward(1000, 2, 90, 150) == 808, "vanilla split by level");
+	Check(VanillaPartyAward(1000, 1, 80, 80) == 1000 && VanillaPartyAward(1000, 0, 80, 80) == 0, "alone, nobody");
+	Check(MedianPartyAward(1000) == 1000 && MedianPartyRangeSq > VanillaPartyRangeSq, "Median: the whole award, wider range");
+
 	// runeword extras: tools/items_data.py
 	using namespace mxl_runewords;
 	Check(ExtraSlots == 6 && RowCount == 237, "table shape");

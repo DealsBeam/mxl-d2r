@@ -123,4 +123,26 @@ constexpr auto RowOfRecord(const uint8_t* record, const uint8_t* table, uint64_t
 	return static_cast<int64_t>(offset / stride);
 }
 
+// Party experience. Median's D2Experience.cpp 0x5e830 gives every collected party member the monster's whole experience
+// (each then goes through the per-member award: level gap penalty, ExpRatio, stat 0x55); 1.13c / D2R's share loop pools
+// xp + (n-1) * xp * 0x59 / 256 and splits it by character level. Median also widens the collect range from 80 to about
+// 179 units (squared distance 0x1900 -> 0x7d00, D2Game 0xdafcb). docs/subsystems/items-xp.md.
+constexpr uint32_t VanillaPartyRangeSq = 0x1900;
+constexpr uint32_t MedianPartyRangeSq = 0x7d00;
+constexpr auto MedianPartyAward(int32_t xp) noexcept -> int32_t {
+	return xp;
+}
+// The vanilla share of the member with `level` out of `n` members whose levels add up to `sum` (the code of 0x44a3b0).
+constexpr auto VanillaPartyAward(int32_t xp, int32_t n, int32_t level, int32_t sum) noexcept -> int32_t {
+	if (n <= 0 || sum <= 0) {
+		return 0;
+	}
+	if (n == 1) {
+		return xp;
+	}
+	const int64_t extra = static_cast<int64_t>(n - 1) * 0x59 * xp;
+	const int64_t pool = xp + ((extra + (extra < 0 ? 0xff : 0)) >> 8);
+	return static_cast<int32_t>(static_cast<double>(level) * (static_cast<double>(pool) / sum));
+}
+
 }  // namespace items_ext

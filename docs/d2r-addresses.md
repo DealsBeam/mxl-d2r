@@ -558,7 +558,7 @@ craft, catalyst, etc.) and return; otherwise call the original. The "Talk" line 
 
 | What | Address | Notes |
 |---|---|---|
-| Menu builder hook | `0x1147a0` | entry `40 55 53 57 41 54 41 56 48 8d ac 24 10 fc ff ff 48 81 ec f0 04 00 00` (23 bytes, no rip-relative). The loop adds `count - 1` lines; the Identify line (id 0xfb4) overwrites the record's `+4` with 3 or 2 on every build, so lines behind it vanish and a skipped Identify is never retried: the plugin keeps its lines in front of Identify and re-sets the count on each call |
+| Menu builder hook | `0x1147a0` | entry `40 55 53 57 41 54 41 56 48 8d ac 24 10 fc ff ff 48 81 ec f0 04 00 00` (23 bytes, no rip-relative). The loop adds `count - 1` lines; the Identify line (id 0xfb4) overwrites the record's `+4` with 3 or 2 on every build, so lines behind it vanish and a skipped Identify is never retried: the plugin keeps its lines in front of Identify and writes the count back (lines + 1) after the builder returns, so the record shows what the list shows (the lowered count hid the plugin line from the harness `menu list`) and re-sets the count on each call |
 | Menu packet hook | `0x4b0470` | entry `40 55 53 56 57 41 54 41 55 48 8d 6c 24 d1 48 81 ec c8 00 00 00` (21 bytes). Packet: `u8 0x38, u32 kind, u32 npc unit id` (9 bytes). The NPC is found with `0x53b8f0(player, unit id, 0x32)` (distance 50), its class is `[unit+4]` |
 | Packet sender | `0xec730(u8 id, u32 a, u32 b)` | builds the 9-byte packet; `0xec820` is the 0x2e variant |
 | Cancel handler | `0x112c30` | closes the list widget (`0x1e9390`), clears `0x2a486a4`, calls `0x10de80(npc id)` and `0xc7d30(8)`; returns 1 |
@@ -697,13 +697,26 @@ Ready-made path, called not hooked, verified in game (slot 2, background mode):
   the 120 s fallback.
 - Used for: Median's dungeon lockout texts (refusal "(Required Level: N)", "Requires Hell difficulty", "This area is locked / Join
   another game to enter again", clock "Closing in: mm:ss" and "ONCE YOU EXIT YOU CANNOT GO BACK" to every player of the game),
-  the quest reward notices (Akara's Heart, Jerhyn / Cain crystals, Ormus shrines) and the goblin "sighted" line. All shown in
+  the quest reward notices (Akara's Heart, Jerhyn / Cain crystals, Ormus shrines) and the goblin line ("Treasure Goblin appears!": Median's push notification is the unit name + string 12320 " appears!"). All shown in
   the screenshots of the lane report. The plugin counts messages sent / failed on the `mxl` command.
 - Not used: the client packet table also has 0x5a (34 bytes, builder `0x5282b0(unit,type)`, sender `0x480510`; Median's goblin notice
   is type 0x15) and unit message `0x491960(player,msg,subject)` (0x14 = D2R's generic "Impossible." line; Median's 0x13 and 0x88
   have no D2R handler). Several client handlers sit behind protected thunks (`0x3e2b7xx`), so they cannot be read statically.
-- Not done: a real timer widget. D2RLoader's PluginSDK has OverlayService (frame callback, drawText) and NetworkService (plugin
-  channel `sendToClient`, 224-byte payload) for a client-side countdown; the notice is a log line for now (docs/unported.md).
+- **Plugin messages (lane approx-items, 2026-10-22; client_messages.cpp / client_messages_logic.h): a hidden server -> client
+  data channel.** No NetworkService is needed: a chat packet 0x26 of type 0 (shows nothing, does not freeze an NPC's speech)
+  whose text is the marker `\x01MXL`, one kind letter and the payload as lower-case hex (up to 125 bytes). The client's
+  packet-table entry for 0x26 (table `0x22bbc40`, 24-byte entries, original handler `0x12c190`; the entry bytes of the handler
+  are checked: `48 89 5c 24 10 48 89 74 24 18 57 48 81 ec 90`) is replaced by a plugin function that reads the text, hands a
+  message that starts with the marker to the handler registered for the kind letter and passes every other chat packet to the
+  original. Kinds: `N` = an NPC page answer (npc_actions.cpp: u32 page kind, u16 NPC class, u16 mask of open entries), `T` = the
+  dungeon clock (dungeon_lockout.cpp: u16 level, u16 0, u32 ms left, 0 = no clock). Off word `clientmsg` switches it off with the
+  rest of the module.
+- **Dungeon countdown** (dungeon_lockout.cpp): the server sends `T` to everybody when a clock starts and to a player who enters a
+  level (level + ms left; a level without a clock sends 0, which clears the old one). The client keeps the end tick and draws
+  "Closing in: mm:ss" (string 11191) and "ONCE YOU EXIT YOU CANNOT GO BACK" (11193) with D2RLoader's OverlayService text calls from a
+  frame callback (phase AfterGameUi), centred at the top of the screen, while the local player's level
+  (`0x9a480(*(u32*)(image + 0x2a23704))` = the local player's unit, `0x34b440` its room, `0x2efc10` the room's level) equals the
+  clock's level. The chat lines of 3a stay.
 
 ## 14. Player actions (lane harness-cast, 2026-10-22; plugin/src/harness_cmds.cpp)
 

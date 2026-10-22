@@ -53,6 +53,9 @@ int RunDungeonTests() {
 	Check(l.Start(157, 1000), "first entry starts the clock");
 	Check(l.Running(157, 1000) && l.Running(157, 20999) && !l.Sealed(157, 20999), "running for 20 s");
 	Check(l.Sealed(157, 21000) && !l.Running(157, 21000), "sealed after 20 s");
+	Check(l.RemainingMs(157, 1000) == 20000 && l.RemainingMs(157, 12500) == 8500 && l.RemainingMs(157, 20999) == 1,
+	      "time left counts down");
+	Check(l.RemainingMs(157, 21000) == 0 && l.RemainingMs(5, 0) == 0, "no time left once sealed, none for a level without a clock");
 	Check(!l.Start(157, 22000), "a sealed level does not restart");
 	Check(!l.Start(157, 5000) && l.Sealed(157, 99999999), "stays sealed");
 	Check(dungeon::Check(l, {120, 0, 2}, 157, 21000) == Verdict::Sealed, "entry refused once sealed");

@@ -73,6 +73,44 @@ int main() {
 	RewardLine("Shrine", 3, out, sizeof(out));
 	Check(std::strcmp(out, "You have received: 3 x Shrine") == 0, "reward count");
 
+	// goblin notice: Median's StrPushNotifGoblinAppear, " appears!", after the monster's name
+	GoblinAppears(out, sizeof(out));
+	Check(std::strcmp(out, "Treasure Goblin appears!") == 0, "goblin notice");
+
+	// plugin messages: hidden type, marker, kind letter, hex payload
+	{
+		const uint8_t payload[] = {0x00, 0x01, 0xab, 0xff, 0x7e};
+		Check(BuildPluginMessage(rec, 0x11223344, 'N', payload, sizeof(payload)), "plugin message built");
+		Check(rec[0] == 0x26 && rec[1] == TypeHidden && rec[0x0a] == 0, "plugin message is a hidden chat packet, no name");
+		const char* text = reinterpret_cast<const char*>(rec + 0x47);
+		Check(std::strcmp(text, "\x01MXLN0001abff7e") == 0, "marker, kind and lower-case hex");
+		char kind = 0;
+		uint8_t got[PluginPayloadMax];
+		size_t got_n = 0;
+		Check(ParsePluginMessage(text, &kind, got, sizeof(got), &got_n) && kind == 'N' && got_n == 5 &&
+		          std::memcmp(got, payload, 5) == 0,
+		      "plugin message round trip");
+		Check(BuildPluginMessage(rec, 1, 'T', nullptr, 0) &&
+		          ParsePluginMessage(reinterpret_cast<const char*>(rec + 0x47), &kind, got, sizeof(got), &got_n) && kind == 'T' &&
+		          got_n == 0,
+		      "empty payload");
+		Check(!ParsePluginMessage("Closing in: 01:00", &kind, got, sizeof(got), &got_n), "a normal line is not a plugin message");
+		Check(!ParsePluginMessage("\x01MXL", &kind, got, sizeof(got), &got_n), "no kind letter");
+		Check(!ParsePluginMessage("\x01MXLN123", &kind, got, sizeof(got), &got_n), "odd hex length");
+		Check(!ParsePluginMessage("\x01MXLN12zz", &kind, got, sizeof(got), &got_n), "non-hex digit");
+		Check(!ParsePluginMessage("\x01MXLN1234", &kind, got, 1, &got_n), "payload over the capacity");
+		uint8_t big[PluginPayloadMax + 1] = {};
+		Check(!BuildPluginMessage(rec, 1, 'N', big, sizeof(big)), "payload over the packet's text size");
+		Check(BuildPluginMessage(rec, 1, 'N', big, PluginPayloadMax) &&
+		          std::strlen(reinterpret_cast<const char*>(rec + 0x47)) <= ChatTextMax,
+		      "largest payload fits the text field");
+		uint8_t t[TimerPayloadSize];
+		BuildTimerPayload(t, 253, 61000);
+		Check(Get16(t) == 253 && Get16(t + 2) == 0 && Get32(t + 4) == 61000, "timer payload");
+		Check(SecondsLeft(61000) == 61 && SecondsLeft(60001) == 61 && SecondsLeft(1) == 1 && SecondsLeft(0) == 0,
+		      "countdown seconds round up");
+	}
+
 	if (failures == 0) {
 		std::printf("client_messages_test: all passed\n");
 	}
