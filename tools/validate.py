@@ -129,6 +129,7 @@ class Validator:
         self.group2 = strings_ns.load_group2()
         self.group2_lower = {k.lower() for k in self.group2}
         self.native = strings_ns.native_exceptions()
+        self.aliases = strings_ns.load_aliases()  # long key -> short alias (strings_ns "short aliases")
         self.strings = set(self.d2r_keys) | self.group2
         for p in (MOD / "local" / "lng" / "strings").rglob("*.json"):
             self.strings |= {e["Key"].split(":", 1)[-1] if e["Key"].startswith(strings_ns.PREFIX) else e["Key"]
@@ -261,7 +262,7 @@ class Validator:
             self.add("warn", table, col, "cell names no known string (Median's own string tables lack it too)", row, v)
         if limit and len(v) > limit:
             self.add("error", table, col, f"longer than {limit} characters (the whole {strings_ns.PREFIX}<key> must fit "
-                     "the field; a key that cannot goes into tools/strings_native.json)", row, v)
+                     "the field; txt_migrate gives such a key a short alias, strings_ns.plan_aliases)", row, v)
 
     # ---- columns ----------------------------------------------------------------------------------------
     def check_table(self, table: str) -> None:
@@ -342,6 +343,28 @@ class Validator:
             self.check_table(t)
         self.engine_rules()
         self.native_exceptions()
+        self.alias_refs(names)
+
+    def alias_refs(self, names: set[str]) -> None:
+        """A key with a short alias (its medianxl:<key> did not fit a fixed-size field) is named by the alias everywhere:
+        a plain reference (cubemain input / output, treasure class item) to the long key would match no unique / set
+        item, since their index cell holds the alias. Aliases must also be defined in the namespace list."""
+        for k, a in self.aliases.items():
+            if a not in self.group2:
+                self.add("error", "strings", "Key", f"alias of '{k}' is not in the namespace list", "-", a)
+        if not self.aliases:
+            return
+        for t in sorted(names):
+            tab = self.data.table(t)
+            if not tab:
+                continue
+            header, rows = tab
+            for r in rows:
+                for ci, v in enumerate(r):
+                    if v and strings_ns.retarget(v, self.aliases) != v:
+                        self.add("error", t, header[ci] if ci < len(header) else str(ci),
+                                 "names the long key of a string that has a short alias; it must name the alias",
+                                 r[0] if r else "-", v)
 
     def native_exceptions(self) -> None:
         """Keys kept native because their cell cannot hold medianxl:<key> must exist in the native string files."""

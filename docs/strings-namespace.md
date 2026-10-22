@@ -32,11 +32,24 @@ with D2R's string IDs again (bug #7). D2R's own keys keep native loading. Refere
 
 (filled in by ns-research / ns-plugin; the list itself is `tools/strings_native.json`, read by tbl2json, txt_migrate and validate)
 
-- **Cells that cannot hold `medianxl:<key>` (ns-tables).** Fixed-size text fields must hold the whole `namespace:key`
-  (`LOCALIZATION.md`): `levels.LevelWarp` 39 characters, `uniqueitems.index` and `setitems.index` 31. 19 Median keys
-  ("Sunstone of the Twin Seas", "MRVasily's Falling Star", "To The Island of the Sunless Sea", ...) would be 9
-  characters too long, so they stay native with a fixed ID and their cells stay unqualified. validate.py fails when
-  another key overflows its field (add it to `strings_native.json`).
+- **Cells that cannot hold `medianxl:<key>`: short aliases (ns-longnames).** Fixed-size text fields must hold the whole
+  `namespace:key` (`LOCALIZATION.md`): `levels.LevelWarp` 39 characters, `uniqueitems.index` and `setitems.index` 31.
+  19 Median keys ("Sunstone of the Twin Seas", "MRVasily's Falling Star", "To The Island of the Sunless Sea", ...)
+  would be 9 characters too long. They used to stay native (fixed ID, unqualified cell); with the namespace on, the
+  loader files such a record under `medianxl:` and ignores its ID (ns-research), so the unqualified cell would name
+  `d2r:<key>`, which does not exist. Now each gets a **short alias** `mxlname_<n>` (`strings_ns.plan_aliases`: the keys
+  whose `medianxl:<key>` overflows a cell of the schema's `dataLength`, numbered 1.. in key order):
+  - txt_migrate (`namespace_cells`) finds the keys, writes `work/mod/strings_alias.json` (`{"aliases": {key: alias}}`)
+    and `strings_ns.write_aliases` adds an alias record with the same 13 texts to both `median.json` files and to
+    `strings_namespace.json`. The long key stays defined (idkeys, the plugin's key lookups).
+  - Every localization cell that names the key becomes `medianxl:<alias>` (uniqueitems / setitems `index`, levels
+    `LevelWarp`, misc `spelldescstr`); every plain reference to the key (cubemain input / output, treasureclassex
+    `ItemN`) becomes the bare alias, which is what a unique / set item's `index` now reads as. The pictures
+    (`item_hd.py`: `uniques.json` / `sets.json` keyed on the plain index) therefore use `mxlname_<n>` too. Median's
+    text is not touched: the displayed name is the alias record's text.
+  - validate.py fails when any cell is longer than its field (with the prefix), when a plain reference still names a
+    long key that has an alias, and when an alias is missing from the namespace list. `tools/strings_native.json` is
+    empty again; add a key there only for a string the plugin must give D2R as a fixed numeric ID.
 - Range columns (`hireling.NameFirst` / `NameLast`: every string ID from the first to the last is a name) cannot name a
   namespaced key; they hold D2R keys only, validate.py fails otherwise.
 - **Plugin:** none from the plugin. The plugin does not need a loader-assigned number: it gives D2R ids of its own (below), so every

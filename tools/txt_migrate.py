@@ -1847,34 +1847,74 @@ class Migrator:
         in both banks (docs/strings-namespace.md). Unqualified cells mean D2R's own `d2r:` strings, so group 1 keys
         (keys of D2R's string files, whose text tbl2json overwrites in place) stay as they are. Only the columns of
         strings_ns.LOCALIZATION are looked at, numbers are never touched, and a row is edited cell by cell so the
-        rest of the file stays byte for byte as written by migrate()."""
+        rest of the file stays byte for byte as written by migrate().
+
+        A key whose `medianxl:<key>` does not fit the field of one of its cells (uniqueitems / setitems index, levels
+        LevelWarp: strings_ns "short aliases") gets an alias `mxlname_<n>`; the alias replaces the key in every cell
+        that names it, localization cells and plain references (cubemain, treasureclassex) alike."""
         group2 = strings_ns.load_group2()
         self.prefixed: Counter = Counter()
-        for bank in ("base", ""):
-            folder = OUT / "data" / "global" / "excel" / bank
-            for path in sorted(folder.glob("*.txt")):
-                table = path.stem
-                if table not in strings_ns.LOCALIZATION:
+        self.retargeted: Counter = Counter()
+        files = [(bank, p) for bank in ("base", "") for p in sorted((OUT / "data" / "global" / "excel" / bank).glob("*.txt"))]
+        if Migrator._schema is None:
+            import validate
+            Migrator._schema = validate.Schema()
+
+        def loc_columns(table: str, header: list[str]) -> list[int]:
+            return [i for i, c in enumerate(header)
+                    if strings_ns.is_localization(table, c) and not strings_ns.is_range_column(table, c)]
+
+        def limit(table: str, column: str) -> int | None:
+            typ = (Migrator._schema.field(table, column) or {}).get("type")
+            return typ.get("dataLength") if isinstance(typ, dict) else None
+
+        # which keys do not fit
+        long_keys = set()
+        for _bank, path in files:
+            if path.stem not in strings_ns.LOCALIZATION:
+                continue
+            lines = path.read_bytes().decode("utf-8").split("\r\n")
+            header = lines[0].split("\t")
+            for i in loc_columns(path.stem, header):
+                lim = limit(path.stem, header[i])
+                for line in lines[1:]:
+                    cells = line.split("\t")
+                    if lim and i < len(cells) and cells[i] in group2 and len(strings_ns.PREFIX + cells[i]) > lim:
+                        long_keys.add(cells[i])
+        self.aliases = strings_ns.plan_aliases(long_keys)
+        clash = {a for a in self.aliases.values() if a in group2 or a in strings_ns.d2r_keys()}
+        if clash:
+            raise SystemExit(f"txt_migrate: alias names already used as strings: {sorted(clash)}")
+        strings_ns.write_aliases(self.aliases)
+        group2 = strings_ns.load_group2()
+
+        for bank, path in files:
+            table = path.stem
+            lines = path.read_bytes().decode("utf-8").split("\r\n")
+            header = lines[0].split("\t")
+            cols = loc_columns(table, header) if table in strings_ns.LOCALIZATION else []
+            changed = False
+            for n in range(1, len(lines)):
+                if not cols and not any(k in lines[n] for k in self.aliases):
                     continue
-                lines = path.read_bytes().decode("utf-8").split("\r\n")
-                header = lines[0].split("\t")
-                cols = [i for i, c in enumerate(header)
-                        if strings_ns.is_localization(table, c) and not strings_ns.is_range_column(table, c)]
-                changed = False
-                for n in range(1, len(lines)):
-                    cells = lines[n].split("\t")
-                    if cells[0] == "Expansion":
+                cells = lines[n].split("\t")
+                if cells[0] == "Expansion":
+                    continue
+                for i, cell in enumerate(cells):
+                    if i in cols:
+                        new = strings_ns.qualify(cell, group2, self.aliases)
+                    elif cell and any(cell.lstrip('"').startswith(k) for k in self.aliases):
+                        new = strings_ns.retarget(cell, self.aliases)
+                    else:
                         continue
-                    for i in cols:
-                        if i < len(cells):
-                            new = strings_ns.qualify(cells[i], group2)
-                            if new != cells[i]:
-                                cells[i] = new
-                                self.prefixed[(bank or "rotw", table, header[i])] += 1
-                                changed = True
-                    lines[n] = "\t".join(cells)
-                if changed:
-                    path.write_text("\r\n".join(lines), encoding="utf-8", newline="")
+                    if new != cell:
+                        cells[i] = new
+                        counter = self.prefixed if i in cols else self.retargeted
+                        counter[(bank or "rotw", table, header[i])] += 1
+                        changed = True
+                lines[n] = "\t".join(cells)
+            if changed:
+                path.write_text("\r\n".join(lines), encoding="utf-8", newline="")
 
     def migrate(self, table: str) -> None:
         mh, mrows = read_tsv(NAMED / f"{table}.txt")
@@ -2084,6 +2124,14 @@ def main() -> int:
         m.report.append(f"| {t} | {c} | {m.prefixed[('rotw', t, c)]} | {m.prefixed[('base', t, c)]} |")
     m.report.append(f"| **total** | | {sum(v for k, v in m.prefixed.items() if k[0] == 'rotw')} | "
                     f"{sum(v for k, v in m.prefixed.items() if k[0] == 'base')} |")
+    if m.aliases:
+        m.report += ["", "## Short aliases (the key does not fit its fixed-size field, tools/strings_ns.py)", "",
+                     "| Key | Alias |", "|---|---|"]
+        m.report += [f"| {k} | `{strings_ns.PREFIX}{a}` |" for k, a in m.aliases.items()]
+        m.report += ["", "Reference cells rewritten to the bare alias:", "", "| Table | Column | rotw bank | base bank |",
+                     "|---|---|---|---|"]
+        for t, c in sorted({(t, c) for (_b, t, c) in m.retargeted}):
+            m.report.append(f"| {t} | {c} | {m.retargeted[('rotw', t, c)]} | {m.retargeted[('base', t, c)]} |")
     m.report += ["", "## Overflow: Median values with no D2R column (kept in work/mod/overflow/<table>.txt)", ""]
     for t, (cols, n) in sorted(m.overflow.items()):
         m.report.append(f"- **{t}** ({n} rows): " + ", ".join(f"{c} ({m.dropped[t][c]})" for c in cols))
