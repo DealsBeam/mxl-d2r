@@ -5335,15 +5335,27 @@ def _sprint_leg(stam0, walk, max_s, stop_exhausted=False):
 
 
 def _pairs(rows, mode):
-    return [(a, b) for a, b in zip(rows, rows[1:]) if a[3] == mode and b[3] == mode and b[0] > a[0]]
+    """Consecutive samples that are both in `mode` (a number, or a tuple of modes that count as one: 1 and 5 are both standing)."""
+    modes = mode if isinstance(mode, tuple) else (mode,)
+    return [(a, b) for a, b in zip(rows, rows[1:]) if a[3] in modes and b[3] in modes and b[0] > a[0]]
 
 
 def _speed(rows, mode):
-    """Units per frame over the consecutive samples that are both in this mode; (speed, frames)."""
-    pr = _pairs(rows, mode)
-    frames = sum(b[0] - a[0] for a, b in pr)
-    dist = sum(((b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2) ** 0.5 for a, b in pr)
-    return (dist / frames if frames else 0.0), frames
+    """Units per frame in this mode; (speed, frames in the mode). The positions are whole units and the samples a few frames apart, so
+    a single pair is off by a quarter: the speed is the distance between the ends of an unbroken stretch of samples in the mode (at
+    least 12 frames), and the fastest stretch counts (one that turns a corner or is held up by an obstacle reads low)."""
+    frames = sum(b[0] - a[0] for a, b in _pairs(rows, mode))
+    stretches, cur = [], []
+    for r in rows:
+        if r[3] == mode and (not cur or r[0] > cur[-1][0]):
+            cur.append(r)
+            continue
+        stretches.append(cur)
+        cur = [r] if r[3] == mode else []
+    stretches.append(cur)
+    per = [((s[-1][1] - s[0][1]) ** 2 + (s[-1][2] - s[0][2]) ** 2) ** 0.5 / (s[-1][0] - s[0][0]) for s in stretches
+           if len(s) > 1 and s[-1][0] - s[0][0] >= 12]
+    return (max(per) if per else 0.0), frames
 
 
 def _drain(rows):
@@ -5490,7 +5502,7 @@ def _check_sprint():
     # 4. no cooldown: two points of stamina are enough for a run to start (the first direction that is free; the points last only
     # a few frames, so sample at once)
     modes = set()
-    for dx, dy in SPRINT_DIRS:
+    for dx, dy in [(int(dx * k), int(dy * k)) for k in (1.0, 0.5, 0.25) for dx, dy in SPRINT_DIRS]:  # a cramped spot: shorter paths
         setstat("player", 10, STAMINA_POINT * 2)
         here = _sample()
         H("move %d %d" % (here[1] + dx, here[2] + dy))
@@ -5523,7 +5535,9 @@ def _check_sprint():
     keyrun = {}
     # Screen points in the directions the legs walked (world offset to isometric screen, the character is in the middle of the
     # window), then a spread of fixed points: a character in a cramped spot has only a few free ways out.
-    click_points = []
+    # A `state` reply takes about 0.6 s, so a click that walks 8 units (190 px) is over before the first sample: the far points come first
+    # (30 units and more: two seconds of walking), then the near ones.
+    click_points = [(0.12, 0.50), (0.88, 0.50), (0.50, 0.12), (0.50, 0.80), (0.20, 0.20), (0.80, 0.80), (0.20, 0.80), (0.80, 0.20)]
     for dx, dy in SPRINT_DIRS:
         u, v = dx - dy, (dx + dy) / 2.0
         n = (u * u + v * v) ** 0.5
@@ -5537,21 +5551,25 @@ def _check_sprint():
             g.click_bg(fx, fy)
             for _ in range(3):  # the order reaches the server a few frames after the click
                 time.sleep(0.1)
-                keyrun[label] = _sample()[3]
-                if keyrun[label] in (2, 3):
+                smp = _sample()
+                keyrun[label] = smp[3]
+                log.append("R %s click %.3f,%.3f -> frame %d x %d y %d mode %d" % ((label, fx, fy) + (smp[0], smp[1], smp[2], smp[3])))
+                if keyrun[label] in (2, 3, 6):
                     break
-            if keyrun[label] in (2, 3):
+            if keyrun[label] in (2, 3, 6):
                 break
         time.sleep(2.5)
     # The run toggle is the character's own setting (it survives a restart), so the check does not know which way the first press goes:
     # the two presses must give one run and one walk, and the second press puts the character's toggle back.
-    notes.append("key R: click-to-move mode %s after the first press, %s after the second (3 = run, 2 = walk; one of each, the toggle ends where it began)" % (
+    notes.append("key R: click-to-move mode %s after the first press, %s after the second (3 = run, 2 or 6 in the town = walk; one of each, the toggle ends where it began)" % (
         keyrun["on"], keyrun["off"]))
-    if sorted((keyrun["on"], keyrun["off"])) != [2, 3]:
+    if sorted(2 if m == 6 else m for m in (keyrun["on"], keyrun["off"])) != [2, 3]:  # 6 is walking in the town
         bad.append("toggle key R gave modes %s / %s (want one run and one walk)" % (keyrun["on"], keyrun["off"]))
     setstat("player", 10, full)
+    shot = sh("sprint")
+    goto(2)  # back to the field the next check starts from (standing there is mode 1, in the town it is mode 5)
     add(name, "PASS" if not bad else "FAIL", "; ".join(notes) if not bad else "; ".join(bad) + " | " + "; ".join(notes),
-        [sh("sprint")], log)
+        [shot], log)
 
 
 def mapcells():
@@ -6350,7 +6368,7 @@ def check_manarules():
         stand.append(_sample())
         time.sleep(0.2)
     log += ["stand " + " ".join(map(str, r)) for r in stand]
-    rate, frames = per_frame(stand, 1)
+    rate, frames = per_frame(stand, (1, 5))  # 5 (town neutral) is what a character has in the field until it moves after arriving
     notes.append("standing: %s raw/frame over %d frames (Median %d = max %d / 256 x (100+%d)%%)" % (
         ("%.1f" % rate) if rate is not None else "?", frames, step, point, bonus))
     if rate is None or abs(rate - step) > 0.05 * step:
