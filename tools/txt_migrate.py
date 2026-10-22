@@ -444,16 +444,14 @@ class Migrator:
                 self.report.append(f"\nlvlmaze: {len(missing)} maze levels had no lvlmaze row; added copies of a "
                                    f"same-LevelType row for levels {', '.join(missing)}")
 
-    def fold_level_layers(self) -> None:
-        """Levels.txt `Layer` is the key of the per-character map memory (explored rooms per layer, the character's
-        .map / .ma2 / .ma3 save files). D2R keeps it as a hash with 100 buckets indexed by the layer directly
-        (0x1400d5fe0 save, 0x1400d5710 load: `local_1d8[100]`, `local_1d8[layer]`), and all of its levels use 0..99
-        (several levels share a layer, 14 share 0). Median's layers go up to 279: leaving or entering a level with
-        a layer of 100 or more read past that array, the chain it found was garbage and the save loop spun forever
-        (bug #24: the client hangs/crashes after a few area changes, its UI thread logs "Reading From: <name>.ma2"
-        without end). A layer above 99 becomes D2R's own layer of that level id when D2R has the level (Median reuses
-        the ids 133-136 of D2R's Pandemonium levels), else 0, the layer D2R already shares between levels that have
-        no map memory of their own (Median blanks it for its towns too); levels that shared a Median layer share 0."""
+    def fix_maze_positions(self) -> None:
+        """Levels.txt `Position` (level record +0x90, bug #27): when set, the level entry finder 0x3da650 picks the
+        arrival spot from a table of entry rooms the maze generator fills for the level (a random room of the requested
+        type, 0x3dac20). D2R's own mazes that set it (54, 74, 125-127) have such rooms in their presets; with none the
+        table is empty, the spot is (0, 0), no room is there and the next call (0x3289a0) reads +0x50 of null: the
+        process dies on `cheat goto 184` (Maggot Lair, Median sets Position on it, the vanilla lair levels 62-64 do not).
+        A maze level D2R does not have itself gets Position cleared; the arrival spot then comes from the level's
+        warp tile as in every other maze."""
         n = 0
         for bank in ("base", ""):
             d = OUT / "data" / "global" / "excel" / bank
@@ -462,17 +460,16 @@ class Migrator:
                 continue
             lh, lrows = read_tsv(d / "levels.txt")
             dh, drows = read_tsv(dr)
-            li, lid = lh.index("Layer"), lh.index("Id")
-            dli, did = dh.index("Layer"), dh.index("Id")
-            d2r_layer = {r[did]: r[dli] for r in drows if is_record(r)}
+            pi, lid, dt = lh.index("Position"), lh.index("Id"), lh.index("DrlgType")
+            d2r_ids = {r[dh.index("Id")] for r in drows if is_record(r)}
             n = 0
             for r in lrows:
-                if is_record(r) and r[li].lstrip("-").isdigit() and int(r[li]) > 99:
-                    r[li] = d2r_layer.get(r[lid], "0")
+                if is_record(r) and r[dt] == "1" and r[pi] == "1" and r[lid] not in d2r_ids:
+                    r[pi] = ""
                     n += 1
             write_tsv(d / "levels.txt", lh, lrows)
-        self.report.append(f"\nlevels: {n} Median levels had a Layer above 99 (D2R's map memory has 100 buckets); "
-                           f"set to D2R's layer of the same id or 0")
+        self.report.append(f"\nlevels: {n} Median-only maze levels had Position set (no entry room in the maze, the "
+                           f"game dies on arrival); cleared")
 
     def formula_proxies(self) -> None:
         """D2Sigma's formula functions (hasstate, statlayer, itemstat, tabpoints): tools/formula.py renders each
@@ -2111,7 +2108,7 @@ def main() -> int:
     m.inventory_sizes()
     m.claim_presets()
     m.claim_mazes()
-    m.fold_level_layers()
+    m.fix_maze_positions()
     m.object_presets()
     m.sound_rows()
     m.skill_costs()

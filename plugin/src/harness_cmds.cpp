@@ -19,6 +19,7 @@
 #include "item_events.h"
 #include "npc_actions.h"
 #include "item_gen.h"
+#include "map_memory.h"
 #include "level_types.h"
 #include "monster_looks.h"
 #include "skill_tree.h"
@@ -2262,6 +2263,21 @@ auto CmdPanelRow(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// Client side (UI thread): `mapmem` prints the automap layer of the current level (layer, table index, the sizes of its four
+// room sets) and what the character's map file holds for it (nodes of this layer, nodes of other layers sharing the chain),
+// with the counters of the map memory hooks (map_memory.cpp).
+auto CmdMapMem(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	MapMemoryInfo info;
+	if (!MapMemoryProbe(&info)) {
+		return Fail(c, "mapmem: no automap layer is current");
+	}
+	Out("mapmem layer=%d bucket=%d cells=%llu,%llu,%llu,%llu file=%s size=%u nodes=%d foreign=%d clean=%d loads=%ld saves=%ld views=%ld resets=%ld",
+	    info.layer, info.bucket, static_cast<unsigned long long>(info.cells[0]), static_cast<unsigned long long>(info.cells[1]),
+	    static_cast<unsigned long long>(info.cells[2]), static_cast<unsigned long long>(info.cells[3]), info.haveFile ? "read" : "none",
+	    info.fileSize, info.nodes, info.foreign, info.clean ? 1 : 0, info.loads, info.saves, info.views, info.resets);
+	return true;
+}
+
 // --- lane bug-backlog-b: verbs for the old "fix to test" rows of docs/bugs.md ----------------------------------------
 
 // Client side (UI thread): `skilltab [n]` the selected tab of the skill tree panel (bug #3), or select tab n through the
@@ -2443,7 +2459,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | levelact <id>..");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | "
-	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | stat merc|mon:<id> <stat>");
+	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
 	Out("backlog verbs: stat <ref> <stat> scan [max layer] | cubeslots <first> <count> | cubeout <recipe> [slot] (portal outputs) | state (portal dest=)");
 	return true;
 }
@@ -2984,7 +3000,7 @@ const Verb Verbs[] = {
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

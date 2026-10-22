@@ -39,7 +39,7 @@ jobs:
       - name: Run unit tests
         run: |
           set -e
-          for t in mxl_tests craft_tests goblin_tests nocorpse_tests harness_tests clientmsg_tests strings_tests; do ./build-tests/$t; done
+          for t in mxl_tests craft_tests goblin_tests nocorpse_tests harness_tests clientmsg_tests strings_tests mapmem_tests; do ./build-tests/$t; done
 
   tools:
     runs-on: mxl-cross
