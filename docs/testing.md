@@ -426,3 +426,15 @@ cheats are verified by their effect in the screenshots.
 | Cow portal recipe, lockout (refusal, clock, seal) | BLOCKED: after `cheat itemgridclear` the `cheat spawn box,inv` / `leg,inv` / `tbk,inv` lines through the harness put nothing into the inventory (`cow_normal_town_spawn_failed.png`); the same lines typed in the console panel in the foreground run did. The lockout needs the scroll in the inventory, the counters (`refused N, clocks started N` in `mxl`) are readable already |
 | Cube gold payment, craft flags | BLOCKED: needs harness commands `item <code> [stat=value ...]` (item with stats in the inventory), `flag player\|game N get\|set\|clear`, `gold get` |
 | Andariel kill (catalyst, Warriv) | BLOCKED: needs a harness command `kill <monster>` or world clicks that work, plus `quest <id> <state>` to put quest 6 in progress |
+
+### Monster looks (lane sigma-behaviours-b, 2026-10-22, slot 3, background mode)
+
+Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261022-101244-s3\` (not committed). `h spawn 2791 1` (treasure goblin) in the Blood Moor.
+
+| Row | Result | Note |
+|---|---|---|
+| `mxl` monster looks line | PASS | "monster looks on: name colours on, automap on, spawn overlays on (1803 monsters in the table)" with counters |
+| Automap marker and name | PASS | `goblin_automap.png`: Tab shows the blue NPC marker and "Treasure Goblin" under it; counter 124 markers / 124 names |
+| Spawn overlay | PARTIAL | counter "1 spawn overlays (last 53 on monster 2791)" and the game stays up; the effect itself was not seen in the 0.4 s captures. The first build read the creation function's result without a check (callers that return 1) and ended the game on `cheat goto 2` (crash reports of `d2rloader\crashes`: read at address 1); fixed by only reading pointers |
+| Name colour | BLOCKED | the hover needs the cursor over the monster; background mode cannot place it. Rules and data are unit tested (`monster_looks_test.cpp`), the hooks install ("name colours on") |
+| PalShift stand-ins | PASS (tool) | `work/mod/effects_hd.md` paragraph PalShift: 21 shifted rows scored, 13 custom art; not looked at in game |
