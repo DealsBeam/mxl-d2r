@@ -14,6 +14,9 @@
 #include "craft_flags.h"
 #include "d2r.h"
 #include "dungeon_lockout.h"
+#include "engine_gaps.h"
+#include "engine_gaps_logic.h"
+#include "gamble_logic.h"
 #include "goblins.h"
 #include "hirelings.h"
 #include "hirelings_logic.h"
@@ -28,6 +31,7 @@
 #include "map_memory.h"
 #include "level_types.h"
 #include "monster_looks.h"
+#include "monster_rules.h"
 #include "skill_damage.h"
 #include "skill_starts.h"
 #include "skill_tree.h"
@@ -2301,6 +2305,84 @@ auto CmdMercPrice(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return price == expected;
 }
 
+// `players [n]`: D2R's "Offline Difficulty Scaling" setting, the number the /players chat command sets (1-8): what the monster
+// setup 0x543e90 reads as the players count of a monster spawned from now on. The chat command also saves the setting
+// (0xa07670); this verb does not. Prints the value now.
+constexpr uint64_t RvaPlayersSetting = 0xe19e0;     // () -> the setting object; the value at +0xc
+constexpr uint64_t RvaPlayersSettingSet = 0xd2f020; // (setting, value)
+
+auto CmdPlayers(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	void* setting = Fn<void* (*)()>(RvaPlayersSetting)();
+	if (setting == nullptr) {
+		return Fail(c, "players: no setting object");
+	}
+	if (t.n >= 2) {
+		long long n = 0;
+		if (!hcmd::ParseInt(t.tok[1], &n) || n < 1 || n > 8) {
+			return Fail(c, "usage: players [1-8]");
+		}
+		Fn<void (*)(void*, int32_t)>(RvaPlayersSettingSet)(setting, static_cast<int32_t>(n));
+	}
+	Out("players setting=%d", d2r::At<int32_t>(setting, 0xc));
+	return true;
+}
+
+// `tctrace [reset]`: the class lookups of the treasure-class executor since start (or the last reset): the level it handed
+// the class getter 0x397290 is above 0 only when the monster's level steps the class up (Median: in Normal too).
+auto CmdTcTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	(void)c;
+	const TcTrace tc = NormalTcTrace(t.n >= 2 && hcmd::LowerEq(t.tok[1], "reset"));
+	Out("tctrace calls=%d leveled=%d lastclass=%d lastlevel=%d", tc.calls, tc.leveled, tc.lastClass, tc.lastLevel);
+	return true;
+}
+
+// `leash [distance]`: the player's mercenary against its owner. With a distance, moves the MERCENARY (the unit move 0x491ca0,
+// as `interact` does for the player) to a free spot that far from the player, along an axis or a diagonal: moving the player
+// pulls the mercenary along at once, whatever the leash. Prints both positions, the distance D2R's own owner-distance function
+// 0x596720 gives, the Euclidean one, and the mercenary's mode.
+constexpr uint64_t RvaOwnerDistance = 0x596720;  // (unit, owner) -> sub-tile distance
+using OwnerDistanceFn = int32_t (*)(Unit*, Unit*);
+
+auto CmdLeash(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
+	if (merc == nullptr) {
+		return Fail(c, "leash: the player has no mercenary");
+	}
+	long long want = -1;
+	if (t.n >= 2 && (!hcmd::ParseInt(t.tok[1], &want) || want < 0 || want > 200)) {
+		return Fail(c, "usage: leash [distance 0-200]");
+	}
+	int32_t px = 0, py = 0;
+	d2r::UnitXY(c->player, &px, &py);
+	if (want >= 0) {
+		static const double dir[][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {0.7071, 0.7071}, {-0.7071, 0.7071}, {0.7071, -0.7071}, {-0.7071, -0.7071}};
+		bool moved = false;
+		for (const auto& d : dir) {
+			const int32_t x = px + static_cast<int32_t>(std::lround(d[0] * static_cast<double>(want)));
+			const int32_t y = py + static_cast<int32_t>(std::lround(d[1] * static_cast<double>(want)));
+			if (x < 0 || y < 0 || Fn<BlockedFn>(RvaMoveBlocked)(merc, x, y, 0x804) != 0) {
+				continue;
+			}
+			Fn<MoveFn>(RvaMove)(c->game, merc, 0, x, y, 0, 0);
+			int32_t mx = 0, my = 0;
+			d2r::UnitXY(merc, &mx, &my);
+			if (mx == x && my == y) {
+				moved = true;
+				break;
+			}
+		}
+		if (!moved) {
+			return Fail(c, "leash: no free spot %lld sub-tiles from the player", want);
+		}
+	}
+	int32_t mx = 0, my = 0;
+	d2r::UnitXY(merc, &mx, &my);
+	Out("leash merc id=%u at %d,%d player at %d,%d distance=%d euclid=%.1f mode=%d", IdOf(merc), mx, my, px, py,
+	    Fn<OwnerDistanceFn>(RvaOwnerDistance)(merc, c->player),
+	    std::sqrt(static_cast<double>((mx - px) * (mx - px) + (my - py) * (my - py))), ModeOf(merc));
+	return true;
+}
+
 auto CmdMerc(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Unit* merc = Fn<FindMercFn>(RvaFindMerc)(c->game, c->player, 7, 0);
 	if (merc == nullptr) {
@@ -2626,6 +2708,78 @@ auto CmdWear(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		Fn<MeleeWearFn>(RvaMeleeWear)(c->game, attacker, defender);
 	}
 	Out("wear %s -> %s n=%lld durability worn before=%lld after=%lld", t.tok[1], t.tok[2], n, before, durability());
+	return true;
+}
+
+constexpr uint64_t RvaPotionOfLifeStep = 0x580680;  // (game, unit): the Potion of Life's grant; max life (stat 7) += 0x1400 (Median 0x3200)
+constexpr uint64_t RvaLamEsenStep = 0x5ed6d0;       // (game, unit): Lam Esen's Tome reward, once per quest bit; unspent stat points (stat 4) += 5 (Median 10)
+constexpr uint64_t RvaSetState = 0x3355a0;          // (unit, state, on): needs the unit's state stat list
+constexpr uint64_t RvaClearState = 0x3354c0;        // (unit, state, 0)
+constexpr uint64_t RvaStateList = 0x2f5940;         // (unit, state) -> the unit's stat list for that state
+constexpr uint64_t RvaCreateStateList = 0x433d20;   // (&params) -> list (D2R's self buffs, srvdofunc 18, 0x553e60)
+constexpr uint64_t RvaBuffExpired = 0x5551f0;       // the self buffs' expiry callback
+constexpr uint64_t RvaDetachList = 0x2f7920;        // (unit, list)
+constexpr uint64_t RvaFreeList = 0x2f4180;          // (dataFlag, list)
+using RewardStepFn = int (*)(Game*, Unit*);
+using SetStateFn = void (*)(Unit*, int32_t, int32_t);
+using StateListFn = void* (*)(Unit*, int32_t);
+using CreateStateListFn = void* (*)(void* params);
+using DetachListFn = void (*)(Unit*, void*);
+using FreeListFn = void (*)(uint32_t, void*);
+
+// `rewardstep potion|tome`: runs the game's own grant step of the Potion of Life or of Lam Esen's Tome on the player and prints
+// the stat it changes (max life raw and in points; unspent stat points) before and after, so the amounts can be compared with
+// Median's (+50 life, 10 stat points). The Tome step grants only while quest 17 has bit 1 set (`quest 17 1 set`) and clears it.
+auto CmdRewardStep(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: rewardstep potion|tome");
+	}
+	const bool potion = hcmd::LowerEq(t.tok[1], "potion");
+	if (!potion && !hcmd::LowerEq(t.tok[1], "tome")) {
+		return Fail(c, "usage: rewardstep potion|tome");
+	}
+	const int stat = potion ? 7 : 4;
+	const int32_t before = Stat(c->player, stat);
+	Fn<RewardStepFn>(potion ? RvaPotionOfLifeStep : RvaLamEsenStep)(c->game, c->player);
+	const int32_t after = Stat(c->player, stat);
+	Out("rewardstep %s stat=%d before=%d after=%d gained=%d points=%d", t.tok[1], stat, before, after, after - before,
+	    potion ? (after - before) >> 8 : after - before);
+	return true;
+}
+
+// `setstate <ref> <state> <0|1>`: puts a state on a unit or takes it off, the way D2R's self buffs do (srvdofunc 18: a state
+// stat list from 0x433d20, then the set-state call); on lasts 10 minutes. Prints whether the unit has the state afterwards.
+// Gives the player the Stamina Shrine's state 136 without a shrine.
+auto CmdSetState(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long state = 0, on = 0;
+	if (t.n < 4 || !hcmd::ParseInt(t.tok[2], &state) || !hcmd::ParseInt(t.tok[3], &on) || state < 1 || state > 1023) {
+		return Fail(c, "usage: setstate <player|merc|mon:id> <state> <0|1>");
+	}
+	Unit* unit = ResolveRef(c, t.tok[1]);
+	if (unit == nullptr) {
+		return Fail(c, "setstate: unit not found (%s)", t.tok[1]);
+	}
+	const int32_t st = static_cast<int32_t>(state);
+	void* list = Fn<StateListFn>(RvaStateList)(unit, st);
+	if (on != 0 && list == nullptr) {
+		struct Params {  // the request of srvdofunc 18 (see missile_hits.cpp)
+			Unit* caster;
+			Unit* target;
+			int32_t skill, level, duration, minus1, zero, state;
+			void* expired;
+		} params{unit, unit, 0, 1, 25 * 600, -1, 0, st, reinterpret_cast<void*>(g_base + RvaBuffExpired)};
+		static_assert(sizeof(Params) == 0x30);
+		list = Fn<CreateStateListFn>(RvaCreateStateList)(&params);
+		if (list == nullptr) {
+			return Fail(c, "setstate: no state list could be created");
+		}
+		Fn<SetStateFn>(RvaSetState)(unit, st, 1);
+	} else if (on == 0 && list != nullptr) {
+		Fn<SetStateFn>(RvaClearState)(unit, st, 0);
+		Fn<DetachListFn>(RvaDetachList)(unit, list);
+		Fn<FreeListFn>(RvaFreeList)(c->dataFlag, list);
+	}
+	Out("setstate %s state=%lld on=%lld has=%d", t.tok[1], state, on, Fn<UnitHasStateFn>(RvaUnitHasState)(unit, st) != 0 ? 1 : 0);
 	return true;
 }
 
@@ -3114,6 +3268,52 @@ auto CmdShop(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `gamble`: the player's gamble offers (the server builds the list on every gamble request: `interact <Gheed>`, then `menu <Gamble
+// line>`), read from the player data (+0x108); same item lines as `shop`, then `gamble offers N`. tools/game_checks.py check_gamble.
+auto CmdGamble(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	const uint8_t* data = Fn<PlayerDataFn>(RvaPlayerData)(c->player);
+	void* list = data != nullptr ? d2r::At<void*>(data, 0x108) : nullptr;
+	int offers = 0;
+	if (list != nullptr) {
+		int guard = 0;
+		Unit* item = Fn<InvFirstFn>(RvaInvFirst)(list);
+		while (item != nullptr && guard++ < 200) {
+			Unit* next = Fn<InvNextFn>(RvaInvNext)(item);
+			if (TypeOf(item) == 4) {
+				++offers;
+				if (offers <= 60) {
+					DescribeItem(c, item);
+				}
+			}
+			item = next;
+		}
+	}
+	Out("gamble offers %d (expected %d, list %s) difficulty=%d", offers, gamble::MedianOffers, list != nullptr ? "present" : "none",
+	    static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)));
+	return list != nullptr;
+}
+
+// `gaps`: the small engine rules (engine_gaps_logic.h): the bytes at the three patched places and the player's slow floor as the
+// hooked function 0x449f40 returns it. tools/game_checks.py check_engine_gaps.
+auto CmdGaps(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	auto hex = [](uint64_t rva, size_t n, char* out) {
+		const uint8_t* p = reinterpret_cast<const uint8_t*>(g_base + rva);
+		for (size_t i = 0; i < n; ++i) {
+			std::snprintf(out + i * 2, 3, "%02x", p[i]);
+		}
+	};
+	char hit[32] = "", recast[40] = "";
+	hex(gaps::Hit20FloorRva, sizeof(gaps::Hit20FloorPatched), hit);
+	hex(gaps::RecastGuardRva, sizeof(gaps::RecastGuardPatched), recast);
+	const bool hitOn = gaps::SameBytes(reinterpret_cast<const uint8_t*>(g_base + gaps::Hit20FloorRva), gaps::Hit20FloorPatched, sizeof(gaps::Hit20FloorPatched));
+	const bool recastOn =
+	    gaps::SameBytes(reinterpret_cast<const uint8_t*>(g_base + gaps::RecastGuardRva), gaps::RecastGuardPatched, sizeof(gaps::RecastGuardPatched));
+	const int difficulty = static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty));
+	Out("gaps hit20=%s hit20_patched=%d recast=%s recast_patched=%d slowfloor=%d expected_slowfloor=%d difficulty=%d", hit, hitOn ? 1 : 0, recast,
+	    recastOn ? 1 : 0, EngineGapsSlowFloor(c->game, c->player), gaps::PlayerSlowFloor(difficulty), difficulty);
+	return true;
+}
+
 // Client side: the plugin's own string ids (strings.h). `mstr <full key>` reads the key through the localization service,
 // takes (or finds) the plugin id for it and reads the text back through D2R's numeric lookup, the way the NPC menu does.
 auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
@@ -3133,12 +3333,12 @@ auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
-	Out("verbs: state | merc | mercreq | mercprice [level] | a5done | countessreward | hellforgereward [class] | prisonreward | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
+	Out("verbs: state | merc | mercreq | mercprice [level] | players [1-8] | tctrace [reset] | leash [distance] | a5done | countessreward | hellforgereward [class] | prisonreward | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
-	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | levelact <id>..");
+	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | gamble | gaps | levelact <id>..");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
 	Out("backlog verbs: stat <ref> <stat> scan [max layer] | cubeslots <first> <count> | cubeout <recipe> [slot] (portal outputs) | state (portal dest=)");
@@ -3751,10 +3951,10 @@ const Verb Verbs[] = {
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
-    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
+    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
-    {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
 };
 

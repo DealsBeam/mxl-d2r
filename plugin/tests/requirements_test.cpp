@@ -20,6 +20,8 @@ int RunSkillDamageTests();  // skill_damage_test.cpp
 int RunItemsExtTests();  // items_ext_test.cpp
 int RunItemGenTests();  // item_gen_test.cpp
 int RunItemRulesTests();  // item_rules_test.cpp
+int RunGambleTests();  // gamble_test.cpp
+int RunEngineGapsTests();  // gamble_test.cpp
 int RunWaypointsTests();  // waypoints_test.cpp
 int RunTravelTests();     // travel_test.cpp
 int RunMonsterAiTests();  // monster_ai_test.cpp
@@ -27,9 +29,11 @@ int RunItemEventsTests();  // item_events_test.cpp
 int RunMonsterLooksTests();  // monster_looks_test.cpp
 int RunSkillRestrictTests();  // skill_restrict_test.cpp
 int RunHeatTests();  // heat_test.cpp
+int RunStatRulesTests();  // stat_rules_test.cpp
 int RunTrophyTimerTests();  // trophy_timer_test.cpp
 int RunCollideTypesTests();  // collide_types_test.cpp
 int RunSkillStartsTests();  // skill_starts_test.cpp
+int RunMonsterRulesTests();  // monster_rules_test.cpp
 
 namespace {
 
@@ -144,6 +148,8 @@ int main() {
 	failures += RunItemsExtTests();
 	failures += RunItemGenTests();
 	failures += RunItemRulesTests();
+	failures += RunGambleTests();
+	failures += RunEngineGapsTests();
 	failures += RunWaypointsTests();
 	failures += RunTravelTests();
 	failures += RunMonsterAiTests();
@@ -151,9 +157,11 @@ int main() {
 	failures += RunMonsterLooksTests();
 	failures += RunSkillRestrictTests();
 	failures += RunHeatTests();
+	failures += RunStatRulesTests();
 	failures += RunTrophyTimerTests();
 	failures += RunCollideTypesTests();
 	failures += RunSkillStartsTests();
+	failures += RunMonsterRulesTests();
 	std::printf(failures == 0 ? "requirements: all tests passed\n" : "requirements: %d failures\n", failures);
 	return failures == 0 ? 0 : 1;
 }

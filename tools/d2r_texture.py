@@ -13,6 +13,8 @@ import numpy as np
 
 FMT_BC4 = 0x3F
 FMT_RGBA8 = 0x1F
+FMT_BC3 = 0x3E  # 62: DXT5 colour maps (albedo)
+FMT_BC5 = 0x3D  # 61: two-channel linear maps (normal, ORM)
 
 
 def mip_chain(a: np.ndarray, levels: int) -> list[np.ndarray]:
@@ -102,6 +104,29 @@ def write_bc4(path, a: np.ndarray, mips: int = 1) -> None:
 def write_rgba(path, a: np.ndarray, mips: int = 1) -> None:
     h, w = a.shape[:2]
     write_texture(path, FMT_RGBA8, w, h, [m.tobytes() for m in mip_chain(a, mips)])
+
+
+def _dds_levels(a: np.ndarray, mips: int, pixel_format: str, mode: str) -> list[bytes]:
+    import io
+    from PIL import Image
+    levels = []
+    for m in mip_chain(a, mips):
+        bio = io.BytesIO()
+        Image.fromarray(np.ascontiguousarray(m[..., :len(mode)]), mode).save(bio, format="DDS", pixel_format=pixel_format)
+        d = bio.getvalue()
+        levels.append(d[148:] if d[84:88] == b"DX10" else d[128:])
+    return levels
+
+
+def write_bc3(path, a: np.ndarray, mips: int = 1) -> None:
+    """BC3 / DXT5 (format 62, sRGB colour: albedo) from (h, w, 4) uint8 pixels, encoded by Pillow's DDS writer."""
+    write_texture(path, FMT_BC3, a.shape[1], a.shape[0], _dds_levels(a, mips, "DXT5", "RGBA"))
+
+
+def write_bc5(path, a: np.ndarray, mips: int = 1) -> None:
+    """BC5 (format 61, linear two-channel data: normal maps, ORM maps) from (h, w, >=2) pixels; red and green are kept."""
+    a = np.dstack([a[..., :2], np.zeros(a.shape[:2], np.uint8)])
+    write_texture(path, FMT_BC5, a.shape[1], a.shape[0], _dds_levels(a, mips, "BC5", "RGB"))
 
 
 def read_texture(path):

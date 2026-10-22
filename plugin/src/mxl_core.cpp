@@ -28,6 +28,7 @@
 #include "missile_hits.h"
 #include "mana_costs.h"
 #include "item_rules.h"
+#include "stat_rules.h"
 #include "skill_damage.h"
 #include "heat.h"
 #include "trophy_timer.h"
@@ -42,10 +43,13 @@
 #include "quests_act2_5.h"
 #include "quests_rewards.h"
 #include "dungeon_lockout.h"
+#include "engine_gaps.h"
+#include "gamble.h"
 #include "goblins.h"
 #include "monster_ai.h"
 #include "monster_looks.h"
 #include "hirelings.h"
+#include "monster_rules.h"
 #include "items_ext.h"
 #include "item_gen.h"
 #include "npc_actions.h"
@@ -82,7 +86,8 @@ char g_manaCostsReport[160] = "off: not the expected game image";
 char g_itemRulesReport[320] = "off: not the expected game image";
 char g_skillDamageReport[160] = "off: not the expected game image";
 char g_skillRestrictReport[160] = "off: not the expected game image";
-char g_heatReport[160] = "off: not the expected game image";
+char g_heatReport[200] = "off: not the expected game image";
+char g_statRulesReport[320] = "off: not the expected game image";
 char g_trophyReport[200] = "off: not the expected game image";
 char g_missileHitsReport[1024] = "";
 char g_cubeReport[192] = "off: not the expected game image";
@@ -102,6 +107,11 @@ char g_npcReport[256] = "off: not the expected game image";
 char g_stringsReport[256] = "off: not the expected game image";
 char g_hirelingsReport[192] = "off: not the expected game image";
 char g_mercReviveReport[192] = "off: not the expected game image";
+char g_monLevelReport[192] = "off: not the expected game image";
+char g_playersXReport[192] = "off: not the expected game image";
+char g_normalTcReport[192] = "off: not the expected game image";
+char g_leashReport[192] = "off: not the expected game image";
+char g_throneReport[192] = "off: not the expected game image";
 char g_questXpReport[192] = "off: not the expected game image";
 char g_questRewardsReport[256] = "off: not the expected game image";
 char g_skillTreeReport[192] = "off: not the expected game image";
@@ -109,6 +119,8 @@ char g_reqGatesReport[256] = "off: not the expected game image";
 char g_combatReport[256] = "off: not the expected game image";
 char g_statColumnsReport[256] = "off: not the expected game image";
 char g_infoPanelsReport[256] = "off: not the expected game image";
+char g_gambleReport[192] = "off: not the expected game image";
+char g_engineGapsReport[256] = "off: not the expected game image";
 char g_itemEventsReport[448] = "off: not the expected game image";
 char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
@@ -142,7 +154,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability quantity autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels
+// items missiles mana townmana durability quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels gamble hitfloor recast slowfloor
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -224,6 +236,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "skill restrict %s", g_skillRestrictReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "heat %s", g_heatReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "stat rules %s", g_statRulesReport);
 	Say(command, line);
 	{
 		char status[96];
@@ -314,6 +328,22 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		              MercRevivePrices(), last, level);
 	}
 	Say(command, line);
+	std::snprintf(line, sizeof(line), "monster level %s", g_monLevelReport);
+	Say(command, line);
+	{
+		const PlayersTrace pt = PlayersTraceLast();
+		std::snprintf(line, sizeof(line), "players scaling %s (%d records, last players %d, life %d%% -> %d%%, exp %d%% -> %d%%)",
+		              g_playersXReport, pt.records, pt.players, pt.hpIn, pt.hpOut, pt.expIn, pt.expOut);
+		Say(command, line);
+		const TcTrace tc = NormalTcTrace(false);
+		std::snprintf(line, sizeof(line), "normal-difficulty treasure class %s (%d class lookups, %d with a level, last class %d level %d)",
+		              g_normalTcReport, tc.calls, tc.leveled, tc.lastClass, tc.lastLevel);
+		Say(command, line);
+	}
+	std::snprintf(line, sizeof(line), "summon leash %s", g_leashReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "Baal throne delay %s", g_throneReport);
+	Say(command, line);
 	{
 		const QuestRewardCounts counts = QuestRewardsCounts();
 		std::snprintf(line, sizeof(line), "quest experience %s (%d grants, last %d)", g_questXpReport, counts.xpGrants, counts.lastXp);
@@ -342,6 +372,10 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "combat %s", g_combatReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "gamble %s", g_gambleReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "engine gaps %s", g_engineGapsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "stat columns %s", g_statColumnsReport);
 	Say(command, line);
@@ -481,10 +515,20 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		if (Off("heat")) {
 			std::snprintf(g_heatReport, sizeof(g_heatReport), "%s", OffNote);
 		} else {
-			InstallHeat(context, g_heatReport, sizeof(g_heatReport));
+			InstallHeat(context, !Off("manaregen"), g_heatReport, sizeof(g_heatReport));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: heat %s", g_heatReport);
 		context->LogInfo(line);
+		{
+			const StatRulesParts parts{!Off("potionamounts"), !Off("stamina")};
+			if (!parts.potionAmounts && !parts.stamina) {
+				std::snprintf(g_statRulesReport, sizeof(g_statRulesReport), "%s", OffNote);
+			} else {
+				InstallStatRules(context, parts, g_statRulesReport, sizeof(g_statRulesReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: stat rules %s", g_statRulesReport);
+			context->LogInfo(line);
+		}
 		if (Off("trophy")) {
 			std::snprintf(g_trophyReport, sizeof(g_trophyReport), "%s", OffNote);
 		} else {
@@ -664,6 +708,51 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 		{
+			if (Off("monlevel")) {
+				std::snprintf(g_monLevelReport, sizeof(g_monLevelReport), "%s", OffNote);
+			} else {
+				InstallMonsterLevel(context, g_monLevelReport, sizeof(g_monLevelReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: monster level %s", g_monLevelReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("playersx")) {
+				std::snprintf(g_playersXReport, sizeof(g_playersXReport), "%s", OffNote);
+			} else {
+				InstallPlayersTable(context, g_playersXReport, sizeof(g_playersXReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: players scaling %s", g_playersXReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("normaltc")) {
+				std::snprintf(g_normalTcReport, sizeof(g_normalTcReport), "%s", OffNote);
+			} else {
+				InstallNormalTc(context, g_normalTcReport, sizeof(g_normalTcReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: normal-difficulty treasure class %s", g_normalTcReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("leash")) {
+				std::snprintf(g_leashReport, sizeof(g_leashReport), "%s", OffNote);
+			} else {
+				InstallLeash(context, g_leashReport, sizeof(g_leashReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: summon leash %s", g_leashReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("throne")) {
+				std::snprintf(g_throneReport, sizeof(g_throneReport), "%s", OffNote);
+			} else {
+				InstallThrone(context, g_throneReport, sizeof(g_throneReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: Baal throne delay %s", g_throneReport);
+			context->LogInfo(line);
+		}
+		{
 			if (Off("questxp")) {
 				std::snprintf(g_questXpReport, sizeof(g_questXpReport), "%s", OffNote);
 			} else {
@@ -735,6 +824,25 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallCombat(context, !Off("damagered"), g_combatReport, sizeof(g_combatReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: combat %s", g_combatReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("gamble")) {
+				std::snprintf(g_gambleReport, sizeof(g_gambleReport), "%s", OffNote);
+			} else {
+				InstallGamble(context, g_gambleReport, sizeof(g_gambleReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: gamble %s", g_gambleReport);
+			context->LogInfo(line);
+		}
+		{
+			const bool hit = !Off("hitfloor"), rc = !Off("recast"), sl = !Off("slowfloor");
+			if (!hit && !rc && !sl) {
+				std::snprintf(g_engineGapsReport, sizeof(g_engineGapsReport), "%s", OffNote);
+			} else {
+				InstallEngineGaps(context, hit, rc, sl, g_engineGapsReport, sizeof(g_engineGapsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: engine gaps %s", g_engineGapsReport);
 			context->LogInfo(line);
 		}
 		{

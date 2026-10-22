@@ -341,6 +341,14 @@ is NOPed). D2R's counterparts, hooked with whole-instruction entries (recorded i
 | IT2 quantity | `0x439130` quantity use (game, unit, item, flag), callers `0x439320` from `0x432f90`, `0x4333f0`, `0x43acb0`, `0x55906e` | returns the stack's quantity and leaves it alone |
 | IT3 drops identified | generator `0x442d60` `(game, &item, genRecord)`, the hook that also rolls ethereal (`item_gen.cpp`; off word `autoid`) | after the original: for quality 4 (magic), 5 (set), 6 (rare), 7 (unique) `SetItemFlag 0x36d8f0 (item, 0x10, 1)`; low, normal, superior and crafted items stay as generated |
 
+The get-hit path (audit item 12, D2Sigma NOPs the call `6fcfeba0` in SUnitDmg `6fcfed30`, D2Game+0xdee28): D2R's SUnitDmg
+`0x44b2b0` calls the wear step `0x4526c0` (game, attacker, defender) at `0x44b44b`, behind a test of the hit's flags. That step
+calls the dispatcher `0x441b10` twice: for the attacker's weapon (`0x45270c`) and, through `0x4527a0`, for one random piece
+of the defender's armour (`0x4528cd`). Those are the only two callers of the dispatcher, and `0x4526c0` has the one caller
+`0x44b2b0`, so the no-op above already covers it; no further hook is needed. The item generator `0x442d60`, `0x43ef29` and the
+other writers of stat 0x48 set a new item's durability and are not wear. `game_checks nodurability` runs `wear` (the step
+`0x4526c0` with a monster as attacker and the player as defender) and then lets three real monsters hit the character for 25 s.
+
 Median does IT3 in its generators: the magic (D2Game `0x104c1`), rare (`0x15443`), set (`0x13daa`) and unique item pickers push 1
 instead of 0 as the third argument of `SetItemFlag(item, 0x10 identified)` (docs/sigma-patch-audit.md item 1). D2R's
 generator dispatches on the quality at `0x442d60`; its sub-generators set the flag with 0, so the plugin sets it with 1 once
@@ -412,11 +420,47 @@ regeneration / 10`; D2Sigma's mana regeneration (D2Resource.cpp `0x100a1b50`) tu
 rate whenever stat 297 is not 0 (no drain in a town); the fire skills cost 0 mana in the data; Emberstep's aura and the
 hit states of the fire skills put a **negative** 297 on the caster for a while, which makes the drain a build-up. D2R's
 regeneration is `0x42e350` (game, unit; entry `48 89 5c 24 10 48 89 6c 24 18 56 57 41 57 48 83 ec 20`, 18 bytes): the
-plugin detours it. With stat 297 zero it calls the original; in a town (`0x34b440` room, `0x2f0750`) it does nothing;
+plugin detours it. With stat 297 zero it calls the original (unless the regeneration base is below 1, see "Stat rules" below: Median does not raise it to 1); in a town (`0x34b440` room, `0x2f0750`) it does nothing;
 otherwise `heat_logic.h` `HeatDelta` takes the regeneration D2R would give (max mana / the class's regeneration frames
 x (stat 27 + 140)%, plus stat 26), scales it by -stat 297% and adds the result to mana (stat 8), clamped to 0 and max
 mana. Not ported: the UI relabel of the mana bar as Heat. Checked by `game_checks heat` (drain, floor at 0, Flamefront
 build-up, town hold). Emberstep was not cast in the test (the harness cannot select it).
+
+## Stat rules: Potion of Life, Lam Esen's Tome, stamina and mana recovery (`stat_rules.cpp`, `heat.cpp`, audit items 11 and 15; off words `potionamounts`, `stamina`, `manaregen`)
+
+**Amounts (item 11).** D2Sigma changes two immediates in the original grants: the Potion of Life's `push 0x1400` becomes
+`0x3200` (+50 life instead of +20, stat 7 maximum life, D2Game+0xd9eea, ItemMode `6fcf9bf0`) and the byte of Lam Esen's Tome's
+stat point grant becomes `0xa` (10 unspent stat points instead of 5, stat 4, D2Game+0xe6496, `6fd06420`). The D2R twins are two
+in-place `PatchBytes` (expected bytes checked first): `0x5806b5` `41 b8 00 14 00 00` (`mov r8d,0x1400`) -> `0x3200` in the
+potion's step `0x580680` (game, unit), and `0x5ed70d` `8d 50 03 44 8d 40 04` (`lea edx,[rax+3]` / `lea r8d,[rax+4]`, rax = 1
+after the quest bit test) -> the last byte `09`, i.e. `r8d = 10`, in the Tome's step `0x5ed6d0`. The harness verb `rewardstep`
+runs both steps; `game_checks potionamounts` reads +50 and +10.
+
+**Stamina (item 15).** The per-frame regeneration of a player calls the stamina step and then the mana step (D2R `0x42e850` and
+`0x42e350`, from `0x42e73c`). D2Sigma redirects the call at D2Game+0x79b7c to `0x100a1f90` and the mana call at +0x79b77 to
+`0x100a1f60` (formula `0x100a1b50`). `stat_rules_logic.h` has Median's stamina rule, and `InstallInlineHook(0x42e850)` replaces
+D2R's step with it (entry bytes of 23 whole instructions without rip-relative operands, recorded in the file):
+
+| Case | Median | D2R's own step |
+|---|---|---|
+| state 136 (`shrine_stamina`, the Stamina Shrine "Gain infinite Stamina", shrines.txt code 14, 4800 frames) | the bar is filled at once, in any mode | no effect (a bar at 0 refills like a standing one, 6 of 50 points in 1 s) |
+| standing (mode 1) or standing in a town (mode 5) | max / 256 raw per frame x (100 + stat 28)% | |
+| running (mode 3) | nothing | |
+| every other mode (walking, attacking, casting, hit, dead) | 75% of the standing step | 50% walking and attacking, nothing in the rest without a recovery bonus of 1000 |
+| bar full, or under one point | no special case | |
+
+"Infinite stamina" is therefore the Stamina Shrine's state, not a stat. The town rule of Median's infinite running belongs to the
+drain, not to this step: the vanilla drain of a run (1.13c `6fc97bb0`) returns "no drain" when the unit's room is a town, and
+D2R's drain does the same (game check `manarules`, the run in the Rogue Encampment). Median's sprint (audit SK7, PR #101) is
+the 50-point bar with `RunDrain 60`, a data row; the stamina step above decides how fast the bar refills.
+
+**Mana (item 15).** D2Sigma's mana formula `0x100a1b50` is D2R's with two differences: stat 297 (heat, `heat.cpp`) turns the
+recovery into a drain, zero in a town, and the base `max mana / (regeneration seconds x 25)` is not raised to 1 when it comes
+out 0 (D2R and 1.13c raise it), so a pool smaller than the frame count regenerates nothing. `heat.cpp` detours `0x42e350`
+already; with stat 297 = 0 it now runs D2R's step when the base is at least 1 or the no-regeneration state (0x55) is set, and
+otherwise applies `statrules::ManaDelta` (base scaled by (100 + stat 27)%, plus stat 26, clamped to [-mana, max - mana]).
+Free mana in a town (audit SK3, `mana_costs.cpp`) is the skill-cost hook, a separate part. Off words: `potionamounts` (the two
+patches), `stamina` (the stamina hook), `manaregen` (the floor of 1 returns to D2R; the heat drain stays under `heat`).
 
 ## Trophy timer (`trophy_timer.cpp`, off word `trophy`)
 

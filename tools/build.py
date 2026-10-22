@@ -16,6 +16,7 @@
   gfx_placeholders.py  D2R graphics for Median-only monsters (until the art port) + hd/character/monsters.json
   art_provenance.py  Median's missile/overlay/monster DCCs matched to D2R's own by image (exact/recolour/rescale/mashup) -> work/mod/art_provenance.json (cached in work/art_provenance/; first run about 2 minutes)
   hd_monsters.py     donor, scale and colour per Median-only monster (HD units) -> hd/character
+  wereowl_models.py  the generated 3D Wereowl as the Druid form and the Corrupted Wereowl (needs the local assets; MXL_NO_3D=1 skips) -> hd/character
   animdata_merge.py  merge Median animation data into D2R's animdata
   hd_skill_anims.py  HD skill animation data for Median skills
   missile_hd.py      HD models for Median's missiles (by CelFile) -> hd/missiles/missiles.json
@@ -39,7 +40,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decode"], ["tbl2json.py"],
-         ["txt_migrate.py"], ["art_fix.py"], ["waypoints_data.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["art_provenance.py"], ["hd_monsters.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["effects_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
+         ["txt_migrate.py"], ["art_fix.py"], ["waypoints_data.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["art_provenance.py"], ["hd_monsters.py"], ["wereowl_models.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["effects_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
          ["validate.py"]]
 
 
