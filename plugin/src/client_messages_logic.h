@@ -151,8 +151,7 @@ inline void FormatClock(uint32_t seconds, char* out, size_t outSize) noexcept {
 // (and in the unit tests). A `tmpl` of null means the English.
 //
 // Median string 11192 (mxlstr::KeySealed) is the sealed level's tooltip: two lines.
-inline constexpr const char* SealedText = "Join another game to enter again
-This area is locked";
+inline constexpr const char* SealedText = "Join another game to enter again\nThis area is locked";
 // The quest-table condition of the warp test has no text of its own in Median (the unit message alone); this stands in.
 inline constexpr const char* QuestLine = "You have not finished the quest for this area";
 // Median string 11189 (mxlstr::KeyRequiredLevel).

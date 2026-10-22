@@ -49,13 +49,20 @@ auto ServiceLookup(const char* key, char* out, size_t size) noexcept -> bool {
 	return g_loc->getStringByKey(g_ctx, key, out, static_cast<uint32_t>(size), &required) == D2RL::Localization::Result::Success;
 }
 
-// The replacement of D2R's lookup: the plugin's ids give the text of their key, everything else goes to D2R.
+// The replacement of D2R's lookup: the plugin's ids give the text of their key, everything else goes to D2R. The service is
+// called outside the lock (it may look strings up through D2R itself, which comes back here).
 const char* LookupHook(uint32_t id) {
 	if (id >= mxlstr::IdRegistry::FirstId - 4 * mxlstr::IdRegistry::Capacity && id <= mxlstr::IdRegistry::FirstId) {
-		std::lock_guard<std::mutex> guard(g_lock);
-		const int index = g_ids.IndexOf(id);
+		char key[mxlstr::IdRegistry::KeyMax];
+		int index = -1;
+		{
+			std::lock_guard<std::mutex> guard(g_lock);
+			index = g_ids.IndexOf(id);
+			if (index >= 0) {
+				mxlstr::CopyText(key, sizeof(key), g_ids.KeyOf(id));
+			}
+		}
 		if (index >= 0) {
-			const char* key = g_ids.KeyOf(id);
 			char* text = g_texts[index];
 			if (!ServiceLookup(key, text, TextMax)) {
 				mxlstr::CopyText(text, TextMax, key);  // the key shows what is missing
@@ -123,7 +130,10 @@ auto StringId(const mxlstr::Ref& ref) noexcept -> uint16_t {
 		return 0;
 	}
 	std::lock_guard<std::mutex> guard(g_lock);
-	return g_ids.Add(ref.key, [](uint16_t id) { return !NativeText(id); });
+	// An id D2R has no text for. When D2R answers every id (no id looks free), the range is taken as it is: the top of the
+	// 16-bit space is far from the ids of D2R's files and of the loader's table references.
+	const uint16_t id = g_ids.Add(ref.key, [](uint16_t candidate) { return !NativeText(candidate); });
+	return id != 0 ? id : g_ids.Add(ref.key, [](uint16_t) { return true; });
 }
 
 auto StringIdCount() noexcept -> int {
@@ -134,4 +144,18 @@ auto StringIdCount() noexcept -> int {
 auto StringKeyOfId(uint32_t id) noexcept -> const char* {
 	std::lock_guard<std::mutex> guard(g_lock);
 	return g_ids.KeyOf(id);
+}
+
+auto StringProbeId(uint32_t id, char* out, size_t outSize) noexcept -> bool {
+	out[0] = '\0';
+	if (g_ctx == nullptr || id == 0) {
+		return false;
+	}
+	__try {
+		const char* text = reinterpret_cast<LookupFn>(g_ctx->exeBase + StringThunkRva)(id);
+		mxlstr::CopyText(out, outSize, text);
+		return text != nullptr;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return false;
+	}
 }

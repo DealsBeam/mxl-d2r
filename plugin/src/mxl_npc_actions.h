@@ -53,7 +53,8 @@ inline constexpr Action Actions[ActionCount] = {
 // Menu slots of the NPCs that have any. kind = npcRow * 16 + slot is what the client sends (packet 0x38 kind
 // 0x10 + kind). label = D2R string id of the entry text (0 = none). sub: 10 = an entry of the submenu opened
 // by the top-level slot before it, 0 = a top-level entry. confirm: the client asks Yes / No first, with the text
-// `prompt` (D2R string id, 0 = none), before it sends the kind.
+// `prompt` (D2R string id, 0 = none), before it sends the kind. A string in the `medianxl` namespace has no D2R id:
+// label / prompt are 0 and labelKey / promptKey hold its full key ("medianxl:<key>"; plugin/src/strings.h StringId).
 struct Slot {
 	int32_t npcRow;
 	int32_t slot;
@@ -64,6 +65,8 @@ struct Slot {
 	uint16_t sub;
 	uint16_t prompt;
 	bool confirm;
+	const char* labelKey;
+	const char* promptKey;
 };
 inline constexpr int32_t SlotCount = 34;
 inline constexpr Slot Slots[SlotCount] = {

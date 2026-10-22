@@ -27,3 +27,6 @@ auto StringId(const mxlstr::Ref& ref) noexcept -> uint16_t;
 // Test harness: how many ids the plugin has handed out, and the key of one (null: not ours).
 auto StringIdCount() noexcept -> int;
 auto StringKeyOfId(uint32_t id) noexcept -> const char*;
+
+// Test harness: the text D2R's numeric lookup (0x143e2b730) gives for `id`, empty when it has none.
+auto StringProbeId(uint32_t id, char* out, size_t outSize) noexcept -> bool;
