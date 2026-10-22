@@ -2062,21 +2062,25 @@ auto FlagsOf(Unit* item) noexcept -> uint32_t {
 	return data != nullptr ? d2r::At<uint32_t>(data, ItemFlagsOffset) : 0;
 }
 
-// `hit <target ref> phys|fire|ltng|magic|cold <amount> [attacker ref] [stagger]`: one hit of that damage through D2R's hit and apply
+// `hit <target ref> phys|fire|ltng|magic|cold|pois|life|mana|stam|clen|flen|plen <amount> [attacker ref] [stagger]`: one hit of that damage through D2R's hit and apply
 // steps (0x44ce80, 0x44a9b0; the same pair the area damage hook uses), so the resist step 0x4523e0 and the absorb step
 // 0x450670 run. The amount goes into the damage block's field as is. Attacker: the player; for the player as target the
 // nearest live monster (else the player itself). `stagger` sets the result flag 4 (hit recovery) between the two steps, so the
 // target enters its GetHit mode even when its hit recovery would not (bosses): the monster's last-mode field then reads 3 after it.
+// `field=` is the element's field right after the hit step (what is left of `amount` after resist, absorb and Median's stats
+// 184 / 189 / 417); for clen / flen / plen (cold, freeze and poison length) it is the shortened duration.
 auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	struct Elem {
 		const char* name;
 		int offset;
 		int hitClass;
 	};
-	static const Elem elems[] = {{"phys", 0x18, 0}, {"fire", 0x20, 0x20}, {"ltng", 0x2c, 0x40}, {"magic", 0x30, 0}, {"cold", 0x34, 0x30}};
+	static const Elem elems[] = {{"phys", 0x18, 0}, {"fire", 0x20, 0x20}, {"ltng", 0x2c, 0x40}, {"magic", 0x30, 0}, {"cold", 0x34, 0x30},
+	                          {"pois", 0x38, 0}, {"life", 0x120, 0}, {"mana", 0x124, 0}, {"stam", 0x128, 0}, {"clen", 0x118, 0},
+	                          {"flen", 0x11c, 0}, {"plen", 0x3c, 0}};
 	long long amount = 0;
 	if (t.n < 4 || !hcmd::ParseInt(t.tok[3], &amount) || amount < 0) {
-		return Fail(c, "usage: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker ref] [stagger]");
+		return Fail(c, "usage: hit <player|merc|mon:id> phys|fire|ltng|magic|cold|pois|life|mana|stam|clen|flen|plen <amount> [attacker ref] [stagger]");
 	}
 	const Elem* elem = nullptr;
 	for (const Elem& e : elems) {
@@ -2118,13 +2122,14 @@ auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	}
 	const int32_t before = Stat(target, StatLife);
 	Fn<HitUnitFn>(RvaHitUnit)(c->game, attacker, target, 1, d.b);
+	const int32_t fieldAfter = DmgField<int32_t>(d, elem->offset);
 	if (stagger) {
 		DmgField<uint16_t>(d, 0x04) |= 4;
 	}
 	Fn<ApplyDamageFn>(RvaApplyDamage)(c->game, attacker, target, d.b);
 	const int32_t after = Stat(target, StatLife);
-	Out("hit target=%s elem=%s amount=%lld life=%d->%d lost=%d absorbed=%d result=0x%x", t.tok[1], elem->name, amount, before, after,
-	    hcmd::LifeLost(before, after), DmgField<int32_t>(d, 0x130), static_cast<unsigned>(DmgField<uint16_t>(d, 0x04)));
+	Out("hit target=%s elem=%s amount=%lld life=%d->%d lost=%d absorbed=%d result=0x%x field=%d", t.tok[1], elem->name, amount, before, after,
+	    hcmd::LifeLost(before, after), DmgField<int32_t>(d, 0x130), static_cast<unsigned>(DmgField<uint16_t>(d, 0x04)), fieldAfter);
 	DamageDestroy(d);
 	return true;
 }
