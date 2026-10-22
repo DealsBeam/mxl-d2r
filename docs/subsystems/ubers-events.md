@@ -151,8 +151,10 @@ Corrections found while reading the code for the port (all from the D2Sigma deco
   below the level's requirement for the game difficulty (+0x158 + difficulty), difficulty below +0x151, or class lock (+0x15e)
   not equal to class + 1; (2) the level has a lock time (+0x153 non-zero) and its flag 2 is set; (3) a quest-table condition:
   the 0x9c-byte table at TxtRecords +0xc60 (vanilla LevelDefBin, row = level) has a non-zero quest id at +4 and the player
-  has none of quest bits 1, 0, 0xe, 0xf for it. (3) is not ported: D2R has no such table access found and the five
-  vanilla quest levels keep D2R's own check (0x516a50). The three Sigma special cases (73, 100, 132) are D2R's own.
+  has none of quest bits 1, 0, 0xe, 0xf for it. (3) **is ported** (`Entry::questLock`, `dungeon::QuestAllows`): the table is
+  `leveldefs.bin` (QuestFlagEx at +4 of each 0x9c-byte row, read by tools/sigma_data.py): 23 levels name a quest (46 and 66-73: quest 13;
+  50-54 and 74: quest 11; 100-102: quest 21; 128-132: quest 39). D2R's own check (0x516a50: levels 73 / 100 / 118 / 128 / 132) still runs
+  in front; the plugin adds the rest. The three Sigma special cases (73, 100, 132) are D2R's own.
 - **What the player sees**: a refusal sets the player's pending unit message 0x13 (0x100b15d0 stores it at +0x6e / +0x70 and
   sets flag 0x400), which the client turns into its lockout popup; the clock and its title text are the client
   `DungeonWidget` fed by packet 0x88 (type 1 flags, type 2 milliseconds left, 60 levels per packet, sent on join and on
@@ -166,7 +168,7 @@ Implemented (mxl-core, switch word `lockout`, report on the `mxl` command and th
   test on the portal's destination word (0x34ad40); refusal = D2R's failure exit (unit message 0x14, return 0); clock starts
   after a successful move. Town portals and red portals use it. The one-way portal (object 600) uses it only if its operate
   function in objects.txt is the same one: to confirm in game.
-- Rules in plugin/src/dungeon_logic.h (141 levels from mxl_dungeons.h): requirements, seal, group locking (levels with the same
+- Rules in plugin/src/dungeon_logic.h (162 levels from mxl_dungeons.h): requirements, seal, group locking (levels with the same
   non-zero group take the starter's end time), per-game reset by game pointer or frame counter going backwards. The seal is
   checked lazily against GetTickCount64 (Median: game events, same wall clock; only difference: Median's events are frame
   based, so a paused server would differ). Unit tests: plugin/tests/dungeon_test.cpp.
@@ -181,7 +183,8 @@ Left:
 - Live timer and popup art (packet 0x88 DungeonWidget): the clock is a single log line at the start. A running countdown needs the
   PluginSDK OverlayService (drawText from a frame callback) fed by a NetworkService channel (`sendToClient`, 224 bytes); popup art is
   custom art (last).
-- Quest-table condition (3) and the 0x7fb70 item teleport (clock start only; find the D2R item spell that teleports).
+- The 0x7fb70 item teleport (clock start only): it is the pSpell 17 item spell ("cherry" `kpac`, table 0x101d95b0), which the plugin
+  refuses (item_spells.cpp); the level it targets (218) has no lock time, so there is nothing to start yet. Port with the spell.
 - Per-game reset: the seals are dropped on the game-end event (`game_end.cpp`, client teardown `0x486be0`; `0x4057c0` itself
   has a rip-relative prologue). The game pointer / frame regress reset stays as a second guard.
 - Confirmed in game (lane client-ui): 0x14 shows "Impossible." in the log. Still open: the one-way portal object.

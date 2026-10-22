@@ -678,7 +678,7 @@ the class rows, quest bits in the game and in a fixed difficulty, the no-item ro
 
 levels.bin rows are 0x220 bytes; the generator reads the extension +0x151..+0x15f (docs/subsystems/ubers-events.md,
 section 3). `mxl_dungeons::Entry` `{level (D2R id), lockSeconds, lockGroup, minDifficulty, levelReq[3], classLock,
-unk152, unk155, portalObject, unk15b}`, one entry per level where any of them is non-zero (141 levels).
+unk152, unk155, portalObject, unk15b, questLock}`, one entry per level where any of them is non-zero (162 levels; 141 without questLock).
 
 **Used by** plugin/src/dungeon_lockout.cpp + dungeon_logic.h (lane dungeon-lockout): the clock starts when a player enters a level with a lock time
 (stairs, tile or portal), seals it for the rest of the game when it runs out; entry also needs minDifficulty, levelReq[difficulty] and the class lock.
@@ -692,6 +692,7 @@ Status and what is left: docs/subsystems/ubers-events.md section 3a.
 | levelReq[3] | +0x158..+0x15a | player level needed in Normal / Nightmare / Hell |
 | classLock | +0x15e | 0 none, else only class (value - 1) may enter (Mirror Temple) |
 | unk152, unk155, unk15b | +0x152, +0x155, +0x15b | raw, meaning not established (+0x155 is set on harder areas) |
+| questLock | leveldefs.bin +4 of the 0x9c-byte row (QuestFlagEx) | quest id that must have bit 1, 0, 0xe or 0xf set in the player's record of the game's difficulty (0 = none); 23 levels. Refusal is the third verdict (`dungeon::Verdict::Quest`) |
 | portalObject | +0x156 u16 | raw: 585 only on level 247 (rainbow portal); a Median objects row, not remapped |
 
 ### Treasure goblins (`mxl_goblins.h`)

@@ -12,8 +12,9 @@
 // Allowed entries that did move the player (his room's level differs afterwards) start the level's clock, as D2Sigma's
 // warp (0x5cf90) and portal (0x96e80) functions call 0x5d9d0 after the move. State: dungeon::Lockout, per game
 // pointer, reset when the game ends (game_end.cpp) and, as a fallback, when the pointer or the frame counter
-// (game+0x170) changes. Not ported: Sigma's quest-table condition in 0x5d810 (levelDef +4), the 0x7fb70 item teleport, the
-// client DungeonWidget and the 0x88 state packet.
+// (game+0x170) changes. Sigma's quest-table condition in 0x5d810 (leveldefs QuestFlagEx, Entry::questLock) is a third
+// refusal, see Allowed. Not ported: the 0x7fb70 item teleport (the cherry item spell, docs/unported.md), the client
+// DungeonWidget and the 0x88 state packet.
 #include "dungeon_lockout.h"
 
 #include "client_messages.h"
@@ -21,6 +22,7 @@
 #include "d2r.h"
 #include "dungeon_logic.h"
 #include "game_end.h"
+#include "quests_common.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -63,6 +65,7 @@ using UnitRoomFn = void* (*)(Unit* unit);
 using PortalLevelFn = uint16_t (*)(Unit* portal);
 using UnitMessageFn = void (*)(Unit* player, int32_t message, Unit* subject);
 using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
+using QuestBitFn = int32_t (*)(void* record, int32_t quest, int32_t bit);
 
 WarpFn g_warpOriginal = nullptr;
 PortalFn g_portalOriginal = nullptr;
@@ -72,6 +75,7 @@ UnitRoomFn g_unitRoom = nullptr;
 PortalLevelFn g_portalLevel = nullptr;
 UnitMessageFn g_unitMessage = nullptr;
 GetStatFn g_getStat = nullptr;
+QuestBitFn g_questBit = nullptr;
 
 std::mutex g_mutex;
 dungeon::Lockout g_lockout;
@@ -103,6 +107,10 @@ void Log(const char* what, int32_t a, int32_t b) noexcept {
 // Median's refusal texts (string table ids 11189 / 11192) as lines in the player's message log: D2R has no popup for
 // the lockout, the vanilla chat line stands in for it (the popup art is custom art, docs/unported.md).
 void TellRefusal(Unit* player, const dungeon::Entry& e, const dungeon::Who& who, dungeon::Verdict v) noexcept {
+	if (v == dungeon::Verdict::Quest) {
+		SendClientMessage(player, clientmsg::QuestLine, clientmsg::Red);
+		return;
+	}
 	if (v == dungeon::Verdict::Sealed) {
 		SendClientMessage(player, clientmsg::SealedLine1, clientmsg::Red);
 		SendClientMessage(player, clientmsg::SealedLine2, clientmsg::Red);
@@ -116,6 +124,21 @@ void TellRefusal(Unit* player, const dungeon::Entry& e, const dungeon::Who& who,
 	}
 }
 
+// The player's bits of quest `quest` for the quest-table condition (no record, no refusal).
+auto QuestBitsOf(Game* game, Unit* player, int quest) noexcept -> dungeon::QuestBits {
+	dungeon::QuestBits q;
+	void* record = questeng::Record(game, player);
+	if (record == nullptr || quest <= 0) {
+		return q;
+	}
+	q.haveRecord = true;
+	q.pending = g_questBit(record, quest, 1) != 0;
+	q.granted = g_questBit(record, quest, 0) != 0;
+	q.completedNow = g_questBit(record, quest, 0xe) != 0;
+	q.completedBefore = g_questBit(record, quest, 0xf) != 0;
+	return q;
+}
+
 // True when the player may enter `dst`; otherwise sends the failure message (D2R's generic "failed" reaction, the one
 // the portal function itself uses) and the reason as text. Median's own message is unit message 0x13 and its popup.
 auto Allowed(Game* game, Unit* player, int32_t src, int32_t dst) noexcept -> bool {
@@ -125,11 +148,12 @@ auto Allowed(Game* game, Unit* player, int32_t src, int32_t dst) noexcept -> boo
 	}
 	const dungeon::Who who{g_getStat(player, StatLevel, 0), static_cast<int32_t>(d2r::At<uint32_t>(player, UnitClass)),
 	                       d2r::At<uint8_t>(game, GameDifficulty)};
+	const dungeon::QuestBits quest = QuestBitsOf(game, player, entry->questLock);
 	dungeon::Verdict v;
 	{
 		std::lock_guard<std::mutex> lock(g_mutex);
 		g_lockout.Touch(game, d2r::At<uint32_t>(game, GameFrame));
-		v = dungeon::Check(g_lockout, who, dst, Now());
+		v = dungeon::Check(g_lockout, who, dst, Now(), quest);
 		if (v != dungeon::Verdict::Allow) {
 			++g_refusals;
 		}
@@ -137,7 +161,10 @@ auto Allowed(Game* game, Unit* player, int32_t src, int32_t dst) noexcept -> boo
 	if (v == dungeon::Verdict::Allow) {
 		return true;
 	}
-	Log(v == dungeon::Verdict::Sealed ? "level sealed, entry refused" : "entry requirements not met, refused", src, dst);
+	Log(v == dungeon::Verdict::Sealed ? "level sealed, entry refused"
+	    : v == dungeon::Verdict::Quest ? "quest not done, entry refused"
+	                                   : "entry requirements not met, refused",
+	    src, dst);
 	g_unitMessage(player, MessageFailed, player);
 	TellRefusal(player, *entry, who, v);
 	return false;
@@ -218,6 +245,21 @@ void ForgetGame(const void* game) noexcept {
 
 }  // namespace
 
+auto DungeonLockoutProbe(void* gameArg, void* playerArg, int dst) noexcept -> int {
+	auto* game = static_cast<Game*>(gameArg);
+	auto* player = static_cast<Unit*>(playerArg);
+	const dungeon::Entry* entry = dst > 0 ? dungeon::Find(dst) : nullptr;
+	if (game == nullptr || !IsPlayer(player) || entry == nullptr) {
+		return -1;
+	}
+	const dungeon::Who who{g_getStat(player, StatLevel, 0), static_cast<int32_t>(d2r::At<uint32_t>(player, UnitClass)),
+	                       d2r::At<uint8_t>(game, GameDifficulty)};
+	const dungeon::QuestBits quest = QuestBitsOf(game, player, entry->questLock);
+	std::lock_guard<std::mutex> lock(g_mutex);
+	g_lockout.Touch(game, d2r::At<uint32_t>(game, GameFrame));
+	return static_cast<int>(dungeon::Check(g_lockout, who, dst, Now(), quest));
+}
+
 void DungeonLockoutCounts(int* refused, int* started) noexcept {
 	std::lock_guard<std::mutex> lock(g_mutex);
 	*refused = g_refusals;
@@ -234,6 +276,7 @@ auto InstallDungeonLockout(const D2RL::PluginContext* context, char* report, siz
 	g_portalLevel = reinterpret_cast<PortalLevelFn>(base + PortalLevelRva);
 	g_unitMessage = reinterpret_cast<UnitMessageFn>(base + UnitMessageRva);
 	g_getStat = reinterpret_cast<GetStatFn>(base + GetStatRva);
+	g_questBit = reinterpret_cast<QuestBitFn>(base + questeng::QuestBitTestRva);
 	const bool warp = context->InstallInlineHook(WarpRva, WarpEntry, sizeof(WarpEntry), reinterpret_cast<void*>(&WarpHook),
 	                                             reinterpret_cast<void**>(&g_warpOriginal));
 	const bool portal = context->InstallInlineHook(PortalRva, PortalEntry, sizeof(PortalEntry),

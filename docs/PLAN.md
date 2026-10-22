@@ -47,7 +47,7 @@ D2R addresses: [d2r-addresses.md](d2r-addresses.md).
 - Cube conditions: 542 recipes
 - Craft flags and gold: 256 effects
 - Act 1 quests: Griswold's Heart, Andariel catalyst, Warriv re-issue
-- Dungeon lockout: 141 levels, stairs and portals
+- Dungeon lockout: 162 levels, stairs and portals
 - Treasure goblins
 - NPC actions: Akara respec, Cain crafting materials
 - Skill tree: 8 pages

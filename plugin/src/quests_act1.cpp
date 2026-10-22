@@ -12,6 +12,9 @@
 //                            executor is not located, so the item is created directly), flag bit set.
 //   a1q6 event 0   0x5e1d30  NPC activated: flag set, NPC is Warriv (class 0x9b, D2Sigma 0xbff40(0)) and no catalyst
 //                            held: create it again.
+//   a1q5 event 8   0x5e10c0  kill: if the killer's quest 5 (Forgotten Tower) already holds bit 0, 0xe or 0xf the vanilla
+//                            handler is skipped (D2Sigma 0x9e8b0: the finish branch must not run again for a killer who
+//                            is done).
 //
 // A unique cannot be requested through 0x517530 (it builds the item-generator block itself), so the generator core
 // 0x43cd50 is hooked and, when a request is armed on this thread, writes the unique index + 1 into the block's field
@@ -40,6 +43,7 @@ using d2r::Unit;
 constexpr uint64_t HandlerHeartRva = 0x5e0830;     // a1q4 event 11
 constexpr uint64_t HandlerKillRva = 0x5e1f00;      // a1q6 event 8
 constexpr uint64_t HandlerActivateRva = 0x5e1d30;  // a1q6 event 0
+constexpr uint64_t HandlerTowerRva = 0x5e10c0;     // a1q5 event 8
 constexpr uint64_t ItemGenRva = 0x43cd50;          // (game, block*, int): item generator core
 constexpr uint64_t ItemUniqueIdRva = 0x36ce70;     // (item) -> unique index (0x443910 reads it back after choosing)
 
@@ -49,6 +53,8 @@ constexpr uint8_t HeartEntry[] = {0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x48
 constexpr uint8_t KillEntry[] = {0x40, 0x53, 0x55, 0x41, 0x56, 0x48, 0x83, 0xec, 0x40, 0x33, 0xed, 0x48, 0x89, 0x74, 0x24, 0x68};
 // 0x5e1d30: mov [rsp+8],rbx / mov [rsp+0x10],rbp / mov [rsp+0x18],rsi / push rdi / push r12
 constexpr uint8_t ActivateEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x41, 0x54};
+// 0x5e10c0: mov [rsp+8],rcx / push rbx / push rbp / push r15 / sub rsp,0x60 / mov r15,rdx (16 bytes)
+constexpr uint8_t TowerEntry[] = {0x48, 0x89, 0x4c, 0x24, 0x08, 0x53, 0x55, 0x41, 0x57, 0x48, 0x83, 0xec, 0x60, 0x4c, 0x8b, 0xfa};
 // 0x43cd50: push rbp / push rbx / push rsi / push r12 / push r15 / lea rbp,[rsp-0x37] / sub rsp,0x90
 constexpr uint8_t ItemGenEntry[] = {0x40, 0x55, 0x53, 0x56, 0x41, 0x54, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xc9,
                                     0x48, 0x81, 0xec, 0x90, 0x00, 0x00, 0x00};
@@ -75,6 +81,8 @@ using UniqueIdFn = uint32_t (*)(Unit* item);
 HandlerFn g_heartOriginal = nullptr;
 HandlerFn g_killOriginal = nullptr;
 HandlerFn g_activateOriginal = nullptr;
+HandlerFn g_towerOriginal = nullptr;
+int g_towerSkipped = 0;
 ItemGenFn g_itemGenOriginal = nullptr;
 UniqueIdFn g_uniqueId = nullptr;
 const D2RL::PluginContext* g_context = nullptr;
@@ -186,7 +194,43 @@ void ActivateHook(void* quest, uint8_t* event) {
 	g_activateOriginal(quest, event);
 }
 
+// Median's guard: the vanilla kill handler of the Forgotten Tower does not run for a killer who is done with the quest.
+// True when the vanilla kill handler must not run: the killer is done with the Forgotten Tower. `count` adds the Countess
+// to the skip counter (the harness probe does not).
+bool TowerSkips(Game* game, Unit* victim, Unit* player, bool count) noexcept {
+	if (game == nullptr || victim == nullptr || player == nullptr) {
+		return false;
+	}
+	void* record = Record(game, player);
+	if (!quests::SkipTowerKill(Bit(record, quests::QuestForgottenTower, quests::BitTowerGranted),
+	                           Bit(record, quests::QuestForgottenTower, quests::BitTowerCompletedNow),
+	                           Bit(record, quests::QuestForgottenTower, quests::BitTowerCompletedBefore))) {
+		return false;
+	}
+	if (count && static_cast<int32_t>(d2r::At<uint32_t>(victim, UnitClass)) == quests::MonsterCountess) {
+		++g_towerSkipped;
+		Log("quest 5 kill handler skipped, killer is done with the Forgotten Tower", g_towerSkipped, 0);
+	}
+	return true;
+}
+
+void TowerKillHook(void* quest, uint8_t* event) {
+	if (event != nullptr && TowerSkips(d2r::At<Game*>(event, 0), d2r::At<Unit*>(event, EventUnit),
+	                                   d2r::At<Unit*>(event, EventPlayer), true)) {
+		return;
+	}
+	g_towerOriginal(quest, event);
+}
+
 }  // namespace
+
+auto QuestsTowerProbe(void* game, void* victim, void* player) noexcept -> bool {
+	return TowerSkips(static_cast<Game*>(game), static_cast<Unit*>(victim), static_cast<Unit*>(player), false);
+}
+
+auto QuestsTowerSkips() noexcept -> int {
+	return g_towerSkipped;
+}
 
 void QuestsWantUnique(int indexPlusOne) noexcept {
 	g_wantUnique = indexPlusOne;
@@ -206,8 +250,11 @@ auto InstallQuestsAct1(const D2RL::PluginContext* context, char* report, size_t 
 	                                 reinterpret_cast<void**>(&g_killOriginal)) ? 1 : 0;
 	ok += context->InstallInlineHook(HandlerActivateRva, ActivateEntry, sizeof(ActivateEntry),
 	                                 reinterpret_cast<void*>(&ActivateHook), reinterpret_cast<void**>(&g_activateOriginal)) ? 1 : 0;
-	std::snprintf(report, reportSize, ok == 4 ? "on: Griswold's Heart (Akara), Andariel catalyst, catalyst re-issue"
-	                                          : "partial: %d of 4 hooks installed (a hook failed; the others stay)",
+	ok += context->InstallInlineHook(HandlerTowerRva, TowerEntry, sizeof(TowerEntry), reinterpret_cast<void*>(&TowerKillHook),
+	                                 reinterpret_cast<void**>(&g_towerOriginal)) ? 1 : 0;
+	std::snprintf(report, reportSize,
+	              ok == 5 ? "on: Griswold's Heart (Akara), Andariel catalyst, catalyst re-issue, Forgotten Tower guard"
+	                      : "partial: %d of 5 hooks installed (a hook failed; the others stay)",
 	              ok);
-	return ok == 4;
+	return ok == 5;
 }

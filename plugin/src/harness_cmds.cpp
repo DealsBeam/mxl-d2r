@@ -407,7 +407,7 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	GoblinsStatus(goblins, sizeof(goblins));
 	int refused = 0, started = 0;
 	DungeonLockoutCounts(&refused, &started);
-	Out("plugin goblins: %s | lockout refused=%d clocks=%d", goblins, refused, started);
+	Out("plugin goblins: %s | lockout refused=%d clocks=%d | tower skips=%d", goblins, refused, started, QuestsTowerSkips());
 	const auto* b = reinterpret_cast<const uint8_t*>(g_base);
 	Out("npcmenu open=%u npc=%u class=%u rows=%u", *reinterpret_cast<const uint32_t*>(b + RvaMenuOpenFlag),
 	    *reinterpret_cast<const uint32_t*>(b + RvaMenuNpcId), static_cast<unsigned>(*reinterpret_cast<const uint16_t*>(b + RvaMenuNpcClass)),
@@ -808,6 +808,29 @@ auto CmdDifficulty(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		*reinterpret_cast<uint8_t*>(reinterpret_cast<uint8_t*>(c->game) + GameDifficulty) = static_cast<uint8_t>(n);
 	}
 	Out("difficulty = %d", static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)));
+	return true;
+}
+
+// `towerprobe`: would the quest 5 kill hook skip the vanilla handler for the nearest Countess (class 45)? Spawn one first.
+auto CmdTowerprobe(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Unit* victim = NearestMonster(c, 45, false);
+	if (victim == nullptr) {
+		return Fail(c, "towerprobe: no Countess (spawn 45) alive");
+	}
+	Out("towerprobe class=45 skip=%d", QuestsTowerProbe(c->game, victim, c->player) ? 1 : 0);
+	return true;
+}
+
+// `lockcheck <level>`: the dungeon warp test's verdict for the player entering the level (dungeon_lockout.cpp).
+auto CmdLockcheck(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &n)) {
+		Out("lockcheck: usage lockcheck <level>");
+		return true;
+	}
+	static const char* const Names[] = {"allow", "requirements", "quest", "sealed"};
+	const int v = DungeonLockoutProbe(c->game, c->player, static_cast<int>(n));
+	Out("lockcheck %lld = %s", n, v >= 0 && v < 4 ? Names[v] : "none");
 	return true;
 }
 
@@ -1635,7 +1658,7 @@ struct Verb {
 const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
-    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
+    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"dump", CmdDump, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},

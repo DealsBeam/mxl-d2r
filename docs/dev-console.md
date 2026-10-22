@@ -23,7 +23,7 @@ Found 2026-10-21 with `tools/game_checks.py` (build 93847, D2RLoader 1.3.1, `ena
 
 `mxl` prints one line per plugin feature, e.g.
 `cube conditions on: 542 recipes (ops 29-42, second condition, gold cost)`,
-`dungeon lockout on: 141 levels; tile warps on, portals on (refused 0, clocks started 0)`,
+`dungeon lockout on: 162 levels; tile warps on, portals on (refused 0, clocks started 0)`,
 `goblins on: ... (FORCED 1) 0 spawned (last -1 in level -1), 0 rolls, 0 spawn failures`,
 `npc actions on: 6 menu lines (Akara respec, Cain crafting materials); 8 stubbed services`. The counters make the
 lockout and goblin checks readable without the log.
