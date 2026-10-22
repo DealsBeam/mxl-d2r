@@ -17,6 +17,8 @@ ItemIsModType, MonsterHasMod); none checks a state, so `mxl_hasstate` still need
 - **error**: rejected value or a reference to something that does not exist.
 - **plugin**: valid once a D2RLoader plugin provides it.
 - **warn**: D2R's own data has the same value, or the string key is missing from Median's own tables too.
+- Plugin string keys (`tools/plugin_keys.py`) and the localization-cell rules are described in [strings.md](strings.md); a
+  missing plugin key is an **error**.
 
 ## Current result (both banks)
 2026-10-20 rebuild on the game PC (docs/setup.md): **0 errors**, 3,994 plugin items (base), 48/89 warnings (base/rotw).

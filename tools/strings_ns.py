@@ -73,6 +73,23 @@ LOCALIZATION = {
 RANGE_COLUMNS = {"hireling": {"namefirst", "namelast"}}
 
 
+# Localization columns whose value is never displayed, so a value that is no string key is no finding: automagic affixes
+# are applied "regardless of the item's quality ... without changing the item's name" (D2R's data guide, automagic.js);
+# Median fills the column with labels ("InnateAreaEffect", "Angelic 1H") that its own string tables lack as well.
+LABEL_COLUMNS = {"automagic": {"name"}}
+# Placeholder rows (value never shown): objects.Name `dummy_<n>`.
+PLACEHOLDER_VALUES = {("objects", "name"): re.compile(r"dummy_\d+")}
+
+
+def is_label_column(table: str, column: str) -> bool:
+    return column.lower() in LABEL_COLUMNS.get(table.lower(), ())
+
+
+def is_placeholder(table: str, column: str, value: str) -> bool:
+    rx = PLACEHOLDER_VALUES.get((table.lower(), column.lower()))
+    return bool(rx and rx.fullmatch(value))
+
+
 def is_localization(table: str, column: str) -> bool:
     return column.lower() in LOCALIZATION.get(table.lower(), ())
 

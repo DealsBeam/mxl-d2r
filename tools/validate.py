@@ -12,6 +12,9 @@ Findings are grouped by severity:
   plugin  valid only once a D2RLoader plugin provides it (Median formula functions / calc codes, new level types)
   warn    suspicious, probably fine
 
+The plugin's string keys and ids (tools/plugin_keys.py: generated headers and literals in plugin/src) must exist in
+Median's namespace file / D2R's string files; a missing one is an error.
+
 Output: work/mod/validate_report.md, validate_findings.json. Exit code 1 if there are errors.
 Usage: python tools/validate.py [--bank base|rotw|both] [--examples 3]
 """
@@ -24,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import art_fix  # noqa: E402
+import plugin_keys  # noqa: E402
 import strings_ns  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -120,7 +124,10 @@ class Validator:
         self.findings: dict[tuple, list] = defaultdict(list)
         # string keys: D2R's (group 1, cells stay unqualified) and Median-only (group 2, cells are medianxl:<key>)
         self.d2r_keys = strings_ns.d2r_keys()
+        # D2R looks keys up without regard to case (vanilla automagic.txt names "of Darkness", the key is "Of Darkness")
+        self.d2r_lower = {k.lower() for k in self.d2r_keys}
         self.group2 = strings_ns.load_group2()
+        self.group2_lower = {k.lower() for k in self.group2}
         self.native = strings_ns.native_exceptions()
         self.strings = set(self.d2r_keys) | self.group2
         for p in (MOD / "local" / "lng" / "strings").rglob("*.json"):
@@ -242,8 +249,16 @@ class Validator:
         elif v in self.group2:
             self.add("error", table, col, "unqualified cell names a Median-only (group 2) string; it must be "
                      f"{strings_ns.PREFIX}<key>", row, v)
-        elif v not in self.d2r_keys and v not in self.native:
-            self.add("warn", table, col, "cell names no known string (not in D2R's, not in the namespace list)", row, v)
+        elif v.lower() in self.d2r_lower or v in self.native:
+            pass
+        elif v.lower() in self.group2_lower:
+            self.add("error", table, col, "unqualified cell names a Median-only (group 2) string by another spelling of "
+                     f"its case; it must be {strings_ns.PREFIX}<key>", row, v)
+        elif (strings_ns.is_label_column(table, col) or strings_ns.is_placeholder(table, col, v)
+              or v in self.vanilla_values(table, col)):
+            pass  # never displayed, or D2R's own table holds the same value
+        else:
+            self.add("warn", table, col, "cell names no known string (Median's own string tables lack it too)", row, v)
         if limit and len(v) > limit:
             self.add("error", table, col, f"longer than {limit} characters (the whole {strings_ns.PREFIX}<key> must fit "
                      "the field; a key that cannot goes into tools/strings_native.json)", row, v)
@@ -506,6 +521,13 @@ def main() -> int:
                 report.append(f"| {table} | {col} | {problem} | {len(vals)} | {ex} |")
             report.append("")
         all_findings[bank] = {"|".join(k): vals for k, vals in v.findings.items()}
+    key_findings, key_counts = plugin_keys.check()
+    errors += len(key_findings)
+    report += ["## Plugin string keys", "",
+               f"errors {len(key_findings)} ({key_counts['keys']} keys, {key_counts['ids']} ids in {key_counts['files']} "
+               "plugin source files, tools/plugin_keys.py)", ""]
+    report += [f"- {f}" for f in key_findings] + ([""] if key_findings else [])
+    all_findings["plugin_keys"] = key_findings
     (out / "validate_report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
     (out / "validate_findings.json").write_text(json.dumps(all_findings, indent=0), encoding="utf-8")
     print("\n".join(line for line in report if line.startswith(("#", "errors"))))
