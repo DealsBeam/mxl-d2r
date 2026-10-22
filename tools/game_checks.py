@@ -9,7 +9,7 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
-catalyst cainsub lockout cow goldcraft craftflags lockclock reenter areacycle. What a click in the world cannot do in background mode (kill a
+catalyst cainsub lockout cow goldcraft craftflags lockclock reenter areacycle trophy. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
 game's own functions, no simulated input, and write their answers to mxl-testharness-console.txt. Only menu / UI clicks
@@ -524,7 +524,29 @@ def check_respec():
         return add(name, "FAIL", "no plugin line in Akara's menu: %s" % menu, [shot], menu)
     idx = int(re.search(r"line (\d+)", plugin_lines[0]).group(1))
     m = mxl_mark()
+    # npcext PromptConfirm: the click opens D2R's Yes / No page and sends nothing; No ends it with the stats untouched
     ok, ml = H("menu %d" % idx)
+    time.sleep(1.5)
+    _, c1 = H("menu confirm")
+    confirm_shot = sh("respec_confirm")
+    asked = ok and any("open" in ln for ln in c1)
+    _, held0 = H("stat player 0")
+    ok_no, no_out = H("menu no")
+    time.sleep(1)
+    _, held1 = H("stat player 0")
+    declined_lines = [ln for ln in mxl_lines_since(m) if "npc actions" in ln]
+    declined = (ok_no and stat_of(held0) == base0 + 60 and stat_of(held1) == base0 + 60
+                and any("declined" in ln for ln in declined_lines) and not any("done" in ln for ln in declined_lines))
+    menu = npc_menu(148)
+    plugin_lines = [ln for ln in (menu or []) if "handler=plugin" in ln]
+    if not plugin_lines:
+        return add(name, "FAIL", "after No, the menu did not come back with the plugin line: %s" % menu, [shot, confirm_shot], ml + no_out)
+    idx = int(re.search(r"line (\d+)", plugin_lines[0]).group(1))
+    m = mxl_mark()
+    ok, ml2 = H("menu %d" % idx)
+    time.sleep(1.5)
+    _, c2 = H("menu confirm")
+    ok, yes_out = H("menu yes")
     time.sleep(1)
     _, after0 = H("stat player 0")
     _, after4 = H("stat player 4")
@@ -535,12 +557,60 @@ def check_respec():
     done = any("done" in ln for ln in lines)
     # the character's strength goes back to the class start (Barbarian 30) and every point spent comes back as unused points
     refunded = (base0 + 60) - s0 if s0 is not None else None
-    add(name, "PASS" if (ok and done and s0 == 30 and s4 == base4 + refunded) else "FAIL",
-        "menu lines %s; strength %d -> %s (Barbarian start 30), unused stat points %d -> %s (%s refunded); log `%s`; quest 41 %s" % (
-            [ln.strip() for ln in menu[1:]], base0 + 60, s0, base4, s4, refunded, lines[-1][-60:] if lines else "none", q[0]),
-        [shot], menu + ml + lines)
+    asked2 = any("open" in ln for ln in c2)
+    add(name, "PASS" if (asked and declined and asked2 and ok and done and s0 == 30 and s4 == base4 + refunded) else "FAIL",
+        "menu lines %s; the click opens the Yes / No page (%s) and No leaves strength at %d (%s); after Yes strength %d -> %s "
+        "(Barbarian start 30), unused stat points %d -> %s (%s refunded); log `%s`; quest 41 %s" % (
+            [ln.strip() for ln in menu[1:]], asked, base0 + 60, declined, base0 + 60, s0, base4, s4, refunded,
+            lines[-1][-60:] if lines else "none", q[0]),
+        [shot, confirm_shot], menu + ml + c1 + no_out + ml2 + c2 + yes_out + lines)
     close_menu()
     H("stat player 4 set %d" % base4)  # the refund raised the unused points: the saved test character keeps the old number
+
+
+def messages_sent():
+    m = re.search(r"client messages .*\(sent (\d+), failed (\d+)\)", mxl_text())
+    return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+
+
+def check_trophy():
+    """Median's trophies (misc2 InteractString): the tooltip says "Right click to reveal trophy challenge" and the right
+    click prints the challenge as chat lines (plugin/src/item_spells.cpp, mxl_items.h Trophies)."""
+    name = "Trophy items: hover text, right click reveals the challenge (misc2 InteractString)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    H("remove a56 5")
+    ok, made = H("item a56 inv")
+    if not ok:
+        return add(name, "BLOCKED", "could not create the Heart of Azmodan (a56): %s" % made)
+    sent0, failed0 = messages_sent()
+    g.press("i")  # inventory (background key message)
+    time.sleep(1.5)
+    shots = [sh("trophy_inventory")]
+    # the item lands in the first free cell of the 15 x 10 inventory grid (a free cell right of the tall items: the HD panel puts it near 0.841, 0.580): hover it with the plugin's virtual cursor
+    for n, (fx, fy) in enumerate(((0.841, 0.580), (0.841, 0.592))):
+        g.click(fx, fy, move_only=True)
+        time.sleep(1.0)
+        shots.append(sh("trophy_hover%d" % n))
+    g.press("i")
+    time.sleep(0.5)
+    ok, used = H("use a56")
+    time.sleep(1.5)
+    shots.append(sh("trophy_revealed"))
+    sent1, failed1 = messages_sent()
+    ok2, again = H("use a56")  # the trophy is kept: a second reveal works
+    time.sleep(0.5)
+    sent2, failed2 = messages_sent()
+    _, held = H("state")
+    kept = any("a56" in ln for ln in held)
+    lines = [ln for ln in used if "pSpell 17" in ln]
+    add(name, "PASS" if (ok and ok2 and lines and "kept" in lines[0] and sent0 is not None and sent1 - sent0 >= 8
+                        and failed1 == failed0 and sent2 - sent1 >= 8 and kept) else "FAIL",
+        "`use a56`: %s; client messages sent %s -> %s -> %s (failed %s -> %s), the item is kept: %s. Hover text and the "
+        "printed lines are read from the screenshots (trophy_hover*.png, trophy_revealed.png)" % (
+            used[0] if used else "-", sent0, sent1, sent2, failed0, failed2, kept), shots, made + used + again)
+    H("remove a56 5")
 
 
 def check_cain():
@@ -1166,7 +1236,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("lockout", check_lockout),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai)]
+          ("areacycle", check_areacycle), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai), ("trophy", check_trophy)]
 
 
 def write_report(extra=""):

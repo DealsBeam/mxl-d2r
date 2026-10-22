@@ -591,6 +591,35 @@ inline constexpr Container Containers[] = {
     {0x786f6262, 0x786f626f, 530, 1, 500},  // "bbox" holds "obox"
     {0x72616272, 0x206c7672, 530, 1, 500},  // "rbar" holds "rvl"
 };
+
+// Trophy items (misc2 InteractString): the tooltip says "right click to reveal", the right click prints
+// this text, lines separated by \n (English; the string table has no other language of it).
+struct Trophy {
+	uint32_t code;
+	const char* text;
+};
+inline constexpr Trophy Trophies[] = {
+    {0x20363561, "Heart of Sin Trophy Challenge\nRequirements: \nKill Azmodan without being struck by \na Flameblood\nDo not die\n\nCube Azmodan's Heart within 10 seconds\nGrants: \n+150 to Life\n+75 to mana\nLocked to current character class"},  // "a56" DescAzmoTrophy
+    {0x20363661, "The Veiled Prophet Trophy Challenge\nRequirements:\nKill either Oris or Gamuel before \ndestroying the Veil Piercer\nKill the Veiled Prophet\nDo not die\n\nCube the Idol of Vanity within 10 seconds\nGrants: \n+20% to Summon Life\n+10% to Summon Elemental Resistances\nLocked to current character class"},  // "a66" DescCoVTrophy
+    {0x20783078, "Kingdom of Shadow Trophy Challenge\nRequirements: \nPurify the Forboding Statue after entering\nKill Juris Khan without dying\n\nCube the Eternal Bone Pile within 10 \nseconds\nGrants: \n10% Movement Speed\nLocked to current character class"},  // "x0x" DescUrehTrophy
+    {0x20783478, "Tran Athulua Trophy Challenge\nRequirements: \nKill Skovos and Lycander within 10 \nseconds of each other\n\nCube the Sunstone of the Gods with both\ntrophy buffs on you\nGrants: \nPhysical Resist 5%\nLocked to current character class"},  // "x4x" DescTATrophy
+    {0x20696461, "Legacy of Blood Trophy Challenge\nRequirements: \nKill Bartuc within 15 seconds of \nentering the Chamber of Blood\nDo not die\n\nCube the Legacy of Blood within the time \nlimit\nGrants: \n20% Bonus to Defense\nLocked to current character class"},  // "adi" DescLobTrophy
+    {0x206b6f6c, "Judgement Day Trophy Challenge\nRequirements: \nKill both Imperius and Malthael within \n60 seconds of the hooded figure \ndisappearing\nDo not die\n\nCube the Crystalline Flame Medallion \nwithin the time limit\nGrants: \n5% to All Attributes\nLocked to current character class"},  // "lok" DescJDayTrophy
+    {0x20217161, "Quov Tsin Trophy Challenge\nRequirements: \nKill Quiv Tsin without being struck by\nhis Bone Spear Nova\nDo not die\n\nCube the Silver Seal of Ureh within \n10 seconds\nGrants: \n+10% to Spell Damage\nLocked to current character class"},  // "aq!" DescQTTrophy
+    {0x20216261, "Astrogha Trophy Challenge\nRequirements: \nKill the real Astrogha while he is \nempowered by a Spider Statue\n\nCube Astrogha's Venom Stinger within \n10 seconds\nGrants: \n-5% to Enemy Elemental Resistances\nLocked to current character class"},  // "ab!" DescAstroTrophy
+    {0x206b406b, "Lord of Lies Trophy Challenge\nRequirements: \nKill Belial without dying\nAll of Belial's clones must die before him\n\nCube The Book of Lies within 10 seconds\nGrants: \nWeapon Physical Damage +20%\nLocked to current character class"},  // "k@k" DescBelialTrophy
+    {0x20744074, "Duncraig Trophy Challenge\nRequirements: \nKill Assur without being hit by his \nFlamefront\nDo not die\n\nCube Demonsbane within 10 seconds\nGrants: \n10% Combat Speeds\nLocked to current character class"},  // "t@t" DescDuncTrophy
+    {0x20774077, "Vizjun Trophy Challenge\nRequirements: \nKill the Master Control System within 25 \nseconds\nDo not die\n\nCube the Cold Fusion Schematics within\nthe time limit\nGrants: \n+15 to all Attributes"},  // "w@w" DescVizjunTrophy
+    {0x20784078, "Archbishop Lazarus Trophy Challenge\nRequirements: \nKill Archbishop Lazarus without being \nstruck by the Black Hand Totem's Tremor\nDo not die\n\nCube the Glorious Book of Median within \n10 seconds\nGrants: \nMaximum Elemental Resists +1% \nLocked to current character class"},  // "x@x" DescLazTrophy
+    {0x20617862, "Banisher of Light Trophy Challenge\nRequirements: \nKill Kabraxis without being hit by his\nPillar of Poison\nDo not die\n\nCube Soul of Kabraxis within 10 seconds\nGrants: \nAdds 5-10 Damage\nLocked to current character class"},  // "bxa" DescKabTrophy
+    {0x202e2323, "Nephalem's Sacrifice Trophy Challenge\nRequirements: \nKill Uldyssian within 4 minutes of \nkilling Moreina the Corrupted\nDo not fail Azmodan's or Baal's\nchallenges on the path\nDo not die\n\nCube Neutrality Pact within the time limit\nGrants: \n+4% Deadly Strike\n+8% Innate Elemetal Damage\nLocked to current character class"},  // "##." DescUldyTrophy
+    {0x205c5c7c, "Yshari Sanctum Trophy Challenge\nRequirements:\nKill Valthek the Archmage within \n5 minutes 30 seconds of killing \nValthek's Altar \nDo not die\n\nCube The Ancient Repositories within \nthe time limit\nGrants\nMaximum Life and Mana +5%\nLocked to current character class"},  // "|\\" DescYhshariTrophy
+    {0x20235c7c, "Xazax Trophy Challenge\nRequirements:\nKill Xazax without being hit by a Penitent\nDo not die\n\nCube Xazax's Illusion within 10 seconds\nGrants\nAdds 75-125 Fire Damage\nAdds 75-125 Lightning Damage\nAdds 75-125 Cold Damage\nLocked to current character class"},  // "|\#" DescXazaxTrophy
+    {0x20385c5c, "Triune Trophy Challenge\nRequirements: \nKill Lucion without being struck by Malic's \nBurning Missiles\nDo not die\n\nCube the Corrupted Wormhole within \n10 seconds\nGrants:\n30% Magic Find\nLocked to current character class"},  // "\\8" DescTriuneTrophy
+    {0x58586f76, "Void Trophy Challenge\nRequirements: \nKill Inarius\nLilith must stay above 95% hp\n\nCube Book of Kalan within 10 seconds\nGrants\n+2 to all Skills\nLocked to current character class"},  // "voXX" DescVoidTrophy
+    {0x2063647c, "Bremmtown Trophy Challenge\nRequirements:\nKill the Dark Star Dragon within 30 \nseconds of entering\nDo not die\n\nCube the Dragon Claw within the time limit\nGrants: \n+10% to Experience Gained"},  // "|dc" DescBremmTrophy
+    {0x6c6f6c62, "Eve of Destruction Trophy Challenge\nRequirements:\nKill Baal without being struck by his Black \nCarpet Bomb\nDo not die\n\nCube the Spirit of Creation within 10 \nseconds \nGrants: \nElemental Resists +10%\nLocked to current character class"},  // "blol" DescBaalTrophy
+};
 inline constexpr int32_t ItemTypeWeapon = 45;
 inline constexpr int32_t ItemTypeArmor = 50;
 

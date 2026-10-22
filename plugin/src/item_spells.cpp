@@ -27,13 +27,18 @@
 //      ultracode) from the inventory and cube, and from the stash in town, adding `amount` to its count stat each,
 //      up to its maximum. Items are removed the way D2R removes a used-up tome (0x4712a0).
 //   13, 21 (arcane shards, catalysts, oils): D2Sigma only shows the item's help text; it is in the tooltip now
-//      (tools/txt_migrate.py help_tooltips), right-click is refused.
+//      (tools/txt_migrate.py help_tooltips), right-click is refused. The 20 trophies (misc2 InteractString) keep the text
+//      back: their tooltip says "Right click to reveal trophy challenge" (the hover string of D2Sigma's interact mode)
+//      and the right click prints the challenge as chat lines (mxl_items.h Trophies, items_ext_logic.h).
 // Items D2Sigma keeps (13, 18, 21, keys with calc3) use pSpell PluginSpellKeep (17), whose table flag is set here:
 // D2R's client marks an item spell as "used up" from that flag (0x308e80) and the server checks the two agree.
 // Not yet (refused, so the item is kept): 12, 15, 17, 19 (home_cherry, Perfect Ruby, askari_call, cherry, toa).
 #include "item_spells.h"
 
+#include "client_messages.h"
+#include "client_messages_logic.h"
 #include "d2r.h"
+#include "items_ext_logic.h"
 #include "mxl_items.h"
 
 #include <cstdint>
@@ -436,6 +441,22 @@ auto IsOtherItem(d2r::Unit* target, d2r::Unit* item) noexcept -> bool {
 	return target != nullptr && target != item && d2r::At<int32_t>(target, d2r::UnitType) == 4;
 }
 
+auto TrophyOf(const mxl_items::SigmaItem& entry) noexcept -> const mxl_items::Trophy* {
+	for (const auto& t : mxl_items::Trophies) {
+		if (t.code == entry.code) {
+			return &t;
+		}
+	}
+	return nullptr;
+}
+
+// The right click on a trophy: its challenge text in the chat log, the title in gold.
+void RevealTrophy(d2r::Unit* player, const mxl_items::Trophy& trophy) noexcept {
+	items_ext::ForEachTrophyLine(trophy.text, [player](const char* line, bool title) {
+		SendClientMessage(player, line, title ? clientmsg::Tan : clientmsg::White);
+	});
+}
+
 auto CheckDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Unit* target) noexcept -> uint64_t {
 	const mxl_items::SigmaItem* entry = SigmaItemOf(game, item);
 	if (entry == nullptr) {
@@ -454,6 +475,9 @@ auto CheckDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Uni
 		return 0;
 	case 18:
 		return ContainerOf(*entry) != nullptr ? 1 : 0;
+	case 13:
+	case 21:
+		return TrophyOf(*entry) != nullptr ? 1 : 0;
 	default:
 		return 0;  // not implemented: refuse, so the item is not used up
 	}
@@ -484,6 +508,12 @@ auto UseDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Unit*
 	case 18:
 		if (const mxl_items::Container* c = ContainerOf(*entry)) {
 			FillContainer(*c, game, player, item);
+		}
+		break;
+	case 13:
+	case 21:
+		if (const mxl_items::Trophy* t = TrophyOf(*entry)) {
+			RevealTrophy(player, *t);
 		}
 		break;
 	default:
