@@ -2357,6 +2357,18 @@ def check_strings():
         record("rare affixes", full, kg is not None and kg.result == 0 and kg.same(exp), exp, kg.show() if kg else None,
                "result %s" % (kg.result if kg else None))
 
+    # ---- the plugin's own string ids (`h mstr`): every menu text the plugin hands to D2R resolves and gets an id
+    ok, lines = H("mstr " + src.full_key("AkaraMenu1b"))
+    if ok or (lines and "unknown" not in lines[-1].lower()):
+        for key in [k for _c, _n, ks, _l in STR_MENUS for k in ks] + STR_CAIN_SUB:
+            full = src.full_key(key)
+            ok, lines = H("mstr " + full)
+            m = re.search(r'service=(\w+) text="(.*)" id=(\d+) \(0x[0-9a-f]+\) via D2R lookup="(.*)" ids=', lines[0]) if lines else None
+            exp = src.expected(key)
+            via = re.sub("[-].", "", m.group(4)) if m else None
+            record("plugin string ids", full, bool(m) and m.group(1) == "ok" and int(m.group(3)) != 0 and via == exp, exp, via,
+                   "service %s id %s" % (m.group(1), m.group(3)) if m else (lines[-1] if lines else "no answer"))
+
     # ---- native exceptions by key: unqualified, so the loader reads them as d2r:<key>
     for key in STR_NATIVE:
         full = src.full_key(key)
@@ -2375,8 +2387,12 @@ def check_strings():
         got_id = _text_id(e["id"])
         kg = _text_key("d2r:" + key)
         ok = got_id is not None and got_id.same(exp) and (kg is None or (kg.result == 0 and kg.same(exp)))
+        alt = ""
+        if src.ns_keys is not None:  # a namespaced mod keeps an unqualified record in its own namespace: is Median's text there?
+            ag = _text_key(STR_NS + ":" + key)
+            alt = "; %s:%s -> %s" % (STR_NS, key, ag.show() if ag and ag.result == 0 else "absent")
         record("D2R overrides", "%s (id %d)" % (key, e["id"]), ok, exp, got_id.show() if got_id else None,
-               "key d2r:%s -> %s" % (key, "n/a (space)" if kg is None else kg.show()))
+               "key d2r:%s -> %s%s" % (key, kg.show() if kg else None, alt))
 
     # ---- bug #7: the first-talk line of each town NPC is its own string, by D2R's numeric id
     other = {}  # (length, hash) of every Median-only text -> key: a first-talk line that is one of them is the bug
