@@ -2693,6 +2693,7 @@ def _iflags(item_id, unid=False):
     ok, lines = H("iflags %d%s" % (item_id, " unid" if unid else ""))
     m = next((l for l in lines if l.startswith("iflags ")), None)
     if not ok or m is None:
+        print("iflags %d: %s %s" % (item_id, ok, lines[-2:]))
         return None
     return {k: int(v, 16) if v.startswith("0x") else int(v) for k, v in kv(m).items()}
 
@@ -2707,14 +2708,22 @@ def check_nodurability():
     fight_ready()
     god(False)
     log, notes, good = [], [], True
-    for slot in ("rhand", "torso"):
+    H("packclear")  # room in the backpack: an unequip into a full backpack fails and the hand stays occupied
+    for slot in ("rhand", "lhand", "torso"):
         H("unequip " + slot)
-    ok, l1 = H("equip hfh q=2 rhand")
+    # hfh is a quest item that D2R's place function refuses once the character's quest state says its quest is done (see
+    # check_statcols): fall back to ordinary weapons (115 axe, bsd broad sword)
+    for code in ("hfh", "115", "bsd"):
+        ok, l1 = H("equip %s q=2 rhand" % code)
+        log += l1
+        if ok and _item_id(l1):
+            break
+        H("unequip rhand")
     ok2, l2 = H("equip fld q=2 torso")
-    log += l1 + l2
+    log += l2
     weapon, armour = _item_id(l1), _item_id(l2)
     if not (ok and ok2 and weapon and armour):
-        return add(nm, "BLOCKED", "could not equip the test weapon hfh / armour fld: %s" % " | ".join((l1 + l2)[-3:]), [], log)
+        return add(nm, "BLOCKED", "could not equip a test weapon (hfh, 115, bsd) / armour fld: %s" % " | ".join((l1 + l2)[-3:]), [], log)
     w0, a0 = _iflags(weapon), _iflags(armour)
     log.append("before: weapon %s armour %s" % (w0, a0))
     if not w0 or not a0 or w0["maxdurability"] <= 0 or a0["maxdurability"] <= 0:
