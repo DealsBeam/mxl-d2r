@@ -677,6 +677,7 @@ class Migrator:
                     fixed += 1
             write_tsv(p, h, rows)
         (ROOT / "plugin" / "src" / "mxl_statcols.h").write_text(stat_screen.plugin_header(), encoding="utf-8")
+        (ROOT / "plugin" / "src" / "mxl_statorder.h").write_text(stat_screen.order_header(), encoding="utf-8")
         missing = sorted(wanted - found)
         self.report.append(f"\nadvanced stats (itemstatcost.advdisplay): {len(found)} stats listed ({len(always & wanted)} always, "
                            f"the rest while not 0), Median's stat pages name {len(wanted)}; {fixed} get descfunc 19 for D2R's "
@@ -1346,6 +1347,37 @@ class Migrator:
         (ROOT / "plugin" / "src" / "mxl_items.h").write_text("\n".join(lines), encoding="utf-8")
         self.report.append(f"\nitem spells: {len(items)} items, {len(orbs)} mystic orb rows -> plugin/src/mxl_items.h"
                            + (f" ({unmapped} orb properties without a D2R row)" if unmapped else ""))
+
+    def infographic_panels(self) -> None:
+        """plugin/src/mxl_infographics.h: the help panels of Median's infographics table (title and positioned text
+        blocks) as D2R panel layouts for the plugin's PanelService (tools/infographics.py), and the items that open
+        them (misc2 `Infographic`: the index of the infographics row, -1 none; the catalyst of disenchantment)."""
+        import infographics
+        texts: dict[str, str] = {}
+        for f in sorted((OUT / "data" / "local" / "lng" / "strings").glob("*.json")):
+            for e in json.loads(f.read_text("utf-8-sig")):
+                if isinstance(e.get("enUS"), str):
+                    texts.setdefault(e["Key"], e["enUS"])
+        ih, irows = read_tsv(ROOT / "work" / "sigma" / "infographics.txt")
+        panels = []
+        for i, r in enumerate(irows):
+            blocks = []
+            for n in range(1, 6):
+                key = r[ih.index("text%d" % n)].strip()
+                if key:
+                    blocks.append((int(r[ih.index("y%d" % n)] or 0), texts.get(key, key)))
+            title = texts.get(r[ih.index("title")].strip(), r[ih.index("name")])
+            panels.append(("Info%d" % i, infographics.layout("Info%d" % i, title, blocks)))
+        nh, nrows = read_tsv(NAMED / "misc.txt")
+        m2h, m2rows = read_tsv(ROOT / "work" / "sigma" / "misc2.txt")
+        items = []
+        for row, m2 in enumerate(m2rows):
+            index = int(m2[m2h.index("Infographic")] or -1)
+            if index >= 0 and row < len(nrows):
+                assert index < len(panels), "misc2 row %d: infographic %d has no row" % (row, index)
+                items.append((nrows[row][nh.index("code")].strip(), index))
+        (ROOT / "plugin" / "src" / "mxl_infographics.h").write_text(infographics.header(panels, items), encoding="utf-8")
+        self.report.append(f"\ninfographics: {len(panels)} help panels, {len(items)} items open one -> plugin/src/mxl_infographics.h")
 
     def item_level_line(self) -> None:
         """Median's itemtypesext NoShowILvl: 10 types (rune, thng, cyc1-3, trph, erun, tent, embl, cyng) hide the item level
@@ -2123,6 +2155,7 @@ def main() -> int:
     m.property_defaults()
     m.missile_functions()
     m.item_spell_tables()
+    m.infographic_panels()
     m.item_level_line()
     m.pet_tables()
     m.hireling_tables()

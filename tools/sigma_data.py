@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BINS = ROOT / "extract" / "mxl" / "data" / "global" / "excel"
 IDMAP = ROOT / "work" / "named" / "idmap.json"
 SRC = ROOT / "plugin" / "src"
+MODXL = ROOT / "work" / "mod" / "data" / "global" / "excel"
 
 REQ_ROW = 44
 LEVEL_ROW = 0x220
@@ -138,6 +139,19 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
     out += ["};", "", "}  // namespace mxl_dungeons", ""]
 
     m3 = table("monstats3", MONSTATS3_ROW)
+    # display names of the goblin rows: the migrated monstats.txt (txt_migrate.py runs earlier) holds each monster's
+    # NameStr resolved to its text; the server's "<name> appears!" line uses it
+    mod_ms = MODXL / "monstats.txt"
+    if not mod_ms.exists():
+        raise SystemExit(f"{mod_ms} missing: run tools/txt_migrate.py first")
+    ml = mod_ms.read_text("utf-8").splitlines()
+    mh = ml[0].split("	")
+    i_id, i_name = mh.index("Id"), mh.index("NameStr")
+    name_of = {}
+    for line in ml[1:]:
+        c = line.split("	")
+        if len(c) > i_name:
+            name_of[c[i_id]] = c[i_name]
     gob = []
     for row, r in enumerate(m3):
         flags = struct.unpack_from("<I", r)[0]
@@ -150,7 +164,7 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
             rl = levels[restrict]
         else:
             raise SystemExit(f"monstats3 row {row}: level restrict {restrict} is not a level row")
-        gob.append((mons[row], flags, rarity, lo, hi, rl, mnames[row]))
+        gob.append((mons[row], flags, rarity, lo, hi, rl, mnames[row], name_of.get(mnames[row]) or mnames[row]))
 
     g = [HEADER, "#pragma once", "", "#include <cstdint>", "", "namespace mxl_goblins {", "",
          "// Treasure goblins (D2Goblins.cpp; docs/subsystems/ubers-events.md section 4).",
@@ -168,9 +182,10 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
           "// flags is the whole monstats3 +0 word; bits other than 0x400 / 0x1000 are not understood.",
           "inline constexpr uint32_t FlagGoblin = 0x400;", "inline constexpr uint32_t FlagRainbow = 0x1000;",
           "struct Goblin {", "\tint32_t monster;       // D2R monstats id", "\tuint32_t flags;", "\tuint16_t rarity;",
-          "\tuint16_t minLevel;", "\tuint16_t maxLevel;", "\tint32_t levelRestrict; // D2R level id, -1 = any", "};",
+          "\tuint16_t minLevel;", "\tuint16_t maxLevel;", "\tint32_t levelRestrict; // D2R level id, -1 = any",
+          "\tconst char* name;     // monstats NameStr text, what the client shows as the unit's name", "};",
           f"inline constexpr int32_t GoblinCount = {len(gob)};", "inline constexpr Goblin Goblins[GoblinCount] = {"]
-    g += [f"    {{{m}, 0x{f:x}, {ra}, {lo}, {hi}, {rl}}},  // {n}" for m, f, ra, lo, hi, rl, n in gob]
+    g += [f"    {{{m}, 0x{f:x}, {ra}, {lo}, {hi}, {rl}, {json.dumps(dn)}}},  // {n}" for m, f, ra, lo, hi, rl, n, dn in gob]
     towns = [levels[row] for row, r in enumerate(lrows) if r[0x14b]]
     nokill = [mons[row] for row, r in enumerate(m3) if r[0x20]] or [-1]
     g += ["};", "",

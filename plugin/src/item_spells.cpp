@@ -27,7 +27,9 @@
 //      ultracode) from the inventory and cube, and from the stash in town, adding `amount` to its count stat each,
 //      up to its maximum. Items are removed the way D2R removes a used-up tome (0x4712a0).
 //   13, 21 (arcane shards, catalysts, oils): D2Sigma only shows the item's help text; it is in the tooltip now
-//      (tools/txt_migrate.py help_tooltips), right-click is refused. The 20 trophies (misc2 InteractString) keep the text
+//      (tools/txt_migrate.py help_tooltips). The catalyst of disenchantment has an infographic (misc2 Infographic, Median's item
+//      event 13): its right click asks the client to open the help panel (info_panels.cpp, plugin message 'I'); other
+//      right clicks are refused. The 20 trophies (misc2 InteractString) keep the text
 //      back: their tooltip says "Right click to reveal trophy challenge" (the hover string of D2Sigma's interact mode)
 //      and the right click prints the challenge as chat lines (mxl_items.h Trophies, items_ext_logic.h).
 // Items D2Sigma keeps (13, 18, 21, keys with calc3) use pSpell PluginSpellKeep (17), whose table flag is set here:
@@ -38,6 +40,7 @@
 #include "client_messages.h"
 #include "client_messages_logic.h"
 #include "d2r.h"
+#include "info_panels.h"
 #include "items_ext_logic.h"
 #include "mxl_items.h"
 #include "strings.h"
@@ -482,7 +485,7 @@ auto CheckDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Uni
 		return ContainerOf(*entry) != nullptr ? 1 : 0;
 	case 13:
 	case 21:
-		return TrophyOf(*entry) != nullptr ? 1 : 0;
+		return TrophyOf(*entry) != nullptr || InfoPanelOf(entry->code) >= 0 ? 1 : 0;
 	default:
 		return 0;  // not implemented: refuse, so the item is not used up
 	}
@@ -519,6 +522,8 @@ auto UseDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Unit*
 	case 21:
 		if (const mxl_items::Trophy* t = TrophyOf(*entry)) {
 			RevealTrophy(player, *t);
+		} else if (const int panel = InfoPanelOf(entry->code); panel >= 0) {
+			SendInfoPanel(player, panel);  // Median's item event 13: the client opens the item's help panel
 		}
 		break;
 	default:

@@ -131,9 +131,7 @@ void GiveHeart(Game* game, Unit* player) noexcept {
 	if (got != static_cast<uint32_t>(heart->uniqueIndex)) {
 		Log("Griswold's Heart came out as another unique, got/wanted", static_cast<int>(got), heart->uniqueIndex);
 	}
-	char line[96];
-	clientmsg::RewardLine("Griswold's Heart", 1, line, sizeof(line));
-	SendClientNotice(player, line, clientmsg::Tan);
+	SendRewardMessage(player, clientmsg::MsgRewardArmor, "Griswold's Heart", 1);
 }
 
 void HeartHook(void* quest, uint8_t* event) {

@@ -14,6 +14,7 @@
 #include "d2r.h"
 #include "dungeon_lockout.h"
 #include "goblins.h"
+#include "info_panels.h"
 #include "mxl_hirelings.h"
 #include "no_corpse.h"
 #include "item_events.h"
@@ -854,6 +855,107 @@ auto CmdSysmsg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		return Fail(c, "send failed (messages off or no client)");
 	}
 	Out("sysmsg type %lld colour %lld: %s", type, colour, text);
+	return true;
+}
+
+// `rewardmsg <0x5f|0x60|0x61>`: the quest reward client message to the player through D2R's unit message (0x491960), the
+// path Jerhyn / Cain / Ormus / Akara use. The client plays Median's sound (`rewardsnd`).
+auto CmdRewardMsg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long msg = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &msg)) {
+		return Fail(c, "usage: rewardmsg <95|96|97 or 0x5f|0x60|0x61>");
+	}
+	if (!RewardSoundsOn()) {
+		return Fail(c, "rewardmsg: the client hook for packet 0x2c is off");
+	}
+	if (!SendRewardMessage(c->player, static_cast<uint32_t>(msg), "Reward", 1)) {
+		return Fail(c, "rewardmsg: not sent (no such reward message or no client)");
+	}
+	Out("rewardmsg 0x%llx sent", msg);
+	return true;
+}
+
+// Client side: `rewardsnd` prints how many reward sounds (messages 0x5f-0x61) the client has played, the last message and
+// the sound row it played (217 gem, 2608 shrine stand-in, 230 armor).
+auto CmdRewardSound(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	int played = 0, message = 0, sound = 0;
+	RewardSoundStats(&played, &message, &sound);
+	Out("rewardsnd hook=%d played=%d last message=0x%x sound=%d", RewardSoundsOn() ? 1 : 0, played, message, sound);
+	(void)c;
+	return true;
+}
+
+// Client side: `infopanel [close <n>]` prints the help panels' presentation state (0 unknown, 1 closed, 2 open, -1 none) and
+// the open requests the client part has handled; `close <n>` closes one.
+auto CmdInfoPanel(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 0;
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "close")) {
+		if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &n)) {
+			return Fail(c, "usage: infopanel close <panel>");
+		}
+		Out("infopanel close %lld %s", n, InfoPanelClose(static_cast<int>(n)) ? "ok" : "failed");
+		return true;
+	}
+	int asked = 0, opened = 0, failed = 0;
+	InfoPanelCounts(&asked, &opened, &failed);
+	Out("infopanel state0=%d state1=%d asked=%d opened=%d failed=%d", InfoPanelState(0), InfoPanelState(1), asked, opened, failed);
+	return true;
+}
+
+// Client side: `statorder` prints the Advanced Stats list as the panel built it last (stat_columns.cpp, Median's order):
+// "statorder ordered=1 rebuilds=N rows=M", then the rows, a section label as [Label] and a stat as its D2R stat id.
+// `statorder open` / `close` opens or closes the character sheet through D2R's panel messages, `statorder adv` presses its
+// Advanced Stats button (the sheet must be open; the button's own onClickMessage).
+auto CmdStatOrder(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n >= 2 && (hcmd::LowerEq(t.tok[1], "open") || hcmd::LowerEq(t.tok[1], "close") || hcmd::LowerEq(t.tok[1], "adv"))) {
+		const bool adv = hcmd::LowerEq(t.tok[1], "adv");
+		const char* command = adv ? "ToggleAdvancedStats" : hcmd::LowerEq(t.tok[1], "open") ? "OpenPanel" : "ClosePanel";
+		const int rc = adv ? HarnessUiAction("CharacterStatsPanelMessage", command, "") : HarnessUiAction("PanelManager", command, "CharacterStatsPanel");
+		Out("statorder %s rc=%d", command, rc);
+		return rc == 0;
+	}
+	bool ordered = false;
+	int rebuilds = 0;
+	int32_t ids[256];
+	const int rows = StatOrderRows(&ordered, &rebuilds, ids, 256);
+	Out("statorder ordered=%d rebuilds=%d rows=%d", ordered ? 1 : 0, rebuilds, rows);
+	char line[400] = "";
+	size_t n = 0;
+	for (int i = 0; i < rows && i < 256; ++i) {
+		const char* label = StatOrderLabel(ids[i]);
+		char item[64];
+		if (label[0] != '\0') {
+			std::snprintf(item, sizeof(item), "[%s] ", label);
+		} else {
+			std::snprintf(item, sizeof(item), "%d ", ids[i]);
+		}
+		const size_t len = std::strlen(item);
+		if (n + len >= sizeof(line)) {
+			Out("statorder rows %s", line);
+			n = 0;
+			line[0] = '\0';
+		}
+		std::memcpy(line + n, item, len + 1);
+		n += len;
+	}
+	if (n != 0) {
+		Out("statorder rows %s", line);
+	}
+	(void)c;
+	return true;
+}
+
+// `goblinsay <monster class>`: the goblin "<name> appears!" line for that variant to the player (the line a spawn sends).
+auto CmdGoblinSay(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long cls = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &cls)) {
+		return Fail(c, "usage: goblinsay <monster class>");
+	}
+	char text[96];
+	if (!GoblinAnnounce(c->player, static_cast<int>(cls), text, sizeof(text))) {
+		return Fail(c, "goblinsay: not sent (messages off or no client)");
+	}
+	Out("goblinsay %lld: %s", cls, text);
 	return true;
 }
 
@@ -2207,11 +2309,23 @@ auto CmdReq(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
-// Client side (UI thread): `cstat <stat> [layer]` reads a stat of the client's copy of the player (what the screen shows).
+// Client side (UI thread): `cstat <stat> [layer] [set <value>]` reads a stat of the client's copy of the player (what the screen
+// shows); `set` writes it there (the server's copy is not touched: a stat set on the server's unit does not reach the client).
 auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
-	long long stat = 0, layer = 0;
-	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &stat) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &layer))) {
-		return Fail(c, "usage: cstat <stat> [layer]");
+	long long stat = 0, layer = 0, value = 0;
+	int next = 2;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &stat)) {
+		return Fail(c, "usage: cstat <stat> [layer] [set <value>]");
+	}
+	if (t.n > next && !hcmd::LowerEq(t.tok[next], "set")) {
+		if (!hcmd::ParseInt(t.tok[next], &layer)) {
+			return Fail(c, "cstat: layer must be a number");
+		}
+		++next;
+	}
+	const bool set = t.n > next && hcmd::LowerEq(t.tok[next], "set");
+	if (set && (t.n <= next + 1 || !hcmd::ParseInt(t.tok[next + 1], &value))) {
+		return Fail(c, "cstat: set needs a number");
 	}
 	if (g_playerId == 0) {
 		return Fail(c, "cstat: no player seen yet");
@@ -2219,6 +2333,9 @@ auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	Unit* unit = Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(g_playerId), 0);
 	if (unit == nullptr) {
 		return Fail(c, "cstat: no client player unit");
+	}
+	if (set) {
+		Fn<SetStatFn>(RvaSetStat)(unit, static_cast<int>(stat), static_cast<int32_t>(value), static_cast<int>(layer));
 	}
 	Out("cstat %lld:%lld = %d", stat, layer, Stat(unit, static_cast<int>(stat), static_cast<int>(layer)));
 	return true;
@@ -3000,7 +3117,7 @@ const Verb Verbs[] = {
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"levelact", CmdLevelAct, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

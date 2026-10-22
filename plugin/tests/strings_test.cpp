@@ -52,7 +52,7 @@ int main() {
 	char lines[3][64];
 	Check(clientmsg::RequirementLines(85, 0, 0, 80, 0, 0, lines, "(Stufe %d)") == 1 && std::strcmp(lines[0], "(Stufe 85)") == 0,
 	      "RequirementLines passes the template on");
-	clientmsg::GoblinAppears(line, sizeof(line), " erscheint!");
+	clientmsg::GoblinAppears(nullptr, line, sizeof(line), " erscheint!");
 	Check(std::strcmp(line, "Treasure Goblin erscheint!") == 0, "goblin suffix");
 
 	// SkipLeadingNumberLine: the number line of a help text is no part of it

@@ -151,17 +151,14 @@ void PlayerTick(Game* game, Unit* player, uint32_t frame, int32_t players) noexc
 		return;
 	}
 	const uint32_t n = g_spawned.fetch_add(1) + 1;
-	char suffix[64];
 	char notice[160];
-	StringText(mxlstr::KeyGoblinAppears, clientmsg::GoblinAppearsSuffix, suffix, sizeof(suffix));
-	clientmsg::GoblinAppears(notice, sizeof(notice), suffix);
-	SendClientMessage(player, notice, clientmsg::Yellow);
+	GoblinAnnounce(player, monster, notice, sizeof(notice));
 	g_lastMonster = monster;
 	g_lastLevel = level;
 	if (n <= 20 && g_context != nullptr) {
 		char line[128];
-		std::snprintf(line, sizeof(line), "mxl-core: goblin %d spawned in level %d near player %u (frame %u)", monster, level,
-		              d2r::At<uint32_t>(player, UnitId), frame);
+		std::snprintf(line, sizeof(line), "mxl-core: goblin %d spawned in level %d near player %u (frame %u), notice \"%s\"", monster,
+		              level, d2r::At<uint32_t>(player, UnitId), frame, notice);
 		g_context->LogInfo(line);
 	}
 }
@@ -275,4 +272,11 @@ auto InstallGoblins(const D2RL::PluginContext* context, char* report, size_t rep
 void GoblinsStatus(char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize, "%u spawned (last %d in level %d), %u rolls, %u ticks, %u spawn failures", g_spawned.load(),
 	              g_lastMonster, g_lastLevel, g_rolls.load(), g_ticks.load(), g_failed.load());
+}
+
+auto GoblinAnnounce(void* player, int monster, char* out, size_t outSize) noexcept -> bool {
+	char suffix[64];
+	StringText(mxlstr::KeyGoblinAppears, clientmsg::GoblinAppearsSuffix, suffix, sizeof(suffix));
+	clientmsg::GoblinAppears(goblins::NameOf(monster), out, outSize, suffix);
+	return SendClientMessage(static_cast<Unit*>(player), out, clientmsg::Yellow);
 }
