@@ -3,7 +3,7 @@
 
   py -3 tools/wereowl_models.py [--assets DIR] [--off]
 
-Runs after hd_monsters.py. The model is never in the repo: DIR (default env MXL_3D_DIR, else D:\\mxl-3d\\out\\wereowl\\s3\\tex) holds
+Runs after hd_monsters.py. The model is in the repo (Git LFS): DIR (default env MXL_3D_DIR, else assets/hd/wereowl) holds
 `mesh_lods.npz` (pos/nrm/uv/tris, LODs as _1.._4) and `albedo.png` from tools/sprite3d. Without them, or with the environment
 variable MXL_NO_3D=1 (or --off), the step does nothing and the goatman1 stand-ins of hd_monsters.py stay (docs/hd-models.md).
 
@@ -33,7 +33,7 @@ import rig_fit  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
 ENEMY = "data/hd/character/enemy/"
-DEFAULT_ASSETS = r"D:\mxl-3d\out\wereowl\s3\tex"
+DEFAULT_ASSETS = str(ROOT / "assets" / "hd" / "wereowl")  # in the repo (Git LFS, assets/hd/wereowl/README.md)
 
 # per use: rig profile, template model (donor unit dir, number of vanilla LODs), where the files go (a vanilla unit nothing in
 # Median uses), texture stem for the albedo/orm/normal maps, the unit it patches
@@ -144,6 +144,9 @@ def main():
         return 0
     if not (assets / "mesh_lods.npz").exists() or not (assets / "albedo.png").exists():
         print("no Wereowl 3D assets in %s: goatman1 stand-ins stay" % assets)
+        return 0
+    if (assets / "mesh_lods.npz").read_bytes()[:40].startswith(b"version https://git-lfs"):
+        print("Wereowl 3D assets in %s are Git LFS pointers (run `git lfs install` + `git lfs pull`): goatman1 stand-ins stay" % assets)
         return 0
     data = ROOT / "work" / "mod"  # the game paths (ENEMY ...) start with data/
     hdc = data / "data" / "hd" / "character"
