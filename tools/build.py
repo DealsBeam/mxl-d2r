@@ -5,6 +5,7 @@
   sigma_tables.py    D2Sigma-only tables      -> work/sigma/
   tbl2json.py        strings                  -> work/mod/data/local/lng/
   txt_migrate.py     D2R table layout         -> work/mod/data/global/excel/{base,}
+  art_fix.py         missile CelFiles and overlay Filenames that exist nowhere -> the closest existing art (both banks)
   waypoints_data.py  actinfo.txt (waypoint panel slots for Median's extra waypoints) -> work/mod, plugin/src/mxl_waypoints.h
   monster_ai_data.py checks the plugin's monster AI id (andariel_ai = monai row 155, served by plugin/src/monster_ai.cpp)
   cube_tables.py     cube conditions          -> plugin/src/mxl_cube.h (+ cubemain stat ids, ext item conditions)
@@ -37,7 +38,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decode"], ["tbl2json.py"],
-         ["txt_migrate.py"], ["waypoints_data.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["hd_monsters.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["effects_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
+         ["txt_migrate.py"], ["art_fix.py"], ["waypoints_data.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["hd_monsters.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["effects_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
          ["validate.py"]]
 
 

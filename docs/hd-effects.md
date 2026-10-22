@@ -145,3 +145,11 @@ Findings that matter beyond this tool:
   load and draw (new fire bursts and the stand-in missiles appear where the "before" run showed only the old rings), the
   game loads without new error classes (the assert lines seen, `sub.nCelNum`, `ii < NUM_LEVEL_TYPES`, unique item index, were
   also in a run without the files). The look of single stand-ins is not signed off; no Sorceress run.
+
+## Rows without art (tools/art_fix.py)
+
+Median's tables name 12 missile and 12 overlay animations that are neither in D2R nor in Median's files (74 rows in both banks), plus two
+names written with ".dcc" and one with "|" for the path separator. art_fix.py (after txt_migrate) repairs the names and points the rest at a
+D2R file wherever one fits, so missile_hd.py (by CelFile) and effects_hd.py (per row) find the exact HD model of that D2R row; the one
+Median-only target (`blackpentacle`, for vanilla's dead `pentacle`) goes through the closest-effect scoring. work/mod/art_fix.md lists every
+row; validate.py fails on any animation name found nowhere.

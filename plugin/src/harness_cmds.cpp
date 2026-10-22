@@ -16,6 +16,8 @@
 #include "goblins.h"
 #include "quests_act1.h"
 #include "testharness.h"
+#include "waypoints.h"
+#include "waypoints_logic.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -42,6 +44,11 @@ constexpr uint64_t RvaPlayerData = 0x34b240;    // (player) -> player data; +0x4
 constexpr uint64_t RvaQuestTest = 0x325c50;     // (record, quest, bit)
 constexpr uint64_t RvaQuestSet = 0x325c00;
 constexpr uint64_t RvaQuestClear = 0x325990;
+constexpr uint64_t RvaWaypointSet = 0x3d6890;   // (record, number)
+constexpr uint64_t RvaWaypointTest = 0x3d6930;  // (record, number) -> bit
+constexpr uint64_t RvaWaypointSend = 0x4812c0;  // (client, record): packet 0x63, the client opens its waypoint panel
+constexpr uint64_t RvaWaypointBits = 0x2389010; // 112 x {u16 word, u16 mask}
+constexpr uint64_t RvaClientQuests = 0x10f180;  // () -> the client's quest record (the waypoint panel tests its tab-unlock quests there)
 constexpr uint64_t RvaUnitId = 0x34a330;        // (unit, file, line)
 constexpr uint64_t RvaUnitClass = 0x349860;     // (unit, file, line)
 constexpr uint64_t RvaUnitMode = 0x34ab60;
@@ -125,6 +132,9 @@ using GetStatFn = int32_t (*)(Unit*, int32_t, int32_t);
 using SetStatFn = void (*)(Unit*, int32_t, int32_t, int32_t);
 using PlayerDataFn = uint8_t* (*)(Unit*);
 using QuestFn = int32_t (*)(void*, int32_t, int32_t);
+using ClientQuestsFn = void* (*)();
+using WaypointFn = int32_t (*)(void* record, int32_t number);
+using WaypointSendFn = void (*)(void* client, void* record);
 using UnitIdFn = uint32_t (*)(Unit*, const char*, int32_t);
 using UnitClassFn = int32_t (*)(Unit*, const char*, int32_t);
 using UnitModeFn = int32_t (*)(Unit*);
@@ -250,6 +260,15 @@ auto QuestRecord(Ctx* c) noexcept -> void* {
 		return nullptr;
 	}
 	return d2r::At<void*>(data, 0x40 + static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)) * 8);
+}
+
+// The player's waypoint record of the game's difficulty (playerData + 0x58 + difficulty * 8).
+auto WaypointRecord(Ctx* c) noexcept -> uint8_t* {
+	uint8_t* data = Fn<PlayerDataFn>(RvaPlayerData)(c->player);
+	if (data == nullptr) {
+		return nullptr;
+	}
+	return d2r::At<uint8_t*>(data, 0x58 + static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty)) * 8);
 }
 
 auto Stat(Unit* u, int stat, int layer = 0) noexcept -> int32_t { return Fn<GetStatFn>(RvaGetStat)(u, stat, layer); }
@@ -461,6 +480,107 @@ auto CmdFlag(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		return Fail(c, "flag: set, clear or get");
 	}
 	Out("flag %s %lld = %d", game ? "game" : "player", n, CraftFlagTest(c->player, static_cast<int>(n), game) ? 1 : 0);
+	return true;
+}
+
+// `waypoint <level id>|n <number>|all [get|set|clear]`, `waypoint open`, `waypoint tabs`, `waypoint panel`: the player's waypoint bits (the level
+// id goes through Median's levels.txt numbers, mxl_waypoints.h), `open` sends the record to the client as the waypoint object
+// does (packet 0x63: the client opens its waypoint panel), `tabs` sets the client's own copy of the four tab-unlock quests (7, 15,
+// 23, 26: bit 0; the panel shows tab 1 only until the client has them), `panel` prints the plugin's panel table (what the buttons list).
+auto CmdWaypoint(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	const char* usage = "usage: waypoint <level id>|n <number>|all [get|set|clear] | waypoint open | waypoint tabs | waypoint panel";
+	if (t.n < 2) {
+		return Fail(c, usage);
+	}
+	if (hcmd::LowerEq(t.tok[1], "tabs")) {
+		void* quests = Fn<ClientQuestsFn>(RvaClientQuests)();
+		if (quests == nullptr) {
+			return Fail(c, "waypoint: no client quest record");
+		}
+		for (const int q : {7, 15, 23, 26}) {
+			Fn<QuestFn>(RvaQuestSet)(quests, q, 0);
+		}
+		Out("client quests 7, 15, 23, 26 set (reopen the panel)");
+		return true;
+	}
+	if (hcmd::LowerEq(t.tok[1], "panel")) {
+		char stats[160];
+		WaypointPanelStats(stats, sizeof(stats));
+		Out("waypoint %s", stats);
+		int count = 0;
+		const void* entries = nullptr;
+		if (WaypointPanelTable(&count, &entries)) {
+			for (int i = 0; i < count && i < wp::MaxButtons; ++i) {
+				const auto& e = static_cast<const wp::ButtonEntry*>(entries)[i];
+				Out("waypoint button %d: level %u other %d", i, e.level, e.other);
+			}
+		}
+		return true;
+	}
+	uint8_t* rec = WaypointRecord(c);
+	if (rec == nullptr) {
+		return Fail(c, "no waypoint record");
+	}
+	if (hcmd::LowerEq(t.tok[1], "open")) {
+		void* client = Fn<UnitClientFn>(RvaUnitClientOf)(c->player);
+		if (client == nullptr) {
+			return Fail(c, "waypoint: no client for the player");
+		}
+		Fn<WaypointSendFn>(RvaWaypointSend)(client, rec);
+		Out("waypoint record sent to the client (the panel opens)");
+		return true;
+	}
+	int first = 0, last = -1;  // the numbers acted on
+	long long n = 0;
+	int argAt = 2;
+	if (hcmd::LowerEq(t.tok[1], "all")) {
+		last = wp::RecordBits - 1;
+	} else if (hcmd::LowerEq(t.tok[1], "n")) {
+		if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &n) || n < 0 || n >= wp::RecordBits) {
+			return Fail(c, usage);
+		}
+		first = last = static_cast<int>(n);
+		argAt = 3;
+	} else {
+		if (!hcmd::ParseInt(t.tok[1], &n)) {
+			return Fail(c, usage);
+		}
+		int found = -1;
+		for (const mxl_wp::Level& l : mxl_wp::Levels) {
+			if (l.level == n) {
+				found = l.number;
+			}
+		}
+		if (found < 0) {
+			return Fail(c, "waypoint: that level has no waypoint number (levels.txt)");
+		}
+		first = last = found;
+	}
+	int action = 0;  // 0 get, 1 set, 2 clear
+	if (t.n > argAt) {
+		if (hcmd::LowerEq(t.tok[argAt], "set")) {
+			action = 1;
+		} else if (hcmd::LowerEq(t.tok[argAt], "clear")) {
+			action = 2;
+		} else if (!hcmd::LowerEq(t.tok[argAt], "get")) {
+			return Fail(c, usage);
+		}
+	}
+	const auto* bits = reinterpret_cast<const uint16_t*>(g_base + RvaWaypointBits);
+	int setCount = 0;
+	for (int i = first; i <= last; ++i) {
+		if (action == 1) {
+			Fn<WaypointFn>(RvaWaypointSet)(rec, i);
+		} else if (action == 2) {
+			*reinterpret_cast<uint16_t*>(rec + 2 * bits[2 * i]) &= static_cast<uint16_t>(~bits[2 * i + 1]);
+		}
+		setCount += Fn<WaypointFn>(RvaWaypointTest)(rec, i) != 0 ? 1 : 0;
+	}
+	if (first == last) {
+		Out("waypoint number %d = %d", first, setCount);
+	} else {
+		Out("waypoints set: %d of %d", setCount, last - first + 1);
+	}
 	return true;
 }
 
@@ -1574,7 +1694,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
 	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
-	    "flag player|game <n> get|set|clear | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
+	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer]");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	return true;
@@ -1633,7 +1753,7 @@ struct Verb {
 	bool clientSide;
 };
 const Verb Verbs[] = {
-    {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false},
+    {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false}, {"waypoint", CmdWaypoint, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},

@@ -442,6 +442,10 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				std::snprintf(g_waypointsReport, sizeof(g_waypointsReport), "%s", OffNote);
 			} else {
 				VerifyWaypoints(context->exeBase, g_waypointsReport, sizeof(g_waypointsReport));
+				char panel[160];
+				InstallWaypointPanel(context, panel, sizeof(panel));
+				const size_t used = std::strlen(g_waypointsReport);
+				std::snprintf(g_waypointsReport + used, sizeof(g_waypointsReport) - used, "; %s", panel);
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: waypoints %s", g_waypointsReport);
 			context->LogInfo(line);
