@@ -112,11 +112,39 @@ the lines are the ones the panel would draw.
 Limits: the suffix is English text built by the plugin (no string-table entry); the columns are a suffix of the attribute
 row, not three columns of Median's page art.
 
+## 3c. Median's sections and order (`stat_columns.cpp`, `stat_order_logic.h`, generated `mxl_statorder.h`)
+
+Median's two pages group the boxes in sections (section 2 and 5 of this file); the Advanced Stats list follows them.
+`tools/stat_screen.py` `SECTIONS` names the sections and the first stat id of each (page 1: General, Weapon Damage, Spell
+Damage, Elemental Pierce; page 2: Speed, Summon, Defenses, Stacked Resists, Damage Absorb, Sustain, Miscellaneous), writes
+`mxl_statorder.h` (103 entries: 11 labels and the 92 listed stats in sheet order; `always` marks the 15 `advdisplay` 1 stats)
+and asserts that the stats are exactly the `advdisplay` rows of the migrated itemstatcost.
+
+D2R's panel (`0x14eaf40`, the rebuild) builds the list from itemstatcost: group 1 and group 2 vectors of 0x144 byte
+records, then a row per record (`0x14ead50`). The plugin replaces the rebuild: it pushes all 103 entries into group 2 in Median's
+order (`0x14edd50` copies a record), a label being a copy of record 0 with the id `0x7000 + entry index`. The two row hooks
+of section 3b decide what shows: a stat record is listed when `advdisplay` is 1 or its value is not 0 (D2R's rule), a label
+only when a stat of its section is listed; the label's text is "== <section name> ==" (the panel's text widget prints colour codes as text, so no colour).
+D2R's update (`0x14ed3a0`) recomputes the ids of the records with a value and rebuilds when they differ from the stored list,
+so a stat that becomes non-zero appears at its place in its section at once. The hook is installed only when the entry bytes of
+the three functions match build 93847; off word `statcols` (as the columns), otherwise D2R's own order.
+
+Limits: one scrolling list in D2R's look, not two pages of boxes; Median's per-box hover texts are not ported.
+Checked in game (HD, slot 2, background mode, 2026-10-22, `py -3 tools/game_checks.py all statorder`; harness verb
+`statorder [open|adv|close]` opens the sheet (`PanelManager` `OpenPanel` `CharacterStatsPanel`) and presses its Advanced Stats
+button (`CharacterStatsPanelMessage` `ToggleAdvancedStats`) through `WidgetService::dispatchUiAction`, `statorder` reads the ids
+the panel built, `cstat <stat> set <v>` writes a stat of the client's copy): the list is a subsequence of Median's order (General,
+Weapon Damage, Speed, Defenses, Stacked Resists with the stats of this character), the 15 always boxes are listed, stat 143 under
+"Damage Absorb" appears when the client copy has 25 of it (the update rebuilds the list) and goes when it is 0. PASS. On screen
+(statorder_open.png): "== General ==" heads the strength / dexterity / ... rows, "== Weapon Damage ==" the two damage bonus rows and
+the attack rating, "== Speed ==" follows. A server-side `stat player 143 set` does not reach the client's copy, so the check sets it
+on the client copy.
+
 ## 4. Left
 
 - A second panel with Median's page art (stat-screen.dc6 pages 1 and 2, 60 boxes) and its own text widgets needs a plugin that
   feeds values to the boxes (the type table above is everything it needs) - not built; the flat list covers the content.
-- Order and headings follow the stat id, not Median's sections.
+- The portrait and the boxes' art (custom art, last). The order and the section headings are done (section 3c).
 
 ## 5. All rows of pages 2 and 3
 

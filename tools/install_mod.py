@@ -3,7 +3,8 @@
 <game>/mods/MedianXL/
   MedianXL.mpq/modinfo.json         {"name": "MedianXL", "savepath": "MedianXL/"}  (own save folder; D2R reads it
                                     inside the folder MPQ; a copy also sits at the mod root)
-  d2rloader/metadata.json           schemaVersion 1, no "namespace" (native string loading, see docs/strings.md)
+  d2rloader/metadata.json           schemaVersion 1 + "namespace": "medianxl" (Median-only strings, docs/strings-namespace.md;
+                                    the folder MPQ needs no (listfile): it is a directory, not a packed archive)
   d2rloader/config/d2rloader.toml   [d2rcore.save_format] mode = "extended" (Median's wider item/stat IDs)
   MedianXL.mpq/data/...             copy of work/mod/data (folder-style MPQ) + global/dataversionbuild.txt
                                     + Median's classic tiles/maps (global/tiles)
@@ -20,6 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "work" / "mod" / "data"
+NAMESPACE = "medianxl"  # tbl2json.py writes the namespaced strings under lng/strings/<NAMESPACE>/
 DEFAULT_GAME = os.environ.get("MXL_D2R_GAME", r"C:\Program Files (x86)\Diablo II Resurrected")  # see game_ctl.py
 BUILD = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "dataversionbuild.txt"
 MXL_GLOBAL = ROOT / "extract" / "mxl" / "data" / "global"
@@ -111,7 +113,7 @@ def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, d
     (d2rl / "config").mkdir(parents=True, exist_ok=True)
     (d2rl / "plugins").mkdir(exist_ok=True)
     (d2rl / "patches").mkdir(exist_ok=True)
-    meta = {"schemaVersion": 1,
+    meta = {"schemaVersion": 1, "namespace": NAMESPACE,
             "metadata": {"name": "Median XL (D2R port)", "modVersion": "0.1.0-dev", "author": "mxl-d2r",
                          "description": "Work-in-progress port of Median XL to D2R.",
                          "website": ""}}
@@ -126,6 +128,10 @@ def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, d
     if not toml.exists():  # never overwrite a config someone edited
         toml.write_text('[d2rcore.save_format]\nmode = "extended"\n', encoding="utf-8")
 
+    for rel in ("strings/%s/median.json", "strings/%s/overrides.json", "strings-legacy/%s/median.json"):
+        ns_file = data / "local" / "lng" / (rel % NAMESPACE)
+        if not ns_file.exists():
+            print(f"warning: {ns_file.relative_to(data)} is missing: no Median strings (run tools/tbl2json.py)")
     files = sum(1 for _ in data.rglob("*") if _.is_file())
     size = sum(p.stat().st_size for p in data.rglob("*") if p.is_file()) / 1e6
     print(f"installed {files} files ({size:.0f} MB) -> {mod}")

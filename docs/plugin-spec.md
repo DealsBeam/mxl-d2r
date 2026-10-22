@@ -752,10 +752,35 @@ suffix of the attribute, life, mana and stamina rows. Groups come from the gener
 (tools/stat_screen.py `column_groups()`); the arithmetic is `stat_columns_logic.h` (unit tests `stat_columns_test.cpp`).
 Details and the game check: [subsystems/stat-screen.md](subsystems/stat-screen.md) section 3b.
 
+### Median's section order (`stat_columns.cpp`, `stat_order_logic.h`, generated `mxl_statorder.h`)
+
+Replaces the Advanced Stats panel's list rebuild (`0x14eaf40`): all 103 entries of Median's two stat pages (11 section labels,
+92 stats) go into the panel's group 2 in the order of the sheet; the row hooks above list a stat when `advdisplay` is 1 or its
+value is not 0, and a section label while one of its stats is listed ("== <name> =="). Needs the entry bytes of `0x14eaf40`,
+`0x14edd50` (push a record) and `0x14ead50` (add a row) to match, else D2R's order stays. Same off word `statcols`. Harness verb
+`statorder [open|adv|close]` (client side). [subsystems/stat-screen.md](subsystems/stat-screen.md) section 3c.
+
+## Help panels (`info_panels.cpp`, generated `mxl_infographics.h`, off word `infopanels`)
+
+Median's `Infographic` items (misc2; the catalyst of disenchantment, `3o[`) open a help panel on a right click (item event 13,
+packet 0x16). The plugin registers one PluginSDK panel per infographics row (layout JSON as a resource
+`data/global/ui/layouts/mxl-core/<id>hd.json`, `PanelService::registerPanel`, `CloseOnEscape`; text from
+`tools/infographics.py`: D2R's modal frame, the title, the text blocks in two columns in the picture's order, colour codes
+dropped). The item's use handler (`item_spells.cpp`) accepts the right click for such an item and sends the plugin message
+`I` (one byte: the panel index; `client_messages_logic.h`); the client handler queues `openPanel` on the UI thread
+(`ThreadService`). `mxl` console: "help panels ... (asked, opened, failed)". Harness verb `infopanel [close <n>]` (client side).
+
+## Quest reward sounds (`client_messages.cpp`)
+
+The unit messages 0x5f-0x61 (`SendRewardMessage`, server `0x491960`) travel in D2R's unit packet 0x2c; the client hook of its
+handler (`0x12c870`) plays Median's sounds at the player's unit (217 item_gem, 4715 shrine_boink with D2R's holy shrine sound
+2608 as stand-in, 230 item_lightarmor); the chat line is the fallback when the hook is off. Harness verbs `rewardmsg`,
+`rewardsnd`, `goblinsay` (the goblin line with the variant's own monstats name).
+
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints lockout goblins npc reqgates hirelings skilltree runewords xp`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints lockout goblins npc reqgates hirelings skilltree runewords xp mapmem`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500

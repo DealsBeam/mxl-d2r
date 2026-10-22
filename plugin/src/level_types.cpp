@@ -41,6 +41,12 @@ static_assert(sizeof(AutomapRow) == 0x20);
 using AutomapLookupFn = uint64_t (*)(int32_t levelType, int32_t tileType, uint32_t style, int32_t sequence) noexcept;
 AutomapLookupFn g_original = nullptr;
 uint64_t g_exeBase = 0;
+constexpr int CounterTypes = 64;
+uint32_t g_calls[CounterTypes] = {};  // automap lookups per level type (harness verb `automap`)
+uint32_t g_hits[CounterTypes] = {};   // ... of which found a cel
+constexpr int MissSlots = 12;
+int32_t g_miss[CounterTypes][MissSlots][2] = {};  // the first distinct (tile type, style) pairs of lookups that found no row
+int g_missCount[CounterTypes] = {};
 
 auto MedianLookup(int32_t levelType, int32_t tileType, uint32_t style, int32_t sequence) noexcept -> uint64_t {
 	const auto* rows = *reinterpret_cast<const AutomapRow* const*>(g_exeBase + AutomapRowsRva);
@@ -76,7 +82,23 @@ auto MedianLookup(int32_t levelType, int32_t tileType, uint32_t style, int32_t s
 
 auto AutomapLookup(int32_t levelType, int32_t tileType, uint32_t style, int32_t sequence) noexcept -> uint64_t {
 	if (levelType >= D2RLevelTypes) {
-		return MedianLookup(levelType, tileType, style, sequence);
+		const uint64_t cel = MedianLookup(levelType, tileType, style, sequence);
+		if (levelType < CounterTypes) {
+			++g_calls[levelType];
+			g_hits[levelType] += cel != 0xffffffffULL ? 1U : 0U;
+			if (cel == 0xffffffffULL && g_missCount[levelType] < MissSlots) {
+				bool known = false;
+				for (int i = 0; i < g_missCount[levelType]; ++i) {
+					known = known || (g_miss[levelType][i][0] == tileType && g_miss[levelType][i][1] == static_cast<int32_t>(style));
+				}
+				if (!known) {
+					g_miss[levelType][g_missCount[levelType]][0] = tileType;
+					g_miss[levelType][g_missCount[levelType]][1] = static_cast<int32_t>(style);
+					++g_missCount[levelType];
+				}
+			}
+		}
+		return cel;
 	}
 	if (levelType < 0) {
 		return 0xffffffffULL;
@@ -94,4 +116,52 @@ auto InstallLevelTypeGuards(const D2RL::PluginContext* context, char* report, si
 	                                     : "off: automap hook failed (%d row ranges)",
 	              static_cast<int>(sizeof(mxl_automap::Rows) / sizeof(mxl_automap::Rows[0])));
 	return ok;
+}
+
+auto LevelTypeProbe(int32_t levelType, int32_t tileType, uint32_t style, int32_t sequence) noexcept -> uint64_t {
+	// not counted as a game lookup; a row with several cels advances the game's automap seed (only which cel is drawn next)
+	return g_original != nullptr && levelType >= D2RLevelTypes ? MedianLookup(levelType, tileType, style, sequence) : 0xffffffffULL;
+}
+
+auto LevelTypeRows(int32_t levelType, int32_t* first, int32_t* end) noexcept -> bool {
+	for (const mxl_automap::TypeRows& range : mxl_automap::Rows) {
+		if (range.levelType == levelType) {
+			*first = range.first;
+			*end = range.end;
+			return true;
+		}
+	}
+	return false;
+}
+
+auto LevelTypeRowTable(int32_t index, int32_t* tileType, uint32_t* style, int32_t* startSeq, int32_t* celCount, uint32_t* cel0) noexcept -> bool {
+	if (g_exeBase == 0) {
+		return false;
+	}
+	const auto* rows = *reinterpret_cast<const AutomapRow* const*>(g_exeBase + AutomapRowsRva);
+	const uint64_t count = *reinterpret_cast<const uint64_t*>(g_exeBase + AutomapRowsRva + 8);
+	if (rows == nullptr || count != static_cast<uint64_t>(mxl_automap::RowCount) || index < 0 || static_cast<uint64_t>(index) >= count) {
+		return false;
+	}
+	*tileType = rows[index].tileType;
+	*style = rows[index].style;
+	*startSeq = rows[index].startSeq == 0xff ? 0 : rows[index].startSeq;
+	*celCount = rows[index].celCount;
+	*cel0 = rows[index].cels[0];
+	return true;
+}
+
+void LevelTypeCounters(int32_t levelType, uint32_t* calls, uint32_t* hits) noexcept {
+	const bool ok = levelType >= 0 && levelType < CounterTypes;
+	*calls = ok ? g_calls[levelType] : 0;
+	*hits = ok ? g_hits[levelType] : 0;
+}
+
+auto LevelTypeMiss(int32_t levelType, int index, int32_t* tileType, int32_t* style) noexcept -> bool {
+	if (levelType < 0 || levelType >= CounterTypes || index < 0 || index >= g_missCount[levelType]) {
+		return false;
+	}
+	*tileType = g_miss[levelType][index][0];
+	*style = g_miss[levelType][index][1];
+	return true;
 }
