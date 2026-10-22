@@ -2169,13 +2169,13 @@ def check_statorder():
     expected = [("L", h) if h is not None else ("S", ids[s]) for h, s in stat_screen.section_order()]
     always = {ids[names.index(n)] for n in stat_screen.ALWAYS_LISTED}
     probe = 143  # item_absorbfire: under "Damage Absorb", listed while it is not 0
-    base = rd("player", probe)
     bad, shots = [], []
     try:
-        setstat("player", probe, 0)
         H("statorder close")
         time.sleep(1)
         rc = H("statorder open")
+        time.sleep(2)
+        rc = (rc[0], rc[1] + H("statorder adv")[1])
         time.sleep(3)
         first = _statorder()
         if first is None:
@@ -2185,7 +2185,7 @@ def check_statorder():
         if not ordered:
             bad.append("the rebuild hook is off (D2R's order)")
         if rebuilds < 1:
-            bad.append("the panel built no list (open: %s)" % (rc[1][:1],))
+            bad.append("the panel built no list (open: %s)" % (rc[1][:3],))
         # the built list is a subsequence of Median's order: labels in sheet order, stats under their own label
         it = iter(expected)
         if not all(any(x == e for e in it) for x in rows):
@@ -2200,11 +2200,14 @@ def check_statorder():
             bad.append("stat %d is listed at 0" % probe)
         # a stat that becomes non-zero makes the update rebuild the list: the stat appears, under Damage Absorb
         n0 = rebuilds
-        setstat("player", probe, 25)
-        time.sleep(2.5)
+        ok_eq, l_eq = H("cstat %d set 25" % probe)  # the client's own copy: a stat set on the server's unit does not reach it
+        time.sleep(3)
+        cs = H("cstat %d" % probe)[1][:1]
         second = _statorder()
-        if second is None or ("S", probe) not in second[2]:
-            bad.append("stat %d does not appear when set to 25" % probe)
+        if not ok_eq:
+            bad.append("cstat %d set 25 failed: %s" % (probe, l_eq[:1]))
+        elif second is None or ("S", probe) not in second[2]:
+            bad.append("stat %d does not appear when the client copy has it (client reads %s)" % (probe, cs))
         else:
             if second[1] <= n0:
                 bad.append("no rebuild after the stat changed (%d -> %d)" % (n0, second[1]))
@@ -2212,19 +2215,18 @@ def check_statorder():
             if not below or below[-1][1] != "Damage Absorb":
                 bad.append("stat %d is not under Damage Absorb (%s)" % (probe, below[-1:] if below else None))
             shots.append(sh("statorder_stat"))
-        setstat("player", probe, 0)
-        time.sleep(2.5)
+        H("cstat %d set 0" % probe)
+        time.sleep(3)
         third = _statorder()
         if third is None or ("S", probe) in third[2]:
             bad.append("stat %d stays listed after it went back to 0" % probe)
         add(name, "PASS" if not bad else "FAIL",
-            "panel opened with `statorder open` (PanelManager OpenPanel AdvancedStatsPanel): %d rows, %d rebuilds, labels %s; "
+            "sheet opened with `statorder open`, Advanced Stats button pressed with `statorder adv`: %d rows, %d rebuilds, labels %s; "
             "%s. The grouping on the sheet is read from the screenshots (statorder_open.png, statorder_stat.png)" % (
                 len(rows), rebuilds, labels, "; ".join(bad) if bad else "order = Median's, always boxes listed, a changed stat rebuilds the list"),
             shots, [str(r) for r in rows[:40]])
     finally:
-        if base is not None:
-            setstat("player", probe, base)
+        H("cstat %d set 0" % probe)
         H("statorder close")
 
 

@@ -45,12 +45,12 @@ auto SectionListed(const Entry* order, int32_t count, int32_t label, Listed list
 	return false;
 }
 
-// The label's row text: D2R's gold colour code (UTF-8 for 0xff, 'c', '4') and the label.
+// The label's row text: the label between "== ", the panel's text widget prints colour codes as text, so it has none.
 inline auto HeaderText(const char* header, char* out, size_t size) noexcept -> int {
 	if (size == 0) {
 		return 0;
 	}
-	return std::snprintf(out, size, "\xC3\xBF" "c4%s", header);
+	return std::snprintf(out, size, "== %s ==", header);
 }
 
 }  // namespace stat_order

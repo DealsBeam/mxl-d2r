@@ -839,11 +839,13 @@ auto CmdInfoPanel(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 // Client side: `statorder` prints the Advanced Stats list as the panel built it last (stat_columns.cpp, Median's order):
 // "statorder ordered=1 rebuilds=N rows=M", then the rows, a section label as [Label] and a stat as its D2R stat id.
-// `statorder open` / `close` / `toggle` opens or closes the panel through D2R's panel messages.
+// `statorder open` / `close` opens or closes the character sheet through D2R's panel messages, `statorder adv` presses its
+// Advanced Stats button (the sheet must be open; the button's own onClickMessage).
 auto CmdStatOrder(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
-	if (t.n >= 2 && (hcmd::LowerEq(t.tok[1], "open") || hcmd::LowerEq(t.tok[1], "close") || hcmd::LowerEq(t.tok[1], "toggle"))) {
-		const char* command = hcmd::LowerEq(t.tok[1], "open") ? "OpenPanel" : hcmd::LowerEq(t.tok[1], "close") ? "ClosePanel" : "TogglePanel";
-		const int rc = HarnessUiAction("PanelManager", command, "AdvancedStatsPanel");
+	if (t.n >= 2 && (hcmd::LowerEq(t.tok[1], "open") || hcmd::LowerEq(t.tok[1], "close") || hcmd::LowerEq(t.tok[1], "adv"))) {
+		const bool adv = hcmd::LowerEq(t.tok[1], "adv");
+		const char* command = adv ? "ToggleAdvancedStats" : hcmd::LowerEq(t.tok[1], "open") ? "OpenPanel" : "ClosePanel";
+		const int rc = adv ? HarnessUiAction("CharacterStatsPanelMessage", command, "") : HarnessUiAction("PanelManager", command, "CharacterStatsPanel");
 		Out("statorder %s rc=%d", command, rc);
 		return rc == 0;
 	}
@@ -2145,11 +2147,23 @@ auto CmdReq(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
-// Client side (UI thread): `cstat <stat> [layer]` reads a stat of the client's copy of the player (what the screen shows).
+// Client side (UI thread): `cstat <stat> [layer] [set <value>]` reads a stat of the client's copy of the player (what the screen
+// shows); `set` writes it there (the server's copy is not touched: a stat set on the server's unit does not reach the client).
 auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
-	long long stat = 0, layer = 0;
-	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &stat) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &layer))) {
-		return Fail(c, "usage: cstat <stat> [layer]");
+	long long stat = 0, layer = 0, value = 0;
+	int next = 2;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &stat)) {
+		return Fail(c, "usage: cstat <stat> [layer] [set <value>]");
+	}
+	if (t.n > next && !hcmd::LowerEq(t.tok[next], "set")) {
+		if (!hcmd::ParseInt(t.tok[next], &layer)) {
+			return Fail(c, "cstat: layer must be a number");
+		}
+		++next;
+	}
+	const bool set = t.n > next && hcmd::LowerEq(t.tok[next], "set");
+	if (set && (t.n <= next + 1 || !hcmd::ParseInt(t.tok[next + 1], &value))) {
+		return Fail(c, "cstat: set needs a number");
 	}
 	if (g_playerId == 0) {
 		return Fail(c, "cstat: no player seen yet");
@@ -2157,6 +2171,9 @@ auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	Unit* unit = Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(g_playerId), 0);
 	if (unit == nullptr) {
 		return Fail(c, "cstat: no client player unit");
+	}
+	if (set) {
+		Fn<SetStatFn>(RvaSetStat)(unit, static_cast<int>(stat), static_cast<int32_t>(value), static_cast<int>(layer));
 	}
 	Out("cstat %lld:%lld = %d", stat, layer, Stat(unit, static_cast<int>(stat), static_cast<int>(layer)));
 	return true;
@@ -2209,7 +2226,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] | avoid <ref> melee|missile|evade [n] | "
-	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | statorder [open|close|toggle] (client) | infopanel [close <n>] (client) | stat merc|mon:<id> <stat>");
+	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | statorder [open|adv|close] (client) | infopanel [close <n>] (client) | stat merc|mon:<id> <stat>");
 	return true;
 }
 

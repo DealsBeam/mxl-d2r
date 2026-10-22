@@ -36,7 +36,7 @@ int RunInfoPanelsTests() {
 		Check(std::strstr(layout, root) != nullptr, "the root is named <plugin id>/<local id>, as PanelService needs");
 		Check(Count(layout, "{") == Count(layout, "}") && Count(layout, "[") == Count(layout, "]"), "braces and brackets balance");
 		Check(Count(layout, "\"TextBoxWidget\"") >= 3, "a title and text blocks");
-		Check(std::strstr(layout, "\xC3\xBF" "c") != nullptr, "the text keeps Median's colour codes");
+		Check(std::strstr(layout, "\xC3\xBF" "c") == nullptr, "the widget text is plain (a TextBoxWidget would print colour codes)");
 		Check(std::strlen(Panels[i].localId) <= 64 && std::strchr(Panels[i].localId, '/') == nullptr, "a PanelService local id");
 	}
 	// the catalyst of disenchantment (misc2 row 571, "3o[") is the item with an infographic

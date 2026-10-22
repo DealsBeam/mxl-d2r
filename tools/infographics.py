@@ -11,20 +11,28 @@ shown in reverse order, which reads as the steps of the picture.
 from __future__ import annotations
 
 import json
+import re
+import textwrap
 
 PLUGIN_ID = "mxl-core"
 FRAME = "Panel\\Modals\\Modal_No_Title_BG"   # the stock modal frame the SDK sample uses (1254 x 540 at -627, -270)
-COLUMN_X = (78, 646)
-COLUMN_WIDTH = 530
-TOP = 150
-LINE = 34       # pixels per text line (the modal description style)
-GAP = 30        # between two blocks of a column
-HINT = "ÿc5Press Escape to close."
+COLUMN_X = (50, 640)
+COLUMN_WIDTH = 570
+TOP = 135
+LINE = 38       # layout units per text line (measured on the 16pt font in game)
+GAP = 14        # between two blocks of a column
+WRAP = 36       # characters per line (a line of 40 characters fills 560 units of the 16pt font)
+HINT = "Press Escape to close."
+
+
+COLOUR = re.compile("ÿc.")
+# the widget text is plain: D2R's TextBoxWidget does not read the "ÿc" colour codes of the strings (they would print as text)
+TEXT_STYLE = {"options": {"lineWrap": True}, "alignment": {"h": "left", "v": "top"}, "spacing": {"leading": 1.0}}
 
 
 def reading_lines(text: str) -> list[str]:
-    """The lines of one block in reading order (Median stores them bottom up)."""
-    return [line for line in text.strip("\n").split("\n")][::-1]
+    """The lines of one block in reading order (Median stores them bottom up), without colour codes."""
+    return [COLOUR.sub("", line) for line in text.strip("\n").split("\n")][::-1]
 
 
 def layout(local_id: str, title: str, blocks: list[tuple[int, str]]) -> dict:
@@ -32,7 +40,7 @@ def layout(local_id: str, title: str, blocks: list[tuple[int, str]]) -> dict:
     ordered = [text for _y, text in sorted(blocks, key=lambda b: b[0])]
     half = (len(ordered) + 1) // 2
     widgets = [{"type": "TextBoxWidget", "name": "Title",
-                "fields": {"rect": {"x": 78, "y": 60, "width": 1076, "height": 70}, "text": title, "style": "$StyleSettingsTitle"}}]
+                "fields": {"rect": {"x": 78, "y": 60, "width": 1076, "height": 70}, "text": COLOUR.sub("", title), "style": "$StyleSettingsTitle"}}]
     n = 0
     for column, group in enumerate((ordered[:half], ordered[half:])):
         y = TOP
@@ -41,7 +49,7 @@ def layout(local_id: str, title: str, blocks: list[tuple[int, str]]) -> dict:
             n += 1
             widgets.append({"type": "TextBoxWidget", "name": "Block%d" % n,
                             "fields": {"rect": {"x": COLUMN_X[column], "y": y, "width": COLUMN_WIDTH, "height": LINE * len(lines)},
-                                       "text": "\n".join(lines), "style": "$StyleModalDialogDescription"}})
+                                       "text": "\n".join(lines), "fontType": "16pt", "style": TEXT_STYLE}})
             y += LINE * len(lines) + GAP
     widgets.append({"type": "TextBoxWidget", "name": "Hint",
                     "fields": {"rect": {"x": 78, "y": 470, "width": 1076, "height": 40}, "text": HINT,

@@ -62,7 +62,7 @@ int RunStatColumnsTests() {
 		Check(SectionListed(order, 6, 3, only12) && !SectionListed(order, 6, 5, only12), "the section ends at the next label and at the end");
 		char text[32];
 		HeaderText("Speed", text, sizeof(text));
-		Check(std::strcmp(text, "\xC3\xBF" "c4Speed") == 0 && static_cast<unsigned char>(text[0]) == 0xC3, "label text has the gold colour code");
+		Check(std::strcmp(text, "== Speed ==") == 0, "label text is the label between marks, without colour codes");
 		HeaderText("Speed", text, 5);
 		Check(text[4] == '\0', "short label buffer stays terminated");
 
