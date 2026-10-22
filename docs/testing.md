@@ -615,7 +615,7 @@ Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261022-224210-s1\` (not committe
 |---|---|---|
 | Map reveal (R, MU2) | PARTIAL | the harness `reveal` (the R hotkey's call of D2R's debug Reveal Automap) returns, the automap layer list grows 1 -> 25, a second reveal adds nothing, the debug flag byte is kept. The picture did not change: `cheat goto` and the town arrive with the map drawn whole (`mapreveal_before.png` = `mapreveal.png`), and the cell count stays 8878. A fresh field level reached by walking was not tested. A first pixel-difference criterion passed on a moving NPC only and was removed |
 | Waypoint auto-activation (WP2, WP3) | PASS | Cold Plains waypoint (number 1): bit set within 1.5 s at distance 3, still clear at distance 47 (negative control), set at distance 24 while walking up. Two players in one game were not run |
-| Hotkeys X / R / C (UI4, CR5) | PASS (first port; the defaults are now X / L / K, see the checks-robust section) | window-message presses reach InputService: X toggles (0->1->2 presses, pickup on/off/on), R reveals (+1), C with the cube closed is counted and ignored (transmutes 0, blocked 1), C with the cube open calls Transmute (transmutes 1). The cube-open state comes from the UI message `PanelManager:OpenPanel(<cube panel>)` and `ClosePanel` / `UnloadPanel`. The default keys can overlap D2R's own R and C bindings; not checked |
+| Hotkeys X / R / C (UI4, CR5) | PASS (first port; the defaults are now X / L / K, see "Checks that no longer depend on the test character's history" below) | window-message presses reach InputService: X toggles (0->1->2 presses, pickup on/off/on), R reveals (+1), C with the cube closed is counted and ignored (transmutes 0, blocked 1), C with the cube open calls Transmute (transmutes 1). The cube-open state comes from the UI message `PanelManager:OpenPanel(<cube panel>)` and `ClosePanel` / `UnloadPanel`. The default keys can overlap D2R's own R and C bindings; not checked |
 | Stash pages (GS5) | PASS | `add_shared_tabs = 7` in `d2rloader.toml`: an item created through ItemService lands in shared tabs 0-9, tabs 10 and 12 are refused. The personal stash stays one page; no Prev / Next / Sort / Mode buttons |
 
 ### Monster level, players scaling, Normal drops, leash (lane pa2-monsters, 2026-10-23, slot 1, background mode, plugin 0.54.0 + the lane's parts)
@@ -642,3 +642,56 @@ Run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261023-003647-s3\` (not committe
 | Player slow floor (audit item 21) | PASS | `gaps` at difficulty 0 / 1 / 2 (`h difficulty n`): -12 / -25 / -50 through the hooked entry |
 
 Off words are letters only (digits are dropped when `mxl-core-off.txt` is read): the hit-20 floor is `hitfloor`.
+
+### Checks that no longer depend on the test character's history (lane checks-robust, 2026-10-23, slots 1 and 3, background mode)
+
+The release suite (0.54.0, runs `checks-20261022-212141-s1`, `-212441-s3`, `-2256*-s3`) failed checks that pass on a fresh character. The causes were in the checks, the state the earlier checks leave, or the stored settings of the install; none in the game rules the checks test, except the stored hotkeys (below). Run: `py -3 tools/game_checks.py --slot N all respec itemevents medianai medianai_ctl tyrael resistcap avoidcaps classlock bonusdrops summoner vendors itemskills nocorpse deathcrash sprint hotkeys manarules`, once on slot 3 (character `MxlBarb`, level 27 after the `respec` / `xp` checks) and once on slot 1 (level 150, different gear, stash and merc history).
+
+| Check | Cause of the failure | Fix |
+|---|---|---|
+| respec | the check compared the unused stat points with a fixed number; a character that has spent points (strength 90 / 150) refunds more | `before` / `after` base stats 0-3 are read; the refund is the sum of the differences, and `unused after = unused before + refund`; the stats and stat 4 are put back afterwards |
+| tyrael, vendors (Gheed "no menu") | the character was dead or the NPC click was lost; a dead character cannot talk | `npc_menu` revives first, then retries (close menu, interact, spawn a copy of the NPC, wait 30 s then 15 s) up to four times |
+| avoidcaps, resistcap, classlock ("no mercenary could be hired") | (1) `itemevents` set life to 100 for its measurement and then wrote the life stat of a character that had died: the server unit stayed in mode 17 while the client believed it alive, so hits, menus and hires did nothing and Esc only paused the game (zombie death); (2) `medianai` leaves 30 unkillable dark nephalems (class 1239) in Blood Moor, which killed a level 150 character within two seconds of `cheat goto 2` | `revive_if_dead` (life 0: Esc every 3 s; zombie: Save and Exit + Play puts the character in town alive); `itemevents` puts life back; `ensure_merc` revives, sets gold and quest 2, tries `hire 150 n` for the free entries and spawns Kashya when missing; `clean_area` (used by `fight_ready`, `medianai`, `medianai_ctl`) kills what can be killed and starts a new game when something survives |
+| bonusdrops | quest 13 / 25 and the flags (quest 47 bits 1 / 2) were already set by an earlier run, so the kill handler never ran or the catalyst was not re-issued | `clear_quest_bits` resets quests 13 / 25 and the bits before the first kill and the quest before the second |
+| sprint | the character's stamina stats (max, recovery 28, drain 154, skill percents 162 / 163, per-level and by-time gains 241 / 242 / 294 / 295) changed the run time; the run toggle R is the character's own setting and survives a restart; the samples of stamina and of the frame were two replies apart | the wrapper zeroes the bonuses, sets Median's 50 points and restores everything; `state` reports `frame`, `stamina`, `maxstamina` in one reply, and the check asserts Median's rules (pa2-stats, audit item 15 / SK7) per frame and exactly: running -120 raw per frame (107 frames from full), walking +37, standing +50 (refill in 253-261 frames), a run starts with 2 points, state 136 fills, R gives one run and one walk. Nothing was loosened; the R-toggle step needs open ground and a `state` reply takes 0.6 s, so it goes to the Rogue Encampment, clicks the far points first (a click 8 units away is over before the first sample), accepts mode 6 (town walk) as walking, and goes back to Blood Moor; run/walk speed is the fastest unbroken stretch of samples (whole-unit positions a few frames apart are 25% off per pair); the 2-point run start also tries shorter paths |
+| resistcap | slot 3's character wears an item with Median stat 184 (damage taken -25% after resistance, stat 369 here) that cut the 90% cap's share to 75% | the check zeroes stat 369 of player and merc and puts it back, and judges `_reduce(want, stat 184)` of what the gear still gives |
+| (all checks) | `leave_and_reenter` left `in_game` False when the Save and Exit click did not leave the game, so every later check was BLOCKED "not in a game" | it restores the flag and returns False; `clean_area` then goes on in the same game |
+| itemskills (table half) | `medianxl:` prefixes on the skill name cells: 3844 of ~6000 parameters compared, "mismatches 0" but FAIL on the count | `item_skill_audit.py` matches rows by `strings_ns.bare`; the criterion is mismatches plus "every table with skill parameters contributed" (6054 parameters, 10 of 10 tables) |
+| summoner | `medianai` left class 1239 in Blood Moor: "Summoner 250: modes [1]" | `clean_area` (above) |
+| deathcrash | a merge had put the `nocorpse` body inside it, and it ran in town (a player cannot be hurt there: `result=0`) | `nocorpse` is its own check, `deathcrash` revives, goes to Blood Moor, hits up to five times and judges by the player's mode, not by the hit's result line |
+| nocorpse | the ground gold piles were compared between Blood Moor (before) and the town (after the respawn) | compared only inside the same area |
+| itemevents | (1) the life-on-kill gain was read before the heal landed; (2) after the merge of pa2-monsters (monster level by area) a spawned monster has 3-7 points of life, so the 50-point thorns event killed it (life 0 is not `a - 50`), and a monster next to the character may fire the event a second time | (1) polls for up to 1.6 s; (2) the monster is given 2734 points of life before the event, and the loss is judged as a whole multiple (one or more) of 50 points |
+| manarules (pa2-stats) | `standing` counted only mode 1, but a character that has just arrived in an area (`cheat goto`) stays in mode 5 (town neutral) until it moves: 0 frames, "recovery None" | standing = modes 1 and 5 (the rule is the same, audit item 15) |
+| hotkeys | see below | see below |
+
+Hotkey defaults. travel.cpp (PR #113) registered `mxl_pickup_toggle` X, `mxl_map_reveal` R, `mxl_transmute` C. In D2R, R is the run / walk toggle and C the Character screen (the character's `<name>.key` file: R = action 35, C = action 1, V = action 45), so one press did two things; the Median install on the test machine keeps its keys in `preferences.json` (nopickup 0x58 = X, revealmap 0x4c = L, transmute 0x56 = V) and V is a D2R action too. New defaults: **X** auto pickup (Median's), **L** map reveal (Median's), **K** transmute (the free key next to Median's V). The check reads the registered bindings from `h travel`, requires them to be the defaults, requires that none is in the D2R key file (57 bound keys), presses each key and requires that only its own counters move, presses R and C and requires that no plugin counter moves (with a Character screen screenshot), and drives the transmute key with the cube closed (counted, blocked) and open (transmutes 0 -> 1).
+
+Stored bindings. D2RLoader writes every registered action's key into `<game>/d2rloader/config/input-bindings.toml` the first time the plugin registers it (`primary_key = 82` for R, `67` for C), and keeps it: changing a default in the plugin does not reach a player who already ran an older build. Slot 3 still had R and C stored, so the first run after the change failed with `mxl_map_reveal is bound to R` and the plugin's reveal swallowed the run toggle (sprint saw the first R press give no run). `tools/install_mod.py` now drops the two stored entries of the first port's defaults (only when the stored key is still the old default) so the next start registers the new keys. Players who rebound an action by hand keep their key.
+
+Results of the final full run on both slots (the code of this commit, merged with main after PR #124):
+
+| Check | Slot 1 (level 150, stash and merc history) | Slot 3 (level 27 after `respec` / `xp`) |
+|---|---|---|
+| respec | PASS | PASS |
+| itemevents | PASS | PASS |
+| medianai (all users act) | PASS | PASS |
+| medianai_ctl (controlled branch) | PASS | PASS |
+| tyrael | PASS | PASS |
+| resistcap | PASS | PASS |
+| avoidcaps | PASS | PASS |
+| classlock | PASS | PASS |
+| bonusdrops | PASS | PASS |
+| summoner | PASS | PASS |
+| vendors | PASS | PASS |
+| itemskills (every table has parameters) | PASS | PASS |
+| itemskills (unique parameters) | PASS | PASS |
+| deathcrash | PASS | PASS |
+| nocorpse | PASS | PASS |
+| sprint | PASS | PASS |
+| hotkeys | PASS | PASS |
+| manarules | PASS | PASS |
+| **Total** | **18 / 18 PASS** | **18 / 18 PASS** |
+
+Run folders `checks-20261023-044022-s1` and `checks-20261023-044022-s3` (both 0 new crash files). Before the fix of bug #33, four of the long chains on slot 3 ended in the goblin crash; afterwards 120 goblin kills in a row on slot 1 and both final chains ran through.
+
+Fixed: the intermittent client crash after a goblin kill, docs/bugs.md #33.
