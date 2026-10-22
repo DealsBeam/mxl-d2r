@@ -33,7 +33,7 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 | Inventory, cube and belt sizes | 3 | 0 | 0 | 0 | 2 | 5 |
 | Item rules | 7 | 3 | 4 | 2 | 2 | 18 |
 | Crafting and the cube | 3 | 0 | 2 | 0 | 2 | 7 |
-| Experience, party and level cap | 4 | 1 | 0 | 0 | 4 | 9 |
+| Experience, party and level cap | 5 | 0 | 0 | 0 | 4 | 9 |
 | Difficulty, area levels and monster scaling | 7 | 1 | 0 | 0 | 2 | 10 |
 | Uber and quest content | 3 | 2 | 1 | 0 | 1 | 7 |
 | Skills, respec and caps | 4 | 1 | 4 | 0 | 4 | 13 |
@@ -45,11 +45,11 @@ Rules that `docs/unported.md` already tracks say "listed". Every **missing** or 
 | Multiplayer | 0 | 0 | 0 | 1 | 3 | 4 |
 | Hardcore | 1 | 0 | 1 | 0 | 0 | 2 |
 | Anything else Median documents as different | 1 | 0 | 0 | 2 | 1 | 4 |
-| **All** | **48** | **15** | **22** | **9** | **30** | **124** |
+| **All** | **49** | **14** | **22** | **9** | **30** | **124** |
 
 ## Top 10 gaps (by player impact)
 
-1. **XP1, level cap 150**: the built `experience` table probably caps the engine at 99, so the whole Median endgame (levels 100-150, area levels up to 150) is out of reach. A data merge fix, `tools/txt_migrate.py` line 173.
+1. ~~**XP1, level cap 150**~~: fixed (lane gap-levelcap): the built `experience` table now carries Median's `MaxLvl 150` row, the engine reaches level 150 and stops there.
 2. **DC1, no player corpse**: D2R still makes a corpse that must be retrieved; Median re-equips gear in town and keeps the belt. Lane `no-corpse`.
 3. **SK10 and SK11, Hunter steady aim and Fire Sorceress Heat**: class-defining resources that the docs and plugin never mention. Unknown whether the tables alone carry them; if not, those builds do not work.
 4. **IT1 and IT2, durability and quantity**: Median removed durability and stack depletion; the port still wears items down and uses up throwing stacks.
@@ -142,7 +142,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
-| XP1 | The maximum character level is 150. | P1.0.0 | partly | D:experience has rows to level 150, but Median's `MaxLvl` row lost its label (decoded as level -1, `4294967295`) and D2R's `MaxLvl 99 99 ...` row is appended last, so the engine probably still caps at 99. `tools/txt_migrate.py` line 173 `UNSIGNED_32_TABLES = {"experience"}` has no `MaxLvl` handling. Check: `level set 120` or run a kill `xp` test above 99 |
+| XP1 | The maximum character level is 150. | P1.0.0 | ported | fixed in lane gap-levelcap: `tools/txt_migrate.py` relabels Median's `MaxLvl` row, so it replaces D2R's `MaxLvl 99` row (it was decoded as level -1 / `4294967295` and D2R's row was appended last, capping the engine at 99). Verified: `levelcap` check (levels 99, 120, 149, 150; the level stops at 150; stat and skill points per `charstats`; Save and Exit and Play keeps level 150; `docs/testing.md`) |
 | XP2 | Reworked experience formula; level 100 by the start of Hell; no huge gaps at 121-125. | P1.0.0 | ported (unverified) | D:experience rows and ExpRatio |
 | XP3 | Skill and stat points per level. | P1.0.0 | ported | D:charstats `SkillsPerLevel`, `StatPerLevel` |
 | XP4 | Kill experience: reworked level-difference penalty. | P2.9.0 | ported (unverified) | inline hook `0x44fef0`, check `xp`; listed (`docs/services.md` I3) |

@@ -9,6 +9,8 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy levelcap. What a click in the world cannot do in background mode (kill a
+
 catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy skillcaps
 townportal potions itemskills cowportals deathcrash (bugs.md rows 4, 6, 10, 16, 19, 12). What a click in the world cannot do in background mode (kill a
 
@@ -2301,6 +2303,106 @@ def check_statcols():
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
+def _excel(name):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "mod", "data", "global", "excel", "base", name + ".txt")
+    with open(path, encoding="utf-8-sig") as f:
+        rows = [l.rstrip(chr(10)).split(chr(9)) for l in f]
+    return rows[0], rows[1:]
+
+
+CLASS_NAMES = ["Amazon", "Sorceress", "Necromancer", "Paladin", "Barbarian", "Druid", "Assassin"]
+
+
+def check_levelcap():
+    name = "Level cap 150 (experience.txt MaxLvl): XP near levels 99 / 120 / 149, stat and skill points, save and reload"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    cls = hstate()["player"].get("class")
+    if not isinstance(cls, int) or cls >= len(CLASS_NAMES):
+        return add(name, "BLOCKED", "player class %r" % (cls,))
+    col = CLASS_NAMES[cls]
+    xh, xrows = _excel("experience")
+    maxlvl = int(next(r for r in xrows if r[0] == "MaxLvl")[xh.index(col)])
+    lv = {int(r[0]): int(r[xh.index(col)] or 0) for r in xrows if r[0].isdigit()}  # row L = experience at which level L + 1 starts
+
+    def start(level):  # experience at which `level` starts
+        return lv[level - 1]
+
+    ch, crows = _excel("charstats")
+    crow = next(r for r in crows if r[0] == col)
+    per_stat, per_skill = int(crow[ch.index("StatPerLevel")] or 0), int(crow[ch.index("SkillsPerLevel")] or 0)
+    keep = {s: rd("player", s) for s in (4, 5, 6, 7, 8, 9, 10, 11, 12, 13)}
+    log, bad = [], []
+
+    def now():
+        return {"level": rd("player", 12), "xp": rd("player", 13) & 0xffffffff, "stat": rd("player", 4), "skill": rd("player", 5)}
+
+    def climb(label, from_level, to_level, expect_level, expect_gain):
+        """Put the character at the start of `from_level` and award the experience that ends at the start of `to_level` (D2R's own
+        award function runs the level-ups): the level and the points granted must match the table."""
+        setstat("player", 12, from_level)
+        setstat("player", 13, start(from_level))
+        a = now()
+        H("xp %d" % max(start(to_level) - start(from_level), 0))
+        b = now()
+        gained = b["level"] - a["level"]
+        ok = b["level"] == expect_level and gained == expect_gain and b["stat"] - a["stat"] == gained * per_stat and b["skill"] - a["skill"] == gained * per_skill
+        log.append("%s: level %d -> %d (want %d), stat points %+d (want %+d), skill points %+d (want %+d), experience %d" % (
+            label, a["level"], b["level"], expect_level, b["stat"] - a["stat"], expect_gain * per_stat, b["skill"] - a["skill"],
+            expect_gain * per_skill, b["xp"]))
+        if not ok:
+            bad.append(log[-1])
+        return b
+
+    if maxlvl != 150:
+        bad.append("built experience.txt MaxLvl is %d for %s" % (maxlvl, col))
+    climb("level 98 -> 99", 98, 99, 99, 1)
+    climb("level 99 -> 100 (the old cap)", 99, 100, 100, 1)
+    climb("level 119 -> 120", 119, 120, 120, 1)
+    climb("level 148 -> 149", 148, 149, 149, 1)
+    climb("level 149 -> 150", 149, 150, 150, 1)
+    b = now()
+    H("xp 100000000")  # past the last level: the level and the points stay
+    c = now()
+    log.append("150 + 100000000 experience: level %d, stat points %+d, skill points %+d, experience %d" % (
+        c["level"], c["stat"] - b["stat"], c["skill"] - b["skill"], c["xp"]))
+    if c["level"] != 150 or c["stat"] != b["stat"] or c["skill"] != b["skill"]:
+        bad.append(log[-1])
+    top = climb("one award from level 99 to the end of the table", 99, 150, 150, 51)
+    time.sleep(1)
+    _, c12 = H("cstat 12")
+    log.append("client copy of the level (cstat 12): %s" % (c12[0] if c12 else None))
+    if not c12 or not c12[0].rstrip().endswith("= 150"):
+        bad.append("client level: %s" % (c12[0] if c12 else None))
+    shots = []
+    g.key("c")
+    time.sleep(1.5)
+    shots.append(sh("levelcap_charsheet"))
+    g.key("c")
+    time.sleep(0.5)
+    # save and reload: Save and Exit writes the character, Play loads it again
+    ok = leave_and_reenter()
+    if not ok:
+        bad.append("could not leave and re-enter the game")
+    else:
+        time.sleep(3)
+        d = now()
+        saved = None
+        sp = os.path.join(SAVES, g.CHAR_NAME + ".d2s")
+        if os.path.exists(sp):
+            with open(sp, "rb") as f:
+                saved = f.read(0x1c)[0x1b]
+        log.append("after Save and Exit and Play: level %d (saved header byte %s), experience %d (was %d), stat points %d (was %d), "
+                   "skill points %d (was %d)" % (d["level"], saved, d["xp"], top["xp"], d["stat"], top["stat"], d["skill"], top["skill"]))
+        if d["level"] != 150 or d["xp"] != top["xp"] or d["stat"] != top["stat"] or d["skill"] != top["skill"] or saved != 150:
+            bad.append(log[-1])
+    # the test character goes back to the numbers it had
+    for s_, v in keep.items():
+        setstat("player", s_, v or 0)
+    add(name, "PASS" if not bad else "FAIL",
+        "%s (class %s, %d stat / %d skill points per level, MaxLvl %d): %s" % (
+            "all steps hold" if not bad else "; ".join(bad), col, per_stat, per_skill, maxlvl, "; ".join(log)), shots, log)
+
 # ------------------------------------------------------------------ the old "fix to test" rows of docs/bugs.md (4, 6, 10, 12, 16, 19)
 # Background mode, harness verbs only. Expected values come from sources other than the migration being tested: Median's
 # own cubemain.bin / skills2 caps / named tables (names, not ids) and the built levels.txt.
@@ -3220,10 +3322,13 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
-          ("trophy", check_trophy), ("statcols", check_statcols),
-          # the old "fix to test" rows of docs/bugs.md; deathcrash last (it kills the test character)
-          ("skillcaps", check_skillcaps), ("townportal", check_townportal), ("potions", check_potions),
-          ("itemskills", check_itemskills), ("cowportals", check_cowportals), ("deathcrash", check_deathcrash),
+          ("trophy", check_trophy), ("statcols", check_statcols), ("levelcap", check_levelcap),
+          ("skillcaps", check_skillcaps),
+          ("townportal", check_townportal),
+          ("potions", check_potions),
+          ("itemskills", check_itemskills),
+          ("cowportals", check_cowportals),
+          ("deathcrash", check_deathcrash),
           ("nslong", check_nslong),
           ("strings", check_strings)]
 

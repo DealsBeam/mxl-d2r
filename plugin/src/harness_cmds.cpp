@@ -69,6 +69,7 @@ constexpr uint64_t RvaClientUnit = 0x484c90;    // (client, 0) -> player unit
 constexpr uint64_t RvaNpcRecord = 0x3971a0;     // (dataFlag, class) -> NPC table row or null
 constexpr uint64_t RvaDistance = 0x325140;      // (unit, unit) -> distance
 constexpr uint64_t RvaKill = 0x44db20;          // (game, victim, killer unit, 1): the unit death function
+constexpr uint64_t RvaAddExperience = 0x44f2e0; // (game, unit, old level, amount): adds stat 13 and runs the level-ups (items_ext.cpp)
 constexpr uint64_t RvaSpawn = 0x4929e0;         // (game, room, x, y, class, 1, radius, 0, 0)
 constexpr uint64_t RvaInRoom = 0x38dfb0;        // (room, x, y)
 constexpr uint64_t RvaTravel = 0x4f2e40;        // (game, player, level, 0): the NPC travel / waypoint warp
@@ -157,6 +158,7 @@ using ClientUnitFn = Unit* (*)(void*, int32_t);
 using NpcRecordFn = void* (*)(uint32_t, int32_t);
 using DistanceFn = uint32_t (*)(Unit*, Unit*);
 using KillFn = void (*)(Game*, Unit*, Unit*, int32_t);
+using AddExperienceFn = void (*)(Game*, Unit*, int32_t, int32_t);
 using SpawnFn = Unit* (*)(Game*, void*, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, uint16_t);
 using InRoomFn = void* (*)(void*, int32_t, int32_t);
 using TravelFn = void (*)(Game*, Unit*, int32_t, int32_t);
@@ -926,6 +928,19 @@ auto CmdKill(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	const int32_t cls = ClassOf(victim);
 	Fn<KillFn>(RvaKill)(c->game, victim, c->player, 1);
 	Out("kill id=%u class=%d: mode now %d (0 or 12 = dead)", id, cls, ModeOf(victim));
+	return true;
+}
+
+// `xp <amount>`: the experience award of a kill without the monster (D2R's own function, so the level-ups, the stat and skill
+// points and the level cap are the engine's). Prints the numbers a level cap check reads.
+auto CmdXp(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long amount = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &amount) || amount < 0 || amount > 0x7fffffff) {
+		return Fail(c, "usage: xp <amount>");
+	}
+	Fn<AddExperienceFn>(RvaAddExperience)(c->game, c->player, Stat(c->player, StatLevel), static_cast<int32_t>(amount));
+	Out("xp level=%d experience=%u statpoints=%d skillpoints=%d", Stat(c->player, StatLevel),
+	    static_cast<uint32_t>(Stat(c->player, 13)), Stat(c->player, 4), Stat(c->player, 5));
 	return true;
 }
 
@@ -2241,7 +2256,7 @@ auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
-	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
+	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | xp <amount> | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
@@ -2781,8 +2796,8 @@ struct Verb {
 };
 const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false}, {"waypoint", CmdWaypoint, false},
-    {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
-    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"cubeslots", CmdCubeSlots, false},{"cubeout", CmdCubeOut, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
+    {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
+    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},

@@ -177,6 +177,10 @@ SIGNED_BYTE = {"monstats": {"coldeffect", "coldeffect(N)", "coldeffect(H)", "spa
 # EMinLev5, ...). Written as the signed value they hold, so D2R's text parser cannot clamp them to 2147483647.
 # experience.txt holds real unsigned 32-bit values (D2R's own Warlock column).
 UNSIGNED_32_TABLES = {"experience"}
+# experience.txt's first row holds the maximum level per class (Median: 150, patch notes 1.0.0). The .bin decoder lost
+# its label (Level -1, printed 4294967295), so it matched no D2R row: D2R's own "MaxLvl 99" row was appended last and the
+# engine kept the cap at 99. Relabelled, it overrides D2R's row (the Warlock column, which Median has not, stays D2R's).
+EXPERIENCE_MAXLVL_KEY = "4294967295"
 ID_COMMENT_COLUMNS = {"*id", "*hcidx", "*index"}
 
 
@@ -1960,6 +1964,8 @@ class Migrator:
                 if r[li] not in ("", "0"):
                     r[ri] = f"{r[ri] or 0}+{r[li]}*lvl"
             mh = [("*LevRange" if c == "LevRange" else c) for c in mh]
+        if table == "experience":
+            mrows = [["MaxLvl", *r[1:]] if r[0] == EXPERIENCE_MAXLVL_KEY else r for r in mrows]
         banks = {"base": D2R / "base" / f"{table}.txt", "rotw": D2R / f"{table}.txt"}
         banks = {k: v for k, v in banks.items() if v.exists()}
         if not banks:
