@@ -73,7 +73,7 @@ table now points at D2Sigma data), `nop` 380, `const` 284 (an immediate or a tab
 
 ## 3. Totals
 
-767 functions and 2027 patch sites are classified in 307 rows (all 767 functions / 2,027 sites of the patch tables are covered).
+All 767 functions and 2,027 patch sites of the patch tables are classified, in 307 rows.
 
 | Status | Rows | Functions | Patch sites |
 |---|---:|---:|---:|
