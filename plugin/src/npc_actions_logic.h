@@ -5,6 +5,7 @@
 
 #include "mxl_npc_actions.h"
 #include "requirements.h"
+#include "strings_logic.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -221,10 +222,18 @@ constexpr auto NeedsConfirm(int slotIndex) noexcept -> bool {
 	return slotIndex >= 0 && slotIndex < mxl_npc::SlotCount && mxl_npc::Slots[slotIndex].confirm;
 }
 
+// The line text / prompt text of a slot as a string reference: D2R's id, or the full key of a Median-only string.
+constexpr auto LabelOf(const mxl_npc::Slot& s) noexcept -> mxlstr::Ref {
+	return {s.label, s.labelKey};
+}
+constexpr auto PromptOf(const mxl_npc::Slot& s) noexcept -> mxlstr::Ref {
+	return {s.prompt, s.promptKey};
+}
+
 // The header text of the prompt: the prompt label, else the line's own label.
-constexpr auto ConfirmText(int slotIndex) noexcept -> uint16_t {
+constexpr auto ConfirmText(int slotIndex) noexcept -> mxlstr::Ref {
 	const mxl_npc::Slot& s = mxl_npc::Slots[slotIndex];
-	return s.prompt != 0 ? s.prompt : s.label;
+	return PromptOf(s).IsNone() ? LabelOf(s) : PromptOf(s);
 }
 
 // The pending confirmation of the client: one at a time, answered once (the list's Yes, No and Escape all end it).
@@ -272,8 +281,8 @@ inline auto ParsePagePayload(const uint8_t* p, size_t n, uint32_t* pageKind, uin
 
 // The submenu the client shows for a page answer: the sub-entries whose mask bit is set, in order. Returns the count.
 struct PageEntry {
-	uint16_t label;  // D2R string id
-	uint32_t kind;   // packet 0x38 kind of the entry's own slot
+	mxlstr::Ref label;  // the entry text
+	uint32_t kind;      // packet 0x38 kind of the entry's own slot
 };
 inline auto PageEntries(int npcClass, uint32_t pageKind, uint32_t mask, PageEntry* out, int cap) noexcept -> int {
 	const int page = FindSlot(pageKind, npcClass);
@@ -286,7 +295,7 @@ inline auto PageEntries(int npcClass, uint32_t pageKind, uint32_t mask, PageEntr
 	for (int j = 0; j < n && j < 32 && count < cap; ++j) {
 		if ((mask >> j) & 1u) {
 			const mxl_npc::Slot& s = mxl_npc::Slots[subs[j]];
-			out[count++] = {s.label, KindOf(s.npcRow, s.slot)};
+			out[count++] = {LabelOf(s), KindOf(s.npcRow, s.slot)};
 		}
 	}
 	return count;

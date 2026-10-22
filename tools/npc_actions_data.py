@@ -91,10 +91,11 @@ def main() -> int:
     out += ["// Menu slots of the NPCs that have any. kind = npcRow * 16 + slot is what the client sends (packet 0x38 kind",
             "// 0x10 + kind). label = D2R string id of the entry text (0 = none). sub: 10 = an entry of the submenu opened",
             "// by the top-level slot before it, 0 = a top-level entry. confirm: the client asks Yes / No first, with the text",
-            "// `prompt` (D2R string id, 0 = none), before it sends the kind.",
+            "// `prompt` (D2R string id, 0 = none), before it sends the kind. A string in the `medianxl` namespace has no D2R id:",
+            "// label / prompt are 0 and labelKey / promptKey hold its full key (\"medianxl:<key>\"; plugin/src/strings.h StringId).",
             "struct Slot {", "\tint32_t npcRow;", "\tint32_t slot;", "\tuint16_t npcClass;", "\tint32_t requirement;",
             "\tint32_t action;", "\tuint16_t label;", "\tuint16_t sub;", "\tuint16_t prompt;",
-            "\tbool confirm;", "};"]
+            "\tbool confirm;", "\tconst char* labelKey;", "\tconst char* promptKey;", "};"]
     rows = []
     for n, r in enumerate(npcs):
         cls = struct.unpack_from("<i", r, 0)[0]

@@ -20,6 +20,7 @@
 #include "item_gen.h"
 #include "quests_act1.h"
 #include "stat_columns.h"
+#include "strings.h"
 #include "testharness.h"
 #include "waypoints.h"
 #include "waypoints_logic.h"
@@ -2101,6 +2102,23 @@ auto CmdPanelRow(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// Client side: the plugin's own string ids (strings.h). `mstr <full key>` reads the key through the localization service,
+// takes (or finds) the plugin id for it and reads the text back through D2R's numeric lookup, the way the NPC menu does.
+auto CmdMstr(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: mstr <full key, e.g. medianxl:AkaraMenu1b>");
+	}
+	char service[512];
+	char viaId[512];
+	const bool found = StringLookup(t.tok[1], service, sizeof(service));
+	const mxlstr::Ref ref{0, t.tok[1]};
+	const uint16_t id = StringId(ref);
+	StringProbeId(id, viaId, sizeof(viaId));
+	Out("mstr %s service=%s text=\"%s\" id=%u (0x%x) via D2R lookup=\"%s\" ids=%d", t.tok[1], found ? "ok" : "missing", service, id,
+	    id, viaId, StringIdCount());
+	return id != 0;
+}
+
 auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("harness frames seen %ld last game %ld", static_cast<long>(g_frames), static_cast<long>(g_lastGame));
 	Out("verbs: state | merc | mercreq | hire [npc class] [n] | dump player|client|mon <class>|ground | kill <id>|nearest [class] | spawn <class> [n] | interact nearest|<npc class> | menu list|<line>|cancel|confirm|yes|no | "
@@ -2363,7 +2381,7 @@ const Verb Verbs[] = {
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

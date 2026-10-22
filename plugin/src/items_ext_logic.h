@@ -4,6 +4,7 @@
 #pragma once
 
 #include "mxl_runewords.h"
+#include "strings_logic.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -155,36 +156,7 @@ inline constexpr size_t TrophyLineMax = 250;
 
 template <class Out>
 auto ForEachTrophyLine(const char* text, Out out) noexcept -> int {
-	int lines = 0;
-	while (text != nullptr && *text != '\0') {
-		const char* end = text;
-		while (*end != '\0' && *end != '\n') {
-			++end;
-		}
-		const char* from = text;
-		const char* to = end;
-		while (from < to && *from == ' ') {
-			++from;
-		}
-		while (to > from && (to[-1] == ' ' || to[-1] == '\r')) {
-			--to;
-		}
-		if (to > from) {
-			char line[TrophyLineMax + 1];
-			size_t n = static_cast<size_t>(to - from);
-			if (n > TrophyLineMax) {
-				n = TrophyLineMax;
-			}
-			for (size_t i = 0; i < n; ++i) {
-				line[i] = from[i];
-			}
-			line[n] = '\0';
-			out(static_cast<const char*>(line), lines == 0);
-			++lines;
-		}
-		text = *end == '\n' ? end + 1 : end;
-	}
-	return lines;
+	return mxlstr::ForEachLine(text, TrophyLineMax, [&out](const char* line, int index) { out(line, index == 0); });
 }
 
 }  // namespace items_ext

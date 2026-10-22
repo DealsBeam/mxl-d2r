@@ -175,7 +175,7 @@ int RunNpcActionsTests() {
 		Check(PageEntries(244, KindFor(244, 0), 0, e, 8) == 0, "empty mask: no entries");
 		Check(PageEntries(244, KindFor(244, 0), 0xf, e, 8) == 4, "full mask: four entries");
 		Check(e[0].kind == KindFor(244, 1) && e[3].kind == KindFor(244, 4), "entries keep the slot order");
-		Check(e[0].label == mxl_npc::Slots[SlotOf(244, 1)].label && e[2].label == mxl_npc::Slots[SlotOf(244, 3)].label,
+		Check(e[0].label == LabelOf(mxl_npc::Slots[SlotOf(244, 1)]) && e[2].label == LabelOf(mxl_npc::Slots[SlotOf(244, 3)]),
 		      "entry labels are the slots'");
 		Check(PageEntries(244, KindFor(244, 0), 0xa, e, 8) == 2 && e[0].kind == KindFor(244, 2) && e[1].kind == KindFor(244, 4),
 		      "mask 0xa picks entries 2 and 4");
@@ -253,7 +253,7 @@ int RunNpcActionsTests() {
 	{
 		const int akara = SlotOf(148, 0);
 		Check(akara >= 0 && NeedsConfirm(akara), "Akara's respec line asks Yes / No first");
-		Check(ConfirmText(akara) == mxl_npc::Slots[akara].label && ConfirmText(akara) != 0,
+		Check(ConfirmText(akara) == LabelOf(mxl_npc::Slots[akara]) && !ConfirmText(akara).IsNone(),
 		      "the prompt text is the respec label (npcext PromptLabel)");
 		int asking = 0;
 		for (int i = 0; i < mxl_npc::SlotCount; ++i) {
@@ -265,10 +265,10 @@ int RunNpcActionsTests() {
 
 		Confirmation c;
 		Check(!c.open && c.Answer(true) == 0, "Yes with nothing pending sends nothing");
-		c.Open(KindFor(148, 0), ConfirmText(akara));
+		c.Open(KindFor(148, 0), 7);
 		Check(c.open && c.Answer(true) == KindFor(148, 0) && !c.open, "Yes sends the line's kind once");
 		Check(c.Answer(true) == 0, "a second Yes sends nothing");
-		c.Open(KindFor(148, 0), ConfirmText(akara));
+		c.Open(KindFor(148, 0), 7);
 		Check(c.Answer(false) == 0 && !c.open, "No sends nothing and ends the confirmation");
 		c.Open(KindFor(148, 0), 1);
 		c.Open(KindFor(244, 0), 2);
