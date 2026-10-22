@@ -6,12 +6,20 @@
 // an output, the recipe's effects are applied. Flags are memory only, per game pointer (reset when it changes) and per
 // character name (as Median does); the game-end hook (game_end.cpp) clears them with their game; gold comes from
 // carried gold first, then the bank (D2Craft.cpp 0x10059120).
+//
+// Output byte 1 (a portal) is D2R's own Cow Level handler, which ignores the level: Median's five portal recipes (rows 2,
+// 3, 85, 4962, 7453; mxl_cube_effects.h Portals) name a level each. Entry 1 of the handler table (0x1d3bfc0) is replaced
+// by a handler that opens the recipe's level (item_spells.cpp CubeLevelPortal) and passes everything else on.
 #include "craft_flags.h"
 
 #include "craft_state.h"
 #include "d2r.h"
 #include "game_end.h"
+#include "item_spells.h"
 #include "mxl_cube.h"
+
+#define NOMINMAX
+#include <windows.h>
 
 #include <cstdint>
 #include <cstring>
@@ -32,6 +40,9 @@ constexpr uint64_t PlayerDataRva = 0x34b240;  // (player) -> player data
 constexpr int PlayerNameOffset = 0x00;        // char[16] in the player data (1.10: PlayerData.szName)
 constexpr int PlayerNameSize = 16;
 constexpr int RecordSize = 0x16c;
+constexpr uint64_t OutputTableRva = 0x1d3bfc0;     // qword handlers (game, player, slot); where byte 1 sits: OutputHandlerSlot
+constexpr uint64_t CowHandlerRva = 0x52a9d0;       // entry for byte 1 (jmp 0x5da2a0): always the Cow Level
+constexpr int32_t CowLevelMedian = 39;
 constexpr int32_t StatGold = 14, StatGoldBank = 15;
 
 // 0x5269c0: push rbp rbx rsi rdi r12 r13 r14 r15 / lea rbp,[rsp-0x15f8] (21 bytes, whole instructions; dump of build
@@ -45,7 +56,11 @@ using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
 using SetStatFn = void (*)(Unit* unit, int32_t stat, int32_t value, int32_t layer);
 using UnitIdFn = uint32_t (*)(Unit* unit, const char* file, int32_t line);
 
+using OutputFn = int64_t (*)(Game* game, Unit* player, const uint8_t* slot);
+
 ExecFn g_execOriginal = nullptr;
+OutputFn g_portalOriginal = nullptr;
+uint64_t* g_byteOneEntry = nullptr;  // where byte 1 sits (set when the portal handler is swapped; the scan needs the original)
 RecordFn g_record = nullptr;
 GetStatFn g_getStat = nullptr;
 SetStatFn g_setStat = nullptr;
@@ -95,6 +110,37 @@ auto RecipeIndex(Game* game, const uint8_t* record) noexcept -> int32_t {
 	return index;
 }
 
+// Byte 1 (portal): the level of the recipe the slot belongs to. Row 2 and any slot this table does not know stay D2R's.
+int64_t PortalHook(Game* game, Unit* player, const uint8_t* slot) {
+	int32_t recipe = 0, index = 0;
+	const uint8_t* first = g_record != nullptr && game != nullptr ? g_record(d2r::DataFlag(game), 0) : nullptr;
+	if (first != nullptr &&
+	    craft::SlotOf(reinterpret_cast<uintptr_t>(first), reinterpret_cast<uintptr_t>(slot), mxl_cube::RecipeCount, &recipe, &index)) {
+		const int32_t median = craft::PortalLevel(recipe, index);
+		if (median != 0 && median != CowLevelMedian) {
+			return CubeLevelPortal(game, player, median) ? 1 : 0;
+		}
+	}
+	return g_portalOriginal(game, player, slot);
+}
+
+// Swaps entry 1 of the output handler table; only when it still holds the Cow handler of this build.
+auto InstallPortalHandler(uint64_t exeBase) noexcept -> bool {
+	uint64_t* entry = OutputHandlerSlot(exeBase, 1);
+	if (entry == nullptr) {
+		return false;
+	}
+	DWORD old = 0;
+	if (!VirtualProtect(entry, sizeof(*entry), PAGE_READWRITE, &old)) {
+		return false;
+	}
+	g_portalOriginal = reinterpret_cast<OutputFn>(*entry);
+	g_byteOneEntry = entry;
+	*entry = reinterpret_cast<uint64_t>(&PortalHook);
+	VirtualProtect(entry, sizeof(*entry), old, &old);
+	return true;
+}
+
 void* ExecHook(Game* game, Unit* player, const uint8_t* record, void* ctx) {
 	g_state.Touch(game);
 	void* item = g_execOriginal(game, player, record, ctx);
@@ -132,6 +178,21 @@ void CraftBind(uint64_t exeBase) noexcept {
 	g_playerData = reinterpret_cast<PlayerDataFn>(exeBase + PlayerDataRva);
 }
 
+auto OutputHandlerSlot(uint64_t exeBase, int byte) noexcept -> uint64_t* {
+	if (g_byteOneEntry != nullptr) {
+		return g_byteOneEntry + (byte - 1);
+	}
+	// the dump's table starts at 0x1d3bfc0 with a null entry 0 (index = byte), the dispatch code indexes it with byte - 1;
+	// whichever it is, byte 1 is the entry that holds the Cow handler
+	const auto* table = reinterpret_cast<const uint64_t*>(exeBase + OutputTableRva);
+	for (int i = 0; i < 4; ++i) {
+		if (table[i] == exeBase + CowHandlerRva) {
+			return const_cast<uint64_t*>(table) + i + (byte - 1);
+		}
+	}
+	return nullptr;
+}
+
 void CraftForgetGame(const void* game) noexcept {
 	g_state.Forget(game);
 }
@@ -154,7 +215,9 @@ auto InstallCraftFlags(const D2RL::PluginContext* context, char* report, size_t 
 	RegisterGameEnd(&CraftForgetGame);
 	const bool ok = context->InstallInlineHook(ExecRva, ExecEntry, sizeof(ExecEntry), reinterpret_cast<void*>(&ExecHook),
 	                                           reinterpret_cast<void**>(&g_execOriginal));
-	std::snprintf(report, reportSize, ok ? "on: %d output effects (gold, player and game flags)" : "off: hook failed",
-	              static_cast<int>(sizeof(mxl_cube::Effects) / sizeof(mxl_cube::Effects[0])));
+	const bool portals = ok && InstallPortalHandler(context->exeBase);
+	std::snprintf(report, reportSize, ok ? "on: %d output effects (gold, player and game flags), %s" : "off: hook failed",
+	              static_cast<int>(sizeof(mxl_cube::Effects) / sizeof(mxl_cube::Effects[0])),
+	              portals ? "portal outputs by level" : "portal outputs left to D2R (handler table differs)");
 	return ok;
 }

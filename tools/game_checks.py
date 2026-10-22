@@ -9,6 +9,9 @@ aborts the run when the real cursor enters the game window or the game window be
 
 Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screenshots and logs into
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot. Checks: mxl goblins respec cain heart
+catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy skillcaps
+townportal potions itemskills cowportals deathcrash (bugs.md rows 4, 6, 10, 16, 19, 12). What a click in the world cannot do in background mode (kill a
+
 catalyst cainsub tower lockout lockquest cow goldcraft craftflags lockclock reenter areacycle trophy strings. What a click in the world cannot do in background mode (kill a
 boss, talk to an NPC, set quest bits, create items with stats, transmute, open a portal) is done by the plugin's
 harness gameplay commands (plugin/src/harness_cmds.cpp, `g.hcmd`, docs/testing.md "Harness commands"): they call the
@@ -2298,6 +2301,449 @@ def check_statcols():
         "panel row functions on the client's player copy (harness `panelrow`), formula Str * StrBonus / 100 and Dex * DexBonus / 100 of the "
         "wielded weapon vs weapons.txt: %s" % ("; ".join(rows[:6]) if not bad else "; ".join(bad)), [], rows)
 
+# ------------------------------------------------------------------ the old "fix to test" rows of docs/bugs.md (4, 6, 10, 12, 16, 19)
+# Background mode, harness verbs only. Expected values come from sources other than the migration being tested: Median's
+# own cubemain.bin / skills2 caps / named tables (names, not ids) and the built levels.txt.
+
+import json  # noqa: E402
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BUILT_EXCEL = os.path.join(REPO, "work", "mod", "data", "global", "excel")
+TOWNS = [1, 40, 75, 103, 109]  # the town of act 1-5
+
+
+def _tsv(path):
+    import csv
+    with open(path, encoding="utf-8-sig", errors="replace", newline="") as f:
+        return list(csv.reader(f, delimiter="\t"))
+
+
+def _main_checkout(path):
+    """A worktree keeps no extract/: fall back to the main checkout's copy."""
+    if os.path.exists(path):
+        return path
+    alt = os.path.join(r"%USERPROFILE%\mxl-d2r", os.path.relpath(path, REPO))
+    return alt if os.path.exists(alt) else path
+
+
+def _level_acts():
+    t = _tsv(os.path.join(BUILT_EXCEL, "levels.txt"))
+    h = t[0]
+    return {int(r[h.index("Id")]): int(r[h.index("Act")] or 0) for r in t[1:] if len(r) > 4 and r[h.index("Id")].isdigit()}
+
+
+def go(area):
+    """Move to an area: D2R's `cheat goto` inside an act, the plugin's `level` (NPC travel) across acts."""
+    acts = _level_acts()
+    now = hstate()["player"].get("area")
+    if now is not None and acts.get(now) != acts.get(area):
+        revive_if_dead()
+        H("level %d" % area)
+        t0 = time.time()
+        while time.time() - t0 < 40:
+            time.sleep(2)
+            st = hstate()
+            if st["player"].get("area") == area:
+                time.sleep(2)
+                return st
+    return goto(area)
+
+
+def new_portals(before):
+    st = hstate()
+    return [o for o in st["objs"] if o["id"] not in before and o.get("class") in (59, 60, 600)]
+
+
+def check_cowportals():
+    """Bug #19: the five 'Cow Portal' output recipes (rows 2, 3, 85, 4962, 7453) open the level Median's cubemain names, and
+    the 256 cleaned empty output cells are empty in D2R's records."""
+    n1 = "Cube portal outputs (bug #19): each Cow Portal recipe opens its own level"
+    n2 = "Cube outputs (bug #19): no stray quotes, D2R's empty slots match the txt"
+    if not need_game():
+        add(n1, "BLOCKED", "not in a game")
+        return add(n2, "BLOCKED", "not in a game")
+    # expected: Median's special byte 1 slots (cubemain.bin: 4-byte count, 0x148 records, slots at +0x4c step 0x54, byte +8,
+    # word +6 = Median level number), level numbers -> D2R ids by idmap.json
+    data = open(_main_checkout(os.path.join(REPO, "extract", "mxl", "data", "global", "excel", "cubemain.bin")), "rb").read()
+    count = struct.unpack_from("<I", data, 0)[0]
+    idmap = json.load(open(_main_checkout(os.path.join(REPO, "work", "named", "idmap.json")), encoding="utf-8"))
+    level_id = {e["row"]: e["id"] for e in idmap["levels"]}
+    wants = []
+    for row in range(count):
+        for slot in range(3):
+            s = 4 + row * 0x148 + 0x4c + 0x54 * slot
+            if data[s + 8] == 1:
+                median = struct.unpack_from("<H", data, s + 6)[0]
+                wants.append((row, slot, median, level_id.get(median)))
+    acts = _level_acts()
+    rows, bad = [], []
+    log = []
+    H("difficulty 2")
+    H("quest 40 0 set")  # the Cow Level's own handler wants Baal killed in the game's difficulty
+    try:
+        for row, slot, median, want in wants:
+            town = TOWNS[acts.get(want, 0)] if want is not None else 1
+            go(town)
+            before = {o["id"] for o in hstate()["objs"]}
+            ok, lines = H("cubeout %d %d" % (row, slot))
+            time.sleep(1.5)
+            new = new_portals(before)
+            dests = [o.get("dest") for o in new]
+            log.append("row %d slot %d: Median level %d -> D2R %s, town %d: ok=%s new portal dest %s" % (row, slot, median, want, town, ok, dests))
+            rows.append("row %d -> %s" % (row, dests))
+            if not ok or want not in dests:
+                bad.append("row %d wants level %s, got %s" % (row, want, dests))
+        sh("cowportals")
+    finally:
+        H("difficulty 0")
+    add(n1, "PASS" if wants and not bad else "FAIL",
+        "%d portal outputs from cubemain.bin (Median level numbers -> idmap.json -> D2R ids): %s%s" % (
+            len(wants), "; ".join(rows), ("; WRONG: " + "; ".join(bad)) if bad else ""), [sh("cowportals")], log)
+
+    # --- the empty output cells
+    txt = _tsv(os.path.join(BUILT_EXCEL, "cubemain.txt"))
+    h = txt[0]
+    cols = [h.index("output"), h.index("output b"), h.index("output c")]
+    quotes = sum(1 for r in txt[1:] for c in cols if c < len(r) and '"' in r[c])
+    want_mask = []
+    for r in txt[1:]:
+        m = 0
+        for i, c in enumerate(cols):
+            if c < len(r) and r[c].strip():
+                m |= 1 << i
+        want_mask.append(m)
+    got = ""
+    for first in range(0, len(want_mask), 2500):
+        ok, lines = H("cubeslots %d %d" % (first, min(2500, len(want_mask) - first)), 60)
+        got += "".join(m.group(2) for m in (re.match(r"cubeslots (\d+) (\d+)$", l.strip()) for l in lines) if m)
+    diffs = [(i, want_mask[i], int(got[i])) for i in range(min(len(got), len(want_mask))) if want_mask[i] != int(got[i])]
+    add(n2, "PASS" if quotes == 0 and len(got) == len(want_mask) and not diffs else "FAIL",
+        "%d recipes: %d output cells with a quote in the built cubemain.txt; D2R's records (slot +0x5a/0x5b/0x5b) hold %d of %d "
+        "slots the txt names and %d empty ones; differences (row, txt mask, D2R mask): %s" % (
+            len(want_mask), quotes, sum(bin(m).count("1") for m in want_mask), len(want_mask) * 3,
+            len(want_mask) * 3 - sum(bin(m).count("1") for m in want_mask), diffs[:12]), [],
+        ["recipe %d: txt %d D2R %d" % d for d in diffs[:40]])
+
+
+def _caps_sources():
+    """Median row -> (mlvl, skcn) from work/formulas/skill_caps.txt, Median row -> D2R id (idmap.json), D2R id -> name."""
+    caps = {}
+    for line in open(_main_checkout(os.path.join(REPO, "work", "formulas", "skill_caps.txt")), encoding="utf-8").read().splitlines()[1:]:
+        f = (line.split("\t") + ["", ""])[:3]
+        if f[0].isdigit():
+            caps[int(f[0])] = (int(f[1] or 0), f[2])
+    idmap = json.load(open(_main_checkout(os.path.join(REPO, "work", "named", "idmap.json")), encoding="utf-8"))
+    ids = {e["row"]: e["id"] for e in idmap["skills"]}
+    names = {e["id"]: e["name"] for e in idmap["skills"]}
+    return caps, ids, names
+
+
+def _setskill(skill, level):
+    """`setskill`: the base level the game's own point function stopped at."""
+    for _ in range(2):
+        ok, lines = H("setskill %d %d" % (skill, level))
+        m = re.search(r"base level (-?\d+)", " ".join(lines))
+        if m:
+            return int(m.group(1))
+        time.sleep(1)
+    return None
+
+
+def check_skillcaps():
+    """Bug #4: the skill-point caps. `setskill` raises a skill with the game's own point function until the skpoints formula
+    answers 999, so the level it stops at is the cap."""
+    nm = "Skill point caps (bug #4): per-skill cap, +N to a skill (skcp), Specialization"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    caps, ids, names = _caps_sources()
+    stat_id = {e["row"]: e["id"] for e in json.load(open(_main_checkout(os.path.join(REPO, "work", "named", "idmap.json")), encoding="utf-8"))["itemstatcost"]}
+    skcp, pst4 = stat_id[449], stat_id[397]  # Median's stat rows -> D2R ids (the harness takes D2R's)
+    # sample: a plain (no skcn lock formula) skill of each cap value, spread over classes by taking every 7th
+    t = _tsv(os.path.join(BUILT_EXCEL, "skills.txt"))
+    reqlevel = {int(r[t[0].index("*Id")]): int(r[t[0].index("reqlevel")] or 0) for r in t[1:] if r and r[t[0].index("*Id")].isdigit()}
+    by_cap = {}
+    for row, (mlvl, skcn) in sorted(caps.items()):
+        if mlvl > 0 and not skcn and row in ids and row > 6 and reqlevel.get(ids[row], 999) <= 80:
+            by_cap.setdefault(mlvl, []).append(row)
+    sample = []
+    for mlvl, rows in sorted(by_cap.items()):
+        sample += [(rows[i], mlvl) for i in range(0, len(rows), max(1, len(rows) // 2))][:2]
+    sample.sort(key=lambda x: x[0] % 7)  # not all low caps first
+    lvl0 = hstate()["player"].get("level")
+    H("stat player 12 set 99")
+    log, bad, done = [], [], []
+    try:
+        for row, mlvl in sample[:16]:
+            sid = ids[row]
+            got = _setskill(sid, 99)
+            log.append("skill %s (Median row %d, id %d): cap by skill_caps.txt %d, game stopped at %s" % (names.get(sid), row, sid, mlvl, got))
+            done.append(sid)
+            if got != mlvl:
+                bad.append("%s %s != %d" % (names.get(sid), got, mlvl))
+            # +3 to the skill (skcp: stat 449 with the skill id as its parameter) raises the cap by 3
+            H("stat player %d %d set 3" % (skcp, sid))
+            got3 = _setskill(sid, 99)
+            H("stat player %d %d set 0" % (skcp, sid))
+            log.append("  with +3 to the skill: stopped at %s (want %d)" % (got3, mlvl + 3))
+            if got3 != mlvl + 3:
+                bad.append("%s +3: %s != %d" % (names.get(sid), got3, mlvl + 3))
+            _setskill(sid, 0)
+        # Specialization: earthquake_2 (Median row of the barbarian's tab) has its cap raised by the tab's Specialization
+        # Specialization's first point needs skill('skills_1835'.pst4) > 0: pst4 is that skill's passivecalc4 = syn4 = the
+        # player's stat 426 with the skill as its parameter (D2R id 1907 for the Median row 1835); the cap rises by the
+        # Specialization's calc1 = blvl / 2
+        by_name = _skill_ids_by_name()[0]
+        spec, quake, gate = by_name.get("specialization_3"), by_name.get("earthquake_2"), by_name.get("skills_1835")
+        spec_ok = False
+        if spec and quake and gate:
+            base = _setskill(quake, 99)
+            _setskill(quake, 0)
+            _setskill(gate, 1)
+            H("stat player %d %d set 1" % (pst4, gate))
+            lvl = _setskill(spec, 10)
+            raised = _setskill(quake, 99)
+            want = (base or 0) + (lvl or 0) // 2
+            spec_ok = bool(lvl) and raised == want
+            log.append("earthquake_2 (id %d): cap %s; Specialization (specialization_3, id %d) at level %s -> cap %s (want %s)" % (
+                quake, base, spec, lvl, raised, want))
+            if not spec_ok:
+                bad.append("Specialization %s: earthquake_2 cap %s -> %s, want %s" % (lvl, base, raised, want))
+            _setskill(quake, 0)
+            _setskill(spec, 0)
+            _setskill(gate, 0)
+            H("stat player %d %d set 0" % (pst4, gate))
+        else:
+            bad.append("no specialization_3 / earthquake_2 / skills_1835 row (%s %s %s)" % (spec, quake, gate))
+    finally:
+        H("stat player 12 set %s" % (lvl0 if lvl0 else 1))
+    add(nm, "PASS" if sample and not bad else "FAIL",
+        "%d skills raised to their cap with the game's point function: cap = Median's mlvl (work/formulas/skill_caps.txt, "
+        "skills with no lock formula); +3 to a skill (Median stat 449 = D2R 478) raised each cap by 3; Specialization (barbarian) raised "
+        "earthquake_2's cap by half its level%s" % (len(done), ("; WRONG: " + "; ".join(bad[:8])) if bad else ""), [], log)
+
+
+def _skill_ids_by_name():
+    t = _tsv(os.path.join(BUILT_EXCEL, "skills.txt"))
+    h = t[0]
+    return {r[0]: int(r[h.index("*Id")]) for r in t[1:] if r and r[0] and r[h.index("*Id")].isdigit()}, t, h
+
+
+def check_townportal():
+    """Bug #6: the itemless Town Portal skill (D2R's srvdofunc 109): casts in the field, opens a portal to the town and one
+    back, with no scroll or book."""
+    nm = "Town Portal skill (bug #6): itemless cast opens a portal to town and back"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    by_name, t, h = _skill_ids_by_name()
+    tp = by_name.get("town_portal")
+    do109 = [r[0] for r in t[1:] if r and r[h.index("srvdofunc")] == "109"]
+    if tp is None:
+        return add(nm, "BLOCKED", "no town_portal row in skills.txt (rows with srvdofunc 109: %s)" % do109)
+    fight_ready()  # Blood Moor, nothing alive nearby
+    for code in ("tbk", "tsc", "ibk", "isc"):
+        H("remove %s 99" % code)
+    st0 = hstate()
+    area = st0["player"].get("area")
+    if not items(st0, "tbk") and not items(st0, "tsc"):
+        pass
+    _, sl = H("skills")
+    if not any(l.startswith("skill id=%d " % tp) for l in sl):
+        _setskill(tp, 1)
+    H("stat player 8 set %d" % (rd("player", 9) or 0))  # full mana
+    before = {o["id"] for o in hstate()["objs"]}
+    ok, cl = H("cast %d self" % tp)
+    new, t0 = [], time.time()
+    while time.time() - t0 < 8 and not new:
+        time.sleep(1)
+        new = new_portals(before)
+    sh("townportal_field")
+    acts = _level_acts()
+    want_town = TOWNS[acts.get(area, 0)]
+    field = [o for o in new if o.get("class") == 59]
+    log = cl + ["field portals after the cast: %s" % [(o["id"], o.get("class"), o.get("dest")) for o in new]]
+    ok_field = bool(field) and field[0].get("dest") == want_town
+    arrived = back = False
+    if ok_field:
+        for _ in range(3):
+            ok1, l1 = H("enter nearest")
+            log += l1
+            time.sleep(4)
+            if hstate()["player"].get("area") == want_town:
+                arrived = True
+                break
+        if arrived:
+            sh("townportal_town")
+            town_objs = [o for o in hstate()["objs"] if o.get("class") == 59]
+            log.append("portals in town: %s" % [(o["id"], o.get("dest")) for o in town_objs])
+            for _ in range(3):
+                H("enter nearest")
+                time.sleep(4)
+                if hstate()["player"].get("area") == area:
+                    back = True
+                    break
+    add(nm, "PASS" if ok_field and arrived and back else "FAIL",
+        "skill %d (town_portal; skills with srvdofunc 109: %s), no scroll or book in the pack, cast at the player in area %s: "
+        "new blue portal %s (want dest = town %d); entering it -> %s; the town portal back -> %s" % (
+            tp, do109, area, [(o.get("class"), o.get("dest")) for o in new], want_town,
+            "arrived in town" if arrived else "not in town", "back in area %s" % area if back else "did not return"),
+        [sh("townportal")], log)
+    goto(2)
+
+
+def check_potions():
+    """Bug #10: Median's healing / mana / rejuvenation potions (item spell 22 -> D2R's timed potion). Two results: the life
+    part (hp1, hp5, rvs, rvl: stat hpregen 74, life rises over a control wait) and the mana part (mp1, mp5: manarecoverybonus
+    27 set by the potion, mana rises over a control wait)."""
+    n1 = "Potions (bug #10): healing and rejuvenation potions restore life over time"
+    n2 = "Potions (bug #10): mana potions raise the mana recovery (stat 27) and restore mana over time"
+    if not need_game():
+        add(n1, "BLOCKED", "not in a game")
+        return add(n2, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    H("difficulty 0")
+    cases = [("hp1", True, False), ("hp5", True, False), ("rvs", True, False), ("rvl", True, False), ("mp1", False, True), ("mp5", False, True)]
+    rows = {True: [], False: []}
+    bad = {True: [], False: []}
+    log = []
+    maxhp, maxmp = rd("player", 7), rd("player", 9)
+
+    def drain():
+        setstat("player", 6, maxhp // 5)
+        setstat("player", 8, maxmp // 5)
+        time.sleep(0.5)
+
+    def gain(code, seconds=4):
+        """Life and mana gain (raw 1/256) over `seconds` seconds after `use <code>` (code None: a control wait), with the
+        regeneration stats read right after the use."""
+        drain()
+        l0, m0, h0, r0 = rd("player", 6), rd("player", 8), rd("player", 74), rd("player", 27)
+        line = ""
+        if code:
+            ok, line, _ = hv("use %s" % code, "use")
+            if not ok:
+                return None
+        h1, r1 = rd("player", 74), rd("player", 27)
+        time.sleep(seconds)
+        return rd("player", 6) - l0, rd("player", 8) - m0, h0, h1, r0, r1, line
+
+    control = gain(None)
+    for code, heals, mana in cases:
+        key = heals
+        H("remove %s 9" % code)
+        ok, line, _ = hv("item %s" % code, "item")
+        r = gain(code) if ok else None
+        left = len([i for i in hstate()["items"] if str(i.get("code")) == code])
+        if r is None:
+            rows[key].append("%s: WRONG (no item / use failed: %s)" % (code, line[:60]))
+            bad[key].append(code)
+            continue
+        pl, pm, h0, h1, r0, r1, uline = r
+        log += [line, uline, "%s: hpregen %s -> %s, manarecoverybonus %s -> %s; gain with potion life %d mana %d, control life %d mana %d" % (
+            code, h0, h1, r0, r1, pl, pm, control[0], control[1])]
+        good = left == 0
+        if heals and (h1 is None or h1 <= (h0 or 0) or pl <= control[0] + 256 * 5):
+            good = False
+        if mana and (r1 is None or r1 <= (r0 or 0) or pm <= control[1] + 256 * 2):
+            good = False
+        rows[key].append("%s: %s (life +%d vs control +%d, mana +%d vs +%d, hpregen %s->%s, manarecoverybonus %s->%s)" % (
+            code, "ok" if good else "WRONG", pl >> 8, control[0] >> 8, pm >> 8, control[1] >> 8, h0, h1, r0, r1))
+        if not good:
+            bad[key].append(code)
+        H("remove %s 9" % code)
+    setstat("player", 6, maxhp)
+    setstat("player", 8, maxmp)
+    shot = sh("potions")
+    add(n1, "PASS" if not bad[True] else "FAIL",
+        "`use` consumed each potion; in the 4 s after it hpregen (stat 74) rose and life rose above a control wait: " + "; ".join(rows[True]),
+        [shot], log)
+    add(n2, "PASS" if not bad[False] else "FAIL",
+        "`use` consumed each potion; the potion should set manarecoverybonus (stat 27, calc1 = 100 / 200 per cent) and mana rise above "
+        "a control wait. OPEN: the stat ends at 0 / 1 (setting 200 by hand triples the recovery), so the potion's calc1 value is "
+        "lost: " + "; ".join(rows[False]), [shot], log)
+
+
+def check_deathcrash():
+    """Bug #12: the client formatted 'was slain by' with a missing %s argument and crashed. The test character is killed by a
+    monster's hit; the game process must survive and the character must be able to respawn and travel."""
+    nm = "Player death (bug #12): killed by a monster, the game survives, respawn works"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    fight_ready()
+    pids = sorted(g.game_pids())
+    atk = spawn_attacker(1)
+    if atk is None:
+        return add(nm, "BLOCKED", "no attacker monster")
+    setstat("player", 7, BIG_LIFE)
+    setstat("player", 6, 256 * 100)
+    ok, line, lines = hv("hit player phys 2000000000 %s" % atk, "hit")
+    time.sleep(3)
+    p = hstate()["player"]
+    shot_dead = sh("death")
+    dead = p.get("mode") in (0, 17) or str(p.get("life", "1")).split("/")[0] == "0"
+    alive_pids = sorted(g.game_pids())
+    time.sleep(4)
+    survived = sorted(g.game_pids()) == pids and hstate()["ok"]
+    revived = revive_if_dead()
+    st = hstate()
+    again = st["player"].get("area") is not None and not (st["player"].get("mode") in (0, 17))
+    moved = goto(2)["player"].get("area") == 2
+    add(nm, "PASS" if dead and survived and again and moved else "FAIL",
+        "hit amount 2e9 from a spawned monster: %s; player dead (mode %s) %s; game process %s; respawned %s, alive again %s, travel to "
+        "Blood Moor %s" % (line[:90], p.get("mode"), dead, "survived" if survived else "GONE", revived, again, moved),
+        [shot_dead], lines)
+    setstat("player", 6, rd("player", 7) or BIG_LIFE)
+
+
+def check_itemskills():
+    """Bug #16: skill / monster parameters of item properties. Table audit (every parameter of Median's property tables by skill
+    name, tools/item_skill_audit.py) plus in-game: unique items with each kind of skill property carry the right skill."""
+    n1 = "Item property skill parameters (bug #16): all tables, by skill name"
+    n2 = "Item property skill parameters (bug #16): uniques in game carry the named skill"
+    import item_skill_audit as audit
+    checked, bad, samples = audit.audit()
+    add(n1, "PASS" if not bad and sum(checked.values()) > 5000 else "FAIL",
+        "%d skill / monster parameters in %d Median property tables compared with the skill's name (named/skills.txt, built "
+        "skills.txt); mismatches %d%s" % (sum(checked.values()), len({t for t, _ in checked}), len(bad),
+                                          (": " + "; ".join(str(b) for b in bad[:4])) if bad else ""))
+    if not need_game():
+        return add(n2, "BLOCKED", "not in a game")
+    goto(1)
+    ut = _tsv(os.path.join(BUILT_EXCEL, "uniqueitems.txt"))
+    it = _tsv(os.path.join(BUILT_EXCEL, "itemstatcost.txt"))
+    stat_id = {r[0]: int(r[it[0].index("*ID")]) for r in it[1:] if r and r[0] and r[it[0].index("*ID")].isdigit()}
+    encode = {r[0]: r[it[0].index("Encode")] for r in it[1:] if r and r[0]}
+    rows, bad2, log = [], [], []
+    for code, picks in sorted(samples.items()):
+        pick = next((p for p in picks if p[0] == "uniqueitems"), None)
+        if pick is None:
+            continue
+        _table, index, uname, skill, skill_name, stat = pick
+        base = ut[index + 1][ut[0].index("code")]
+        if stat not in stat_id:
+            continue
+        H("cubeclear")
+        ok, line, _ = hv("item %s uniq=%d" % (base, index), "item")
+        m = re.search(r"item id=(\d+)", line)
+        if not ok or not m:
+            log.append("%s: item %s uniq=%d failed: %s" % (uname, base, index, line[:80]))
+            rows.append("%s: no item" % uname)
+            continue
+        ok, lines = H("stat %s %d scan" % (m.group(1), stat_id[stat]), 60)
+        layers = [(int(a), int(b)) for a, b in re.findall(r"scan \S+ \d+:(\d+) = (-?\d+)", " ".join(lines)) if int(b) != 0]
+        # the layer is the skill (aura, oskill, ...) or skill << 6 | level (encode 2 / 3: skill on an event, charges)
+        want_layer = lambda l: (l >> 6) == skill if encode.get(stat) in ("2", "3") else l == skill  # noqa: E731
+        good = any(want_layer(l) for l, _v in layers)
+        log.append("%s (uniq %d, prop %s, stat %s=%d, encode %s): skill %s = %d; layers %s" % (
+            uname, index, code, stat, stat_id[stat], encode.get(stat), skill_name, skill, layers[:6]))
+        rows.append("%s %s -> %s %s" % (uname, code, skill_name, "ok" if good else "WRONG %s" % layers[:3]))
+        if not good:
+            bad2.append(uname)
+        H("remove %s 9" % base)
+    add(n2, "PASS" if rows and not bad2 and len(rows) >= 8 else "FAIL",
+        "%d unique items, one per skill property kind, created with `item <base> uniq=<row>`; `stat <item> <stat> scan` found the "
+        "skill the name oracle expects: %s" % (len(rows), "; ".join(rows)), [], log)
+
 def check_nslong():
     name = "Short aliases of the long Median keys (docs/strings-namespace.md): service text and displayed names"
     if not need_game():
@@ -2762,7 +3208,11 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("dye", check_dye), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
-          ("trophy", check_trophy), ("statcols", check_statcols), ("nslong", check_nslong),
+          ("trophy", check_trophy), ("statcols", check_statcols),
+          # the old "fix to test" rows of docs/bugs.md; deathcrash last (it kills the test character)
+          ("skillcaps", check_skillcaps), ("townportal", check_townportal), ("potions", check_potions),
+          ("itemskills", check_itemskills), ("cowportals", check_cowportals), ("deathcrash", check_deathcrash),
+          ("nslong", check_nslong),
           ("strings", check_strings)]
 
 

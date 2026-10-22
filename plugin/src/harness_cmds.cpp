@@ -64,6 +64,7 @@ constexpr uint64_t RvaUnitClass = 0x349860;     // (unit, file, line)
 constexpr uint64_t RvaUnitMode = 0x34ab60;
 constexpr uint64_t RvaUnitRoom = 0x34b440;
 constexpr uint64_t RvaRoomLevel = 0x2efc10;
+constexpr uint64_t RvaPortalLevel = 0x34ad40;   // (portal object) -> destination level (word)
 constexpr uint64_t RvaClientUnit = 0x484c90;    // (client, 0) -> player unit
 constexpr uint64_t RvaNpcRecord = 0x3971a0;     // (dataFlag, class) -> NPC table row or null
 constexpr uint64_t RvaDistance = 0x325140;      // (unit, unit) -> distance
@@ -151,6 +152,7 @@ using UnitClassFn = int32_t (*)(Unit*, const char*, int32_t);
 using UnitModeFn = int32_t (*)(Unit*);
 using UnitRoomFn = void* (*)(Unit*);
 using RoomLevelFn = int32_t (*)(void*);
+using PortalLevelFn = uint16_t (*)(Unit*);
 using ClientUnitFn = Unit* (*)(void*, int32_t);
 using NpcRecordFn = void* (*)(uint32_t, int32_t);
 using DistanceFn = uint32_t (*)(Unit*, Unit*);
@@ -434,7 +436,13 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 			++objs;
 			int32_t ox = 0, oy = 0;
 			d2r::UnitXY(u, &ox, &oy);
-			Out("obj id=%u class=%d mode=%d dist=%.0f at %d,%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u), ox, oy);
+			const int32_t ocls = ClassOf(u);
+			if (ocls == 59 || ocls == 60 || ocls == 600) {  // portals: where they lead (D2R level id)
+				Out("obj id=%u class=%d mode=%d dist=%.0f at %d,%d dest=%d", IdOf(u), ocls, ModeOf(u), DistTo(p, u), ox, oy,
+				    static_cast<int>(Fn<PortalLevelFn>(RvaPortalLevel)(u)));
+			} else {
+				Out("obj id=%u class=%d mode=%d dist=%.0f at %d,%d", IdOf(u), ocls, ModeOf(u), DistTo(p, u), ox, oy);
+			}
 		}
 	});
 	char goblins[160] = "";
@@ -618,9 +626,18 @@ auto CmdStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long who = 0, stat = 0, layer = 0, value = 0;
 	int next = 3;
 	if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &stat)) {
-		return Fail(c, "usage: stat player|merc|mon:<id>|m<monster id>|<item unit id>|<item code> <stat> [layer] [set <value>]");
+		return Fail(c, "usage: stat player|merc|mon:<id>|m<monster id>|<item unit id>|<item code> <stat> [layer] [set <value>] | scan [max layer]");
 	}
-	if (t.n > next && !hcmd::LowerEq(t.tok[next], "set")) {
+	const bool scan = t.n > next && hcmd::LowerEq(t.tok[next], "scan");
+	if (scan) {
+		long long maxLayer = 262143;  // skill id << 6 | level stays below this for ids up to 4095
+		if (t.n > next + 1 && !hcmd::ParseInt(t.tok[next + 1], &maxLayer)) {
+			return Fail(c, "stat: scan needs a number");
+		}
+		next = t.n;
+		layer = maxLayer;
+	}
+	if (!scan && t.n > next && !hcmd::LowerEq(t.tok[next], "set")) {
 		if (!hcmd::ParseInt(t.tok[next], &layer)) {
 			return Fail(c, "stat: layer must be a number");
 		}
@@ -647,6 +664,22 @@ auto CmdStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	}
 	if (unit == nullptr) {
 		return Fail(c, "stat: unit not found");
+	}
+	if (scan) {  // every layer of the stat that reads non-zero: which skill an item property or oskill really carries
+		int shown = 0, total = 0;
+		for (long long l = 0; l <= layer; ++l) {
+			const int32_t v = Stat(unit, static_cast<int>(stat), static_cast<int>(l));
+			if (v == 0) {
+				continue;
+			}
+			++total;
+			if (shown < 40) {
+				Out("scan %s %lld:%lld = %d", t.tok[1], stat, l, v);
+				++shown;
+			}
+		}
+		Out("scan %s %lld: %d layers non-zero (up to %lld)", t.tok[1], stat, total, layer);
+		return true;
 	}
 	if (set) {
 		Fn<SetStatFn>(RvaSetStat)(unit, static_cast<int>(stat), static_cast<int32_t>(value), static_cast<int>(layer));
@@ -1176,6 +1209,77 @@ auto CmdCuberec(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `cubeslots <first> <count>`: which of the three output slots (record + 0x5a + 0x5b * i) of recipes first..first+count-1 hold
+// anything (a digit 0-7: bit i = slot i is filled), 50 recipes a line. A slot's tail holds -1 defaults even when the output
+// cell was empty, so only its first 0x0e bytes count (quantity / code / type word and the special-output byte at +0x0d).
+auto CmdCubeSlots(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long first = 0, count = 0;
+	if (t.n < 3 || !hcmd::ParseInt(t.tok[1], &first) || !hcmd::ParseInt(t.tok[2], &count) || first < 0 || count < 1 || count > 20000) {
+		return Fail(c, "usage: cubeslots <first recipe> <count>");
+	}
+	char line[80];
+	int n = 0;
+	long long lineFirst = first;
+	for (long long i = first; i < first + count; ++i) {
+		const uint8_t* rec = Fn<CubeRecordFn>(RvaCubeRecord)(c->dataFlag, static_cast<int32_t>(i));
+		int mask = 0;
+		if (rec == nullptr) {
+			return Fail(c, "cubeslots: no record %lld", i);
+		}
+		for (int slot = 0; slot < 3; ++slot) {
+			const uint8_t* s = rec + 0x5a + 0x5b * slot;
+			for (int k = 0; k < 0x0e; ++k) {
+				if (s[k] != 0) {
+					mask |= 1 << slot;
+					break;
+				}
+			}
+		}
+		line[n++] = static_cast<char>('0' + mask);
+		if (n == 50 || i == first + count - 1) {
+			line[n] = '\0';
+			Out("cubeslots %lld %s", lineFirst, line);
+			n = 0;
+			lineFirst = i + 1;
+		}
+	}
+	return true;
+}
+
+// `cubeout <recipe> [slot]`: the executor's output dispatch (0x526d3c) for the special-output slots of a recipe (byte at slot
+// +0x0d, 1-4 = portals), without inputs or conditions: handler table 0x1d3bfc0 entry byte-1, called (game, player, slot).
+// Prints `cubeout <recipe> slot <i> byte <b>` per slot it called; look at `state` for the portal it opened.
+auto CmdCubeOut(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long index = 0, only = -1;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &index) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &only))) {
+		return Fail(c, "usage: cubeout <recipe index> [slot 0-2]");
+	}
+	const uint8_t* rec = Fn<CubeRecordFn>(RvaCubeRecord)(c->dataFlag, static_cast<int32_t>(index));
+	if (rec == nullptr) {
+		return Fail(c, "cubeout: no such record");
+	}
+	using OutputFn = int64_t (*)(Game*, Unit*, const uint8_t*);
+	int called = 0;
+	for (int slot = 0; slot < 3; ++slot) {
+		const uint8_t* s = rec + 0x5a + 0x5b * slot;
+		const uint8_t byte = s[0x0d];
+		if ((only >= 0 && slot != only) || byte < 1 || byte > 4) {
+			continue;
+		}
+		const uint64_t* entry = OutputHandlerSlot(g_base, byte);
+		if (entry == nullptr || *entry == 0) {
+			return Fail(c, "cubeout: no handler for output byte %d in the table", byte);
+		}
+		reinterpret_cast<OutputFn>(*entry)(c->game, c->player, s);
+		Out("cubeout %lld slot %d byte %d", index, slot, byte);
+		++called;
+	}
+	if (called == 0) {
+		return Fail(c, "cubeout: recipe %lld has no portal output slot", index);
+	}
+	return true;
+}
+
 auto CmdCubecraft(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	int32_t result[8] = {};
 	alignas(16) uint8_t ctx[512] = {};
@@ -1479,7 +1583,10 @@ auto CmdCast(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		return Fail(c, "cast: the player has no skill %lld (setskill %lld 1 first)", id, id);
 	}
 	// Both cast calls use the player's active left skill (the unit one also walks into range first): select it.
-	if (SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(c->player)) != id && SelectSkill(c, id, true) != id) {
+	// A right-button-only skill (rightskill 1: the itemless Town Portal) cannot be the left skill: select it as the right
+	// one, and for a cast at a position go on without a selection (the call takes the skill record itself).
+	if (SkillIdOf(Fn<ActiveSkillFn>(RvaLeftSkill)(c->player)) != id && SelectSkill(c, id, true) != id &&
+	    SelectSkill(c, id, false) != id && (tg.kind == hcmd::CastTarget::Unit || tg.kind == hcmd::CastTarget::Nearest)) {
 		return Fail(c, "cast: the game would not select skill %lld (a passive, or not usable as an active skill)", id);
 	}
 	const int manaBefore = Stat(c->player, StatMana) >> 8;
@@ -2141,6 +2248,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | stat merc|mon:<id> <stat>");
+	Out("backlog verbs: stat <ref> <stat> scan [max layer] | cubeslots <first> <count> | cubeout <recipe> [slot] (portal outputs) | state (portal dest=)");
 	return true;
 }
 
@@ -2674,7 +2782,7 @@ struct Verb {
 const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false},     {"gold", CmdGold, false}, {"waypoint", CmdWaypoint, false},
     {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false},
-    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
+    {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"cubeslots", CmdCubeSlots, false},{"cubeout", CmdCubeOut, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"missiles", CmdMissiles, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false},

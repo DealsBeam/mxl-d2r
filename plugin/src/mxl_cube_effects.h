@@ -271,4 +271,18 @@ inline constexpr Effect Effects[] = {
     {7383, 7, 99},
 };
 
+// Median's portal outputs (byte 1): recipe row, output slot, Median level number of the destination.
+struct Portal {
+	int32_t recipe;
+	int32_t slot;
+	int32_t level;
+};
+inline constexpr Portal Portals[] = {
+    {2, 0, 39},
+    {3, 0, 163},
+    {85, 0, 192},
+    {4962, 1, 242},
+    {7453, 0, 214},
+};
+
 }  // namespace mxl_cube
