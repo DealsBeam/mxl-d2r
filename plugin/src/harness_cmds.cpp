@@ -110,7 +110,7 @@ constexpr uint64_t RvaPacketTable = 0x1d2a790;  // server packet handlers: (game
 constexpr uint64_t RvaInventory = 0x34a360;     // (unit, file, line)
 constexpr uint64_t RvaInvFirst = 0x388c10;
 constexpr uint64_t RvaInvNext = 0x38aba0;
-constexpr uint64_t RvaItemLevel = 0x3730d0;     // (item) -> item level
+constexpr uint64_t RvaItemLevel = 0x36ccf0;     // (item) -> item level (item data +0x38, at least 1; 0x3730d0 reads +0x40, another field)
 constexpr uint64_t RvaItemPage = 0x36cfe0;      // (item) -> page byte (0 inventory, 3 cube, 4 stash)
 constexpr uint64_t RvaItemLocation = 0x382d20;  // (int32 location[4], item): unit id, page, packed x/y
 constexpr uint64_t RvaItemRecord = 0x314110;    // (dataFlag, class id)
@@ -2580,12 +2580,14 @@ auto CmdMercReq(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
-// `hire [npc class] [n]`: hires the n-th (default first) free mercenary of the nearest hirer the way the client's hire
-// button does: packet 0x36 (npc id, list index, price, current mercenary id or -1) into the server handler.
+// `hire [npc class] [n] [reopen]`: hires the n-th (default first) free mercenary of the nearest hirer the way the client's hire
+// button does: packet 0x36 (npc id, list index, price, current mercenary id or -1) into the server handler. `reopen` makes the
+// list again first (what the client's hire menu does) even when the NPC already has one made long ago.
 auto CmdHire(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long cls = -1, which = 0;
-	if ((t.n > 1 && !hcmd::ParseInt(t.tok[1], &cls)) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &which))) {
-		return Fail(c, "usage: hire [npc class] [n]");
+	const bool reopen = t.n > 3 && hcmd::LowerEq(t.tok[3], "reopen");
+	if ((t.n > 1 && !hcmd::ParseInt(t.tok[1], &cls)) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &which)) || (t.n > 3 && !reopen)) {
+		return Fail(c, "usage: hire [npc class] [n] [reopen]");
 	}
 	Unit* npc = NearestMonster(c, cls, true);
 	if (npc == nullptr) {
@@ -2597,7 +2599,7 @@ auto CmdHire(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (list == nullptr || npcRow == nullptr) {
 		return Fail(c, "hire: the NPC has no mercenary list");
 	}
-	if (d2r::At<uint64_t>(list, 0x20) == 0) {  // the list is made when the player opens the hire menu: do what that does
+	if (reopen || d2r::At<uint64_t>(list, 0x20) == 0) {  // the list is made when the player opens the hire menu: do what that does
 		void* client = Fn<void* (*)(Unit*)>(RvaClientOf)(c->player);
 		Fn<void (*)(Game*, void*, Unit*)>(RvaOpenHireList)(c->game, client, npc);
 		list = Fn<MercListFn>(RvaNpcMercList)(c->game, npc, scratch);
@@ -2629,7 +2631,8 @@ auto CmdHire(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		std::memcpy(pkt + 5, &index, 4);
 		std::memcpy(pkt + 9, &cost, 4);
 		std::memcpy(pkt + 13, &mercId, 4);
-		Out("hire: entry %llu, price %u, gold %d", static_cast<unsigned long long>(i), cost, Stat(c->player, StatGold));
+		Out("hire: entry %llu, price %u, gold %d, npc %u at distance %.0f, player mode %d, current mercenary id %u", static_cast<unsigned long long>(i),
+		    cost, Stat(c->player, StatGold), id, DistTo(c->player, npc), ModeOf(c->player), mercId);
 		if (Stat(c->player, StatGold) < static_cast<int32_t>(cost)) {
 			Fn<SetStatFn>(RvaSetStat)(c->player, StatGold, static_cast<int32_t>(cost) + 1000, 0);
 		}

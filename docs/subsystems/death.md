@@ -138,3 +138,14 @@ Iterations that failed on the way (check bugs, not the part): `checks-20261023-1
 Test saves: slot 1's `MxlBarb` (corpse of an earlier harness death) was picked up in `-175403-s1`; slot 3's had none; slot 2's `MxlBarb.d2s` (corpse count 1) was not touched (the lock of slot 2 belonged to other lanes the whole time): it is picked up at its next load with this plugin. Backups: `save-backup-20261023-*-s1` / `-s3` (every game_checks run copies the save folder first) and `nc2\save-backup-s3`.
 
 Not covered: Hardcore, a corpse that cannot be picked up completely (kept path is unit tested, not seen in game), the belt's potions, a death in the town (not possible).
+
+## 10. Soulstealer: the killer's heal on a player death (lane p4-leftovers, plugin 0.61.0)
+
+Median (patch notes 1.1.0, 2.1.0, 2.8.0): a boss with the Soulstealer property heals 10% of its max life when it kills a player. The death penalty call `0x424ac0`
+(`(game, victim, killer)`, already hooked by `nocorpse`) is the only place of the death path where the killer is known: the plugin part `soulstealer` (off word
+`soulstealer`) reads it there. Victim a player, killer a monster whose class is one of the 34 in `plugin/src/mxl_soulstealer.h` (`tools/soulstealer_data.py` lists every
+class whose `monstats.txt` description is the Soulstealer string): life += max life / 10, capped at max (`0x2f4d20` max, `0x2f5020` stat, `0x2f7d10` set, `0x349020` life
+event 0x97). The killer is the monster itself, so a minion never heals the boss. `mxl` shows `soulstealer on: ... heals N, player deaths N (last killer: type T class C, life L of M)`.
+Result: `game_checks soulstealer` PASS (`checks-20261023-221828-s2`), control with the part off PASS (`checks-20261023-221613-s2`). Not ported: the 40% heals of fire teleport
+and the Chaos Orb, Deimoss' 25%, Uldyssian's flat amount; The Leoric (2907) refills to full life by itself before the call (details in `docs/unported.md`).
+
