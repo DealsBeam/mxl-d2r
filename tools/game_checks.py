@@ -13,7 +13,7 @@ Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout l
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
 classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
-cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
+cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling nodurability autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons.
 """
@@ -4814,6 +4814,73 @@ def check_nslong():
         "; ".join(bad) or "alias texts match the records"), shots, log)
 
 
+def check_orbtips():
+    """Mystic orb tooltips (audit T12): every orb's misc spelldescstr is its own string `mxlorb_<row>` (tools/orb_tips.py:
+    limit per item, required level, properties, target type) instead of the shared "Right-Click to Apply"."""
+    name = "Mystic orb tooltips: per-orb description (limit, level, properties, target type), hovered in the inventory"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    import csv
+    import json
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    with open(os.path.join(root, "work", "mod", "data", "global", "excel", "base", "misc.txt"), encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f, delimiter="\t"))
+    col = {h: i for i, h in enumerate(rows[0])}
+    orbs = [(r[col["code"]], r[col["spelldescstr"]].split(":", 1)[-1]) for r in rows[1:]
+            if r[col["spelldescstr"]].split(":", 1)[-1].startswith("mxlorb_")]
+    recs = {e["Key"]: e["enUS"] for e in json.load(open(os.path.join(
+        root, "work", "mod", "data", "global", "..", "local", "lng", "strings", "medianxl", "median.json"), encoding="utf-8-sig"))}
+    log, bad = [], []
+    texts = [recs.get(key, "") for _c, key in orbs]
+    if len(orbs) < 100 or len(set(texts)) < 90 or any("Right-Click" == t.strip() for t in texts):
+        bad.append("%d orbs, %d distinct texts" % (len(orbs), len(set(texts))))
+    # a spread of orbs: the first line of each record is read back through the string service (the game's own lookup)
+    pick = {}
+    for (code, key), text in zip(orbs, texts):
+        row = int(key.split("_")[1])
+        for tag, test in (("weapon", "(Weapon Only)" in text), ("armor", "(Armor Only)" in text), ("any", "(Any Equippable Item)" in text),
+                          ("chance", "Chance to cast" in text), ("resist", "Resist" in text), ("rare", "Rare items only" in text)):
+            if test and tag not in pick:
+                pick[tag] = (code, key, row, text)
+    goto(1)
+    close_menu()
+    placed = []
+    for tag, (code, key, row, text) in pick.items():
+        first = [w for w in text.split("\n") if w][0]
+        ok, lines = H("str key medianxl:" + key)
+        got = " ".join(lines)
+        want = _COLOUR.sub("", first)
+        want_console = first.replace(chr(255) + "c", "")
+        got_plain = re.sub("[^\x00-\x7f]+.", "", _COLOUR.sub("", got))
+        log.append("%s %s (%s): string answer %s; record %r" % (tag, key, code, got[:100], text.replace("\n", " | ")[:160]))
+        if not (ok and (want in got_plain or want_console in got)):
+            bad.append("%s does not give the record text '%s'" % (key, want))
+        H("remove %s 9" % code)
+        ok, made = H("item %s inv" % code)
+        m = re.search(r"item id=(\d+) .* x=(\d+) y=(\d+)", " ".join(made[:1])) if ok else None
+        if m:
+            placed.append((tag, key, int(m.group(2)), int(m.group(3))))
+        else:
+            bad.append("orb %s (%s) could not be created: %s" % (code, key, made[:1]))
+    g.key("i")
+    time.sleep(1.2)
+    shots = [sh("orbtips_inventory")]
+    for tag, key, x, y in placed:
+        fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
+        g.click(fx, fy, move_only=True)
+        time.sleep(1.0)
+        g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
+        time.sleep(2.0)
+        shots.append(sh("orbtips_%s_%s" % (tag, key)))
+    g.key("esc")
+    for tag, (code, _k, _r, _t) in pick.items():
+        H("remove %s 9" % code)
+    add(name, "FAIL" if bad else "REVIEW",
+        "%d orbs with their own record (%d distinct texts); strings read back and orbs hovered in the inventory (%s): the screenshots "
+        "show the tooltip (limit per item, required level, properties, target type); %s" % (
+            len(orbs), len(set(texts)), ", ".join("%s=%s" % (t, k) for t, k, _x, _y in placed), "; ".join(bad) or "no mismatch"), shots, log)
+
+
 # ------------------------------------------------------------------ strings: what the player reads (lane ns-verify)
 # docs/strings-namespace.md moves Median-only strings into the `medianxl` loader namespace and keeps D2R's own keys native.
 # The proof that the switch changes nothing the player sees: a fixed sample of strings is read back through the plugin
@@ -7752,7 +7819,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("nocorpse", check_nocorpse),
           ("cooldowns", check_cooldowns),
           ("collidetypes", check_collidetypes), ("skillstarts", check_skillstarts), ("activationfreq", check_activationfreq),
-          ("nslong", check_nslong),
+          ("nslong", check_nslong), ("orbtips", check_orbtips),
           ("strings", check_strings),
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
           ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("restrictitems", check_restrictitems), ("heat", check_heat),
