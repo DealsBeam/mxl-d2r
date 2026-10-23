@@ -468,6 +468,28 @@ def clear_shape_states():
     return on
 
 
+def right_panel_open():
+    """The inventory (or stash / cube) panel is open: the dark-red banner of the right-hand panel, 1600 x 900 client (0.09 of the
+    pixels of that strip; 0.00 on every scene screenshot of earlier runs, 0.04 for a cube-only panel)."""
+    im = g.grab_client(g.need_window()).convert("RGB").crop((840, 100, 1260, 160))
+    px = list(im.getdata())
+    return sum(1 for r, gr, b in px if r > 50 and r > 2 * gr and r > 2 * b) > 0.03 * len(px)
+
+
+def close_right_panel():
+    """Closes the inventory panel with the `i` key when the banner shows (a toggle, so only when it is open). Returns True when it
+    was open. A panel on the right half moves the player to the left of the screen: every check that clicks at the player's
+    projected position (monster hover) and the Save and Exit path miss their targets."""
+    if not right_panel_open():
+        return False
+    g.press("i")
+    time.sleep(1.0)
+    if right_panel_open():
+        g.press("esc")  # a stash or cube panel: one Esc closes it and the inventory with it
+        time.sleep(0.8)
+    return True
+
+
 def clean_start_state(label, report_dead=False):
     """The state a check needs the test character to be in: alive, in its own shape, nothing on the cursor. Repairs what it can and
     returns the notes of what it repaired (an empty list when the character was clean); a state it cannot repair raises. Called before
@@ -481,6 +503,11 @@ def clean_start_state(label, report_dead=False):
     held = release_held_item()
     if held:
         notes.append("item %d (%s) was held on the cursor (dropped; it blocks skill casts and NPC menus)" % held)
+    try:
+        if close_right_panel():
+            notes.append("the inventory panel was open (closed with `i`; it covers the right half of the client)")
+    except Exception as e:  # no window grab: the check that needs the screen will say so
+        g.log("start state before %s: panel test failed: %r" % (label, e))
     if notes:
         g.log("start state before %s: %s" % (label, "; ".join(notes)))
     return notes
@@ -8055,8 +8082,9 @@ def check_teleportgold():
         return gold
 
     trial("pile 24 behind the arrival point", 2000, not ctl)
-    H("gold set 160000 0")
-    trial("purse full", 160000, False)
+    cap = (rd("player", 12) or 1) * 10000  # the most gold a character carries (engine function 0x34b320): 10000 per character level
+    H("gold set %d 0" % cap)
+    trial("purse full (%d gold, level %s)" % (cap, rd("player", 12)), cap, False)
     g.press("x")
     time.sleep(0.6)
     off = travel_counts().get("pickup")
@@ -8766,15 +8794,17 @@ def check_collidetypes():
             verdict = None
             for attempt in range(6):
                 kill_all_near()
-                if spawn_id(18) is None:
+                sid = spawn_id(18)
+                if sid is None:
                     continue
                 time.sleep(0.5)
                 st = hstate()
                 p = st["player"]
-                mons = [m for m in st["mons"] if "mx" in m and "my" in m]
+                # the spawned monster itself: a town NPC left in the area (Deckard Cain, id 10, unkillable) is the nearest unit otherwise
+                mons = [m for m in st["mons"] if "mx" in m and "my" in m and m["id"] == sid]
                 if not mons:
                     continue
-                mo = min(mons, key=lambda m: (m["mx"] - p["x"]) ** 2 + (m["my"] - p["y"]) ** 2)
+                mo = mons[0]
                 vx, vy = mo["mx"] - p["x"], mo["my"] - p["y"]
                 d0 = (vx * vx + vy * vy) ** 0.5
                 if d0 < 7 or d0 > 18:  # the missile starts a few sub-tiles ahead of the player
