@@ -3,6 +3,8 @@
 
   py -3 tools/sprite3d/morph_shots.py [--slot N] [--skill 1364] [--area 2] [--keep] [--no-start] [--tag wereowl]
 
+`MXL_MORPH_DIRS=1` adds eight short walks (phases dir0..dir7, two frames each) in the eight facings.
+
 The slot's lock must be held by the caller (game_slots.py lock N <owner>, then MXL_RUN=<owner>); this script never takes or
 removes a lock. The test character is whoever the slot's first card is (MxlBarb): the harness `class 5` makes it a Druid for
 the skill checks, `setskill <skill> 1` gives it the morph skill (D2R skill id of Median's wereowl_form = 1364, werewolf_form
@@ -79,6 +81,13 @@ def run(skill, tag, area, form_state):
         gc.H("move %d %d" % (x - 9, y - 4))
         burst(tag, "run", 8, 0.2, rows)
         time.sleep(1.5)
+        if os.environ.get("MXL_MORPH_DIRS"):  # the form walking in eight directions (a sheet of every facing)
+            for k, (dx, dy) in enumerate(((6, 6), (8, 0), (6, -6), (0, -8), (-6, -6), (-8, 0), (-6, 6), (0, 8))):
+                p, x, y = ppos()
+                gc.H("move %d %d walk" % (x + dx, y + dy))
+                time.sleep(0.9)
+                burst(tag, "dir%d" % k, 2, 0.2, rows)
+            time.sleep(1.5)
     # attack: a target next to the player (Skeleton-class fodder), the form's attack skill then the plain attack
     gc.H("spawn 3 1")
     time.sleep(1.5)

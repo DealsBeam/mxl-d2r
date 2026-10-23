@@ -85,26 +85,55 @@ def casc_cache(rels):
     return out
 
 
-def write_textures(data, albedo_png, stems):  # stems: {texture stem: (suffixes, albedo gamma)}
-    """The maps in the engine's own formats (docs/hd-models.md 3b, d2r_texture.py): albedo BC3 sRGB (format 62) at 1024 (an RGBA8
-    or 2048 albedo showed noise or lost the GPU device); normal and ORM maps BC3 read linearly (format 61): flat normal DXT5nm
-    (255, y 128, 0, x 128), ORM (occlusion 255, roughness, metal 0, 255); the black thickness / mask map BC3 sRGB."""
+MAP_SIZE = 1024  # albedo, normal and ORM maps (the vanilla werebear's albedo and normal are 1024; an RGBA8 / 2048 albedo lost the GPU device)
+NRM_GREEN = os.environ.get("MXL_NRM_GREEN", "dx")  # the engine's green channel: "dx" = +y toward the image bottom (docs/hd-models.md 3d)
+
+
+def pack_normal(png, size):
+    """`normal.png` (OpenGL tangent space, tools/sprite3d/owl_maps.py) -> D2R's DXT5nm layout (255, y, 0, x) at `size`."""
     from PIL import Image
-    im = Image.open(albedo_png).convert("RGB").resize((1024, 1024), Image.LANCZOS)
+    im = Image.open(png).convert("RGB")
+    if im.size[0] != size:
+        im = im.resize((size, size), Image.LANCZOS)
+    n = np.asarray(im).astype(np.float32) / 127.5 - 1.0
+    n /= np.maximum(np.linalg.norm(n, axis=2, keepdims=True), 1e-6)
+    if NRM_GREEN == "dx":
+        n[..., 1] = -n[..., 1]
+    q = lambda c: np.clip(np.rint((c * 0.5 + 0.5) * 255), 0, 255).astype(np.uint8)
+    return np.dstack([np.full((size, size), 255, np.uint8), q(n[..., 1]), np.zeros((size, size), np.uint8), q(n[..., 0])])
+
+
+def pack_orm(png, size):
+    from PIL import Image
+    im = Image.open(png).convert("RGB")
+    if im.size[0] != size:
+        im = im.resize((size, size), Image.LANCZOS)
+    return np.dstack([np.asarray(im), np.full((size, size), 255, np.uint8)])
+
+
+def write_textures(data, assets, stems):  # stems: {texture stem: (suffixes, albedo gamma)}
+    """The maps in the engine's own formats (docs/hd-models.md 3b, d2r_texture.py): albedo BC3 sRGB (format 62) at MAP_SIZE; normal and
+    ORM maps BC3 read linearly (format 61): normal DXT5nm (255, y, 0, x), ORM (occlusion, roughness, metal 0, 255). `assets/normal.png`
+    / `orm.png` (baked from the high-poly, tools/sprite3d/owl_bake.py) are used when present, else flat maps; the black thickness /
+    mask map is BC3 sRGB."""
+    from PIL import Image
+    S = MAP_SIZE
+    im = Image.open(assets / "albedo.png").convert("RGB").resize((S, S), Image.LANCZOS)
     base = np.array(im).astype(np.float32) / 255.0
-    nrm = np.full((256, 256, 4), (255, 128, 0, 128), np.uint8)
-    orm = np.full((256, 256, 4), (255, 160, 0, 255), np.uint8)
+    nrm = pack_normal(assets / "normal.png", S) if (assets / "normal.png").exists() else np.full((256, 256, 4), (255, 128, 0, 128), np.uint8)
+    orm = pack_orm(assets / "orm.png", S) if (assets / "orm.png").exists() else np.full((256, 256, 4), (255, 160, 0, 255), np.uint8)
     black = np.full((256, 256, 4), (0, 0, 0, 255), np.uint8)
     for stem, (sufs, gamma) in stems.items():
         for suf in sufs:
             p = data / (stem + "_" + suf + ".texture")
             if suf == "alb":
                 rgb = 255.0 * base ** gamma
-                dt.write_bc3(p, np.dstack([np.rint(rgb).astype(np.uint8), np.full((1024, 1024), 255, np.uint8)]), mips=11)
+                dt.write_bc3(p, np.dstack([np.rint(rgb).astype(np.uint8), np.full((S, S), 255, np.uint8)]), mips=11)
             elif suf == "sss":
                 dt.write_bc3(p, black, mips=9)
             else:
-                dt.write_bc3(p, {"nrm": nrm, "orm": orm}[suf], mips=9, linear=True)
+                m = {"nrm": nrm, "orm": orm}[suf]
+                dt.write_bc3(p, m, mips=int(np.log2(m.shape[0])) + 1, linear=True)
 
 
 # a new texture path needs a descriptor in the engine's data/hd/texture_desc_cache.json (format, size, mips; 31073 entries), a new
@@ -113,7 +142,7 @@ TEXTURE_TEMPLATES = {"alb": ENEMY + "horse/textures/horse_alb.texture", "nrm": E
                      "orm": ENEMY + "horse/textures/horse_orm.texture"}
 
 
-def index_new_paths(data, models, textures):
+def index_new_paths(data, models, textures, assets_dir=Path(DEFAULT_ASSETS)):
     """Entries for the new paths in copies of the two index files, written into the mod folder (a copy already there, from another
     step, is extended; else the game's). `models`: {new model path: vanilla model path whose entry it copies}; `textures`: {new
     texture path: vanilla texture path whose descriptor it copies} (BC3 albedo 1024 with 11 mips, the other maps 256 with 9, as
@@ -129,8 +158,9 @@ def index_new_paths(data, models, textures):
         e = copy.deepcopy(by[template.lower()])
         alb = path.endswith("_alb.texture")
         e["filename"] = path
-        e["width"] = e["height"] = 1024 if alb else 256
-        e["levels"] = 11 if alb else 9
+        flat = not (assets_dir / ("normal.png" if path.endswith("_nrm.texture") else "orm.png")).exists() and not alb
+        e["width"] = e["height"] = 256 if flat else MAP_SIZE
+        e["levels"] = 9 if flat else 11
         if not alb:
             e["thumbnailMip"] = e["levels"] - 1
         cache = [x for x in cache if x["filename"] != path] + [e]
@@ -217,7 +247,7 @@ def main():
     npz = dict(np.load(assets / "mesh_lods.npz", allow_pickle=True))
     mj = json.loads((hdc / "monsters.json").read_text("utf-8"))
     dtex, ctex = place(USES["druid"])[1], place(USES["corrupted"])[1]
-    write_textures(data, assets / "albedo.png", {dtex: (("alb", "nrm", "orm"), USES["druid"]["gamma"]),
+    write_textures(data, assets, {dtex: (("alb", "nrm", "orm"), USES["druid"]["gamma"]),
                                                  ctex: (("alb", "nrm", "orm") + (("sss",) if OLD_PATHS else ()), USES["corrupted"]["gamma"])})
     sizes = {}
     for use, cfg in USES.items():
@@ -243,7 +273,7 @@ def main():
     (hdc / "monsters.json").write_text(json.dumps(mj, indent=2), encoding="utf-8")
     if not OLD_PATHS:
         index_new_paths(data, {place(c)[0] + "torso.model": ENEMY + c["slot"] + "/torso.model" for c in USES.values()},
-                        {place(c)[1] + "_%s.texture" % k: t for c in USES.values() for k, t in TEXTURE_TEMPLATES.items()})
+                        {place(c)[1] + "_%s.texture" % k: t for c in USES.values() for k, t in TEXTURE_TEMPLATES.items()}, assets)
     print("Wereowl 3D: Druid form -> %s (%s skeleton, models at %s), Corrupted Wereowl -> %s (goatman1 skeleton, models at %s); "
           "model sizes %s" % (USES["druid"]["unit"], USES["druid"]["donor"], place(USES["druid"])[0], mj["corrupted_wereowl"],
                               place(USES["corrupted"])[0], sizes))
