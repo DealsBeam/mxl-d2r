@@ -150,6 +150,7 @@ candidate looks free, the first ids of the range are taken unchecked.
 | Sealed level text (11192, two lines) | `dungeon_lockout.cpp` | two hard-coded lines | `medianxl:mxl_11192`, split into chat lines in text order |
 | "Closing in: %s" (11191) and the exit warning (11193), chat line and the on-screen timer | `dungeon_lockout.cpp` | hard-coded English | `medianxl:mxl_11191` / `medianxl:mxl_11193` |
 | Goblin notice suffix " appears!" (12320 `StrPushNotifGoblinAppear`) | `goblins.cpp` | hard-coded English | `medianxl:StrPushNotifGoblinAppear` |
+| Unique carry limit refusal (12109, "You can only carry one Relic") | `unique_limits.cpp` (`mxlstr::KeyUniqueLimit`) | - (new) | `medianxl:12109`, English kept as the fallback; Median shows this one line for every limited unique |
 | Stat columns (`stat_columns.cpp`, `mxl_statcols.h`) | | numbers and stat ids only | no string use |
 | Build-time readers of `strings_idkeys.json` | `tools/npc_actions_data.py` (ns-ui); `tools/txt_migrate.py` trophies use `strings_ns.qualify` | | emit keys, see above |
 

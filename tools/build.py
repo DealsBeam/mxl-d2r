@@ -11,6 +11,7 @@
   cube_tables.py     cube conditions          -> plugin/src/mxl_cube.h (+ cubemain stat ids, ext item conditions)
   sigma_data.py      requirements, dungeon lockout and goblin data -> plugin/src/mxl_{requirements,dungeons,goblins}.h
   items_data.py      runeword properties 8-13 -> plugin/src/mxl_runewords.h
+  unique_limits_data.py  uniqueitems2 carry limits -> plugin/src/mxl_unique_limits.h
   npc_actions_data.py  npcext menu slots + npcactions -> plugin/src/mxl_npc_actions.h (string ids resolved through tbl2json output)
   npc_services_data.py npcext service flags + requirement rows -> plugin/src/mxl_npc_services.h
   gfx_placeholders.py  D2R graphics for Median-only monsters (until the art port) + hd/character/monsters.json
@@ -40,7 +41,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decode"], ["tbl2json.py"],
-         ["txt_migrate.py"], ["art_fix.py"], ["waypoints_data.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["art_provenance.py"], ["hd_monsters.py"], ["wereowl_models.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["effects_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
+         ["txt_migrate.py"], ["art_fix.py"], ["waypoints_data.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["unique_limits_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["art_provenance.py"], ["hd_monsters.py"], ["wereowl_models.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["effects_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
          ["validate.py"]]
 
 
