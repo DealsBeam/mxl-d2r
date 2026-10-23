@@ -34,12 +34,20 @@
 //      and the right click prints the challenge as chat lines (mxl_items.h Trophies, items_ext_logic.h).
 // Items D2Sigma keeps (13, 18, 21, keys with calc3) use pSpell PluginSpellKeep (17), whose table flag is set here:
 // D2R's client marks an item spell as "used up" from that flag (0x308e80) and the server checks the two agree.
-// Not yet (refused, so the item is kept): 12, 15, 17, 19 (home_cherry, Perfect Ruby, askari_call, cherry, toa).
+//   12, 17 home_cherry, cherry (D2Sigma 0x1007fa90, 0x1007fb70): a teleport. calc1 is the Median level to go to (cherry:
+//      the secret Pacman level 218, or 0 = refused once the player's stat 467 is set; home_cherry: level 1), the player is sent
+//      there as D2R's waypoint warp does (0x488180, act changes included; the NPC travel 0x4f2e40 only opens a portal inside an act) and the dungeon lockout's clock of the
+//      destination starts (dungeon_lockout.cpp, D2Sigma 0x1005d9d0). The cherry (items.txt len = 1) then casts its skill
+//      (calc2, level calc3) where the player lands: D2Sigma first gives the player the skill, makes it the active one,
+//      casts it and puts the old active skill back; D2R's event skill caster (0x589930, as the missile hits use it) needs no
+//      skill in the list, so the cast alone is done.
+// Not yet (refused, so the item is kept): 15, 19 (Perfect Ruby, askari_call, toa).
 #include "item_spells.h"
 
 #include "client_messages.h"
 #include "client_messages_logic.h"
 #include "d2r.h"
+#include "dungeon_lockout.h"
 #include "info_panels.h"
 #include "items_ext_logic.h"
 #include "mxl_items.h"
@@ -81,6 +89,10 @@ constexpr uint64_t RoomLevelIdRva = 0x2efc10;    // (room) -> level id
 constexpr uint64_t LevelActRva = 0x3e2b5c8;      // (dataFlag, level id) -> act
 constexpr uint64_t UnitXYRva = 0x34a040;         // (unit, int32 xy[2])
 constexpr uint64_t FreeSpotRva = 0x517f90;       // (game, room, xy[2], 3, 0x400, &room, 5, 100): free spot near xy
+constexpr uint64_t TravelRva = 0x488180;        // (game, player, level, 0): the move to a level (waypoint warp); 0x4f2e40 opens a portal in the same act
+constexpr uint64_t EventSkillRva = 0x589930;     // (game, caster, skill, level, target, x, y, 4 x out, 0): cast a skill at once
+constexpr int ItCalc2 = 0xa8;                    // items record: calc2, calc3 (compiled formulas), as 1.13c
+constexpr int ItCalc3 = 0xac;
 constexpr uint64_t CreatePortalRva = 0x432ce0;   // (game, unit, room, x, y, destLevel, &object, objectId, 0, 1)
 constexpr uint64_t SetPortalLevelRva = 0x34e9d0; // (object, level byte); clears the high byte
 constexpr int UnitObjectData = 0x10;             // object unit -> object data
@@ -149,6 +161,9 @@ using FreeSpotFn = void (*)(d2r::Game* game, void* room, int32_t* xy, int32_t si
 using CreatePortalFn = int32_t (*)(d2r::Game* game, d2r::Unit* unit, void* room, int32_t x, int32_t y, int32_t level,
                                    d2r::Unit** object, int32_t objectId, int32_t findSpot, int32_t anywhere);
 using SetPortalLevelFn = void (*)(d2r::Unit* object, uint32_t level);
+using TravelFn = void (*)(d2r::Game* game, d2r::Unit* player, int32_t level, int32_t zero);
+using EventSkillFn = uint64_t (*)(d2r::Game* game, d2r::Unit* caster, int32_t skill, int32_t level, d2r::Unit* target, int32_t x,
+                                  int32_t y, void* out1, void* out2, void* out3, void* out4, int32_t zero);
 using GameCounterFn = int32_t* (*)(void* counters, const int32_t* key);
 using UnitMessageFn = void (*)(d2r::Unit* player, int32_t message, d2r::Unit* subject);
 using UnitInventoryFn = void* (*)(d2r::Unit* unit, const char* file, int32_t line);
@@ -187,6 +202,9 @@ UnitXYFn g_unitXY = nullptr;
 FreeSpotFn g_freeSpot = nullptr;
 CreatePortalFn g_createPortal = nullptr;
 SetPortalLevelFn g_setPortalLevel = nullptr;
+const D2RL::PluginContext* g_context = nullptr;
+TravelFn g_travel = nullptr;
+EventSkillFn g_eventSkill = nullptr;
 GameCounterFn g_gameCounter = nullptr;
 UnitMessageFn g_unitMessage = nullptr;
 UnitInventoryFn g_unitInventory = nullptr;
@@ -343,6 +361,53 @@ auto KeyLevel(const mxl_items::SigmaItem& entry, d2r::Game* game, d2r::Unit* pla
 	return level;
 }
 
+// D2Sigma 0x1007fa90 / 0x1007fb70: the D2R level a cherry sends the player to (its calc1, a Median level number), or 0 when
+// it may not be used: calc1 gives no level or one without a D2R twin.
+auto CherryLevel(d2r::Game* game, d2r::Unit* player, d2r::Unit* item) noexcept -> int32_t {
+	const uint8_t* record = ItemRecordOf(game, item);
+	if (record == nullptr) {
+		return 0;
+	}
+	const int32_t median = g_evalItemCalc(d2r::DataFlag(game), player, item, d2r::At<int32_t>(record, ItCalc1));
+	if (median <= 0 || median >= static_cast<int32_t>(std::size(mxl_items::LevelIds))) {
+		return 0;
+	}
+	const int32_t level = mxl_items::LevelIds[median];
+	return level > 0 && level <= 0xffff ? level : 0;
+}
+
+// The teleport of the cherries; true when the player was sent. `cast` (the cherry): then the item's skill at the landing spot.
+auto UseCherry(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, bool cast) noexcept -> bool {
+	const int32_t level = CherryLevel(game, player, item);
+	void* room = g_unitRoom(player);
+	if (level == 0 || room == nullptr || g_travel == nullptr) {
+		return false;
+	}
+	const int32_t from = g_roomLevelId(room);
+	const uint8_t* record = ItemRecordOf(game, item);
+	const uint32_t dataFlag = d2r::DataFlag(game);
+	const int32_t skill = cast ? g_evalItemCalc(dataFlag, player, item, d2r::At<int32_t>(record, ItCalc2)) : 0;
+	int32_t skillLevel = cast ? g_evalItemCalc(dataFlag, player, item, d2r::At<int32_t>(record, ItCalc3)) : 0;
+	if (skillLevel < 1) {
+		skillLevel = 1;
+	}
+	g_travel(game, player, level, 0);
+	DungeonLockoutItemEntered(game, player, from);
+	uint64_t casted = 0;
+	if (skill > 0) {
+		int32_t xy[2] = {};
+		g_unitXY(player, xy);
+		casted = g_eventSkill(game, player, skill, skillLevel, nullptr, xy[0], xy[1], nullptr, nullptr, nullptr, nullptr, 0);
+	}
+	if (g_context != nullptr) {
+		char line[160];
+		std::snprintf(line, sizeof(line), "mxl-core: cherry: level %d -> %d, skill %d level %d cast %llu", from, level, skill,
+		              skillLevel, static_cast<unsigned long long>(casted));
+		g_context->LogInfo(line);
+	}
+	return true;
+}
+
 // A portal next to `at` (the player, or a missile), as D2R's cube "Red Portal" output (0x5da800) opens one.
 auto OpenPortalAt(d2r::Game* game, d2r::Unit* player, d2r::Unit* at, int32_t level, int32_t object) noexcept -> bool {
 	void* room = g_unitRoom(at);
@@ -481,6 +546,13 @@ auto CheckDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Uni
 		}
 		g_unitMessage(player, 0x15, player);
 		return 0;
+	case 12:
+	case 17:
+		if (CherryLevel(game, player, item) != 0) {
+			return 1;
+		}
+		g_unitMessage(player, 0x15, player);
+		return 0;
 	case 18:
 		return ContainerOf(*entry) != nullptr ? 1 : 0;
 	case 13:
@@ -510,6 +582,12 @@ auto UseDispatch(d2r::Game* game, d2r::Unit* player, d2r::Unit* item, d2r::Unit*
 	case 16:
 		if (const int32_t level = KeyLevel(*entry, game, player, item);
 		    level == 0 || !OpenKeyPortal(game, player, item, level)) {
+			g_unitMessage(player, 0x15, player);
+		}
+		break;
+	case 12:
+	case 17:
+		if (!UseCherry(game, player, item, entry->spell == 17)) {
 			g_unitMessage(player, 0x15, player);
 		}
 		break;
@@ -585,6 +663,7 @@ auto HitLevelPortal(d2r::Game* game, d2r::Unit* owner, d2r::Unit* missile, int32
 
 auto InstallItemSpells(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;
+	g_context = context;
 	g_unitClass = reinterpret_cast<UnitClassFn>(base + UnitClassRva);
 	g_itemRecord = reinterpret_cast<ItemRecordFn>(base + ItemRecordRva);
 	g_itemIsType = reinterpret_cast<ItemIsTypeFn>(base + ItemIsTypeRva);
@@ -608,6 +687,8 @@ auto InstallItemSpells(const D2RL::PluginContext* context, char* report, size_t 
 	g_freeSpot = reinterpret_cast<FreeSpotFn>(base + FreeSpotRva);
 	g_createPortal = reinterpret_cast<CreatePortalFn>(base + CreatePortalRva);
 	g_setPortalLevel = reinterpret_cast<SetPortalLevelFn>(base + SetPortalLevelRva);
+	g_travel = reinterpret_cast<TravelFn>(base + TravelRva);
+	g_eventSkill = reinterpret_cast<EventSkillFn>(base + EventSkillRva);
 	g_gameCounter = reinterpret_cast<GameCounterFn>(base + GameCounterRva);
 	g_unitMessage = reinterpret_cast<UnitMessageFn>(base + UnitMessageRva);
 	g_unitInventory = reinterpret_cast<UnitInventoryFn>(base + UnitInventoryRva);

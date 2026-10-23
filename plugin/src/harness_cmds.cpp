@@ -36,6 +36,7 @@
 #include "monster_rules.h"
 #include "skill_damage.h"
 #include "skill_starts.h"
+#include "sigma_skills.h"
 #include "skill_tree.h"
 #include "mxl_skill_flags.h"
 #include "quests_act1.h"
@@ -53,6 +54,7 @@
 
 #define NOMINMAX
 #include <windows.h>
+#include <intrin.h>
 
 #include <cmath>
 #include <cstdarg>
@@ -3197,6 +3199,54 @@ auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// Client side (UI thread): `cltdo <skill id> [orig]` runs the skill's client function (cltdofunc, table 0x235f7d0 - the one the skill
+// dispatcher 0x216d20 calls with (unit, skill, level)) on the client's copy of the player, at the player's level of the skill (1
+// when it has none). Prints the function slot, the row's cltmissilea and what the function returned. A curse without a client
+// missile used to hit D2R's "nMissile >= 0" assert here (sigma_skills.cpp CltDoCurse); `orig` runs D2R's own curse function
+// (0x2b05d0) instead of the table entry, for the control of that assert (slot 30 rows only).
+// `skillstats`: counters of the wrapped srvdofunc slots 41 (casts, melee hits thrown) and 73 (casts, missile b / c taken).
+auto CmdSkillStats(Ctx*, const hcmd::Tokens&) noexcept -> bool {
+	long fanCasts = 0, fanHits = 0, hammerCasts = 0, hammerSwaps = 0;
+	SigmaSkillCounters(&fanCasts, &fanHits, &hammerCasts, &hammerSwaps);
+	Out("skillstats fan casts=%ld melee hits=%ld hammer casts=%ld swaps=%ld", fanCasts, fanHits, hammerCasts, hammerSwaps);
+	return true;
+}
+
+auto CmdCltDo(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long skill = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &skill)) {
+		return Fail(c, "usage: cltdo <skill id> [orig]");
+	}
+	if (g_playerId == 0) {
+		return Fail(c, "cltdo: no player seen yet");
+	}
+	Unit* unit = Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(g_playerId), 0);
+	if (unit == nullptr) {
+		return Fail(c, "cltdo: no client player unit");
+	}
+	const uint32_t dataFlag = Fn<UnitDataFlagFn>(RvaUnitDataFlag)(unit);
+	const uint8_t* record = d2r::api.getSkillRecord(dataFlag, static_cast<int32_t>(skill));
+	if (record == nullptr) {
+		return Fail(c, "cltdo: no skills.txt row %lld", skill);
+	}
+	const int slot = d2r::At<int16_t>(record, 0x14a);
+	const int missile = d2r::At<int16_t>(record, 0x140);
+	if (slot < 0 || slot >= 130) {
+		return Fail(c, "cltdo: skill %lld has no client function (cltdofunc %d)", skill, slot);
+	}
+	using CltFn = int64_t (*)(Unit*, int32_t, int32_t);
+	const bool orig = t.n > 2 && hcmd::LowerEq(t.tok[2], "orig") && slot == 30;
+	const uint64_t entry = orig ? g_base + 0x2b05d0
+	                            : *reinterpret_cast<const volatile uint64_t*>(g_base + 0x235f7d0 + static_cast<uint64_t>(slot) * 8);
+	if (entry == 0) {
+		return Fail(c, "cltdo: slot %d is empty", slot);
+	}
+	const int64_t r = reinterpret_cast<CltFn>(entry)(unit, static_cast<int32_t>(skill), 1);
+	Out("cltdo skill=%lld cltdofunc=%d cltmissilea=%d %s returned=%lld", skill, slot, missile, orig ? "orig" : "table",
+	    static_cast<long long>(r));
+	return true;
+}
+
 // `panelrow <stat>` runs the Advanced Stats panel's row functions (0x14eb1b0, 0x14eb250 - hooked by stat_columns.cpp) for a D2R
 // stat id on the server's player unit (the harness equips and sets stats there; the client's copy only learns of them through
 // packets): the displayed value and the row text (D2R colour codes removed), then the Strength / Dexterity bonus of the wielded
@@ -3728,6 +3778,146 @@ auto CmdMenu(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 constexpr uint64_t RvaStringThunk = 0x3e2b730;  // (u32 id) -> const char*
 using StringFn = const char* (*)(uint32_t);
 const D2RL::PluginContext* g_textContext = nullptr;
+
+// --- `asserttrace`: who raises D2R's engine asserts (lane p4-engine-b) -----------------------------------------------------------
+// Every BC_ASSERT of the engine ends in the report function 0x75ff0 (descriptor pointer in rcx: file name at +0, message at +0x20).
+// `asserttrace on` hooks it; each call keeps the message, the file and 16 return addresses found by scanning the stack (RVAs of the image) in a ring of 24 and writes them
+// to mxl-core.log ("assert trace: ..."). `asserttrace show` prints the ring, `asserttrace clear` empties it. The log of the loader names the
+// message but not the place; this gives the call chain, which is where a bad row or argument comes from.
+constexpr uint64_t RvaAssertReport = 0x75ff0;
+constexpr uint8_t AssertReportEntry[] = {0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x05, 0x05, 0x1f, 0xc4, 0x01};
+constexpr int AssertFrames = 16;
+constexpr int AssertRing = 24;
+struct AssertEvent {
+	char message[96];
+	char file[96];
+	uint32_t frames[AssertFrames];
+	int count;
+	long skill, level, cls;  // the last srvdofunc 65 call (see SrvDo65Hook)
+};
+AssertEvent g_asserts[AssertRing];
+// The last skill the aura-style server function 65 (0x563d90, the nRadius assert's caller) ran for: skill id, level, unit class.
+constexpr uint64_t RvaSrvDo65 = 0x563d90;
+constexpr uint8_t SrvDo65Entry[] = {0x40, 0x55, 0x53, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x8d, 0x6c, 0x24, 0xb8};
+volatile LONG g_do65Skill = -1;
+volatile LONG g_do65Level = -1;
+volatile LONG g_do65Class = -1;
+int64_t (*g_do65Original)(void*, void*, int, int) = nullptr;
+auto SrvDo65Hook(void* game, void* unit, int skill, int level) noexcept -> int64_t {
+	g_do65Skill = skill;
+	g_do65Level = level;
+	g_do65Class = -1;
+	__try {
+		g_do65Class = static_cast<LONG>(*reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(unit) + 4));
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+	}
+	return g_do65Original(game, unit, skill, level);
+}
+volatile LONG g_assertCount = 0;
+void (*g_assertOriginal)(void*) = nullptr;
+bool g_assertHooked = false;
+
+void ReadGuarded(const void* at, char* out, size_t cap) noexcept {
+	out[0] = '\0';
+	__try {
+		const char* p = static_cast<const char*>(at);
+		size_t i = 0;
+		for (; i + 1 < cap && p[i] != '\0' && static_cast<unsigned char>(p[i]) >= 0x20; ++i) {
+			out[i] = p[i];
+		}
+		out[i] = '\0';
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		out[0] = '\0';
+	}
+}
+
+void AssertReportHook(void* descriptor) noexcept {
+	const LONG slot = (InterlockedIncrement(&g_assertCount) - 1) % AssertRing;
+	AssertEvent& e = g_asserts[slot];
+	e.message[0] = e.file[0] = '\0';
+	if (descriptor != nullptr) {
+		const char* const* d = static_cast<const char* const*>(descriptor);
+		__try {
+			ReadGuarded(d[0], e.file, sizeof(e.file));
+			ReadGuarded(d[4], e.message, sizeof(e.message));
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+		}
+	}
+	// The unwinder stops after one frame in the engine's code, so the stack is scanned: every value of the next 400 slots that is a
+	// return address (inside the image, a call instruction before it) is a frame of the chain, innermost first.
+	e.count = 0;
+	e.skill = g_do65Skill;
+	e.level = g_do65Level;
+	e.cls = g_do65Class;
+	char line[600];
+	size_t used = static_cast<size_t>(std::snprintf(line, sizeof(line), "assert trace: %s | %s | skill %ld lvl %ld class %ld |", e.message, e.file,
+	                                                  static_cast<long>(g_do65Skill), static_cast<long>(g_do65Level), static_cast<long>(g_do65Class)));
+	const uint64_t* sp = static_cast<const uint64_t*>(_AddressOfReturnAddress());
+	__try {
+		for (int i = 0; i < 400 && e.count < AssertFrames; ++i) {
+			const uint64_t v = sp[i];
+			if (v < g_base + 0x1000 || v >= g_base + 0x1400000) {
+				continue;
+			}
+			const uint8_t* at = reinterpret_cast<const uint8_t*>(v);
+			if (at[-5] != 0xe8 && !(at[-6] == 0xff && (at[-5] & 0x38) == 0x10) && !(at[-2] == 0xff && (at[-1] & 0x38) == 0x10)) {
+				continue;
+			}
+			e.frames[e.count++] = static_cast<uint32_t>(v - g_base);
+			if (used + 12 < sizeof(line)) {
+				used += static_cast<size_t>(std::snprintf(line + used, sizeof(line) - used, " %x", e.frames[e.count - 1]));
+			}
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+	}
+	if (g_textContext != nullptr) {
+		g_textContext->LogInfo(line);
+	}
+	if (g_assertOriginal != nullptr) {
+		g_assertOriginal(descriptor);
+	}
+}
+
+auto CmdAssertTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: asserttrace on|show|clear");
+	}
+	if (hcmd::LowerEq(t.tok[1], "on")) {
+		if (!g_assertHooked) {
+			if (g_textContext == nullptr ||
+			    !g_textContext->InstallInlineHook(RvaAssertReport, AssertReportEntry, sizeof(AssertReportEntry),
+			                                      reinterpret_cast<void*>(&AssertReportHook), reinterpret_cast<void**>(&g_assertOriginal))) {
+				return Fail(c, "asserttrace: hook of 0x75ff0 failed");
+			}
+			g_assertHooked = true;
+			if (g_textContext->InstallInlineHook(RvaSrvDo65, SrvDo65Entry, sizeof(SrvDo65Entry), reinterpret_cast<void*>(&SrvDo65Hook),
+			                                     reinterpret_cast<void**>(&g_do65Original))) {
+				Out("asserttrace: srvdofunc 65 tracked");
+			}
+		}
+		Out("asserttrace on (%ld asserts so far)", static_cast<long>(g_assertCount));
+		return true;
+	}
+	if (hcmd::LowerEq(t.tok[1], "clear")) {
+		InterlockedExchange(&g_assertCount, 0);
+		Out("asserttrace cleared");
+		return true;
+	}
+	const LONG total = g_assertCount;
+	const LONG first = total > AssertRing ? total - AssertRing : 0;
+	for (LONG i = first; i < total; ++i) {
+		const AssertEvent& e = g_asserts[i % AssertRing];
+		char frames[256] = "";
+		size_t used = 0;
+		for (int k = 0; k < e.count && used + 12 < sizeof(frames); ++k) {
+			used += static_cast<size_t>(std::snprintf(frames + used, sizeof(frames) - used, "%s%x", k > 0 ? " " : "", e.frames[k]));
+		}
+		Out("assert %ld: %s [do65 skill %ld lvl %ld class %ld] | %s | %s", static_cast<long>(i), e.message, e.skill, e.level, e.cls, e.file, frames);
+	}
+	Out("asserttrace show: %ld asserts", static_cast<long>(total));
+	return true;
+}
+
 
 // D2R colour codes removed, newlines written as the two characters \n. A colour code is 0xff 'c' <char> (UTF-8 c3 bf) in the files;
 // the loaded strings hold it as one private-use character (UTF-8 ee 81 be) followed by the colour character.
@@ -4313,7 +4503,7 @@ const Verb Verbs[] = {
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
-    {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false}, {"tip", CmdTip, true}, {"tiplog", CmdTipLog, true}, {"tipfmt", CmdTipFmt, true},
+    {"cstat", CmdClientStat, true}, {"cltdo", CmdCltDo, true}, {"skillstats", CmdSkillStats, false}, {"asserttrace", CmdAssertTrace, false}, {"panelrow", CmdPanelRow, false}, {"tip", CmdTip, true}, {"tiplog", CmdTipLog, true}, {"tipfmt", CmdTipFmt, true},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"itemdesc", CmdItemDesc, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
