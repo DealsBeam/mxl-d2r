@@ -15,7 +15,8 @@ classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner 
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
-questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths.
+questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths teleportgold skillafford hcdeath
+meleenotarget reqlevel cubedrop.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -555,7 +556,7 @@ def check_mxl():
     txt = mxl_text()
     wanted = ["states fix", "level types", "calc codes", "skill functions", "item spells", "missile hits", "mana costs",
               "cube conditions", "craft flags", "act 1 quests", "dungeon lockout", "goblins on", "item events on",
-              "npc actions on", "skill tree on"]
+              "npc actions on", "skill tree on", "required level on", "hardcore death on", "teleport gold on", "skill afford on"]
     missing = [w for w in wanted if w not in txt]
     add("`mxl` console command output", "PASS" if not missing else "FAIL",
         "console_text('mxl') returned %d lines with all %d feature lines; first: %s" % (
@@ -7131,15 +7132,18 @@ def check_gamble():
 
 
 def check_engine_gaps():
-    name = "Small engine rules (audit item 21): hit 20 floor 0, recast guard of srvdofunc 47 removed, player slow floor -12 / -25 / -50 by difficulty"
+    ctl = "recast" in set(os.environ.get("MXL_CONTROL", "").split())  # control run: the recast guard is left in (off word `recast`)
+    name = "Small engine rules (audit item 21): hit 20 floor 0, recast guard of srvdofunc 47 removed (proved by a double cast), player slow floor -12 / -25 / -50 by difficulty%s" % (
+        " [control: recast off]" if ctl else "")
     if not need_game():
         return add(name, "BLOCKED", "not in a game")
     revive_if_dead()
     txt = mxl_text()
     line = [ln for ln in txt.splitlines() if "engine gaps" in ln]
     bad, rows = [], []
-    if not any("hit 20 floor 0x45edce on" in ln and "recast guard 0x56f859 on" in ln and "0x449f40 on" in ln for ln in line):
-        bad.append("the `mxl` engine gaps line is not all `on`: %s" % (line or "missing"))
+    want_line = "recast guard 0x56f859 off (word)" if ctl else "recast guard 0x56f859 on"
+    if not any("hit 20 floor 0x45edce on" in ln and want_line in ln and "0x449f40 on" in ln for ln in line):
+        bad.append("the `mxl` engine gaps line is not as expected (%s): %s" % (want_line, line or "missing"))
     first = None
     for diff, want in ((0, -12), (1, -25), (2, -50)):
         H("difficulty %d" % diff)
@@ -7154,11 +7158,519 @@ def check_engine_gaps():
     H("difficulty 0")
     if first:
         rows.append("hit20 bytes %s patched=%s, recast bytes %s patched=%s" % (first.get("hit20"), first.get("hit20_patched"), first.get("recast"), first.get("recast_patched")))
-        if first.get("hit20_patched") != "1" or first.get("recast_patched") != "1":
-            bad.append("a byte patch is not in memory: %s" % first)
+        if first.get("hit20_patched") != "1" or first.get("recast_patched") != ("0" if ctl else "1"):
+            bad.append("a byte patch is not in memory as expected: %s" % first)
     else:
         bad.append("`h gaps` gave no answer")
-    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], line + [rows[-1]] if rows else line)
+    # recast: Howl of the Spirits (1404, srvdofunc 47: a timed self buff with a state) cast again while its state runs. D2R's function
+    # returns at once when the caster has the state (the guard); Median's extends it. The cast needs the werewolf form state.
+    log = line + ([rows[-1]] if rows else [])
+    try:
+        howl = _state_id("howl_of_the_spirits_state")
+        were = _state_id("werewolf_form_state")
+        goto(2)
+        close_menu()
+        setstat("player", 8, 1291520)
+        H("setskill 1404 1")
+        H("setstate player %d 1" % were)
+        H("stat player 309 1404 set 1000")  # no cooldown between the casts
+        H("setstate player %d 0" % howl)
+        expiry = []
+        for _ in range(3):
+            H("cast 1404 self")
+            time.sleep(1.0)
+            on, listed, exp, frame = _has_state(howl)
+            expiry.append((on, exp))
+        H("setstate player %d 0" % were)
+        H("setskill 1404 0")
+        rows.append("Howl of the Spirits (1404) cast three times a second apart: state on / expiry frame %s" % expiry)
+        log.append(rows[-1])
+        grew = expiry[1][1] > expiry[0][1] and expiry[2][1] > expiry[1][1]
+        if not all(e[0] for e in expiry):
+            bad.append("the state is not on after a cast: %s" % expiry)
+        elif ctl and expiry[1][1] != expiry[0][1]:
+            bad.append("control: a second cast changed the expiry although the guard is in place: %s" % expiry)
+        elif not ctl and not grew:
+            bad.append("the expiry did not move with the second and third cast (recast guard still in): %s" % expiry)
+    except Exception as e:  # noqa: BLE001 - the byte checks above stand on their own
+        bad.append("the recast cast test failed to run: %r" % (e,))
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+
+
+CONTROL = set(os.environ.get("MXL_CONTROL", "").split())  # parts left out of this run (mxl-core-off.txt words): the check expects the old behaviour
+
+
+def _ctl(word):
+    return word in CONTROL
+
+
+def _ground_piles():
+    """{id: line} of the gold piles on the ground (`h dump ground`)."""
+    out = {}
+    for ln in H("dump ground")[1]:
+        m = re.search(r"ground id=(\d+) code=gld ", ln)
+        if m:
+            out[int(m.group(1))] = ln
+    return out
+
+
+def _tpgold():
+    m = re.search(r"teleports=(\d+) seen=(\d+) taken=(\d+)", " ".join(H("tpgold")[1]))
+    return tuple(int(x) for x in m.groups()) if m else (None, None, None)
+
+
+def _jump(tries=((24, 0), (-24, 0), (0, 24), (0, -24))):
+    """One Teleport (skill 54, srvdofunc 179) of 24 sub-tiles to an offset that works; returns (from, to) or None."""
+    for dx, dy in tries:
+        p0 = hstate()["player"]
+        setstat("player", 8, 1291520)
+        H("cast 54 %d %d" % (p0["x"] + dx, p0["y"] + dy))
+        time.sleep(1.5)
+        p1 = hstate()["player"]
+        if (p1["x"], p1["y"]) != (p0["x"], p0["y"]):
+            return (p0["x"], p0["y"]), (p1["x"], p1["y"])
+    return None
+
+
+def check_teleportgold():
+    """Gold auto-pickup after a teleport (Median D2AutoPickup.cpp: a teleport walks the units around the arrival point and picks up
+    the gold in reach) and the X toggle (audit GS2). Teleport (skill 54, slot 179) 24 sub-tiles away from a dropped pile."""
+    ctl = _ctl("teleportgold")
+    name = "Gold auto-pickup after a teleport (GS2) and the X toggle%s" % (" [control: teleportgold off]" if ctl else "")
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    god(False)
+    if hstate()["player"].get("area") != 2:
+        goto(2)
+    close_menu()
+    clean_area()
+    H("setskill 54 1")
+    txt = mxl_text()
+    line = [ln for ln in txt.splitlines() if "teleport gold" in ln]
+    rows, bad, log = [], [], list(line)
+    if not any(("teleport gold off" in ln) if ctl else ("teleport gold on" in ln) for ln in line):
+        bad.append("the `mxl` teleport gold line is not `%s`: %s" % ("off" if ctl else "on", line or "missing"))
+    if travel_counts().get("pickup") == "off":
+        g.press("x")
+        time.sleep(0.6)
+    saved = rd("player", 14)
+
+    left_over = {}  # piles an earlier trial left on the ground: the later teleports come back into their reach
+
+    def trial(label, gold_before, want_taken, drop=333):
+        """Drop a pile where the character stands, teleport away, see whether the pile (and the gold) is gone. Piles left from
+        earlier trials count as taken when they are within reach (36 sub-tiles) of the arrival point."""
+        H("gold set %d 0" % gold_before)
+        before = _ground_piles()
+        H("item gld 14=%d ground" % drop)
+        time.sleep(0.4)
+        mine = [i for i in _ground_piles() if i not in before]
+        t0 = _tpgold()
+        j = _jump()
+        time.sleep(0.5)
+        gold = rd("player", 14)
+        now = _ground_piles()
+        left = [i for i in mine if i in now]
+        t1 = _tpgold()
+        near = far = 0  # earlier piles clearly in reach (<= 30) / maybe in reach (30..40)
+        if j:
+            for i, (px, py) in left_over.items():
+                d = ((px - j[1][0]) ** 2 + (py - j[1][1]) ** 2) ** 0.5
+                near += 1 if d <= 30 else 0
+                far += 1 if 30 < d <= 40 else 0
+        extra_ok = range(near * drop, (near + far) * drop + 1, drop) if want_taken else [0]
+        row = "%s: pile %s, jump %s, gold %s -> %s, pile %s, counters %s -> %s, earlier piles in reach %d" % (
+            label, mine, j, gold_before, gold, "left" if left else "gone", t0, t1, near)
+        rows.append(row)
+        log.append(row)
+        if not mine:
+            bad.append("%s: the pile was not dropped" % label)
+        elif j is None:
+            bad.append("%s: the teleport did not move the character" % label)
+        elif want_taken and (left or (gold - gold_before - drop) not in extra_ok):
+            bad.append("%s: expected the pile taken (gold +%d), got %s" % (label, drop, row))
+        elif not want_taken and (not left or gold != gold_before):
+            bad.append("%s: expected the pile left alone, got %s" % (label, row))
+        for i in left:
+            m = re.search(r" at (\d+),(\d+)", now[i])
+            if m:
+                left_over[i] = (int(m.group(1)), int(m.group(2)))
+        for i in list(left_over):
+            if i not in now:
+                del left_over[i]
+        return gold
+
+    trial("pile 24 behind the arrival point", 2000, not ctl)
+    H("gold set 160000 0")
+    trial("purse full", 160000, False)
+    g.press("x")
+    time.sleep(0.6)
+    off = travel_counts().get("pickup")
+    if off != "off":
+        bad.append("the X key did not switch the pickup off (pickup %s)" % off)
+    trial("X toggle off", 2000, False)
+    g.press("x")
+    time.sleep(0.6)
+    if travel_counts().get("pickup") != "on":
+        bad.append("the second X press did not switch the pickup on again")
+    trial("X toggle on again", 2000, not ctl)
+    H("gold set %d 0" % saved)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+
+
+def _skill_usable(skill):
+    """`h skills` -> the usable code of one skill (0 usable, 1 not enough mana, ...) or None."""
+    for ln in H("skills")[1]:
+        m = re.match(r"skill id=(\d+) level=(\d+) mode=\S+ owner=\S+ usable=(-?\d+)", ln)
+        if m and int(m.group(1)) == skill:
+            return int(m.group(3))
+    return None
+
+
+def check_skillafford():
+    """Skill affordability from the cost formulas (audit common2-016 (a); Median D2SkillValidation.cpp 0x100b0b60). D2R's test 0x340900
+    reads the 16-bit mana columns; the 17 skills whose cost is a formula (calc7 / calc8: the summons' pet-count cost, titan's
+    fortitude) read 256 (1 mana) there and are always affordable. With mana below the formula cost they must be refused."""
+    ctl = _ctl("afford")
+    name = "Skill affordability uses the calc7/calc8 cost formulas (common2-016)%s" % (" [control: afford off]" if ctl else "")
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    god(False)
+    close_menu()
+    rows, bad, log = [], [], []
+    line = [ln for ln in mxl_text().splitlines() if "skill afford" in ln]
+    log += line
+    if not any(("skill afford off" in ln) if ctl else ("skill afford on" in ln) for ln in line):
+        bad.append("the `mxl` skill afford line is not `%s`: %s" % ("off" if ctl else "on", line or "missing"))
+    max_mana = rd("player", 9) or 1291520
+    saved = rd("player", 8)
+    for skill in (1285, 488, 1114):  # guardian spirit, two more pet skills: cost = (level - 1) * lvlmana(pets) + mana
+        H("setskill %d 10" % skill)
+        ok, first, lines = hv("afford %d" % skill, "afford")
+        m = re.search(r"afford=(\d) cost=(\d+) cols=(\d+)", first)
+        if not m:
+            bad.append("skill %d: `afford` gave no numbers: %s" % (skill, first[:120]))
+            continue
+        cost, cols = int(m.group(2)), int(m.group(3))
+        log.append(first)
+        if cost < 10 * 256 or cost <= 4 * cols or cost > max_mana // 2:
+            bad.append("skill %d: formula cost %d vs the columns %d (need a clear gap and room under the mana maximum)" % (skill, cost, cols))
+            continue
+        seen = {}
+        for label, mana in (("half the cost", cost // 2), ("twice the cost", min(cost * 2, max_mana))):
+            setstat("player", 8, mana)
+            ok, first, _l = hv("afford %d" % skill, "afford")
+            m2 = re.search(r"afford=(\d)", first)
+            seen[label] = (int(m2.group(1)) if m2 else None, _skill_usable(skill))
+            log.append("%d with %s (mana set %d): %s | usable %s" % (skill, label, mana, first[:120], seen[label][1]))
+        want_half = (1, 0) if ctl else (0, 1)  # (afford answer, usable code): D2R alone says affordable, the formula says no mana
+        rows.append("skill %d level 10: formula cost %.1f mana, columns %.1f; at half the cost afford=%s usable=%s (want %s), at twice afford=%s usable=%s" % (
+            skill, cost / 256, cols / 256, seen["half the cost"][0], seen["half the cost"][1], want_half, seen["twice the cost"][0], seen["twice the cost"][1]))
+        if seen["half the cost"] != want_half:
+            bad.append("skill %d: half the cost gives %s, want %s" % (skill, seen["half the cost"], want_half))
+        if seen["twice the cost"] != (1, 0):
+            bad.append("skill %d: twice the cost gives %s, want (1, 0)" % (skill, seen["twice the cost"]))
+    setstat("player", 8, saved if saved is not None else max_mana)
+    for skill in (1285, 488, 1114):
+        H("setskill %d 0" % skill)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+
+
+def _hc_line():
+    """`h hc` -> dict of the Hardcore flags (info word, hardcore bit, client flag, deaths seen / converted by the plugin)."""
+    line = next((l for l in H("hc")[1] if l.startswith("hc ")), "")
+    d = kv(line)
+    d["line"] = line
+    return d
+
+
+def _d2s_status():
+    """The character's status byte in the save (offset 0x14 of the D2R header: 0x04 hardcore, 0x08 died, 0x20 expansion)."""
+    with open(os.path.join(SAVES, g.CHAR_NAME + ".d2s"), "rb") as f:
+        return f.read(0x20)[0x14]
+
+
+def check_hcdeath():
+    """Hardcore death in Single Player (Median docs: a dead Hardcore character becomes Softcore; audit DC9 / HC1). D2R makes the
+    dead character unplayable (died flag, locked for good). The test character is marked Hardcore with `h hc on`, killed by a
+    monster's hit and respawned: the plugin must have cleared the Hardcore bits before D2R's death handlers ran, the character plays
+    on and the save written by Save and Exit has the Hardcore bit (status byte 0x04) cleared."""
+    ctl = _ctl("hcdeath")
+    name = "Hardcore death in Single Player: the dead Hardcore character becomes Softcore%s" % (" [control: hcdeath off]" if ctl else "")
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    fight_ready()
+    rows, bad, log = [], [], []
+    line = [ln for ln in mxl_text().splitlines() if "hardcore death" in ln]
+    log += line
+    if not any(("hardcore death off" in ln) if ctl else ("hardcore death on" in ln) for ln in line):
+        bad.append("the `mxl` hardcore death line is not `%s`: %s" % ("off" if ctl else "on", line or "missing"))
+    status0 = _d2s_status()
+    h0 = _hc_line()
+    H("hc on")
+    h1 = _hc_line()
+    if h1.get("hardcore") != "1" or not int(h1.get("client", "0"), 16) & 0x800:
+        bad.append("`hc on` did not mark the character Hardcore: %s" % h1["line"])
+    atk = spawn_attacker(1)
+    if atk is None:
+        return add(name, "BLOCKED", "no attacker monster")
+    setstat("player", 7, BIG_LIFE)
+    setstat("player", 6, 256 * 100)
+    ok, hline, _l = hv("hit player phys 2000000000 %s" % atk, "hit")
+    for _ in range(12):
+        time.sleep(1)
+        if hstate()["player"].get("mode") == 17:
+            break
+    h2 = _hc_line()
+    mode = hstate()["player"].get("mode")
+    rows.append("before %s | marked %s | dead (mode %s): %s" % (h0["line"], h1["line"], mode, h2["line"]))
+    log += [rows[-1], hline]
+    if mode != 17:
+        bad.append("the character did not die (mode %s): %s" % (mode, hline[:120]))
+    if ctl:
+        # D2R alone: still Hardcore after the death (and the character now unplayable): nothing converted
+        if h2.get("hardcore") != "1" or h2.get("converted") != h1.get("converted"):
+            bad.append("control: expected the character still Hardcore and nothing converted, got %s" % h2["line"])
+        # what D2R alone writes: Save and Exit keeps the Hardcore bit (the character cannot be played again: the run ends here)
+        left = leave_and_reenter()
+        status1 = _d2s_status()
+        rows.append("Save and Exit after the death: status byte 0x%02x -> 0x%02x (Hardcore bit 0x04 %s), re-entered: %s" % (
+            status0, status1, "set" if status1 & 4 else "clear", left))
+        if not status1 & 4:
+            bad.append("control: the saved status byte has no Hardcore bit: 0x%02x" % status1)
+        return add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+    if h2.get("hardcore") != "0" or int(h2.get("client", "0"), 16) & 0x800:
+        bad.append("after the death the character is still Hardcore: %s" % h2["line"])
+    if int(h2.get("converted", 0)) != int(h1.get("converted", 0)) + 1 or int(h2.get("deaths", 0)) != int(h1.get("deaths", 0)) + 1:
+        bad.append("the plugin's counters did not each rise by one: %s -> %s" % (h1["line"], h2["line"]))
+    time.sleep(6)
+    revived = revive_if_dead()
+    time.sleep(2)
+    p = hstate()["player"]
+    alive = p.get("mode") not in (0, 17)
+    h3 = _hc_line()
+    rows.append("respawn pressed (was dead %s), mode now %s, flags %s" % (revived, p.get("mode"), h3["line"]))
+    if not alive or h3.get("hardcore") != "0":
+        bad.append("the character did not come back as a Softcore player: %s" % rows[-1])
+    if not leave_and_reenter():
+        bad.append("Save and Exit + Play did not get back into a game")
+    else:
+        status1 = _d2s_status()
+        h4 = _hc_line()
+        rows.append("save status byte 0x%02x -> 0x%02x (Hardcore bit 0x04 %s), after re-entering: %s" % (
+            status0, status1, "set" if status1 & 4 else "clear", h4["line"]))
+        if status1 & 4:
+            bad.append("the saved status byte still has the Hardcore bit: 0x%02x" % status1)
+        if h4.get("hardcore") != "0":
+            bad.append("the re-entered character is Hardcore: %s" % h4["line"])
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+
+
+def _modewatch():
+    """`h modewatch read`: (attack modes, move modes, samples, last mode, mana at the start, lowest mana) since `modewatch start`."""
+    ok, lines = H("modewatch read")
+    m = re.search(r"attack=(\d+) move=(\d+) samples=(\d+) last=(-?\d+) mana=(-?\d+) min=(-?\d+)", " ".join(lines))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def _ground_click(fx, fy, shift):
+    """One left click on the ground in the game window (background input; Shift held as a window message state), watched by
+    `modewatch`: the player unit's attack / walk modes and the lowest mana during the following second."""
+    h = g.need_window()
+    H("modewatch stop")
+    H("modewatch start")
+    time.sleep(0.2)
+    if shift:
+        g._set_mods(("shift",))
+        g._post_key(h, "shift", False)
+        time.sleep(0.1)
+    g.click_bg(fx, fy)
+    time.sleep(1.0)
+    if shift:
+        g._post_key(h, "shift", True)
+        g._set_mods(())
+    r = _modewatch()
+    H("modewatch stop")
+    return r
+
+
+def check_meleenotarget():
+    """Melee skills without a target (Median P2.3.0, audit SK8: most melee skills can be used with Shift and no target). D2R's own
+    Shift-click does the same (the skill's start function runs at the clicked ground point and the character stands still); this
+    checks it for three Median melee skills (spiral_dance 521, cherubim 548, 722) with nothing to attack in reach: with Shift held
+    the character enters an attack mode and pays the skill's mana, without Shift it does not attack (it walks, or the skill is not used)."""
+    name = "Melee skills without a target: Shift + click on the ground attacks (SK8)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    fight_ready()
+    close_menu()
+    H("packclear")
+    H("unequip rhand")
+    H("unequip lhand")  # no weapon: the skills need none to be usable, a bow in the hand would make them unusable
+    rows, bad, log = [], [], []
+    for skill in (521, 548, 722):
+        H("setskill %d 5" % skill)
+        H("skill left %d" % skill)
+        usable = _skill_usable(skill)
+        res = {}
+        for label, shift in (("shift", True), ("plain", False)):
+            setstat("player", 8, 1291520)
+            time.sleep(0.3)
+            res[label] = _ground_click(0.62, 0.45, shift)
+            time.sleep(1.0)
+        s_, p_ = res["shift"], res["plain"]
+        rows.append("skill %d (usable code %s): Shift click -> attack modes %s, walk %s, mana %.1f -> %.1f; plain click -> attack %s, walk %s, mana lowest %.1f" % (
+            skill, usable, s_[0] if s_ else None, s_[1] if s_ else None, (s_[4] / 256) if s_ else 0, (s_[5] / 256) if s_ else 0,
+            p_[0] if p_ else None, p_[1] if p_ else None, (p_[5] / 256) if p_ else 0))
+        log.append(rows[-1])
+        if usable != 0:
+            bad.append("skill %d is not usable without a weapon (code %s)" % (skill, usable))
+        if not s_ or s_[0] < 1 or s_[5] >= s_[4]:
+            bad.append("skill %d: Shift click did not attack and spend mana: %s" % (skill, s_))
+        if not p_ or p_[0] != 0 or p_[5] < p_[4]:
+            bad.append("skill %d: the plain click attacked or spent mana: %s" % (skill, p_))
+    for skill in (521, 548, 722):
+        H("setskill %d 0" % skill)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+
+
+def _skills_row(skill_id):
+    """{column: value} of one skills.txt row of the built mod."""
+    t = _tsv(os.path.join(BUILT_EXCEL, "skills.txt"))
+    head = t[0]
+    for r in t[1:]:
+        if len(r) > 300 and r[head.index("*Id")] == str(skill_id):
+            return dict(zip(head, r))
+    return {}
+
+
+def _item_level_threshold(item_id, lo=1, hi=100):
+    """The lowest character level at which `req player` calls the backpack item usable (the requirement function's level check:
+    D2R's 0x3d4170 behind the executable's thunk 0x376de0), by bisection on stat 12. None when no level in lo..hi works."""
+    def ok(level):
+        setstat("player", 12, level)
+        for ln in H("req player")[1]:
+            if ln.startswith("req id=%d " % item_id):
+                return "level=1" in ln
+        return None
+    if ok(hi) is not True:
+        return None
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if ok(mid):
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+def check_reqlevel():
+    """Required level without the +6 oskill penalty (audit common1-013; Median's D2Common patch: "ITEMS_GetRequiredLevel no longer
+    adds 6 for class-only (oskill) bonuses"). An amulet whose only property is +1 to a skill of another class (stat 97, layer =
+    skill id; Teleport has no class) needs the skill's required level in Median (D2R: that plus 6). The lowest character level at
+    which the item is usable is found by bisection on the level stat; the barbarian test character is of none of these classes."""
+    ctl = _ctl("reqlevel")
+    name = "Required level of an oskill item without the +6 (common1-013)%s" % (" [control: reqlevel off]" if ctl else "")
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    rows, bad, log = [], [], []
+    ok, gl = H("gaps")
+    sites = re.search(r"reqlevel_sites=(-?\d+)", " ".join(gl))
+    log += gl[:1]
+    n_sites = int(sites.group(1)) if sites else None
+    if n_sites is None or (n_sites != 2 if not ctl else n_sites > 0):
+        bad.append("reqlevel sites patched: %s (want %s)" % (n_sites, "none" if ctl else "2"))
+    saved = rd("player", 12)
+    H("packclear")
+    for skill in (54, 483, 488):
+        row = _skills_row(skill)
+        want = int(row.get("reqlevel", "0")) + (6 if ctl else 0)
+        ok, lines = H("item amu 97:%d=1 inv" % skill)
+        m = re.search(r"item id=(\d+) ", " ".join(lines))
+        if not m:
+            bad.append("skill %d: the amulet could not be created: %s" % (skill, lines[:1]))
+            continue
+        iid = int(m.group(1))
+        got = _item_level_threshold(iid)
+        rows.append("skill %d (%s, class %r, reqlevel %s): usable from level %s (want %d)" % (skill, row.get("skill"), row.get("charclass"), row.get("reqlevel"), got, want))
+        log.append(rows[-1])
+        if got != want:
+            bad.append(rows[-1])
+        H("remove amu 1")
+    setstat("player", 12, saved)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+
+
+def check_cubedrop():
+    """A Horadric Cube dropped with items inside (audit item 21, game6-001: D2Sigma D2Game 0xd7b75 makes the place-into-container call of
+    the item-mode handler fail, so a cube dropped on the ground never takes its items back). D2R 3.3 has no such case to patch: its
+    drop handler 0x4bd8f0 refuses to drop a cube that holds items (the cube stays on the cursor, the items stay in it, nothing
+    reaches the ground), and an empty cube drops as usual. The check picks the cube up (packet 0x19) and drops it (0x17) with two
+    items inside and again empty."""
+    nm = "Cube dropped with items (game6-001): D2R refuses the drop, an empty cube drops"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    rows, bad, log = [], [], []
+    H("packclear")
+    H("cubeclear")
+    drop_cursor_item(log)
+
+    def cursor_id():
+        m = re.search(r"cursor id=(\d+)", " ".join(H("cursor")[1]))
+        return int(m.group(1)) if m else None
+
+    def boxes_on_ground():
+        return [l for l in H("dump ground")[1] if "code=box " in l and re.search(r"mode=[35] ", l)]
+
+    H("item box inv")
+    cube = next(iter(items(hstate(), "box")), None)
+    if not cube:
+        return add(nm, "BLOCKED", "no Horadric Cube in the backpack")
+    ok1, l1 = H("item hp1 cube")
+    ok2, l2 = H("item rin cube")
+    inside = [i for i in hstate()["items"] if i.get("page") == 3]
+    if not (ok1 and ok2) or len(inside) != 2:
+        return add(nm, "BLOCKED", "could not put two items into the cube: %s %s" % (l1[:1], l2[:1]))
+    g0 = len(boxes_on_ground())
+    H("pkt 19 " + _le(cube["id"], cube["x"], cube["y"], 0))
+    time.sleep(0.5)
+    held = cursor_id()
+    H("pkt 17 " + _le(cube["id"]))
+    time.sleep(1.0)
+    held2 = cursor_id()
+    inside2 = [i for i in hstate()["items"] if i.get("page") == 3]
+    g1 = len(boxes_on_ground())
+    rows.append("cube with %d items: picked up (cursor %s), drop packet -> cursor %s, items still inside %d, cubes on the ground %d -> %d" % (
+        len(inside), held, held2, len(inside2), g0, g1))
+    if held != cube["id"]:
+        bad.append("the cube did not reach the cursor (cursor %s)" % held)
+    if held2 != cube["id"] or g1 != g0 or len(inside2) != len(inside):
+        bad.append("the drop of the full cube was not refused: " + rows[-1])
+    # the empty cube: back into the backpack, emptied, picked up, dropped
+    H("pkt 18 " + _le(cube["id"], cube["x"], cube["y"], 0))
+    time.sleep(0.5)
+    H("cubeclear")
+    H("pkt 19 " + _le(cube["id"], cube["x"], cube["y"], 0))
+    time.sleep(0.5)
+    held3 = cursor_id()
+    H("pkt 17 " + _le(cube["id"]))
+    time.sleep(1.0)
+    held4 = cursor_id()
+    g2 = len(boxes_on_ground())
+    rows.append("empty cube: cursor %s, drop packet -> cursor %s, cubes on the ground %d -> %d" % (held3, held4, g1, g2))
+    log += rows
+    if held3 != cube["id"] or held4 is not None or g2 != g1 + 1:
+        bad.append("the empty cube was not dropped: " + rows[-1])
+    H("remove box 9")
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
 
 
 def check_mercrevive():
@@ -8438,7 +8950,10 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards),
           ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash),
           ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons), ("uniquelimits", check_uniquelimits),
-          ("assetpaths", check_assetpaths)]
+          ("assetpaths", check_assetpaths),
+          # lane p4-engine-a: engine rules of docs/unported.md (control runs: MXL_CONTROL="<off word>")
+          ("teleportgold", check_teleportgold), ("skillafford", check_skillafford), ("hcdeath", check_hcdeath),
+          ("meleenotarget", check_meleenotarget), ("reqlevel", check_reqlevel), ("cubedrop", check_cubedrop)]
 
 
 def write_report(extra=""):
