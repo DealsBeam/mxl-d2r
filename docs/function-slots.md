@@ -7,7 +7,7 @@ number runs whatever D2R put there (bug #31: Feral Strike, Flash, MonFrenzy and 
 `tools/validate.py` (`engine_rules`) fails the build when a Median row is still on a slot D2R changed.
 
 The audit is `py -3 tools/func_slots.py` (`D2R_BANK=base|""` picks the bank): the same vanilla skill (missile) is read
-in 1.13c's tables (`D2R Modding Tools\D2Compare_102\TXT\113c`) and D2R's, and every column slot that is not the same
+in the 1.13c view (`tools/vanilla113.py`: D2R's first rows plus the 22 slot cells D2R changed, kept as the 1.13c numbers) and D2R's, and every column slot that is not the same
 number is reported. `tools/func_slots_median.py` lists, per slot, the Median rows that use it against the vanilla users in
 both games. The remap constants (`SRV_DO_REMAP`, `SRV_START_REMAP`, `SRV_START_REMAP_WITH_DO`, `CLT_START_DROP`,
 `POISON`) are in `tools/func_slots.py`.
