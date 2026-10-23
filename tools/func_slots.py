@@ -6,11 +6,14 @@ A slot "moved" when the same vanilla skill (missile) uses number A in 1.13c's ta
 (A -> B) is read out of the rows; a column slot that maps to more than one D2R slot is reported as ambiguous.
 """
 import os
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import vanilla113  # noqa: E402  (the 1.13c view built from D2R's own tables)
+
 ROOT = Path(__file__).resolve().parent.parent
-V113 = ROOT.parent / "D2R Modding Tools" / "D2Compare_102" / "TXT" / "113c"
 D2R = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "excel" / os.environ.get("D2R_BANK", "base")
 
 SKILL_COLS = ["srvstfunc", "srvdofunc", "srvstopfunc", "srvprgfunc1", "srvprgfunc2", "srvprgfunc3",
@@ -39,9 +42,14 @@ def read(p: Path):
     return h, [l.rstrip("\r").split("\t") for l in lines[1:] if l.strip()]
 
 
+def vanilla(table: str):
+    """(header, rows) of skills.txt / missiles.txt as 1.13c has them (tools/vanilla113.py)."""
+    return vanilla113.load(table.removesuffix(".txt"), read)
+
+
 def moves(table: str, cols: list[str]) -> dict[str, dict[str, Counter]]:
     """column -> 1.13c slot -> Counter of D2R slot (as 'slot:skills')"""
-    vh, vr = read(V113 / table)
+    vh, vr = vanilla(table)
     dh, dr = read(D2R / table)
     k = KEY[table]
     d = {r[dh.index(k)]: r for r in dr}

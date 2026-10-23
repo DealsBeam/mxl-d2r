@@ -546,6 +546,14 @@ handler `0x1162f0`); 257 (first record) Repair only. All records can be listed a
 (`DecompOut.java 0x360d0`); the field layout is the table above. Maximum **5 lines per record** (the `+0x18` handler array has 5 slots, the id array 8);
 there are no spare slots for 16 actions.
 
+### Durability in the client UI (lane no-durability)
+
+| What | Where | Notes |
+|---|---|---|
+| `Durability: x of y` line of the item description | `0x2c1640 (item, text buffer)`, no result | gate: `0x373540` (the base has durability), `0x2f4b60` (maximum durability > 0), `0x374710` (throwable-like: no line); strings `ItemStats1d` and `newline` appended with `0x1412276a0` (strcat into a 0x400 buffer). Callers: `0x2bd480` (inventory tooltip, 9 args, one direct caller `0x150c377`) and `0x2be560` (`std::string out, item, flags, char, char* text, options*`; one direct caller `0x87e8ac`: `rcx` = a 0x28-byte block `{char* text, size, cap, inline buffer}`, `r8d` = 0, `r9b` = 1, `[rsp+0x20]` = 0, `[rsp+0x28]` = a block whose byte `+8` is 0). The harness verb `itemdesc` calls `0x2be560` that way |
+| Vendor panel mode | `0x2411e0` (VendorPanel set-up); dword `+0x168` of the panel: 0 trade, 1 repair vendor, 2 gambler | mode 1 for the NPC classes 0x9a Charsi, 0xb2, 0xfd, 0x101, 0x1ff Larzuk (the switch at `0x2412a3`, `mov [rbx+0x168],1` at `0x2412de`); mode 1 draws `button_repair`, `button_repair_all` and `background_repair` and hides `button_blank`, `button_close`, `background`; mode 2 draws `button_refresh` and the `tabs`. `0x22ba70` writes the same field of another panel (gold amount) and is not the vendor panel |
+| NPC menu "trade/repair" line | string id 0xd06 (`NPCMenuTradeRepair`, `trade/repair`) in the records of Charsi, Larzuk and record 257 | 0xd44 is `NPCMenuTrade` (`trade`), used by Akara, Gheed, Ormus, Malah, Anya; same click handler `0x112f30` |
+
 ### Adding Median's action lines
 
 Two options, both client-side data edits at load time (the table is on the heap, patch it after the process static-init, e.g. at the first
