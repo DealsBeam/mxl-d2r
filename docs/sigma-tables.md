@@ -106,6 +106,8 @@ field; before, 402 of 428 were named and 27 of 37 tables were complete).
   (skill tab titles), **itemclasses** and the **infographics** text blocks (text, font, colour, x, y) are named too.
 - **statscreen** (33 bytes, 15 columns): page, type, x, y, `Text`, `Color` (+11), `Font` (+12; the two were swapped in the
   first reading), `Stat`, `Layer`, `IsBase`, `IsPercent`, `Align`, `HoverText`, `Min` (zero), `Max` (was `Cap`).
+  `Min` is unread (no reader found): the `FUN_10117c10` dispatch and `engine/ui/StatScreen.cpp` handlers were searched
+  for a row +0x19 read; the source descriptor still names the field `min`, and all 242 values are zero.
 - **stateicons**: which states show a bottom-panel icon, which side, icon frame, tooltip
   (confirmed against `mxl_extracted/buff_timer_hook.cpp`).
 - **skilltabs**: skill tree tabs (class, tab, title string, screen position).
