@@ -16,8 +16,12 @@
 #include "d2r.h"
 #include "dungeon_lockout.h"
 #include "engine_gaps.h"
+#include "hardcore_death.h"
+#include "required_level.h"
+#include "teleport.h"
 #include "engine_gaps_logic.h"
 #include "gamble_logic.h"
+#include "vendor_stock.h"
 #include "goblins.h"
 #include "hirelings.h"
 #include "hirelings_logic.h"
@@ -36,6 +40,7 @@
 #include "monster_rules.h"
 #include "skill_damage.h"
 #include "skill_starts.h"
+#include "sigma_skills.h"
 #include "skill_tree.h"
 #include "mxl_skill_flags.h"
 #include "quests_act1.h"
@@ -53,12 +58,15 @@
 
 #define NOMINMAX
 #include <windows.h>
+#include <intrin.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 namespace {
 
@@ -2997,6 +3005,194 @@ auto CmdManaCharge(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
+// `hc [on|off]`: the player's Hardcore marks (info flag 4 at +0xe of 0x48fde0's struct, dead flag 8, client record +0x5658 bit
+// 0x800); `on` / `off` sets or clears the two Hardcore ones so a Softcore test character can die as a Hardcore one
+// (hardcore_death.cpp). `converted` counts the deaths the hook made Softcore.
+auto CmdHardcore(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	uint8_t* info = Fn<uint8_t* (*)(Unit*)>(0x48fde0)(c->player);
+	if (info == nullptr) {
+		return Fail(c, "hc: the player has no info struct");
+	}
+	uint8_t* client = nullptr;
+	int guard = 0;
+	for (auto* cl = d2r::At<uint8_t*>(c->game, GameClients); cl != nullptr && guard < 64; cl = d2r::At<uint8_t*>(cl, ClientNext), ++guard) {
+		if (d2r::At<int32_t>(cl, ClientState) == 4 && Fn<ClientUnitFn>(RvaClientUnit)(cl, 0) == c->player) {
+			client = cl;
+		}
+	}
+	if (client == nullptr) {
+		return Fail(c, "hc: no client record for the player");
+	}
+	if (t.n >= 2) {
+		const bool on = hcmd::LowerEq(t.tok[1], "on");
+		if (!on && !hcmd::LowerEq(t.tok[1], "off")) {
+			return Fail(c, "usage: hc [on|off]");
+		}
+		uint16_t& flags = *reinterpret_cast<uint16_t*>(info + 0xe);
+		uint32_t& cflags = *reinterpret_cast<uint32_t*>(client + 0x5658);
+		flags = static_cast<uint16_t>(on ? (flags | 4) : (flags & ~4));
+		cflags = on ? (cflags | 0x800) : (cflags & ~0x800u);
+	}
+	unsigned deaths = 0, converted = 0;
+	HardcoreDeathStats(&deaths, &converted);
+	Out("hc info=0x%x hardcore=%d dead=%d client=0x%x hardcore=%d mode=%d life=%d deaths=%u converted=%u", d2r::At<uint16_t>(info, 0xe),
+	    (d2r::At<uint16_t>(info, 0xe) & 4) != 0 ? 1 : 0, (d2r::At<uint16_t>(info, 0xe) & 8) != 0 ? 1 : 0, d2r::At<uint32_t>(client, 0x5658),
+	    (d2r::At<uint32_t>(client, 0x5658) & 0x800) != 0 ? 1 : 0, ModeOf(c->player), Stat(c->player, StatLife) >> 8, deaths, converted);
+	return true;
+}
+
+// `tpgold`: the teleport gold pickup's counters (teleport.cpp): teleports that looked around, gold piles in reach, piles taken.
+auto CmdTeleportGold(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	unsigned teleports = 0, seen = 0, piles = 0;
+	TeleportGoldStats(&teleports, &seen, &piles);
+	Out("tpgold teleports=%u seen=%u taken=%u gold=%d", teleports, seen, piles, Stat(c->player, StatGold));
+	return true;
+}
+
+// `modewatch start|stop|read`: a thread samples the player's unit mode every 2 ms and counts the entries into the attack / cast /
+// throw / kick / skill modes (7..14) and into walk / run (2, 3, 6): what a Shift click with a skill did, however short the swing.
+std::atomic<bool> g_modeRun{false};
+std::atomic<uint32_t> g_modeAttack{0}, g_modeMove{0}, g_modeSamples{0};
+std::atomic<int32_t> g_modeLast{-1};
+std::atomic<int32_t> g_modeMana0{0}, g_modeManaMin{0};
+
+auto ReadUnitMode(Unit* u) noexcept -> int32_t {
+	__try {
+		return d2r::At<int32_t>(u, UnitMode);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return -1;
+	}
+}
+
+auto ReadManaSafe(Unit* u) noexcept -> int32_t {
+	__try {
+		return Stat(u, 8);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return INT32_MAX;
+	}
+}
+
+auto CmdModeWatch(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: modewatch start|stop|read");
+	}
+	if (hcmd::LowerEq(t.tok[1], "start")) {
+		if (g_modeRun.load()) {
+			return Fail(c, "modewatch: already running");
+		}
+		g_modeAttack = 0;
+		g_modeMove = 0;
+		g_modeSamples = 0;
+		g_modeLast = -1;
+		g_modeMana0 = Stat(c->player, 8);
+		g_modeManaMin = g_modeMana0.load();
+		g_modeRun = true;
+		Unit* player = c->player;
+		std::thread([player]() {
+			int32_t last = ReadUnitMode(player);
+			while (g_modeRun.load()) {
+				const int32_t now = ReadUnitMode(player);
+				const int32_t mana = ReadManaSafe(player);
+				if (mana < g_modeManaMin.load()) {
+					g_modeManaMin = mana;
+				}
+				if (now != last && now >= 0) {
+					if (now >= 7 && now <= 14) {
+						g_modeAttack.fetch_add(1);
+					} else if (now == 2 || now == 3 || now == 6) {
+						g_modeMove.fetch_add(1);
+					}
+					g_modeLast = now;
+				}
+				last = now;
+				g_modeSamples.fetch_add(1);
+				Sleep(2);
+			}
+		}).detach();
+		Out("modewatch started");
+		return true;
+	}
+	if (hcmd::LowerEq(t.tok[1], "stop")) {
+		g_modeRun = false;
+	}
+	Out("modewatch running=%d attack=%u move=%u samples=%u last=%d mana=%d min=%d", g_modeRun.load() ? 1 : 0, g_modeAttack.load(), g_modeMove.load(),
+	    g_modeSamples.load(), g_modeLast.load(), g_modeMana0.load(), g_modeManaMin.load());
+	return true;
+}
+
+// `peek exe+<rva>|<address> [n]`: n bytes (default 32, at most 256) of the live process as hex, and the module the address is in
+// (name, base, offset): reads D2RCore.dll's functions behind the executable's `jmp [rip+x]` thunks.
+auto CmdPeek(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: peek exe+<hex rva>|<hex address> [bytes] [deref]");
+	}
+	const char* arg = t.tok[1];
+	uint64_t address = 0;
+	if (std::strncmp(arg, "exe+", 4) == 0) {
+		address = g_base + std::strtoull(arg + 4, nullptr, 16);
+	} else {
+		address = std::strtoull(arg, nullptr, 16);
+	}
+	long long n = 32;
+	if (t.n > 2 && (!hcmd::ParseInt(t.tok[2], &n) || n < 1 || n > 256)) {
+		return Fail(c, "peek: bytes 1..256");
+	}
+	if (t.n > 3 && hcmd::LowerEq(t.tok[3], "deref")) {
+		uint64_t pointer = 0;
+		__try {
+			pointer = *reinterpret_cast<const uint64_t*>(address);
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return Fail(c, "peek: unreadable %llx", static_cast<unsigned long long>(address));
+		}
+		address = pointer;
+	}
+	HMODULE module = nullptr;
+	char name[MAX_PATH] = "?";
+	if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	                       reinterpret_cast<LPCSTR>(address), &module)) {
+		GetModuleFileNameA(module, name, sizeof(name));
+	}
+	char hex[600] = "";
+	size_t len = 0;
+	__try {
+		for (long long i = 0; i < n; ++i) {
+			len += static_cast<size_t>(std::snprintf(hex + len, sizeof(hex) - len, "%02x", *reinterpret_cast<const uint8_t*>(address + i)));
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return Fail(c, "peek: unreadable at +%lld", static_cast<long long>(len / 2));
+	}
+	Out("peek address=%llx module=%s base=%llx offset=%llx bytes=%s", static_cast<unsigned long long>(address), name,
+	    static_cast<unsigned long long>(reinterpret_cast<uint64_t>(module)), static_cast<unsigned long long>(address - reinterpret_cast<uint64_t>(module)), hex);
+	return true;
+}
+
+// `afford <skill id>`: the usability test's afford step (0x340900, hooked by mana_costs.cpp InstallSkillAfford) for one of the
+// player's skills, with the cost the hook compares (D2Sigma's, 1/256 points) and the mana now: `afford=1` when the mana
+// covers it. D2R's own columns give `cols`, the cost D2R's test would use. `hook` counts the tests the hook answered / changed.
+auto CmdAfford(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id) || id < 0 || id > 0xffff) {
+		return Fail(c, "usage: afford <skill id>");
+	}
+	uint8_t* sk = Fn<SkillByIdFn>(RvaSkillById)(c->player, static_cast<int32_t>(id), -1);
+	if (sk == nullptr) {
+		return Fail(c, "afford: the player has no skill %lld (setskill %lld 1 first)", id, id);
+	}
+	auto* entry = reinterpret_cast<int64_t*>(sk);
+	const uint8_t* rec = d2r::At<const uint8_t*>(sk, 0);
+	const int32_t cost = SigmaSkillCost(c->player, entry);
+	const int32_t level = rec != nullptr ? d2r::At<int32_t>(sk, 0x40) : -1;
+	const int32_t cols = rec != nullptr ? ((level > 0 ? level - 1 : 0) * d2r::At<int16_t>(rec, 0x22c) + d2r::At<int16_t>(rec, 0x22a))
+	                                          << (d2r::At<uint8_t>(rec, 0x228) & 31)
+	                                    : -1;
+	const uint64_t verdict = Fn<uint64_t (*)(Unit*, int64_t*)>(0x340900)(c->player, entry);
+	const AffordLog l = SkillAffordLog();
+	Out("afford skill %lld level %d: afford=%llu cost=%d cols=%d mana=%d life=%d calc7=%d calc8=%d hook=%u/%u", id, level, static_cast<unsigned long long>(verdict),
+	    cost, cols, Stat(c->player, StatMana), Stat(c->player, 6), rec != nullptr ? d2r::At<int32_t>(rec, 0x1a8) : -2,
+	    rec != nullptr ? d2r::At<int32_t>(rec, 0x1ac) : -2, l.calls, l.changed);
+	return true;
+}
+
 // `cursor`: the item on the player's cursor (inventory +0x40, the one 0x4249f0 reports as "busy": no skill can be used while
 // it is held): id and code, or "empty". Drop it with the client packet 0x17 + id (u32).
 auto CmdCursor(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
@@ -3248,8 +3444,9 @@ auto CmdReq(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 				}
 			}
 		}
-		Out("req id=%u code=%s usable=%d lock=%d weapon=%d shield=%d types=%s", IdOf(it), code, static_cast<int>(r & 0xff), Stat(it, StatClassLock),
-		    Fn<IsItemTypeFn>(RvaIsItemType)(it, 0x2d) != 0, Fn<IsItemTypeFn>(RvaIsItemType)(it, 2) != 0, len > 0 ? types : "-");
+		Out("req id=%u code=%s usable=%d level=%u str=%u dex=%u lock=%d weapon=%d shield=%d types=%s", IdOf(it), code, static_cast<int>(r & 0xff), level,
+		    str, dex, Stat(it, StatClassLock), Fn<IsItemTypeFn>(RvaIsItemType)(it, 0x2d) != 0, Fn<IsItemTypeFn>(RvaIsItemType)(it, 2) != 0,
+		    len > 0 ? types : "-");
 		++n;
 	});
 	*classField = savedClass;
@@ -3286,6 +3483,54 @@ auto CmdClientStat(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		Fn<SetStatFn>(RvaSetStat)(unit, static_cast<int>(stat), static_cast<int32_t>(value), static_cast<int>(layer));
 	}
 	Out("cstat %lld:%lld = %d", stat, layer, Stat(unit, static_cast<int>(stat), static_cast<int>(layer)));
+	return true;
+}
+
+// Client side (UI thread): `cltdo <skill id> [orig]` runs the skill's client function (cltdofunc, table 0x235f7d0 - the one the skill
+// dispatcher 0x216d20 calls with (unit, skill, level)) on the client's copy of the player, at the player's level of the skill (1
+// when it has none). Prints the function slot, the row's cltmissilea and what the function returned. A curse without a client
+// missile used to hit D2R's "nMissile >= 0" assert here (sigma_skills.cpp CltDoCurse); `orig` runs D2R's own curse function
+// (0x2b05d0) instead of the table entry, for the control of that assert (slot 30 rows only).
+// `skillstats`: counters of the wrapped srvdofunc slots 41 (casts, melee hits thrown) and 73 (casts, missile b / c taken).
+auto CmdSkillStats(Ctx*, const hcmd::Tokens&) noexcept -> bool {
+	long fanCasts = 0, fanHits = 0, hammerCasts = 0, hammerSwaps = 0;
+	SigmaSkillCounters(&fanCasts, &fanHits, &hammerCasts, &hammerSwaps);
+	Out("skillstats fan casts=%ld melee hits=%ld hammer casts=%ld swaps=%ld", fanCasts, fanHits, hammerCasts, hammerSwaps);
+	return true;
+}
+
+auto CmdCltDo(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long skill = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &skill)) {
+		return Fail(c, "usage: cltdo <skill id> [orig]");
+	}
+	if (g_playerId == 0) {
+		return Fail(c, "cltdo: no player seen yet");
+	}
+	Unit* unit = Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(g_playerId), 0);
+	if (unit == nullptr) {
+		return Fail(c, "cltdo: no client player unit");
+	}
+	const uint32_t dataFlag = Fn<UnitDataFlagFn>(RvaUnitDataFlag)(unit);
+	const uint8_t* record = d2r::api.getSkillRecord(dataFlag, static_cast<int32_t>(skill));
+	if (record == nullptr) {
+		return Fail(c, "cltdo: no skills.txt row %lld", skill);
+	}
+	const int slot = d2r::At<int16_t>(record, 0x14a);
+	const int missile = d2r::At<int16_t>(record, 0x140);
+	if (slot < 0 || slot >= 130) {
+		return Fail(c, "cltdo: skill %lld has no client function (cltdofunc %d)", skill, slot);
+	}
+	using CltFn = int64_t (*)(Unit*, int32_t, int32_t);
+	const bool orig = t.n > 2 && hcmd::LowerEq(t.tok[2], "orig") && slot == 30;
+	const uint64_t entry = orig ? g_base + 0x2b05d0
+	                            : *reinterpret_cast<const volatile uint64_t*>(g_base + 0x235f7d0 + static_cast<uint64_t>(slot) * 8);
+	if (entry == 0) {
+		return Fail(c, "cltdo: slot %d is empty", slot);
+	}
+	const int64_t r = reinterpret_cast<CltFn>(entry)(unit, static_cast<int32_t>(skill), 1);
+	Out("cltdo skill=%lld cltdofunc=%d cltmissilea=%d %s returned=%lld", skill, slot, missile, orig ? "orig" : "table",
+	    static_cast<long long>(r));
 	return true;
 }
 
@@ -3642,16 +3887,34 @@ auto CmdLevelAct(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 // `shop [npc class]`: the inventory of the nearest vendor (the server builds it when a player opens the trade panel: `interact <npc>`,
 // then `menu <Trade line>`); bug #18 buys through the panel itself (a right click), see tools/game_checks.py check_vendors.
+//
+// `shop <class> restock` marks the stock stale (byte +0x35 of the NPC's shop state, (game, npc, &scratch) 0x502b70; the trade request 0x540850 clears and
+// rebuilds a stale stock for a single player), so the next trade panel is built for the player's level and difficulty as they are now.
+// The stock is otherwise built once per game, which a check that changes the level between two shops needs to get around.
 auto CmdShop(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long cls = -1;
 	if (t.n > 1 && !hcmd::ParseInt(t.tok[1], &cls)) {
-		return Fail(c, "usage: shop [npc class]");
+		return Fail(c, "usage: shop [npc class] [restock]");
 	}
 	Unit* npc = NearestMonster(c, cls, true);
 	if (npc == nullptr) {
 		return Fail(c, "shop: no such NPC alive in this area");
 	}
-	Out("shop npc id=%u class=%d", IdOf(npc), ClassOf(npc));
+	if (t.n > 2 && hcmd::LowerEq(t.tok[2], "restock")) {
+		uint8_t scratch[8] = {};
+		uint8_t* state = Fn<uint8_t* (*)(Game*, Unit*, void*)>(RvaNpcMercList)(c->game, npc, scratch);
+		if (state == nullptr) {
+			return Fail(c, "shop: the NPC has no shop state");
+		}
+		state[0x35] = 1;
+		Out("shop restock marked for npc id=%u (built %d)", IdOf(npc), static_cast<int>(state[0x34]));
+		return true;
+	}
+	{
+		const VendorStockTrace trace = VendorStockTraceNow();
+		Out("shop npc id=%u class=%d | stock builds %ld, last item level %d -> %d (cap), difficulty %d", IdOf(npc), ClassOf(npc), trace.builds,
+		    trace.ilvlIn, trace.ilvlOut, trace.difficulty);
+	}
 	int items = 0;
 	EachItemOf(npc, [&](Unit* it) {
 		++items;
@@ -3704,8 +3967,9 @@ auto CmdGaps(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	const bool recastOn =
 	    gaps::SameBytes(reinterpret_cast<const uint8_t*>(g_base + gaps::RecastGuardRva), gaps::RecastGuardPatched, sizeof(gaps::RecastGuardPatched));
 	const int difficulty = static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty));
-	Out("gaps hit20=%s hit20_patched=%d recast=%s recast_patched=%d slowfloor=%d expected_slowfloor=%d difficulty=%d", hit, hitOn ? 1 : 0, recast,
-	    recastOn ? 1 : 0, EngineGapsSlowFloor(c->game, c->player), gaps::PlayerSlowFloor(difficulty), difficulty);
+	Out("gaps hit20=%s hit20_patched=%d recast=%s recast_patched=%d slowfloor=%d expected_slowfloor=%d difficulty=%d reqlevel_sites=%d", hit,
+	    hitOn ? 1 : 0, recast, recastOn ? 1 : 0, EngineGapsSlowFloor(c->game, c->player), gaps::PlayerSlowFloor(difficulty), difficulty,
+	    RequiredLevelPatchedSites());
 	return true;
 }
 
@@ -3734,7 +3998,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | hotkey pickup|reveal|transmute (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | stashpage state|open|close|toggle|msgs|uia|widget|vis|put|fill|drop|list|move|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | gamble | gaps | levelact <id>..");
-	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | "
+	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | afford <skill> | hc [on|off] | tpgold | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
 	Out("backlog verbs: stat <ref> <stat> scan [max layer] | cubeslots <first> <count> | cubeout <recipe> [slot] (portal outputs) | state (portal dest=)");
 	return true;
@@ -3859,6 +4123,146 @@ auto CmdMenu(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 constexpr uint64_t RvaStringThunk = 0x3e2b730;  // (u32 id) -> const char*
 using StringFn = const char* (*)(uint32_t);
 const D2RL::PluginContext* g_textContext = nullptr;
+
+// --- `asserttrace`: who raises D2R's engine asserts (lane p4-engine-b) -----------------------------------------------------------
+// Every BC_ASSERT of the engine ends in the report function 0x75ff0 (descriptor pointer in rcx: file name at +0, message at +0x20).
+// `asserttrace on` hooks it; each call keeps the message, the file and 16 return addresses found by scanning the stack (RVAs of the image) in a ring of 24 and writes them
+// to mxl-core.log ("assert trace: ..."). `asserttrace show` prints the ring, `asserttrace clear` empties it. The log of the loader names the
+// message but not the place; this gives the call chain, which is where a bad row or argument comes from.
+constexpr uint64_t RvaAssertReport = 0x75ff0;
+constexpr uint8_t AssertReportEntry[] = {0x48, 0x83, 0xec, 0x28, 0x48, 0x8d, 0x05, 0x05, 0x1f, 0xc4, 0x01};
+constexpr int AssertFrames = 16;
+constexpr int AssertRing = 24;
+struct AssertEvent {
+	char message[96];
+	char file[96];
+	uint32_t frames[AssertFrames];
+	int count;
+	long skill, level, cls;  // the last srvdofunc 65 call (see SrvDo65Hook)
+};
+AssertEvent g_asserts[AssertRing];
+// The last skill the aura-style server function 65 (0x563d90, the nRadius assert's caller) ran for: skill id, level, unit class.
+constexpr uint64_t RvaSrvDo65 = 0x563d90;
+constexpr uint8_t SrvDo65Entry[] = {0x40, 0x55, 0x53, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x8d, 0x6c, 0x24, 0xb8};
+volatile LONG g_do65Skill = -1;
+volatile LONG g_do65Level = -1;
+volatile LONG g_do65Class = -1;
+int64_t (*g_do65Original)(void*, void*, int, int) = nullptr;
+auto SrvDo65Hook(void* game, void* unit, int skill, int level) noexcept -> int64_t {
+	g_do65Skill = skill;
+	g_do65Level = level;
+	g_do65Class = -1;
+	__try {
+		g_do65Class = static_cast<LONG>(*reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(unit) + 4));
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+	}
+	return g_do65Original(game, unit, skill, level);
+}
+volatile LONG g_assertCount = 0;
+void (*g_assertOriginal)(void*) = nullptr;
+bool g_assertHooked = false;
+
+void ReadGuarded(const void* at, char* out, size_t cap) noexcept {
+	out[0] = '\0';
+	__try {
+		const char* p = static_cast<const char*>(at);
+		size_t i = 0;
+		for (; i + 1 < cap && p[i] != '\0' && static_cast<unsigned char>(p[i]) >= 0x20; ++i) {
+			out[i] = p[i];
+		}
+		out[i] = '\0';
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		out[0] = '\0';
+	}
+}
+
+void AssertReportHook(void* descriptor) noexcept {
+	const LONG slot = (InterlockedIncrement(&g_assertCount) - 1) % AssertRing;
+	AssertEvent& e = g_asserts[slot];
+	e.message[0] = e.file[0] = '\0';
+	if (descriptor != nullptr) {
+		const char* const* d = static_cast<const char* const*>(descriptor);
+		__try {
+			ReadGuarded(d[0], e.file, sizeof(e.file));
+			ReadGuarded(d[4], e.message, sizeof(e.message));
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+		}
+	}
+	// The unwinder stops after one frame in the engine's code, so the stack is scanned: every value of the next 400 slots that is a
+	// return address (inside the image, a call instruction before it) is a frame of the chain, innermost first.
+	e.count = 0;
+	e.skill = g_do65Skill;
+	e.level = g_do65Level;
+	e.cls = g_do65Class;
+	char line[600];
+	size_t used = static_cast<size_t>(std::snprintf(line, sizeof(line), "assert trace: %s | %s | skill %ld lvl %ld class %ld |", e.message, e.file,
+	                                                  static_cast<long>(g_do65Skill), static_cast<long>(g_do65Level), static_cast<long>(g_do65Class)));
+	const uint64_t* sp = static_cast<const uint64_t*>(_AddressOfReturnAddress());
+	__try {
+		for (int i = 0; i < 400 && e.count < AssertFrames; ++i) {
+			const uint64_t v = sp[i];
+			if (v < g_base + 0x1000 || v >= g_base + 0x1400000) {
+				continue;
+			}
+			const uint8_t* at = reinterpret_cast<const uint8_t*>(v);
+			if (at[-5] != 0xe8 && !(at[-6] == 0xff && (at[-5] & 0x38) == 0x10) && !(at[-2] == 0xff && (at[-1] & 0x38) == 0x10)) {
+				continue;
+			}
+			e.frames[e.count++] = static_cast<uint32_t>(v - g_base);
+			if (used + 12 < sizeof(line)) {
+				used += static_cast<size_t>(std::snprintf(line + used, sizeof(line) - used, " %x", e.frames[e.count - 1]));
+			}
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+	}
+	if (g_textContext != nullptr) {
+		g_textContext->LogInfo(line);
+	}
+	if (g_assertOriginal != nullptr) {
+		g_assertOriginal(descriptor);
+	}
+}
+
+auto CmdAssertTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: asserttrace on|show|clear");
+	}
+	if (hcmd::LowerEq(t.tok[1], "on")) {
+		if (!g_assertHooked) {
+			if (g_textContext == nullptr ||
+			    !g_textContext->InstallInlineHook(RvaAssertReport, AssertReportEntry, sizeof(AssertReportEntry),
+			                                      reinterpret_cast<void*>(&AssertReportHook), reinterpret_cast<void**>(&g_assertOriginal))) {
+				return Fail(c, "asserttrace: hook of 0x75ff0 failed");
+			}
+			g_assertHooked = true;
+			if (g_textContext->InstallInlineHook(RvaSrvDo65, SrvDo65Entry, sizeof(SrvDo65Entry), reinterpret_cast<void*>(&SrvDo65Hook),
+			                                     reinterpret_cast<void**>(&g_do65Original))) {
+				Out("asserttrace: srvdofunc 65 tracked");
+			}
+		}
+		Out("asserttrace on (%ld asserts so far)", static_cast<long>(g_assertCount));
+		return true;
+	}
+	if (hcmd::LowerEq(t.tok[1], "clear")) {
+		InterlockedExchange(&g_assertCount, 0);
+		Out("asserttrace cleared");
+		return true;
+	}
+	const LONG total = g_assertCount;
+	const LONG first = total > AssertRing ? total - AssertRing : 0;
+	for (LONG i = first; i < total; ++i) {
+		const AssertEvent& e = g_asserts[i % AssertRing];
+		char frames[256] = "";
+		size_t used = 0;
+		for (int k = 0; k < e.count && used + 12 < sizeof(frames); ++k) {
+			used += static_cast<size_t>(std::snprintf(frames + used, sizeof(frames) - used, "%s%x", k > 0 ? " " : "", e.frames[k]));
+		}
+		Out("assert %ld: %s [do65 skill %ld lvl %ld class %ld] | %s | %s", static_cast<long>(i), e.message, e.skill, e.level, e.cls, e.file, frames);
+	}
+	Out("asserttrace show: %ld asserts", static_cast<long>(total));
+	return true;
+}
+
 
 // D2R colour codes removed, newlines written as the two characters \n. A colour code is 0xff 'c' <char> (UTF-8 c3 bf) in the files;
 // the loaded strings hold it as one private-use character (UTF-8 ee 81 be) followed by the colour character.
@@ -4466,13 +4870,13 @@ const Verb Verbs[] = {
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
-    {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false}, {"tip", CmdTip, true}, {"tiplog", CmdTipLog, true}, {"tipfmt", CmdTipFmt, true},
+    {"cstat", CmdClientStat, true}, {"cltdo", CmdCltDo, true}, {"skillstats", CmdSkillStats, false}, {"asserttrace", CmdAssertTrace, false}, {"panelrow", CmdPanelRow, false}, {"tip", CmdTip, true}, {"tiplog", CmdTipLog, true}, {"tipfmt", CmdTipFmt, true},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"itemdesc", CmdItemDesc, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"hotkey", CmdHotkey, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
-    {"stashpage", CmdStashPage, true}, {"ccorpses", CmdClientCorpses, true},
+    {"stashpage", CmdStashPage, true}, {"ccorpses", CmdClientCorpses, true}, {"afford", CmdAfford, false}, {"hc", CmdHardcore, false}, {"tpgold", CmdTeleportGold, false}, {"modewatch", CmdModeWatch, false}, {"peek", CmdPeek, false},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

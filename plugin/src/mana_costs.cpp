@@ -72,8 +72,8 @@ void* g_skillUseNext = nullptr;      // the stub's way on: D2R's skill use behin
 ManaChargeLog g_log;
 uint64_t g_exeBase = 0;
 
-// D2Sigma's cost at a charge site: the formulas, stat 228, the minimum.
-auto SigmaCost(uint32_t dataFlag, int32_t skillId, int32_t level, Unit* unit) noexcept -> int32_t {
+// D2Sigma's cost at a charge site: the formulas, stat 228, the minimum. The affordability test (SkillAfford) has no minimum.
+auto SigmaCost(uint32_t dataFlag, int32_t skillId, int32_t level, Unit* unit, bool minimum = true) noexcept -> int32_t {
 	const uint8_t* skill = d2r::api.getSkillRecord(dataFlag & 0xff, skillId);
 	if (skill == nullptr) {
 		return 0;
@@ -89,8 +89,8 @@ auto SigmaCost(uint32_t dataFlag, int32_t skillId, int32_t level, Unit* unit) no
 	}
 	lvlMana = static_cast<int32_t>(static_cast<int64_t>(lvlMana) * (100 + g_getStat(unit, StatManaCostPercent, 0)) / 100);
 	const int64_t cost = (static_cast<int64_t>(std::max(level - 1, 0)) * lvlMana + mana) << (At<uint8_t>(skill, SkManaShift) & 31);
-	const int64_t minimum = static_cast<int64_t>(At<int16_t>(skill, SkMinMana)) << 8;
-	return static_cast<int32_t>(std::clamp<int64_t>(std::max(cost, minimum), 0, INT32_MAX));
+	const int64_t floorCost = minimum ? static_cast<int64_t>(At<int16_t>(skill, SkMinMana)) << 8 : 0;
+	return static_cast<int32_t>(std::clamp<int64_t>(std::max(cost, floorCost), 0, INT32_MAX));
 }
 
 // Which charge site the call comes from: 1 server, 2 client, 0 any other caller. D2RLoader's hook of the server function
@@ -200,10 +200,112 @@ auto BuildSkillUseStub() noexcept -> void* {
 	return stub;
 }
 
+// --- Affordability (audit common2-016 (a), D2Sigma D2SkillValidation.cpp 0x100b0b60) ---------------------------------------
+// D2R's afford test 0x340900(unit, skill entry) reads the 16-bit mana / lvlmana columns: the 17 skills whose cost is a
+// formula (calc7 / calc8) read 0 there and are always "affordable", and stat 228 (mana cost %) never scales the lvlmana
+// part. D2Sigma uses the same formulas as the charge: ((level - 1) * lvlmana * (100 + stat 228) / 100 + mana) << shift
+// against the mana stat (the life stat for the blood-cost state). The hook keeps the rest of D2R's test as it is (the 0x74
+// special case) and replaces only the cost, and only for a player and only when the record has a formula or the unit has
+// a mana cost %; any other call gets D2R's answer.
+constexpr uint64_t AffordRva = 0x340900;
+// push rbp / push rsi / push r12 / push r15 / sub rsp,0x28 / xor r8d,r8d / mov rsi,rdx / mov
+constexpr uint8_t AffordEntry[] = {0x40, 0x55, 0x56, 0x41, 0x54, 0x41, 0x57, 0x48, 0x83, 0xec, 0x28, 0x45, 0x33, 0xc0, 0x48, 0x8b};
+constexpr uint64_t SkillLevelBonusRva = 0x3400a0;  // (unit, entry, 0) -> levels added by items
+constexpr uint64_t UnitDataFlagRva = 0x34a0e0;     // (unit) -> the data table flag byte
+constexpr uint64_t MaxSkillLevelRva = 0x300c70;    // (dataFlag, 0) -> the highest skill level the tables allow
+constexpr uint64_t HasStateRva = 0x3351b0;         // (unit, state)
+constexpr uint64_t SpecialUnitRva = 0x336090;      // (unit): the 0x74 special case of the test
+constexpr int EntryLevel = 0x40;                   // int32: the skill's own level
+constexpr int EntryKind = 0x4c;                    // int32: -1 for an ordinary skill
+constexpr int SkSpecial = 0x4e;                    // int16 of the record
+constexpr int32_t StateLifeCost = 0x72;
+constexpr int32_t StatMana = 8;
+constexpr int32_t StatLife = 6;
+
+using AffordFn = uint64_t (*)(Unit* unit, int64_t* entry);
+using BonusFn = int32_t (*)(Unit* unit, int64_t* entry, int32_t zero);
+using DataFlagByteFn = uint8_t (*)(Unit* unit);
+using MaxLevelFn = int32_t (*)(uint8_t dataFlag, int32_t zero);
+using HasStateFn = int64_t (*)(Unit* unit, int32_t state);
+using SpecialFn = int64_t (*)(Unit* unit);
+
+AffordFn g_affordOriginal = nullptr;
+BonusFn g_levelBonus = nullptr;
+DataFlagByteFn g_dataFlagByte = nullptr;
+MaxLevelFn g_maxLevel = nullptr;
+HasStateFn g_hasState = nullptr;
+SpecialFn g_special = nullptr;
+volatile LONG g_affordCalls = 0, g_affordChanged = 0;
+
+// The skill level D2R's test uses: own level plus the item bonus, at least 0, at most the table's top level.
+auto AffordLevel(Unit* unit, int64_t* entry) noexcept -> int32_t {
+	const int32_t sum = At<int32_t>(entry, EntryLevel) + g_levelBonus(unit, entry, 0);
+	const int32_t level = sum > 0 ? sum : 0;
+	const int32_t top = g_maxLevel(g_dataFlagByte(unit), 0);
+	return top <= level ? top : level;
+}
+
+auto SkillAfford(Unit* unit, int64_t* entry) noexcept -> uint64_t {
+	const uint64_t original = g_affordOriginal(unit, entry);
+	if (unit == nullptr || entry == nullptr || *entry == 0 || At<int32_t>(entry, EntryKind) != -1 ||
+	    At<int32_t>(unit, d2r::UnitType) != 0) {
+		return original;
+	}
+	const uint8_t* skill = reinterpret_cast<const uint8_t*>(*entry);
+	const int32_t percent = g_getStat(unit, StatManaCostPercent, 0);
+	if (At<int32_t>(skill, SkCalc7) < 0 && At<int32_t>(skill, SkCalc8) < 0 && percent == 0) {
+		return original;  // the 16-bit columns are the whole cost: D2R's test is right
+	}
+	const bool lifeCost = g_hasState(unit, StateLifeCost) != 0;
+	if (!lifeCost && At<int16_t>(skill, SkSpecial) == 0x74 && g_special(unit) != 0) {
+		return original;
+	}
+	const int32_t level = AffordLevel(unit, entry);
+	const int32_t cost = SigmaCost(g_dataFlagByte(unit), At<int16_t>(skill, 0), level, unit, false);
+	const int32_t have = g_getStat(unit, lifeCost ? StatLife : StatMana, 0);
+	const uint64_t verdict = cost <= have ? 1 : 0;
+	InterlockedIncrement(&g_affordCalls);
+	if (verdict != original) {
+		InterlockedIncrement(&g_affordChanged);
+	}
+	return verdict;
+}
+
 }  // namespace
 
 auto LastManaCharge() noexcept -> ManaChargeLog {
 	return g_log;
+}
+
+auto SkillAffordLog() noexcept -> AffordLog {
+	return {static_cast<unsigned>(g_affordCalls), static_cast<unsigned>(g_affordChanged)};
+}
+
+auto SigmaSkillCost(Unit* unit, int64_t* entry) noexcept -> int32_t {
+	if (unit == nullptr || entry == nullptr || *entry == 0 || g_dataFlagByte == nullptr) {
+		return -1;
+	}
+	const uint8_t* skill = reinterpret_cast<const uint8_t*>(*entry);
+	return SigmaCost(g_dataFlagByte(unit), At<int16_t>(skill, 0), AffordLevel(unit, entry), unit, false);
+}
+
+void ResolveAffordFunctions(const D2RL::PluginContext* context) noexcept {
+	g_exeBase = context->exeBase;
+	g_getStat = reinterpret_cast<GetStatFn>(g_exeBase + GetStatRva);
+	g_levelBonus = reinterpret_cast<BonusFn>(g_exeBase + SkillLevelBonusRva);
+	g_dataFlagByte = reinterpret_cast<DataFlagByteFn>(g_exeBase + UnitDataFlagRva);
+	g_maxLevel = reinterpret_cast<MaxLevelFn>(g_exeBase + MaxSkillLevelRva);
+	g_hasState = reinterpret_cast<HasStateFn>(g_exeBase + HasStateRva);
+	g_special = reinterpret_cast<SpecialFn>(g_exeBase + SpecialUnitRva);
+}
+
+auto InstallSkillAfford(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+	ResolveAffordFunctions(context);
+	const bool ok = context->InstallInlineHook(AffordRva, AffordEntry, sizeof(AffordEntry), SkillAfford,
+	                                           reinterpret_cast<void**>(&g_affordOriginal));
+	std::snprintf(report, reportSize, ok ? "on: affordability from the calc7/calc8 formulas and stat 228 (0x340900)"
+	                                     : "off: afford test hook failed (0x340900 entry bytes differ?)");
+	return ok;
 }
 
 auto InstallManaCosts(const D2RL::PluginContext* context, bool townFree, char* report, size_t reportSize) noexcept -> bool {

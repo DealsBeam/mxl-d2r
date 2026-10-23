@@ -469,7 +469,109 @@ auto CltDoWall(Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
 	return 1;
 }
 
+// D2Sigma's own versions of two vanilla server functions differ from D2R's in one step each (docs/plugin-spec.md); the
+// rest of both is the same code, so D2R's function runs in place and the step is added around it.
+//   41 (D2Sigma 0x100a9300; batstrike_2, vampiric_strike, deathgaze, skills_2759): the skill's target unit, if any, takes
+//      the queued melee hit first (1.13c pointer 0x101f1b04, D2R 0x44b2b0 as in SrvDoStrikeBurst), then the missiles
+//      fly in a random scatter around it. D2R's 0x56dd60 only throws the missiles.
+//   73 (D2Sigma 0x100aa190; hammer_of_zerae, power_shift): the missile is srvmissilea/b/c by calc2 clamped 1-3
+//      (calc2 blank = 1 = srvmissilea). D2R's 0x561f80 always takes srvmissilea (its progressive-skill getter 0x571700):
+//      for the duration of the call srvmissilea holds the one calc2 picks.
+constexpr int SrvDoFanSlot = 41;
+constexpr int SrvDoHammerSlot = 73;
+constexpr uint64_t RvaSrvDoFan = 0x56dd60;
+constexpr uint64_t RvaSrvDoHammer = 0x561f80;
+SrvDoFn g_srvDoFan = nullptr;
+SrvDoFn g_srvDoHammer = nullptr;
+long g_fanCasts = 0, g_fanMeleeHits = 0, g_hammerCasts = 0, g_hammerSwaps = 0;
+
+auto SrvDoFan(Game* game, Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (game == nullptr || unit == nullptr || g_srvDoFan == nullptr) {
+		return 0;
+	}
+	d2r::api.setUnitSkillFlag(unit, 1);
+	++g_fanCasts;
+	if (Unit* target = d2r::api.skillTargetUnit(game, unit)) {
+		d2r::api.applyMeleeHit(game, unit, target, 0, 1);
+		++g_fanMeleeHits;
+	}
+	g_srvDoFan(game, unit, skillId, level);
+	return 1;
+}
+
+auto SrvDoHammer(Game* game, Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (game == nullptr || unit == nullptr || g_srvDoHammer == nullptr) {
+		return 0;
+	}
+	uint8_t* skill = const_cast<uint8_t*>(d2r::api.getSkillRecord(d2r::DataFlag(game), skillId));
+	int16_t* first = skill != nullptr ? reinterpret_cast<int16_t*>(skill + d2r::SkSrvMissileA) : nullptr;
+	int16_t kept = 0;
+	++g_hammerCasts;
+	if (first != nullptr) {
+		int32_t pick = d2r::EvalCalc(game, unit, skill, d2r::SkCalc2, skillId, level);
+		pick = pick < 1 ? 1 : (pick > 3 ? 3 : pick);
+		const int16_t chosen = At<int16_t>(skill, d2r::SkSrvMissile + pick * 2);
+		if (pick > 1 && ValidMissile(game, chosen)) {
+			kept = *first;
+			*first = chosen;
+			++g_hammerSwaps;
+		} else {
+			first = nullptr;
+		}
+	}
+	const int64_t done = g_srvDoHammer(game, unit, skillId, level);
+	if (first != nullptr) {
+		*first = kept;
+	}
+	return done;
+}
+
+// D2R's client curse function (slot 30, 0x2b05d0) reads cltmissilea and asserts ("nMissile >= 0 && nMissile <
+// NumMissileStats", then returns without drawing) when the skill has none. Median's curses are mostly rows with no
+// cltmissilea / cltmissilec (52 of 75 cltdofunc 30 rows): their look is the state overlay, and D2Sigma's function
+// (D2Client's curse, filled in at start-up) skips the missile quietly. Wrapped in place: a row without a client
+// missile draws nothing, as in Median (the cast sound and the rest of the dispatcher still run, the function
+// returns 1), a row with one runs D2R's function unchanged. No curse visual is added to the rows.
+constexpr int CltDoCurseSlot = 30;
+constexpr uint64_t RvaCltDoCurse = 0x2b05d0;
 using CltDoFn = int64_t (*)(Unit* unit, int32_t skill, int32_t level);
+CltDoFn g_cltDoCurse = nullptr;
+auto CltDoCurse(Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (unit == nullptr || g_cltDoCurse == nullptr) {
+		return 0;
+	}
+	const uint32_t dataFlag = g_unitDataFlag(unit);
+	const uint8_t* skill = d2r::api.getSkillRecord(dataFlag, skillId);
+	if (skill == nullptr) {
+		return 0;
+	}
+	const int32_t missile = At<int16_t>(skill, SkCltMissile + 2);
+	if (missile < 0 || missile >= d2r::api.missileCount(dataFlag)) {
+		return 1;
+	}
+	g_cltDoCurse(unit, skillId, level);
+	return 1;
+}
+
+// D2R's area applier of the server aura / curse functions (0x4327d0 -> 0x4398b0) asserts "nRadius > 0" and applies nothing when the
+// skill's radius calc (aurarangecalc, skill +0x84) gives 0 or less. Median's self-only auras and monster property auras (property
+// dmg% = aura, e.g. the treasure goblin's skills_2511, srvdofunc 65) leave aurarangecalc blank: D2Sigma applies the state to the
+// caster and then to nobody. The applier itself returns before doing anything for a radius below 1, so skipping the call here keeps
+// the effect and drops the assert that fired every aura tick (about every 400 ms per monster).
+constexpr uint64_t RvaAreaAura = 0x4327d0;
+// MOV [RSP+0x10],RBX / MOV [RSP+0x18],RBP / MOV [RSP+0x20],RSI / PUSH RDI / SUB RSP,0x60
+constexpr uint8_t AreaAuraEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18,
+                                     0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xec, 0x60};
+using AreaAuraFn = void (*)(void*, void*, uint32_t, uint32_t, int32_t radius, uint32_t, void*, void*, uint32_t, void*, uint32_t);
+AreaAuraFn g_areaAura = nullptr;
+void AreaAuraHook(void* game, void* unit, uint32_t a, uint32_t b, int32_t radius, uint32_t flags, void* callback, void* context,
+                  uint32_t mode, void* file, uint32_t line) noexcept {
+	if (radius < 1) {
+		return;
+	}
+	g_areaAura(game, unit, a, b, radius, flags, callback, context, mode, file, line);
+}
+
 struct ClientSlot {
 	int slot;
 	CltDoFn function;
@@ -518,9 +620,54 @@ auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t
 			used += n > 0 ? static_cast<size_t>(n) : 0;
 		}
 	}
+	// Curse client function: wrapped in place (the slot holds D2R's own function).
+	const uint64_t curseRva = CltDoTable + static_cast<uint64_t>(CltDoCurseSlot) * 8;
+	const uint64_t curse = *reinterpret_cast<const volatile uint64_t*>(context->exeBase + curseRva);
+	g_cltDoCurse = reinterpret_cast<CltDoFn>(context->exeBase + RvaCltDoCurse);
+	{
+		struct Wrap { int slot; uint64_t rva; SrvDoFn* orig; SrvDoFn replacement; const char* name; };
+		const Wrap wraps[] = {{SrvDoFanSlot, RvaSrvDoFan, &g_srvDoFan, &SrvDoFan, "41 with the melee hit"},
+		                      {SrvDoHammerSlot, RvaSrvDoHammer, &g_srvDoHammer, &SrvDoHammer, "73 missile by calc2"}};
+		for (const Wrap& w : wraps) {
+			const uint64_t at = d2r::SrvDoTable + static_cast<uint64_t>(w.slot) * 8;
+			const uint64_t have = *reinterpret_cast<const volatile uint64_t*>(context->exeBase + at);
+			*w.orig = reinterpret_cast<SrvDoFn>(context->exeBase + w.rva);
+			const bool ok = have == context->exeBase + w.rva &&
+			                context->PatchWriteU64(at, &have, sizeof(have), reinterpret_cast<uint64_t>(w.replacement));
+			installed += ok ? 1 : 0;
+			if (used < reportSize) {
+				const int n = std::snprintf(report + used, reportSize - used, "%s srvdofunc %s%s", used ? ";" : "", w.name,
+				                            ok ? "" : " FAILED");
+				used += n > 0 ? static_cast<size_t>(n) : 0;
+			}
+		}
+	}
+	const bool curseOk = curse == context->exeBase + RvaCltDoCurse &&
+	                     context->PatchWriteU64(curseRva, &curse, sizeof(curse), reinterpret_cast<uint64_t>(&CltDoCurse));
+	installed += curseOk ? 1 : 0;
+	if (used < reportSize) {
+		const int n = std::snprintf(report + used, reportSize - used, "%s cltdofunc %d curse without client missile%s",
+		                            used ? ";" : "", CltDoCurseSlot, curseOk ? "" : " FAILED");
+		used += n > 0 ? static_cast<size_t>(n) : 0;
+	}
+	const bool areaOk = context->InstallInlineHook(RvaAreaAura, AreaAuraEntry, sizeof(AreaAuraEntry),
+	                                               reinterpret_cast<void*>(&AreaAuraHook), reinterpret_cast<void**>(&g_areaAura));
+	installed += areaOk ? 1 : 0;
+	if (used < reportSize) {
+		const int n = std::snprintf(report + used, reportSize - used, "%s area aura without radius%s", used ? ";" : "",
+		                            areaOk ? "" : " FAILED");
+		used += n > 0 ? static_cast<size_t>(n) : 0;
+	}
 	return installed;
 }
 
+auto SigmaSkillCounters(long* fanCasts, long* fanMeleeHits, long* hammerCasts, long* hammerSwaps) noexcept -> void {
+	*fanCasts = g_fanCasts;
+	*fanMeleeHits = g_fanMeleeHits;
+	*hammerCasts = g_hammerCasts;
+	*hammerSwaps = g_hammerSwaps;
+}
+
 auto SigmaSkillCount() noexcept -> int {
-	return static_cast<int>(sizeof(Functions) / sizeof(Functions[0]) + sizeof(ClientFunctions) / sizeof(ClientFunctions[0]));
+	return static_cast<int>(sizeof(Functions) / sizeof(Functions[0]) + sizeof(ClientFunctions) / sizeof(ClientFunctions[0]) + 4);
 }

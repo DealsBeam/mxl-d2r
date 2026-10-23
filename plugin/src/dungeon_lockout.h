@@ -19,3 +19,7 @@ auto DungeonActTravels() noexcept -> int;
 // Test harness (`lockcheck <level>`): what the warp test says about the player entering `dst`, without sending anything or
 // counting: 0 allowed, 1 requirements, 2 quest-table condition, 3 sealed, -1 no row for the level / no player.
 auto DungeonLockoutProbe(void* game, void* player, int dst) noexcept -> int;
+
+// An item teleport (the cherries, item_spells.cpp; D2Sigma 0x1007fb70 -> 0x1005d9d0): the player has arrived from level `from`; starts
+// the destination's clock like a stair or portal entry does. Nothing happens when the lockout is off.
+void DungeonLockoutItemEntered(void* game, void* player, int from) noexcept;

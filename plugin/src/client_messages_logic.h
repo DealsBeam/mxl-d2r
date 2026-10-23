@@ -185,10 +185,18 @@ inline constexpr uint32_t MsgRewardArmor = 0x61;
 inline constexpr int SoundItemGem = 217;
 inline constexpr int SoundShrineStandIn = 2608;
 inline constexpr int SoundItemLightArmor = 230;
+// Median's message 0x5e (D2AutoPickup.cpp 0x4c7e0, sounds row 2642 object_waypoint_open, no other effect) is the sound of the
+// waypoint that has just been activated by walking up to it (travel.cpp). D2R's own handler uses 0x5e for a voice line, so the
+// plugin sends this id and the client hook plays the row. Median sends it once per character (a flag bit); the plugin on each
+// activation.
+inline constexpr uint32_t MsgWaypointOpen = 0x70;
+inline constexpr int SoundWaypointOpen = 2642;
 // The sound row of a reward message, 0 for any other message.
 constexpr auto RewardSound(uint32_t message) noexcept -> int {
 	return message == MsgRewardGem ? SoundItemGem
-	                               : (message == MsgRewardShrine ? SoundShrineStandIn : (message == MsgRewardArmor ? SoundItemLightArmor : 0));
+	                               : (message == MsgRewardShrine ? SoundShrineStandIn
+	                                                             : (message == MsgRewardArmor ? SoundItemLightArmor
+	                                                                                          : (message == MsgWaypointOpen ? SoundWaypointOpen : 0)));
 }
 // `count` > 1 prefixes the number.
 inline void RewardLine(const char* what, int count, char* out, size_t outSize) noexcept {
