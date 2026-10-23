@@ -9,6 +9,7 @@
 // "h: <verb> OK" or "h: <verb> FAIL <reason>".
 #include "harness_cmds_logic.h"
 
+#include "buff_icons.h"
 #include "client_messages.h"
 #include "collide_types.h"
 #include "craft_flags.h"
@@ -921,6 +922,61 @@ auto CmdInfoPanel(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	int asked = 0, opened = 0, failed = 0;
 	InfoPanelCounts(&asked, &opened, &failed);
 	Out("infopanel state0=%d state1=%d asked=%d opened=%d failed=%d", InfoPanelState(0), InfoPanelState(1), asked, opened, failed);
+	return true;
+}
+
+// Client side: `bufficons` prints the buff icon bar's counters and the icons of the last overlay frame (state, group, slot,
+// seconds left, -1 = no timer); `bufficons hover <x> <y>` / `hover state <n>` / `hover off` moves the cursor the bar sees (screen
+// pixels; `state` = the centre of that state's icon); `bufficons cstate <state> <0|1>` sets a state bit on the client's copy of
+// the player (the bar reads that copy; a state the server sets reaches it only through D2R's own packets).
+auto CmdBuffIcons(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long a = 0, b = 0;
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "hover")) {
+		if (t.n == 3 && hcmd::LowerEq(t.tok[2], "off")) {
+			BuffIconsHover(0.0F, 0.0F, false);
+			Out("bufficons hover off");
+			return true;
+		}
+		float x = 0.0F, y = 0.0F;
+		if (t.n == 4 && hcmd::LowerEq(t.tok[2], "state") && hcmd::ParseInt(t.tok[3], &a)) {
+			if (!BuffIconsCentre(static_cast<int>(a), &x, &y)) {
+				return Fail(c, "bufficons: state %lld is not shown", a);
+			}
+		} else if (t.n == 4 && hcmd::ParseInt(t.tok[2], &a) && hcmd::ParseInt(t.tok[3], &b)) {
+			x = static_cast<float>(a);
+			y = static_cast<float>(b);
+		} else {
+			return Fail(c, "usage: bufficons hover <x> <y> | state <n> | off");
+		}
+		BuffIconsHover(x, y, true);
+		Out("bufficons hover %.0f %.0f", static_cast<double>(x), static_cast<double>(y));
+		return true;
+	}
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "probe")) {
+		const bool on = t.n < 3 || !hcmd::LowerEq(t.tok[2], "off");
+		BuffIconsProbe(on);
+		Out("bufficons probe %s codes=0x%x", on ? "on" : "off", BuffIconsProbeCodes());
+		return true;
+	}
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "cstate")) {
+		if (t.n != 4 || !hcmd::ParseInt(t.tok[2], &a) || !hcmd::ParseInt(t.tok[3], &b) || a < 1 || a > 1023) {
+			return Fail(c, "usage: bufficons cstate <state> <0|1>");
+		}
+		if (!BuffIconsClientState(static_cast<int>(a), b != 0)) {
+			return Fail(c, "bufficons: no local player (or the part is off)");
+		}
+		Out("bufficons cstate %lld %lld", a, b);
+		return true;
+	}
+	char counters[512];
+	BuffIconShown shown[64];
+	const int n = BuffIconsStatus(counters, sizeof(counters), shown, 64);
+	Out("bufficons %s", counters);
+	for (int i = 0; i < n; ++i) {
+		Out("bufficons icon state=%d side=%d slot=%d row=%d secs=%d hover=%d x=%.0f y=%.0f size=%.0f", shown[i].state, shown[i].side,
+		    shown[i].slot, shown[i].row, shown[i].seconds, shown[i].hovered ? 1 : 0, static_cast<double>(shown[i].x),
+		    static_cast<double>(shown[i].y), static_cast<double>(shown[i].size));
+	}
 	return true;
 }
 
@@ -3973,7 +4029,7 @@ const Verb Verbs[] = {
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
 };
 
