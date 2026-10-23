@@ -28,6 +28,9 @@
 #include "item_spells.h"
 #include "missile_hits.h"
 #include "mana_costs.h"
+#include "hardcore_death.h"
+#include "required_level.h"
+#include "teleport.h"
 #include "item_rules.h"
 #include "stat_rules.h"
 #include "skill_damage.h"
@@ -78,7 +81,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.58.0";
+constexpr const char* PluginVersion = "0.59.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -89,6 +92,10 @@ char g_levelTypesReport[160] = "off: not the expected game image";
 char g_calcReport[160] = "off: not the expected game image";
 char g_itemSpellsReport[160] = "off: not the expected game image";
 char g_manaCostsReport[160] = "off: not the expected game image";
+char g_skillAffordReport[160] = "off: not the expected game image";
+char g_teleportGoldReport[200] = "off: not the expected game image";
+char g_hardcoreDeathReport[200] = "off: not the expected game image";
+char g_requiredLevelReport[200] = "off: not the expected game image";
 char g_itemRulesReport[320] = "off: not the expected game image";
 char g_skillDamageReport[160] = "off: not the expected game image";
 char g_skillRestrictReport[160] = "off: not the expected game image";
@@ -167,7 +174,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits npcheal tplock statclick respecbuffs
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -242,6 +249,29 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "mana costs %s", g_manaCostsReport);
 	Say(command, line);
+	{
+		std::snprintf(line, sizeof(line), "required level %s (%d of 2 sites patched)", g_requiredLevelReport, RequiredLevelPatchedSites());
+		Say(command, line);
+	}
+	{
+		unsigned deaths = 0, converted = 0;
+		HardcoreDeathStats(&deaths, &converted);
+		std::snprintf(line, sizeof(line), "hardcore death %s (%u Hardcore deaths, %u converted)", g_hardcoreDeathReport, deaths, converted);
+		Say(command, line);
+	}
+	{
+		unsigned teleports = 0, seen = 0, piles = 0;
+		TeleportGoldStats(&teleports, &seen, &piles);
+		std::snprintf(line, sizeof(line), "teleport gold %s (%u teleports looked, %u piles in reach, %u taken)", g_teleportGoldReport, teleports, seen,
+		              piles);
+		Say(command, line);
+	}
+	{
+		const AffordLog afford = SkillAffordLog();
+		std::snprintf(line, sizeof(line), "skill afford %s (%u tests answered, %u differ from D2R's)", g_skillAffordReport, afford.calls,
+		              afford.changed);
+		Say(command, line);
+	}
 	std::snprintf(line, sizeof(line), "item rules %s", g_itemRulesReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "skill damage %s", g_skillDamageReport);
@@ -549,6 +579,35 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			InstallManaCosts(context, !Off("townmana"), g_manaCostsReport, sizeof(g_manaCostsReport));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: mana costs %s", g_manaCostsReport);
+		context->LogInfo(line);
+		if (Off("reqlevel")) {
+			std::snprintf(g_requiredLevelReport, sizeof(g_requiredLevelReport), "%s", OffNote);
+		} else {
+			InstallRequiredLevel(context, g_requiredLevelReport, sizeof(g_requiredLevelReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: required level %s", g_requiredLevelReport);
+		context->LogInfo(line);
+		if (Off("hcdeath")) {
+			std::snprintf(g_hardcoreDeathReport, sizeof(g_hardcoreDeathReport), "%s", OffNote);
+		} else {
+			InstallHardcoreDeath(context, g_hardcoreDeathReport, sizeof(g_hardcoreDeathReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: hardcore death %s", g_hardcoreDeathReport);
+		context->LogInfo(line);
+		if (Off("teleportgold")) {
+			std::snprintf(g_teleportGoldReport, sizeof(g_teleportGoldReport), "%s", OffNote);
+		} else {
+			InstallTeleportGold(context, g_teleportGoldReport, sizeof(g_teleportGoldReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: teleport gold %s", g_teleportGoldReport);
+		context->LogInfo(line);
+		if (Off("afford")) {
+			ResolveAffordFunctions(context);
+			std::snprintf(g_skillAffordReport, sizeof(g_skillAffordReport), "%s", OffNote);
+		} else {
+			InstallSkillAfford(context, g_skillAffordReport, sizeof(g_skillAffordReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: skill afford %s", g_skillAffordReport);
 		context->LogInfo(line);
 		if (Off("skilldmg")) {
 			std::snprintf(g_skillDamageReport, sizeof(g_skillDamageReport), "%s", OffNote);

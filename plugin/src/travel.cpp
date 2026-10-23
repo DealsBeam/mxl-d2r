@@ -540,6 +540,10 @@ void TravelGameFrame(void* gamePtr, uint32_t frame) noexcept {
 	}
 }
 
+auto TravelAutoPickupOn() noexcept -> bool {
+	return g_pickupOn.load(std::memory_order_relaxed);
+}
+
 auto TravelRevealNow() noexcept -> int {
 	return DoReveal();
 }
