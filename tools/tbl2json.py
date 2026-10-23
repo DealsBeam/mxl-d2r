@@ -47,6 +47,11 @@ NAMESPACE = "medianxl"  # install_mod.py writes the same name to d2rloader/metad
 NAMESPACE_FILE = "median.json"
 OVERRIDE_FILE = "overrides.json"  # `d2r:<key>` records: Median's text for D2R's own keys
 D2R_PREFIX = "d2r:"
+# D2R keys whose Median text sits under a Median-only key ("x"): D2R keeps 1.13c's IDs, so the ID names the key.
+# (Median ID, D2R key, text from Median's text). Ethereal: Median says "Ethereal" (nothing is repaired in Median, the
+# durability tooltip is gone: docs/median-rules-audit.md IT1); D2R's `strethereal` reads "Ethereal (Cannot be Repaired)"
+# and `strItemModEtherealSocketed` is that text + ", Socketed (%i)". Median's own tooltip builder composes the same way.
+ID_PAIRS = ((22745, "strethereal", "{}"), (22745, "strItemModEtherealSocketed", "{}, Socketed (%i)"))
 NATIVE_EXCEPTIONS: set[str] = set()  # see load_exceptions()
 EXCEPTIONS_FILE = ROOT / "tools" / "strings_native.json"
 LANGS = ["enUS", "zhTW", "deDE", "esES", "frFR", "itIT", "koKR", "plPL", "esMX", "jaJP", "ptBR", "ruRU", "zhCN"]
@@ -188,6 +193,11 @@ def main() -> int:
             same += 1
             continue
         overrides.append({"Key": f"{D2R_PREFIX}{k}", **{lang: t for lang in langs}})
+    for sid, d2r_key, fmt in ID_PAIRS:
+        t = fmt.format(by_id[sid][1])
+        recs = loaded.get(d2r_key)
+        if recs and any(e.get("enUS", "") != t for e in recs) and all(placeholders(t) == placeholders(e.get("enUS", "")) for e in recs):
+            overrides.append({"Key": f"{D2R_PREFIX}{d2r_key}", **{lang: t for lang in langs}})
     group1 = len({k for k in texts if k in d2r_keys})
     report.insert(2, f"- Groups: {group1} group 1 (D2R keys), {len(group2)} group 2 (`{NAMESPACE}:` namespace)")
     base = OUT / "data" / "local" / "lng"

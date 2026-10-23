@@ -1,4 +1,4 @@
-// Pure rules of the three Median item/skill rules that remove D2's old bookkeeping (docs/median-rules-audit.md IT1,
+// Pure rules of the Median item/skill rules that remove D2's old bookkeeping (docs/median-rules-audit.md IT1,
 // IT2, IT3, SK3). No engine access, so mxl_tests can run them.
 #pragma once
 
@@ -20,6 +20,29 @@ constexpr auto DropsIdentified(int32_t quality) noexcept -> bool {
 // stack is not empty.
 constexpr auto QuantityUseResult(int32_t quantity) noexcept -> int32_t {
 	return quantity > 0 ? quantity : 0;
+}
+
+// IT1, what the player sees: Median has no durability at all. The wear is gone (item_rules.cpp), and so are the things
+// D2R draws for it: the "Durability: x of y" line of the item description, the repair buttons of the vendor panel and
+// the "trade/repair" menu line of the repair vendors (Charsi, Larzuk). The vendor panel has three modes in `+0x168`:
+// 0 buy and sell, 1 repair vendor (repair buttons and repair background on), 2 gambler (refresh button).
+constexpr int32_t VendorModeTrade = 0;
+constexpr int32_t VendorModeRepair = 1;
+// String ids of the NPC menu lines (docs/d2r-addresses.md section 9): 0xd06 "trade/repair", 0xd44 "trade".
+constexpr uint16_t MenuLineTradeRepair = 0xd06;
+constexpr uint16_t MenuLineTrade = 0xd44;
+
+// The repair vendors' trade/repair line becomes the plain trade line (same click handler: both open the vendor panel).
+// Returns how many of the n ids were changed.
+inline auto RetitleRepairLines(uint16_t* ids, int n) noexcept -> int {
+	int changed = 0;
+	for (int i = 0; i < n; ++i) {
+		if (ids[i] == MenuLineTradeRepair) {
+			ids[i] = MenuLineTrade;
+			++changed;
+		}
+	}
+	return changed;
 }
 
 // SK3: skills cost no mana in a town; elsewhere the cost is unchanged.
