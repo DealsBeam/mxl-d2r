@@ -8389,6 +8389,8 @@ def check_meleenotarget():
     for loc in (1, 2, 3, 6, 7, 8, 9, 10, 11, 12):  # nor a worn item of an earlier check (its mana drain / cost modifiers made the plain click pay in the full group)
         H("unequip %d" % loc)
     rows, bad, log = [], [], []
+    on = [st_ for st_ in range(1, 360) if (lambda ls: any(re.search(r"hasstate %d: 1" % st_, l) for l in ls))(H("hasstate %d" % st_)[1])]
+    log.append("player states on: %s; max mana %s, max life %s" % (on, rd("player", 9), rd("player", 7)))  # the long-group FAIL (mana cost on a plain click) is state dependent
     for skill in (521, 548, 722):
         H("setskill %d 5" % skill)
         H("skill left %d" % skill)
@@ -8414,7 +8416,7 @@ def check_meleenotarget():
             bad.append("skill %d: the plain click attacked or spent mana: %s" % (skill, p_))
     for skill in (521, 548, 722):
         H("setskill %d 0" % skill)
-    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows) + ("; " + log[0] if bad else ""), [], log)
 
 
 def _skills_row(skill_id):
@@ -11512,7 +11514,8 @@ def check_morphdeath():
         if ids.get(nm) != sid:
             bad.append("skills.txt: %s is %s, the check expects %d" % (nm, ids.get(nm), sid))
     if not switch_character("MxlDru", "druid", 5):
-        return add(name, "BLOCKED", "the Druid test character cannot be opened")
+        shot = g.shot("morphdeath_blocked")  # what the screen shows after Save and Exit / the character list
+        return add(name, "BLOCKED", "the Druid test character cannot be opened", [os.path.basename(shot)])
     P = 256
 
     def morph(sid, state, weapon):

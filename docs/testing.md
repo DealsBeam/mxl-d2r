@@ -822,6 +822,9 @@ each one then reproduced alone with a probe where noted):
 | `nParamIndex < 8` | `enter` into a class 600 portal of a Median dungeon (`lockout`, `scrollportals`, area 251 / 253) | the portal's level parameter; not reproduced in this lane (the earlier lead, andariel_ai Maghda 1693 / class 1899, is the `nSkillCastId` family) | open, not reproduced |
 | `wPrefix != 0 \|\| wSuffix != 0` | harness `item <code> q=4` / `q=6` (`tooltiptext`, `trophy`) | the harness builds magic / rare items without affixes | harness artifact |
 | `activeUnit` | start of `assetpaths` | not traced | open |
+| `nDesc >= 0 && nDesc < skillDescTbl.size()`, then `false` (same pair as the first row) | `enginegaps`: `cast 463 self` (drakemaw, a monster skill, to prove the recast guard) | skill 463 has no `skilldesc` row; the client reads the row of a cast skill. A harness cast of a monster skill, not reachable by play | harness artifact, new trigger (suite-main-060, plugin 0.63.0) |
+| `nStat >= 0 && nStat < statsTbl.size()` (`CmdAccess.h:1609`) | `signet`: the refused use of a Signet of Learning at the 400 cap (`use 01^` with stat 370 = 400, "the game refuses to use it") | the refusal path of the Median signet use reads a stat id outside D2R's stats table; the use is refused as wanted and nothing else is lost | open, new (suite-main-060), harmless so far |
+| `input->IsValid()` (Domino `world.cpp:3251`, `dynamic_tree.h:257`) | `scrollportals`: `enter` into the class 600 portal of a summoning scroll level above 255 (seen once in two 0.63.0 runs, with the `nParamIndex < 8` family) | physics world of the client given an invalid body while the level changes | open, new (suite-main-060) |
 | `BC_ASSERT: 0`, `ii < NUM_LEVEL_TYPES`, `sub.nCelNum`, `eLevelId > 0`, 2 x `statesTbl` | once per launch, on the way into the game | D2R reading Median's tables (states, level types) | open, constant |
 | `s_StatsPool.IsEmpty()`, `m_allocated == 0`, `m_freed == 0`, ... | when the game exits or restarts (keybinds, Save and Exit) | pool leak checks of the engine | exit-only, ignored |
 
@@ -873,3 +876,29 @@ releases the lock at its end, so the lock is taken again before each install). `
 | Wrong skill ids in lane p4-quests-verify (1234 / 1303) | none (`strdex`, `bugfixes` docstrings) | Not a lookup bug: 1234 / 1303 are the `*Id` values of Median's original `skills.txt` (Whirlwind, Werebear Morph); the build renumbers those rows by +72, so the built ids are Barbarian `whirlwind_2` 1306, Druid `werebear_morph` 1375, `werewolf_form` 1380, `wereowl_form` 1364. `_skill_ids_by_name()` reads the built table and is right. |
 | Whirlwind chance-to-cast (audit OT4) | `wwproc` (new): Barbarian `MxlBarb`, ring `stat 198` / `stat 195` = Fire Bolt level 5, 100 %; 4 spins of 1306 through 5 monsters vs 8 normal attacks, Fire Bolt missiles (class 58) counted; `mxl` line and counter checked | PASS, run `checks-20261024-012847-s3` (11 / 13 Fire Bolts in the spins, 4 / 6 from the attacks; 24 casts let through, 0 refused). Control `wwproc` off, run `checks-20261024-013722-s3`: line `off`, spins 0, attacks 5 / 6. Cause: D2R's `0x5896e0` refuses the cast while the caster has state 54 and a spin holds it; the plugin clears the bit around the cast when state 174 is on. |
 | Real shapeshift immortality (audit OT4) | `morphdeath` (new): Druid `MxlDru` (created in the slot when missing), real `cast <id> self` of the three Median morph skills (weapon of type axe / sword / knife in hand, outside town), lethal hit, and Andariel as killer of the bear | PASS, run `checks-20261024-012847-s3`: death (mode 0 then 17), form state ends, Esc respawn gives a living character in area 1 without the form, for all three forms and the monster kill. D2R's code, nothing ported. |
+
+## Lane suite-main-060: full suite on main (plugin 0.63.0)
+
+Test-only lane. Runs on plugin 0.60.0 (slot 1 `checks-20261023-220521-s1` and `checks-20261023-224514-s1`), 0.61.0 (`checks-20261024-002546-s1/-s2`) and, as asked by the coordinator after #153 / #154,
+on **0.63.0** (c2d85b0) with `group1.txt` on slot 1 and `group2.txt` on slot 2 in parallel. The run `checks-20261024-000518-s1` is void from about 00:11 (lane p4-ww-morph ran commands on slot 1 without `MXL_SLOT`).
+
+Fixes of the checks (all in `tools/game_checks.py`, no plugin change):
+
+| Check | Problem | Fix |
+|---|---|---|
+| start state of every check | the inventory panel left open by a check covers the right half of the client: `monhover` and `levelcap` failed on projected clicks, `statorder` crashed the game (access violation and `m_listWidget` assert) | `clean_start_state` closes the panel (`i`, then Esc) and says so as a REVIEW row; it also notes when the worn items changed since the check before |
+| `collidetypes` | the nearest unit was Deckard Cain (unkillable) or the monster moved | uses the spawned monster by id, 14 tries per type |
+| `bugfixes` | `hit player` without an attacker is a hit of the player on the player (ignored) | spawns an attacker; saves and restores the pools; the bounds only exclude a rollover (the mana of a long session may start a regen apart) |
+| `teleportgold` | the purse-full case hard-coded 160000 gold (a level 16 character); a stray pile of an earlier check was taken too | the cap is 10000 x level (D2R's gold limit, `0x34b320`); strays are tolerated |
+| `meleenotarget` | mana regenerates at 8191 pools: the cost hid in the sample | starts from the maximum, waits 3 s after each click, takes every worn item off |
+| `tplock` | one run: the first cast was refused by the verb (character still busy), refusal counter 2 instead of 3 | the cast is repeated once; diagnostics (usable code) in the log |
+| `npcheal` | life 8190/8191 after the heal counted as "not healed" (and a talk that does not start) | full life within 1 %, one retry with a fresh NPC |
+| `strdex` | needs the armor's level (a level 19 character): the stats stayed inactive; the rare ring has random affixes | sets the level 90 for the check; the ring may add resistance |
+| `mapreveal` | FAIL when the level is already drawn whole on arrival; left the character in Lut Gholein (`skillafford` then read the column value, formula cost 256) | PARTIAL for that case; goes back to Act 1; `skillafford` starts in a field level |
+| `morphdeath` | Andariel hit a level 2 bear for ~16 and stopped; Save and Exit took longer than 9 s after a long session | life 12 for the monster kill; `switch_character` waits up to 42 s |
+
+Not regressions (start state, the check or the order of the group): `tplock` (one FAIL on 0.61.0, passed in four later runs), `itemevents` (thorns 686816 vs 687200 once, passed alone), `statorder`
+(panel), `bugfixes` / `meleenotarget` / `strdex` / `skillafford` / `mapreveal` (order), `npcheal` and `soulstealer` (a different NPC class or the boss 2049 fails in each run, never the same set; 2049 fails with
+"heals counter 0 -> 0" while 1852 heals 10 %). Open in the group order: `meleenotarget` (and in one run `skillscaling`, "mastery stat of ltng read 10, set 0") fail in the full `group2.txt` on slot 2 and pass alone and
+after `uniquelimits charmlimit arealevel bugfixes` (mana maximum 7825-7950 instead of 8192 and both click kinds pay about 1540 mana: something an earlier check leaves on the character); `morphdeath` is BLOCKED
+inside the full `group1.txt` ("the Druid test character cannot be opened") and passes alone and after `wwproc`.
