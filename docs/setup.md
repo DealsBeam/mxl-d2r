@@ -5,11 +5,15 @@ build). Every command runs from the repo root.
 
 ## External inputs
 
+Release rule (2026-10-23): the port is for players who own **only D2R**. Everything from Median XL and all custom art is
+in the repo (`assets/`, Git LFS); only Blizzard's base game files are taken from the D2R install and are never committed.
+
 | Input | Where | Notes |
 |---|---|---|
 | Diablo II: Resurrected 3.3, build 93847 | `C:\Program Files (x86)\Diablo II Resurrected` | read through CascLib; game must be installed (not running) |
-| Median XL (classic) 2.14.4 | `C:\Games\median-xl` | classic install with the `medianxl-*.mpq` files |
-| `..\mxl_extracted` | next to the repo (`C:\Users\<you>\mxl_extracted`) | the first extraction (`2_txt`, `1_bin_from_mpq`, Ghidra output); NOT in git. On the game PC it lives in `Desktop\sugma\mxl_extracted`, so a junction points to it: `mklink /J %USERPROFILE%\mxl_extracted %USERPROFILE%\Desktop\sugma\mxl_extracted` |
+| Median XL (classic) 2.14.4 | not needed | Median's own files are in the repo (`assets/median/`, Git LFS); the install (`C:\Games\median-xl`) is only needed to re-extract with `tools/mpq_extract.py` |
+| Git LFS | comes with Git for Windows | `git lfs install` once per PC before cloning (or `git lfs pull` afterwards) |
+| `..\mxl_extracted` | not needed to build | the decoded tables the build reads are in the repo (`assets/median/2_txt`, `item_names.txt`, `skill_names.txt`). The Ghidra output (`3_ghidra`, `4_sigma_source`, ...) is still only here, for the research tools `sigma_fn.py`, `sigma_patches.py` and `sigma_evidence.py`; NOT in git. On the game PC it lives in `Desktop\sugma\mxl_extracted`, so a junction points to it: `mklink /J %USERPROFILE%\mxl_extracted %USERPROFILE%\Desktop\sugma\mxl_extracted` |
 | Python 3.12 | `py -3` | `python` is the Store stub |
 | CMake | `C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin` | not on PATH; add it for the build shells |
 | MSVC | Visual Studio 18 Community, "Desktop development with C++" | |
@@ -20,7 +24,8 @@ build). Every command runs from the repo root.
 1. `git clone --recurse-submodules` the repo (or `git submodule update --init`).
 2. `py -3 -m pip install --user -r tools/requirements.txt` (pillow, capstone).
 3. Native libraries: `tools\build_native.ps1` (with CMake on PATH) -> `build\StormLib`, `build\CascLib`.
-4. Extract Median's MPQs: `py -3 tools/mpq_extract.py` -> `extract/mxl/` (8,528 files, 0 conflicts).
+4. Median's files: nothing to do, they come with the clone (`assets/median/`, 864 MB through Git LFS; `git lfs ls-files`
+   lists them). Without LFS they are small pointer files and the build fails.
 5. Extract the D2R baseline, all sets the build reads:
    ```
    py -3 tools/casc_extract.py --set excel --set strings --set layouts --set dataguide --set meta --set legacy-ui --set legacy-art --set legacy-maps --set hd-ui
@@ -34,12 +39,11 @@ build). Every command runs from the repo root.
    `..\D2R Modding Tools` folder are read. Against the build that read the classic tables `work/mod` is byte-identical
    except 214 comment cells that carry D2R's wording instead of 1.13c's (misc.txt `name`, 63 rows; cubemain.txt
    `description`, 151 rows; both columns are typed "comment" in D2R's data guide) and the lines of validate_report.md that quote them.
-7. Restore the extraction Median shipped before its hotfix. The installed `medianxl-YmludGJsdHh0.mpq` (bintbltxt,
-   dated 2026-10-03) holds `skills.bin`, `skillscode.bin` and `states.bin` that differ from the 2026-10-02
-   extraction behind `..\mxl_extracted\2_txt`; `formula.py` then finds no formula columns in skills. Copy those three
-   files from `..\mxl_extracted\1_bin_from_mpq\data\global\excel\` over the ones in `extract/mxl/data/global/excel/`
-   (the hotfixed originals are kept in `%USERPROFILE%\tmp-ext\mxl-hotfix-bins`). Both say version 2.14.4. Decide later
-   whether to regenerate `2_txt` from the hotfix (needs the patched d2bin2txt, not in this repo).
+7. Nothing to do (already in the repo): `assets/median/data/global/excel/` holds the pre-hotfix `skills.bin`,
+   `skillscode.bin` and `states.bin` that match `assets/median/2_txt` (the installed `medianxl-YmludGJsdHh0.mpq`,
+   dated 2026-10-03, has hotfixed ones with which `formula.py` finds no formula columns in skills; those are kept in
+   `%USERPROFILE%\tmp-ext\mxl-hotfix-bins`). Re-running `tools/mpq_extract.py` writes the hotfixed ones over them:
+   restore the three from git afterwards. Regenerating `2_txt` from the hotfix needs the patched d2bin2txt (not in this repo).
 8. `py -3 tools/build.py` -> `work/mod/`. Result: validate.py **0 errors** (both banks), 3,994 plugin items,
    48 (base) / 89 (rotw) warnings. The 2 errors in `validation.md` were fixed by an earlier commit.
 9. Plugin (CMake on PATH): `tools\build_plugin.ps1` -> `build\plugin\Release\mxl-core.dll`, **mxl-core 0.36.0**.

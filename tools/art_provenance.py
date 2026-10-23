@@ -52,7 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dcc  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-MXL = ROOT / "extract" / "mxl" / "data" / "global"
+MXL = ROOT / "assets" / "median" / "data" / "global"
 VAN = ROOT / "extract" / "d2r" / "93847" / "data" / "global"
 PALETTE = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "palette" / "units" / "pal.dat"
 CACHE_DIR = ROOT / "work" / "art_provenance"

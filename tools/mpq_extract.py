@@ -1,6 +1,6 @@
-"""Extract every Median XL MPQ into extract/mxl/ and write a manifest.
+"""Extract every Median XL MPQ into assets/median/ and write a manifest.
 
-Usage: python tools/mpq_extract.py [--src C:\\Games\\median-xl] [--out extract/mxl]
+Usage: python tools/mpq_extract.py [--src C:\\Games\\median-xl] [--out assets/median]
 
 Archive names are base64 ("bW9uenp6" = "monzzz"). The manifest records, for every file, the archive it
 came from, so later tools can trace an asset back. Files present in more than one archive are listed
@@ -34,7 +34,7 @@ def decode_name(mpq: Path) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=r"C:\Games\median-xl")
-    ap.add_argument("--out", default=str(ROOT / "extract" / "mxl"))
+    ap.add_argument("--out", default=str(ROOT / "assets" / "median"))
     args = ap.parse_args()
 
     out = Path(args.out)

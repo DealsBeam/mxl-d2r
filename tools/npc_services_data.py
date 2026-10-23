@@ -1,6 +1,6 @@
 """D2Sigma's NPC service flags and requirement rows as compiled-in plugin data (plugin/src/mxl_npc_services.h).
 
-Source: extract/mxl npcext.bin (49 rows x 336 bytes; layout in docs/subsystems/npc-hirelings.md section 1.2):
+Source: assets/median npcext.bin (49 rows x 336 bytes; layout in docs/subsystems/npc-hirelings.md section 1.2):
   +0x00 monstats id, +0x04 flags (bit 0 shop, bit 1 gamble, bit 2 hirer), +0x0c / +0x10 / +0x14 requirement row that
   gates bit 0 / 1 / 2 (-1 or 0 = none). The NPC class goes through work/named/idmap.json like npc_actions_data.py.
 Only the rows with at least one of bits 0-2 set, or with a requirement, are kept: plugin/src/requirement_gates.cpp
@@ -24,7 +24,7 @@ def main() -> int:
     ap.add_argument("--root", type=Path, default=REPO, help="repo root holding extract/ and work/ (default: this checkout)")
     ap.add_argument("--out", type=Path, default=REPO / "plugin" / "src" / "mxl_npc_services.h")
     args = ap.parse_args()
-    bins = args.root / "extract" / "mxl" / "data" / "global" / "excel"
+    bins = args.root / "assets" / "median" / "data" / "global" / "excel"
     idmap = json.loads((args.root / "work" / "named" / "idmap.json").read_text("utf-8"))
     mon = {e["row"]: e["id"] for e in idmap["monstats"]}
     b = (bins / "npcext.bin").read_bytes()

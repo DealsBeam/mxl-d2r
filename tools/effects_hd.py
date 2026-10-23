@@ -47,7 +47,7 @@ from txt_migrate import read_tsv  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 D2R = ROOT / "extract" / "d2r" / "93847"
-MXL = ROOT / "extract" / "mxl" / "data" / "global"
+MXL = ROOT / "assets" / "median" / "data" / "global"
 GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
 HDM, HDO = D2R / "data" / "hd" / "missiles", D2R / "data" / "hd" / "overlays"
 BS = chr(92)

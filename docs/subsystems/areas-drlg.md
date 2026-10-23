@@ -3,7 +3,7 @@
 Question: what does Median change in level generation, and can its own areas (Trials, Ruins of Ureh, Silver City, Caldeum,
 the Dimensional Labyrinth, Heart of Darkness, the uber areas, ...) generate and be entered in D2R?
 Sources: `D2Sigma.dll` (Ghidra copy), D2R 3.3 build 93847 (dump + Ghidra), the built tables in `work/mod`, Median's
-`extract/mxl` maps and tiles. Tool: `py -3 tools/area_audit.py` (static audit, section 4). Not verified in game (no
+`assets/median` maps and tiles. Tool: `py -3 tools/area_audit.py` (static audit, section 4). Not verified in game (no
 level-warp console command exists; the installed mod predates the fixes below).
 
 ## Short version

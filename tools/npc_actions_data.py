@@ -1,6 +1,6 @@
 """D2Sigma's NPC menu slots and NPC actions as compiled-in plugin data (plugin/src/mxl_npc_actions.h).
 
-Sources (extract/mxl, the compiled tables; layout in docs/subsystems/npc-hirelings.md section 1.2):
+Sources (assets/median, the compiled tables; layout in docs/subsystems/npc-hirelings.md section 1.2):
   npcext.bin      49 rows x 336 bytes; per NPC 16 menu slots of 16 bytes at +0x50: i32 requirement row (-1 = always),
                   i32 npcactions row, u16 label string id (Median), u16 prompt label (the confirmation's text), u16
                   menu id (10 = an entry of the submenu the preceding top-level slot opens), u8 weight, u8 prompt
@@ -58,7 +58,7 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=REPO / "plugin" / "src" / "mxl_npc_actions.h")
     args = ap.parse_args()
     root = args.root
-    bins = root / "extract" / "mxl" / "data" / "global" / "excel"
+    bins = root / "assets" / "median" / "data" / "global" / "excel"
     idmap = json.loads((root / "work" / "named" / "idmap.json").read_text("utf-8"))
     mon = {e["row"]: e["id"] for e in idmap["monstats"]}
     idkeys, by_key = d2r_string_ids(root)

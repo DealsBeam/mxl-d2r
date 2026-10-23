@@ -27,7 +27,7 @@ from txt_migrate import read_tsv, write_tsv  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 D2R = ROOT / "extract" / "d2r" / "93847"
-MXL = ROOT / "extract" / "mxl" / "data" / "global"
+MXL = ROOT / "assets" / "median" / "data" / "global"
 OUT = ROOT / "work" / "mod"
 EXCEL = OUT / "data" / "global" / "excel"
 # table -> (art column, art folder under data/global)

@@ -381,3 +381,6 @@ mesh's values, compare a normal-mapped result against a vanilla part).
 3. Blender exporter that calls that builder; exporter test on a simple artist test rig (stick figure, 3 clips) end to end
    through `hd_monsters.py`.
 4. Only then commission real art (project rule: custom HD art comes last).
+- Size limit: the forge's proxy drops an LFS upload that takes more than about two minutes (~20 MB from the game PC). Store a larger
+  file xz-compressed (`<name>.xz`) and decompress it in the build step that reads it; push big batches with
+  `git -c lfs.concurrenttransfers=1 push`.

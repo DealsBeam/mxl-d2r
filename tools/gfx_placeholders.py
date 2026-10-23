@@ -34,7 +34,7 @@ MONSTERS_JSON = D2R / "data" / "hd" / "character" / "monsters.json"
 MODES = ["DT", "NU", "WL", "GH", "A1", "A2", "BL", "SC", "S1", "S2", "S3", "S4", "DD", "RN"]  # KB, SQ reuse others
 KEEP = {"Id", "*hcIdx", "*eol"}  # monstats2 columns that stay the row's own
 FALLBACK = "zombie1"
-MXL_MONSTERS = ROOT / "extract" / "mxl" / "data" / "global" / "monsters"
+MXL_MONSTERS = ROOT / "assets" / "median" / "data" / "global" / "monsters"
 NOT_DONORS = re.compile(r"^gorgon\d")  # enabled in monstats but never spawned in D2R
 
 

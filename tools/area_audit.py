@@ -24,7 +24,7 @@ from ds1_remap import Ds1, Maps, remap_bytes  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 EXCEL = ROOT / "work" / "mod" / "data" / "global" / "excel"
 D2R_EXCEL = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "excel"
-MXL_TILES = ROOT / "extract" / "mxl" / "data" / "global" / "tiles"
+MXL_TILES = ROOT / "assets" / "median" / "data" / "global" / "tiles"
 D2R_TILES = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "tiles"
 IDMAP = ROOT / "work" / "named" / "idmap.json"
 

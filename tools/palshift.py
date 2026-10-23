@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MXL_EXCEL = ROOT / "extract" / "mxl" / "data" / "global" / "excel"
+MXL_EXCEL = ROOT / "assets" / "median" / "data" / "global" / "excel"
 NAMED = ROOT / "work" / "named" / "missiles.txt"
 MEDIAN = Path(r"C:\games\median-xl")
 BS = chr(92)

@@ -37,8 +37,8 @@ import sigma_evidence
 
 ROOT = Path(__file__).resolve().parent.parent
 SUGMA = ROOT.parent
-BINS = ROOT / "extract" / "mxl" / "data" / "global" / "excel"
-RAW_DUMPS = SUGMA / "mxl_extracted" / "2_txt" / "sigma_raw_dumps"
+BINS = ROOT / "assets" / "median" / "data" / "global" / "excel"
+RAW_DUMPS = ROOT / "assets" / "median" / "2_txt" / "sigma_raw_dumps"
 SCHEMA = ROOT / "research" / "sigma_schema.json"
 EVIDENCE = ROOT / "research" / "sigma_evidence"
 IDMAP = ROOT / "work" / "named" / "idmap.json"
@@ -60,7 +60,7 @@ SLOTS = {"hiredescext": (0x14, 0xD4), "monumodexp": (0x3C, 0xF4), "skilltree": (
          "stateicons": (0x84, 0x134), "statscreen": (0x88, 0x138)}
 TYPES = {"u8": "<B", "i8": "<b", "u16": "<H", "i16": "<h", "u32": "<I", "i32": "<i", "strid": "<H"}
 NO_STRING = 5382
-STRINGS = SUGMA / "mxl_extracted" / "2_txt" / "strings"
+STRINGS = ROOT / "assets" / "median" / "2_txt" / "strings"
 _string_keys: list[list[str]] = []
 
 
@@ -86,9 +86,9 @@ _formulas: dict[str, dict[int, str]] = {}
 
 def formula_text(table: str, start: int) -> str:
     """Byte offset into <table>.bin's formula bytecode (tools/formula.py: the u32 a record holds) ->
-    "<table>#<entry>: <first decoder's text>"; "" for none. Entries are listed in mxl_extracted/2_txt/<table>.txt."""
+    "<table>#<entry>: <first decoder's text>"; "" for none. Entries are listed in assets/median/2_txt/<table>.txt."""
     if table not in _formulas:
-        lines = (SUGMA / "mxl_extracted" / "2_txt" / f"{table}.txt").read_text("utf-8").splitlines()
+        lines = (ROOT / "assets" / "median" / "2_txt" / f"{table}.txt").read_text("utf-8").splitlines()
         by_start, pos = {}, 0
         for k in range(0, len(lines) - 1, 2):
             idx, _, text = lines[k].partition("	")

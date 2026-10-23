@@ -41,7 +41,7 @@ from skill_icons import decode_frame, palette, read_dc6, write_dc6  # noqa: E402
 from skill_tree_art import encode, quantizer  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "extract" / "mxl" / "data" / "global" / "themes" / "classic_sigma" / "game" / "panels"
+SRC = ROOT / "assets" / "median" / "data" / "global" / "themes" / "classic_sigma" / "game" / "panels"
 D2R_STASH = ROOT / "extract" / "d2r" / "93847" / "data" / "hd" / "global" / "ui" / "panel" / "stash" / "additionalstash"
 CUBE_ART = ("crafting", 0, (39, 208, 474, 498))  # Median's cube grid picture: dc6, page, classic rectangle
 # where the cube view sits in the materials tab, in HD pixels (x, y, width, height); 15 x 10 cells of 54 x 50.6

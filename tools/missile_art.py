@@ -17,7 +17,7 @@ channel) through a gradient map. This tool clones that effect per Median animati
      pixel keeps its size; missiles.json maps every Median missile using that CelFile to it; overlay.txt rows get the
      Character folder "mxl" (D2R's HD overlay folder column).
 
-Input:  extract/mxl/data/global/{missiles,overlays}/*.dcc, work/mod/data/global/excel/{skills,missiles,overlay,states}.txt
+Input:  assets/median/data/global/{missiles,overlays}/*.dcc, work/mod/data/global/excel/{skills,missiles,overlay,states}.txt
 Output: <out>/hd/vfx/textures/mxl/*.texture, <out>/hd/vfx/particles/mxl/*.particles, <out>/hd/missiles/mxl_*.json,
         <out>/hd/overlays/mxl/*.json, <out>/hd/missiles/missiles.json (updated), <out>/global/excel/overlay.txt (Character)
 Usage:  python tools/missile_art.py [--class bar ...] [--all] [--out DIR] [--only KEY ...]
@@ -40,7 +40,7 @@ from txt_migrate import read_tsv  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
 D2R = ROOT / "extract" / "d2r" / "93847"
-MXL = ROOT / "extract" / "mxl" / "data" / "global"
+MXL = ROOT / "assets" / "median" / "data" / "global"
 MOD = ROOT / "work" / "mod" / "data"
 TEMPLATE = "data/hd/vfx/particles/env/ui/vfx_character_create_fire.particles"
 TEX_DIR = "data/hd/vfx/textures/mxl/"

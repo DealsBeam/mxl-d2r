@@ -105,7 +105,7 @@ OBSOLETE = {"*": {"Beta", "Expansion", "eol", "EOL", "OpenBetaGfx", "Source Art"
             "soundenviron": {"EAX Env Size", "EAX Env Diff", "EAX Air Absorb"}, "gems": {"nummods"},
             "qualityitems": {"nummods"}, "runes": {"Rune Name"},
             "automap": {"Type1", "Type2", "Type3", "Type4"}}  # D2R keeps these only as comments
-BINS = ROOT / "extract" / "mxl" / "data" / "global" / "excel"
+BINS = ROOT / "assets" / "median" / "data" / "global" / "excel"
 
 
 def decode_automap(d2r_rows: list[list[str]], dh: list[str]):
@@ -392,7 +392,7 @@ class Migrator:
         stay and Median's table is added as Index 1000 + slot in every act (tools/objpreset.py); tools/ds1_remap.py
         rewrites Median's maps to those indexes. Median's added objects get Class = Name so ObjectClass can name them."""
         import objpreset
-        src = ROOT / "extract" / "mxl" / "data" / "global" / "excel" / "objpreset.bin"
+        src = ROOT / "assets" / "median" / "data" / "global" / "excel" / "objpreset.bin"
         if not src.exists():
             return
         flat = objpreset.load_flat(src)
@@ -1695,7 +1695,7 @@ class Migrator:
                   "drognan": "Drognan", "hratli": "Hratli", "alkor": "Alkor", "ormus": "Ormus", "elzix": "Elzix",
                   "asheara": "Asheara", "cain2": "Cain", "halbu": "Halbu", "jamella": "Jamella", "larzuk": "Larzuk",
                   "drehya": "Anya", "malah": "Malah"}
-        data = (ROOT / "extract" / "mxl" / "data" / "global" / "excel" / "npcstores.bin").read_bytes()
+        data = (ROOT / "assets" / "median" / "data" / "global" / "excel" / "npcstores.bin").read_bytes()
         count = struct.unpack_from("<I", data)[0]
         mh, mrows = read_tsv(NAMED / "monstats.txt")
         stock: dict[str, dict[str, list[str]]] = defaultdict(dict)  # item code -> column -> value
@@ -2064,7 +2064,7 @@ class Migrator:
                                    f"{n_drop} lines D2R can't draw dropped (mostly D2Sigma's code-built type 77)")
 
     def clean_cube_outputs(self) -> None:
-        """The decoded cubemain (mxl_extracted/2_txt) has `""` for empty output b/c cells and `""ow Portal` for the
+        """The decoded cubemain (assets/median/2_txt) has `""` for empty output b/c cells and `""ow Portal` for the
         special output "Cow Portal" (5 recipes, which then opened nothing). Written as empty / Cow Portal; other quoted
         cells ("item,mod,...") are D2R's own convention and stay."""
         for bank in ("base", ""):
