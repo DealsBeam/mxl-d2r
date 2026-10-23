@@ -35,6 +35,7 @@ playerinventoryexpansionlayouthd.json, horadriccubelayouthd.json, bankexpansionl
 vendorpanellayouthd.json (after txt_migrate.py).
 Usage: python tools/ui_layouts.py [--out <layouts dir>]   (default work/mod/data/global/ui/layouts)
 """
+import json
 import re
 import sys
 from pathlib import Path
@@ -46,6 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "work" / "mod" / "data" / "global" / "ui" / "layouts"
 BASE = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "ui" / "layouts"
 GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
+STASH_PAGE_HEADER = ROOT / "plugin" / "src" / "mxl_stash_page.h"  # the plugin's second personal stash page (docs/stash-pages.md)
 TABS = 9  # tab widgets: Median has 9 pages for the Sorceress, 8 for the others (their 9th tab is blank and ignored by the plugin)
 LEFT, RIGHT, TOP, HEIGHT = 130, 1018, 160, 99
 CLASSIC_TABS = {"x": 231, "y": -132, "width": 90, "height": 108}  # D2R classic tab column (3 tabs of "height")
@@ -298,7 +300,89 @@ def stash() -> str:
     gx, gy = hd(*STASH_GOLD)
     t = set_rect(t, "gold_withdraw", rect(gx, gy))
     t = set_rect(t, "gold_amount", rect(gx + 58, gy, 420, 48))
+    # personal stash page 1 of 2: the strip sits where the shared stash's arrows are; the plugin hides it on the other tabs
+    marker = '"type": "Widget", "name": "SharedStashTabContainer"'
+    start = t.rindex("{", 0, t.index(marker))
+    strip = _json5(_nav_strip("MxlPersonalNavigation", f"1 / {STASH_PAGES}", f"PanelManager:TogglePanel:{STASH_PAGE_PANEL}"), 4).lstrip()
+    t = t[:start] + strip + ",\n" + " " * 16 + t[start:]
     return t
+
+
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Personal stash page 2 (docs/stash-pages.md). D2RLoader gives a plugin ONE custom player page (item page 6 in the .d2s); the
+# plugin shows it in its own panel that looks like the stash (same art, same 14 x 14 grid), and both panels get a small
+# "n / 2" strip with two arrows. The stock panel's strip opens the plugin panel (PanelManager:TogglePanel); the stock panel then
+# stays open underneath, hidden by the plugin panel, so the plugin panel's strip just closes itself (PanelManager:ClosePanel) and the
+# stock stash shows again, and its X closes the stock panel (PanelManager:ClosePanel:BankExpansionLayout, the stock layout's root name),
+# which takes both away. All of it is D2R's own messages: no plugin code is in the switch (a custom message target such as
+# "StashPages:Switch" never reached a plugin's UiMessageListener; OpenPanel on the already open stock panel does nothing).
+STASH_STOCK_PANEL = "BankExpansionLayout"
+STASH_PAGE_PANEL = "mxl-core/StashPage2"
+STASH_PAGE_GRID = "mxl-core/StashPage2Grid"
+STASH_NAV = (369, 1211)   # the shared stash's arrows, between the grid and the gold box (420 x 93)
+STASH_PAGES = 2
+
+
+def _nav_children(message: str, text: str) -> list:
+    arrow = {"normalFrame": 0, "pressedFrame": 2, "hoveredFrame": 1, "disabledFrame": 3}
+    return [
+        {"type": "ButtonWidget", "name": "MxlPageLeft",
+         "fields": {"rect": {"x": 29, "y": 13, "width": 64, "height": 64}, "filename": "PANEL\\Stash\\Stash_LeftArrow", **arrow,
+                    "onClickMessage": message}},
+        {"type": "TextBoxWidget", "name": "MxlPageText",
+         "fields": {"text": text, "rect": {"x": 95, "y": 13, "width": 230, "height": 64},
+                    "style": {"fontColor": "$PanelTitleColor", "pointSize": "$MediumFontSize", "alignment": {"v": "center", "h": "center"},
+                              "spacing": "$MinimumSpacing", "dropShadow": "$DefaultDropShadow"}}},
+        {"type": "ButtonWidget", "name": "MxlPageRight",
+         "fields": {"rect": {"x": 327, "y": 13, "width": 64, "height": 64}, "filename": "PANEL\\Stash\\Stash_RightArrow", **arrow,
+                    "onClickMessage": message}},
+    ]
+
+
+def _nav_strip(name: str, text: str, message: str) -> dict:
+    return {"type": "ImageWidget", "name": name, "fields": {"rect": {"x": STASH_NAV[0], "y": STASH_NAV[1], "width": 420, "height": 93}},
+            "children": _nav_children(message, text)}
+
+
+def stash_page_panel() -> str:
+    """Strict JSON of the plugin panel for personal stash page 2: D2R's classic stash panel (frame, hinge, title, close button)
+    with Median's art and 14 x 14 grid, the page strip and nothing else."""
+    gx, gy = hd(*STASH_GRID)
+    layout = {
+        "type": "Panel", "name": STASH_PAGE_PANEL,
+        "fields": {"priority": 5, "rect": "$LeftPanelRect", "anchor": "$LeftPanelAnchor"},
+        "children": [
+            {"type": "ClickCatcherWidget", "name": "click_catcher", "fields": {"rect": "$PanelClickCatcherRect"}},
+            {"type": "ImageWidget", "name": "background", "fields": {"filename": "PANEL\\mxl\\stash"}},
+            {"type": "ImageWidget", "name": "LeftHinge", "fields": {"rect": "$LeftHingeRect", "filename": "$LeftHingeSprite"}},
+            {"type": "TextBoxWidget", "name": "title", "fields": {"rect": "$InGamePanelTitleRect", "style": "$StyleTitleBlock", "text": "@d2r:stash"}},
+            {"type": "ButtonWidget", "name": "close",
+             "fields": {"rect": {"x": 1075, "y": 9}, "filename": "PANEL\\closebtn_4x", "hoveredFrame": 3, "tooltipString": "@d2r:strClose",
+                        "sound": "cursor_close_window_hd", "onClickMessage": f"PanelManager:ClosePanel:{STASH_STOCK_PANEL}"}},
+            _nav_strip("MxlPageNavigation", f"2 / {STASH_PAGES}", f"PanelManager:ClosePanel:{STASH_PAGE_PANEL}"),
+            {"type": "InventoryGridWidget", "name": STASH_PAGE_GRID,
+             "fields": {"rect": {"x": gx, "y": gy, "scale": GRID_SCALE}, "cellCount": {"x": 14, "y": 14}, "cellSize": {"x": 98, "y": 92},
+                        "gemSocketFilename": "PANEL\\gemsocket", "chronicleFlourishOffset": {"x": -1, "y": 0}}},
+        ],
+    }
+    return json.dumps(layout, indent=1)
+
+
+def stash_page_header() -> str:
+    """plugin/src/mxl_stash_page.h: the panel layout as a C++ string (generated and committed like mxl_infographics.h)."""
+    lines = [json.dumps(line + "\n") for line in stash_page_panel().split("\n")]
+    body = "\n".join(f"    {l}" for l in lines)
+    return ("// Generated by tools/ui_layouts.py (stash_page_header); do not edit.\n#pragma once\n\nnamespace mxl_stash_page {\n\n"
+            f'inline constexpr char PanelLocalId[] = "StashPage2";\ninline constexpr char GridName[] = "{STASH_PAGE_GRID}";\n'
+            f"inline constexpr char Layout[] =\n{body};\n\n}}  // namespace mxl_stash_page\n")
+
+
+def _json5(node: dict, depth: int) -> str:
+    """A widget dict as layout text (the stock files are JSON5-ish; plain JSON is valid there)."""
+    pad = "    " * depth
+    return "\n".join(pad + line for line in json.dumps(node, indent=4).split("\n"))
 
 
 def trade() -> str:
@@ -686,6 +770,7 @@ def main() -> int:
     write("bankexpansionlayouthd.json", stash())
     write("tradelayouthd.json", trade())
     write("vendorpanellayouthd.json", vendor())
+    STASH_PAGE_HEADER.write_text(stash_page_header(), encoding="utf-8")
     print(f"skillstreepanel(hd).json: {TABS} tabs; inventory and cube 15 x 10, stash 14 x 14, trade 7 x 15 x 2, stores 15 x 15 on Median's panels, waypoint panel stride {WAYPOINT_STRIDE}")
     return 0
 

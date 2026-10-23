@@ -13,9 +13,9 @@ Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout l
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
 classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
-cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
-heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
-questrewards gamble enginegaps monlevel normaltc leash bufficons.
+cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
+heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
+questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -4814,6 +4814,73 @@ def check_nslong():
         "; ".join(bad) or "alias texts match the records"), shots, log)
 
 
+def check_orbtips():
+    """Mystic orb tooltips (audit T12): every orb's misc spelldescstr is its own string `mxlorb_<row>` (tools/orb_tips.py:
+    limit per item, required level, properties, target type) instead of the shared "Right-Click to Apply"."""
+    name = "Mystic orb tooltips: per-orb description (limit, level, properties, target type), hovered in the inventory"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    import csv
+    import json
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    with open(os.path.join(root, "work", "mod", "data", "global", "excel", "base", "misc.txt"), encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f, delimiter="\t"))
+    col = {h: i for i, h in enumerate(rows[0])}
+    orbs = [(r[col["code"]], r[col["spelldescstr"]].split(":", 1)[-1]) for r in rows[1:]
+            if r[col["spelldescstr"]].split(":", 1)[-1].startswith("mxlorb_")]
+    recs = {e["Key"]: e["enUS"] for e in json.load(open(os.path.join(
+        root, "work", "mod", "data", "global", "..", "local", "lng", "strings", "medianxl", "median.json"), encoding="utf-8-sig"))}
+    log, bad = [], []
+    texts = [recs.get(key, "") for _c, key in orbs]
+    if len(orbs) < 100 or len(set(texts)) < 90 or any("Right-Click" == t.strip() for t in texts):
+        bad.append("%d orbs, %d distinct texts" % (len(orbs), len(set(texts))))
+    # a spread of orbs: the first line of each record is read back through the string service (the game's own lookup)
+    pick = {}
+    for (code, key), text in zip(orbs, texts):
+        row = int(key.split("_")[1])
+        for tag, test in (("weapon", "(Weapon Only)" in text), ("armor", "(Armor Only)" in text), ("any", "(Any Equippable Item)" in text),
+                          ("chance", "Chance to cast" in text), ("resist", "Resist" in text), ("rare", "Rare items only" in text)):
+            if test and tag not in pick:
+                pick[tag] = (code, key, row, text)
+    goto(1)
+    close_menu()
+    placed = []
+    for tag, (code, key, row, text) in pick.items():
+        first = [w for w in text.split("\n") if w][0]
+        ok, lines = H("str key medianxl:" + key)
+        got = " ".join(lines)
+        want = _COLOUR.sub("", first)
+        want_console = first.replace(chr(255) + "c", "")
+        got_plain = re.sub("[^\x00-\x7f]+.", "", _COLOUR.sub("", got))
+        log.append("%s %s (%s): string answer %s; record %r" % (tag, key, code, got[:100], text.replace("\n", " | ")[:160]))
+        if not (ok and (want in got_plain or want_console in got)):
+            bad.append("%s does not give the record text '%s'" % (key, want))
+        H("remove %s 9" % code)
+        ok, made = H("item %s inv" % code)
+        m = re.search(r"item id=(\d+) .* x=(\d+) y=(\d+)", " ".join(made[:1])) if ok else None
+        if m:
+            placed.append((tag, key, int(m.group(2)), int(m.group(3))))
+        else:
+            bad.append("orb %s (%s) could not be created: %s" % (code, key, made[:1]))
+    g.key("i")
+    time.sleep(1.2)
+    shots = [sh("orbtips_inventory")]
+    for tag, key, x, y in placed:
+        fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
+        g.click(fx, fy, move_only=True)
+        time.sleep(1.0)
+        g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
+        time.sleep(2.0)
+        shots.append(sh("orbtips_%s_%s" % (tag, key)))
+    g.key("esc")
+    for tag, (code, _k, _r, _t) in pick.items():
+        H("remove %s 9" % code)
+    add(name, "FAIL" if bad else "REVIEW",
+        "%d orbs with their own record (%d distinct texts); strings read back and orbs hovered in the inventory (%s): the screenshots "
+        "show the tooltip (limit per item, required level, properties, target type); %s" % (
+            len(orbs), len(set(texts)), ", ".join("%s=%s" % (t, k) for t, k, _x, _y in placed), "; ".join(bad) or "no mismatch"), shots, log)
+
+
 # ------------------------------------------------------------------ strings: what the player reads (lane ns-verify)
 # docs/strings-namespace.md moves Median-only strings into the `medianxl` loader namespace and keeps D2R's own keys native.
 # The proof that the switch changes nothing the player sees: a fixed sample of strings is read back through the plugin
@@ -6025,6 +6092,86 @@ def check_stashpages():
     add(name, "PASS" if not wrong else "FAIL",
         "an item created in shared stash tab n through ItemService (+ accepted, - refused): %s; expected tabs 0-9 accepted and 10, 12 refused%s"
         % (" ".join(res), ("; wrong: " + "; ".join(wrong)) if wrong else ""), [], log)
+
+
+def _stashpage_job(cmd, want):
+    """A queued stashpage job (put / list / move / drop) and its answer: the `stashpage result` line once it is not pending."""
+    ok, lines = H("stashpage " + cmd)
+    if not ok:
+        return False, "refused: %s" % (lines[:2],)
+    out = ""
+    for _ in range(20):
+        time.sleep(0.4)
+        ok2, l2 = H("stashpage result")
+        out = next((l for l in l2 if l.startswith("stashpage result")), "")
+        if " -1 pending" not in out and " -2 " not in out:
+            break
+    return want in out, out
+
+
+def check_stashpage2():
+    name = "Stash pages: personal page 2 (item page 6): panel, arrows, items on it, moves between the pages"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    txt = mxl_text()
+    bad, res, log, shots = [], [], [], []
+    if "stash pages on:" not in txt:
+        return add(name, "FAIL", "`mxl` does not say `stash pages on`: %s" % next((l for l in txt.splitlines() if "stash pages" in l), "-"))
+    # two test items on page 2 (codes the test character never carries)
+    for cmd, label in (("put r05 1 1", "item 1"), ("put r06 5 5", "item 2")):
+        ok, out = _stashpage_job(cmd, "container=9")  # 9 = the custom page
+        log.append(out)
+        if not ok:
+            bad.append("%s not created on page 2 (%s)" % (label, out[:80]))
+    ok, out = _stashpage_job("list", "p2:r05@1,1")
+    log.append(out)
+    res.append("page 2 holds both items: %s" % ("yes" if ok and "p2:r06@5,5" in out else "NO"))
+    if not (ok and "p2:r06@5,5" in out):
+        bad.append("page 2 list: %s" % out[:100])
+    ids = {m.group(1): m.group(2) for m in re.finditer(r"p\d:(r0\d)@\d+,\d+#(\d+)", out)}
+    # the stock stash with its strip, the arrow to page 2 and back (D2R's own messages; background clicks on the strip)
+    H("stashpage uia PanelManager OpenPanel BankExpansionLayout")
+    time.sleep(2)
+    ok, lines = H("stashpage widget BankExpansionLayout MxlPersonalNavigation")
+    log += lines
+    strip = next((l for l in lines if "rect result 0" in l), "")
+    res.append("stock stash has the 1 / 2 strip: %s" % ("yes" if strip else "NO"))
+    if not strip:
+        bad.append("MxlPersonalNavigation missing in the stock stash (%s)" % (lines[:1],))
+    shots.append(sh("stashpage_p1"))
+    g.click(0.2506, 0.6756)  # the right arrow of the stock strip
+    time.sleep(1.8)
+    st = next((l for l in H("stashpage state")[1] if l.startswith("stashpage state=")), "")
+    opened = st.startswith("stashpage state=2")
+    res.append("right arrow opens the page 2 panel: %s" % ("yes" if opened else "NO (%s)" % st[:40]))
+    if not opened:
+        bad.append("page 2 panel did not open")
+    shots.append(sh("stashpage_p2"))
+    g.click(0.1725, 0.6756)  # the left arrow of the page 2 strip: back to the stock stash
+    time.sleep(1.8)
+    st = next((l for l in H("stashpage state")[1] if l.startswith("stashpage state=")), "")
+    closed = st.startswith("stashpage state=1")
+    res.append("arrow on page 2 returns to the stock stash: %s" % ("yes" if closed else "NO (%s)" % st[:40]))
+    if not closed:
+        bad.append("the page 2 panel stayed open")
+    # moves between the pages through ItemService (atomic), then back
+    if "r05" in ids:
+        ok1, o1 = _stashpage_job("move %s 1 2 2" % ids["r05"], "move rc=0 committed=1")
+        ok2, l1 = _stashpage_job("list", "p1:r05@2,2")
+        ok3, o3 = _stashpage_job("move %s 2" % ids["r05"], "move rc=0 committed=1")
+        ok4, l2 = _stashpage_job("list", "p2:r05@")
+        log += [o1, l1, o3, l2]
+        res.append("item moved page 2 -> 1 -> 2: %s" % ("yes" if ok1 and ok2 and ok3 and ok4 else "NO"))
+        if not (ok1 and ok2 and ok3 and ok4):
+            bad.append("move between the pages failed (%s / %s / %s / %s)" % (o1[:50], l1[:60], o3[:50], l2[:60]))
+    # clean-up: the test character keeps nothing on its pages
+    H("stashpage uia PanelManager ClosePanel BankExpansionLayout")
+    for code in ("r05", "r06"):
+        ok, out = _stashpage_job("drop " + code, "1 destroyed")
+        log.append(out)
+        if not ok:
+            bad.append("clean-up of %s failed (%s)" % (code, out[:60]))
+    add(name, "PASS" if not bad else "FAIL", "; ".join(res) + ("; failed: %s" % "; ".join(bad) if bad else ""), shots, log)
 
 
 
@@ -7716,6 +7863,252 @@ def check_leash():
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]), [sh("leash")], log)
 
 
+
+def _unique_limit_rows():
+    """Rows of plugin/src/mxl_unique_limits.h (the committed data the plugin was built from): (row, group, count, dup)."""
+    txt = open(os.path.join(REPO, "plugin", "src", "mxl_unique_limits.h"), encoding="utf-8").read()
+    return [tuple(int(v) for v in m) for m in re.findall(r"\{(\d+), (-?\d+), (\d+), (\d+)\},", txt)]
+
+
+def _ul_counts():
+    """(checked, limited, refused, chat lines sent) from the `mxl` command, None without the `unique limits on` line."""
+    txt = mxl_text()
+    m = re.search(r"unique limits on.*moves into the backpack (\d+) \(limited (\d+), refused (\d+)\)", txt)
+    s = re.search(r"client messages .*\(sent (\d+), failed (\d+)\)", txt)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3)), int(s.group(1)) if s else -1
+
+
+def _le(*vals):
+    return " ".join("%02x" % b for v in vals for b in struct.pack("<I", v & 0xffffffff))
+
+
+def check_uniquelimits():
+    """Median's unique carry limits (uniqueitems2: LimitGroup / LimitCount / PickDuplicates; audit I6). The rule (D2Sigma D2Units
+    0x100bd0b0): a limited unique does not enter the backpack when LimitCount uniques of its group (group 0: copies of it) are
+    there, or, in a group, when a copy of that very unique is. Paths: the container packets (0x19 pick from the cube, 0x18 put into
+    the backpack: D2R's item move 0x471e90) and the ground pickup (packet 0x16 with the to-inventory flag: 0x471950)."""
+    nm = "Unique carry limits (audit I6): group limit, no duplicates, single copy, cube -> backpack and ground pickup"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    bad, rows, log = [], [], []
+    s0 = _ul_counts()
+    if s0 is None:
+        return add(nm, "FAIL", "the `mxl` command has no `unique limits on` line: %s" % next((l for l in mxl_text().splitlines() if "unique limits" in l), "-"))
+    limits = _unique_limit_rows()
+    t = _tsv(os.path.join(BUILT_EXCEL, "uniqueitems.txt"))
+    col = t[0].index("code")
+    code_of = lambda row: t[row + 1][col]
+    # four members of group 1 (count 3, no duplicates) on four different base items: `remove <code>` then takes out exactly one.
+    # 1 x 1 bases only: `item <code> cube` finds no spot for a taller item in the cube
+    m = _tsv(os.path.join(BUILT_EXCEL, "misc.txt"))
+    mc, mw, mh = m[0].index("code"), m[0].index("invwidth"), m[0].index("invheight")
+    small = {r[mc] for r in m[1:] if len(r) > mh and r[mw] == "1" and r[mh] == "1"}
+    limits = [r for r in limits if code_of(r[0]) in small]
+    g1, seen = [], set()
+    for r in limits:
+        if r[1] == 1 and code_of(r[0]) not in seen:
+            seen.add(code_of(r[0]))
+            g1.append(r)
+    solo = [r for r in limits if r[1] == 0 and r[2] == 1 and code_of(r[0]) not in seen]
+    if len(g1) < 4 or len(solo) < 2 or g1[0][2] != 3 or g1[0][3] != 0:
+        return add(nm, "FAIL", "the data has no group of count 3 with 4 members on different items / two single copies: %s" % limits[:6])
+    A, B, C, D = (r[0] for r in g1[:4])
+    S1, S2 = (r[0] for r in solo[:2])
+    codes = sorted({code_of(r) for r in (A, B, C, D, S1, S2)})
+
+    def reset():
+        H("packclear")
+        H("cubeclear")
+        drop_cursor_item(log)  # a held item is not found by `remove`: drop it (packet 0x17)
+        for c in codes:
+            H("remove %s 9" % c)
+        ensure_cube()
+
+    def make(row, where):
+        ok, lines = H("item %s %s uniq=%d" % (code_of(row), where, row))
+        d = next((kv(l) for l in lines if l.startswith("item ")), {})
+        if not ok or "id" not in d or d.get("unique") != str(row) or d.get("quality") != "7":
+            bad.append("could not make unique %d (%s) in %s: %s" % (row, code_of(row), where, lines[:2]))
+            return None
+        return {"id": int(d["id"]), "x": int(d.get("x", "0")), "y": int(d.get("y", "0")), "row": row}
+
+    def pack_count(row):
+        return len([i for i in items(hstate(), code_of(row), 0) if i.get("unique") == row and i.get("quality") == 7])
+
+    def cursor_id():
+        ok, cur = H("cursor")
+        m = re.search(r"cursor id=(\d+)", " ".join(cur))
+        return int(m.group(1)) if m else None
+
+    def near_ground(row):
+        """A ground copy within 4 subtiles of the player (the pickup packet 0x16 only reaches that far; `item ... ground` drops
+        up to 6 away): ground drops that landed too far are taken away again and the drop is repeated."""
+        for _ in range(10):
+            g = make(row, "ground")
+            if not g:
+                return None
+            ok, st = H("state")
+            m = re.search(r"player id=\d+ .*? x=(\d+) y=(\d+)", st[0] if st else "")
+            ok, fl = H("iflags %d" % g["id"])
+            f = next((kv(l) for l in fl if l.startswith("iflags")), {})
+            if not m or ((int(f.get("x", "0")) - int(m.group(1))) ** 2 + (int(f.get("y", "0")) - int(m.group(2))) ** 2) <= 9:
+                return g
+            H("remove %s 1" % code_of(row))
+        bad.append("no ground drop of unique %d landed within 4 subtiles of the player" % row)
+        return None
+
+    def cube_to_pack(it, cells=((12, 7), (13, 8), (10, 8), (3, 9))):
+        """Pick the cube item up (packet 0x19), put it into the backpack (0x18: the move D2R's 0x471e90 checks). Returns
+        (landed in the backpack, the id the cursor holds afterwards); a cell without room is skipped, a refusal by the rule
+        (the plugin's counter went up) ends the tries."""
+        H("pkt 19 " + _le(it["id"], it["x"], it["y"], 3))
+        time.sleep(0.4)
+        if cursor_id() != it["id"]:
+            bad.append("the cube item %d did not reach the cursor (cursor holds %s)" % (it["id"], cursor_id()))
+            return False, cursor_id()
+        for (x, y) in cells:
+            before = _ul_counts()
+            H("pkt 18 " + _le(it["id"], x, y, 0))
+            time.sleep(0.4)
+            now = _ul_counts()
+            if cursor_id() != it["id"]:
+                return True, None
+            if now and before and now[2] > before[2]:
+                return False, it["id"]
+        return False, cursor_id()
+
+    reset()
+    # 1. group 1 (count 3, no duplicates): three members carried, the fourth from the cube is refused
+    for r in (A, B, C):
+        make(r, "inv")
+    d4 = make(D, "cube")
+    if d4:
+        before = _ul_counts()
+        landed, held = cube_to_pack(d4)
+        after = _ul_counts()
+        rows.append("group full (A, B, C carried): fourth member %s, refused %d -> %d, limited %d -> %d" % ("LANDED" if landed else "refused", before[2], after[2], before[1], after[1]))
+        if landed or held != d4["id"] or after[2] < before[2] + 1 or pack_count(D) != 0:
+            bad.append("full group: the fourth member should be refused and stay on the cursor (landed %s, cursor %s, refused %d -> %d, in pack %d)" % (landed, held, before[2], after[2], pack_count(D)))
+        # 2. positive control: free a place (remove A), the same item now lands
+        H("remove %s 1" % code_of(A))
+        if pack_count(A) == 0 and held == d4["id"]:
+            before = _ul_counts()
+            H("pkt 18 " + _le(d4["id"], 12, 7, 0))
+            time.sleep(0.4)
+            after = _ul_counts()
+            rows.append("after one is removed: fourth member in the backpack %d, refused %d -> %d" % (pack_count(D), before[2], after[2]))
+            if pack_count(D) != 1 or after[2] != before[2]:
+                bad.append("one place free: the member should land (in pack %d, refused %d -> %d, cursor %s)" % (pack_count(D), before[2], after[2], cursor_id()))
+        else:
+            bad.append("could not free a place for the positive control (A in pack %d, cursor %s)" % (pack_count(A), cursor_id()))
+    # 3. no duplicates: group at 2 of 3, a second copy of a carried member is refused although the group has room
+    reset()
+    make(B, "inv")
+    make(C, "inv")
+    dup = make(B, "cube")
+    if dup:
+        before = _ul_counts()
+        landed, held = cube_to_pack(dup)
+        after = _ul_counts()
+        rows.append("duplicate of a carried member (group 2 of 3): %s, refused %d -> %d" % ("LANDED" if landed else "refused", before[2], after[2]))
+        if landed or after[2] < before[2] + 1:
+            bad.append("a second copy of the same unique in a group should be refused (landed %s, refused %d -> %d)" % (landed, before[2], after[2]))
+    # 4. a single-copy unique (limit 1, group 0): a second copy lying on the ground is refused, a different single-copy unique is not
+    #    (these two bases cannot be placed in the cube by the harness, so the ground path stands in for the cube here)
+    def ground_pickup(row):
+        g = near_ground(row)
+        if not g:
+            return None
+        ok, fl = H("iflags %d" % g["id"])
+        f = next((kv(l) for l in fl if l.startswith("iflags")), {})
+        before = _ul_counts()
+        H("pkt 16 " + _le(g["id"], int(f.get("x", "0")), int(f.get("y", "0")), 1))
+        time.sleep(0.5)
+        after = _ul_counts()
+        return before, after, pack_count(row)
+
+    reset()
+    make(S1, "inv")
+    res = ground_pickup(S1)
+    if res:
+        before, after, inpack = res
+        rows.append("second copy of a single-copy unique picked up from the ground: refused %d -> %d, in pack %d" % (before[2], after[2], inpack))
+        if after[2] < before[2] + 1 or inpack != 1:
+            bad.append("the second copy of a single-copy unique should be refused (refused %d -> %d, in pack %d)" % (before[2], after[2], inpack))
+    # a different single-copy unique is not counted: carry S1 and S2, lift S2 off the backpack (packet 0x19) and put it back (0x18)
+    reset()
+    make(S1, "inv")
+    # (D2R's own one-per-type rule for unique charms refuses a second one of a type at placement, so many pairs cannot be
+    # carried together at all: take the first single-copy unique that can be placed next to S1)
+    s2 = None
+    for cand in [r[0] for r in solo[1:]]:
+        s2 = make(cand, "inv")
+        if s2:
+            S2 = cand
+            break
+        bad.pop()
+    if not s2:
+        rows.append("no second single-copy unique could be carried next to the first (D2R's one-per-type rule): positive control skipped")
+    if s2:
+        H("pkt 19 " + _le(s2["id"], s2["x"], s2["y"], 0))
+        time.sleep(0.4)
+        lifted = cursor_id() == s2["id"]
+        before = _ul_counts()
+        H("pkt 18 " + _le(s2["id"], s2["x"], s2["y"], 0))
+        time.sleep(0.4)
+        after = _ul_counts()
+        rows.append("a different single-copy unique lifted off the backpack and put back: lifted %s, refused %d -> %d, in pack %d, cursor %s" % (lifted, before[2], after[2], pack_count(S2), cursor_id()))
+        if not lifted or after[2] != before[2] or pack_count(S2) != 1 or cursor_id() is not None:
+            bad.append("another single-copy unique must not count (lifted %s, refused %d -> %d, in pack %d, cursor %s)" % (lifted, before[2], after[2], pack_count(S2), cursor_id()))
+    # 5. ground pickup into the inventory (packet 0x16, to-inventory flag 1): refused over the limit; to the cursor (flag 0) is allowed
+    reset()
+    for r in (A, B, C):
+        make(r, "inv")
+    gnd = near_ground(D)
+    if gnd:
+        def iflags():
+            ok, fl = H("iflags %d" % gnd["id"])
+            return next((kv(l) for l in fl if l.startswith("iflags")), {})
+        f = iflags()
+        gx, gy = int(f.get("x", "0")), int(f.get("y", "0"))
+        before = _ul_counts()
+        H("pkt 16 " + _le(gnd["id"], gx, gy, 1))
+        time.sleep(0.5)
+        after = _ul_counts()
+        f2 = iflags()
+        rows.append("ground pickup to the inventory over the limit: checked %d -> %d, refused %d -> %d, item mode %s (3 = still on the ground), in pack %d" % (before[0], after[0], before[2], after[2], f2.get("mode"), pack_count(D)))
+        if after[2] < before[2] + 1 or pack_count(D) != 0 or f2.get("mode") not in ("3", "5"):
+            bad.append("the pickup to the inventory should be refused and leave the item on the ground (refused %d -> %d, mode %s, in pack %d)" % (before[2], after[2], f2.get("mode"), pack_count(D)))
+        H("pkt 16 " + _le(gnd["id"], gx, gy, 0))
+        time.sleep(0.5)
+        rows.append("ground pickup to the cursor: cursor holds %s (item %d)" % (cursor_id(), gnd["id"]))
+        if cursor_id() != gnd["id"]:
+            bad.append("a pickup to the cursor is not limited; the cursor holds %s" % cursor_id())
+        else:
+            before = _ul_counts()
+            H("pkt 18 " + _le(gnd["id"], 12, 7, 0))
+            time.sleep(0.4)
+            after = _ul_counts()
+            rows.append("cursor -> backpack over the limit: refused %d -> %d, cursor %s" % (before[2], after[2], cursor_id()))
+            if after[2] < before[2] + 1 or cursor_id() != gnd["id"]:
+                bad.append("the drop from the cursor into a full group should be refused (refused %d -> %d, cursor %s)" % (before[2], after[2], cursor_id()))
+    # 6. wearing: all 334 limited uniques are misc items without a body location (nothing to equip), so the rule has no wear half
+    # 7. the messages: one chat line per refusal (client messages sent)
+    end = _ul_counts()
+    reset()
+    if end and s0:
+        refusals = end[2] - s0[2]
+        sent = end[3] - s0[3] if end[3] >= 0 and s0[3] >= 0 else None
+        rows.append("refusals this run %d, chat lines sent %s" % (refusals, sent))
+        if sent is not None and sent < refusals:
+            bad.append("%d refusals but only %d chat lines sent" % (refusals, sent))
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows) if bad else "; ".join(rows), [], log)
+
 BUFF_TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "plugin", "src", "mxl_state_icons.h")
 
 
@@ -7873,18 +8266,18 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("nocorpse", check_nocorpse),
           ("cooldowns", check_cooldowns),
           ("collidetypes", check_collidetypes), ("skillstarts", check_skillstarts), ("activationfreq", check_activationfreq),
-          ("nslong", check_nslong),
+          ("nslong", check_nslong), ("orbtips", check_orbtips),
           ("strings", check_strings),
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
           ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("restrictitems", check_restrictitems), ("heat", check_heat),
           ("trophytimer", check_trophytimer),
-          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages),
+          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages), ("stashpage2", check_stashpage2),
           ("skillscaling", check_skillscaling),
           ("nodurability", check_nodurability), ("nodurabilityui", check_nodurabilityui), ("autoid", check_autoid), ("townmana", check_townmana),
           ("potionamounts", check_potionamounts), ("manarules", check_manarules),
           ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards),
           ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash),
-          ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons)]
+          ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons), ("uniquelimits", check_uniquelimits)]
 
 
 def write_report(extra=""):

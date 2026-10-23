@@ -22,6 +22,7 @@
 #include "hirelings.h"
 #include "hirelings_logic.h"
 #include "info_panels.h"
+#include "stash_pages.h"
 #include "mxl_hirelings.h"
 #include "cooldowns.h"
 #include "no_corpse.h"
@@ -3473,7 +3474,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
-	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
+	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | stashpage state|open|close|toggle|msgs|uia|widget|vis|put|fill|drop|list|move|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | gamble | gaps | levelact <id>..");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
@@ -4043,6 +4044,103 @@ auto CmdStashProbe(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// stashpage (client side): state | open | close | toggle | msgs | uia <target> <command> [text] | widget <panel> [child] |
+// vis <panel> <child> 0|1 | put <code> [x y] | fill <1|2> | list | move <runtime id> <1|2> [x y] | result
+// (put / fill / list / move queue work on the game thread; `stashpage result` has the answer).
+auto CmdStashPage(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	const char* usage = "usage: stashpage state|open|close|toggle|msgs|uia <target> <command> [text]|widget <panel> [child]|vis <panel> <child> <0|1>|put <code> [x y]|fill <1|2>|drop <code>|list|move <id> <1|2> [x y]|result";
+	char text[1000];
+	if (t.n < 2) {
+		return Fail(c, usage);
+	}
+	const char* verb = t.tok[1];
+	if (hcmd::LowerEq(verb, "state")) {
+		char status[300];
+		StashPagesStatus(status, sizeof(status));
+		Out("stashpage state=%d %s", StashPageState(), status);
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "open") || hcmd::LowerEq(verb, "close") || hcmd::LowerEq(verb, "toggle")) {
+		const int mode = hcmd::LowerEq(verb, "close") ? 0 : hcmd::LowerEq(verb, "open") ? 1 : 2;
+		Out("stashpage %s %s", verb, StashPageOpen(mode) == 0 ? "queued" : "unavailable");
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "msgs")) {
+		StashPageMessages(text, sizeof(text));
+		Out("stashpage msgs %s", text);
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "uia")) {
+		if (t.n < 4) {
+			return Fail(c, usage);
+		}
+		Out("stashpage uia %s:%s(%s) = %d", t.tok[2], t.tok[3], t.n >= 5 ? t.tok[4] : "", StashPageUiAction(t.tok[2], t.tok[3], t.n >= 5 ? t.tok[4] : ""));
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "widget")) {
+		if (t.n < 3) {
+			return Fail(c, usage);
+		}
+		StashPageWidget(t.tok[2], t.n >= 4 ? t.tok[3] : "", text, sizeof(text));
+		Out("stashpage widget %s", text);
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "vis")) {
+		long long on = 0;
+		if (t.n < 5 || !hcmd::ParseInt(t.tok[4], &on)) {
+			return Fail(c, usage);
+		}
+		Out("stashpage vis %s/%s=%lld result %d", t.tok[2], t.tok[3], on, StashPageSetVisible(t.tok[2], t.tok[3], on != 0));
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "result")) {
+		const int rc = StashPageResult(text, sizeof(text));
+		Out("stashpage result %d %s", rc, text);
+		return true;
+	}
+	long long a = 0, b = -1, d = -1;
+	int queued = 0;
+	if (hcmd::LowerEq(verb, "put")) {
+		if (t.n < 3) {
+			return Fail(c, usage);
+		}
+		if (t.n >= 5) {
+			hcmd::ParseInt(t.tok[3], &b);
+			hcmd::ParseInt(t.tok[4], &d);
+		}
+		queued = StashPageJob("put", b, d, 0, t.tok[2], text, sizeof(text));
+	} else if (hcmd::LowerEq(verb, "fill")) {
+		if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &a)) {
+			return Fail(c, usage);
+		}
+		queued = StashPageJob("fill", a, 0, 0, "", text, sizeof(text));
+	} else if (hcmd::LowerEq(verb, "list")) {
+		queued = StashPageJob("list", 0, 0, 0, "", text, sizeof(text));
+	} else if (hcmd::LowerEq(verb, "drop")) {
+		if (t.n < 3) {
+			return Fail(c, usage);
+		}
+		queued = StashPageJob("drop", 0, 0, 0, t.tok[2], text, sizeof(text));
+	} else if (hcmd::LowerEq(verb, "move")) {
+		long long page = 0;
+		if (t.n < 4 || !hcmd::ParseInt(t.tok[2], &a) || !hcmd::ParseInt(t.tok[3], &page)) {
+			return Fail(c, usage);
+		}
+		if (t.n >= 6 && hcmd::ParseInt(t.tok[4], &b) && hcmd::ParseInt(t.tok[5], &d)) {
+			queued = StashPageJob("move", a, page, (d << 8) | (b & 0xff), "", text, sizeof(text));
+		} else {
+			queued = StashPageJob("move", a, page, -1, "", text, sizeof(text));
+		}
+	} else {
+		return Fail(c, usage);
+	}
+	if (queued == 0) {
+		return Fail(c, text);
+	}
+	Out("stashpage %s %s", verb, text);
+	return true;
+}
+
 // wpobj: every waypoint object of the game with its position and its distance to the player (the wpauto check walks to one).
 auto CmdWpObj(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	int32_t px = 0, py = 0;
@@ -4092,6 +4190,7 @@ const Verb Verbs[] = {
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
+    {"stashpage", CmdStashPage, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

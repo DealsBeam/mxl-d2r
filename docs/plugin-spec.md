@@ -1004,8 +1004,13 @@ the `mxl` line says why).
   `mxl_transmute` K, in the Controls menu, rebindable; none on D2R's own keys: R is its run toggle, C the Character screen, V another action). X flips the switch that gates the auto-activation; L queues the reveal on
   the UI thread; K queues the cube panel's Transmute `0x2cd720` on the UI thread when a UiMessageListener has seen the Horadric
   Cube panel open. Counters and the last UI messages are in the `mxl` command (`travel` lines) and the harness verb `travel`.
-* **Stash pages** are not code: `tools/install_mod.py` writes `d2rcore.stash.add_shared_tabs = 7` into the mod's `d2rloader.toml`
-  (3 normal tabs + 7 = Median's 10 pages), only when the key is not set by hand.
+* **Stash pages** (`stash_pages.cpp`, generated `mxl_stash_page.h`, off word `stashpages`; design in `docs/stash-pages.md`): the shared
+  tabs are not code: `tools/install_mod.py` writes `d2rcore.stash.add_shared_tabs = 7` into the mod's `d2rloader.toml` (3 normal tabs +
+  7 = Median's 10 pages), only when the key is not set by hand. The personal stash has 2 pages: the stock page and the one custom player
+  page of D2RLoader (logical id `stash2`, item page 6, 14 x 14), shown by the plugin panel `mxl-core/StashPage2` (GameplayLeftSlot)
+  over the stock panel `BankExpansionLayout`; both carry a "1 / 2" strip whose arrows send the stock `PanelManager` TogglePanel /
+  ClosePanel messages. When the part is off or the page is taken by another plugin the strip is hidden (`StashPagesOff`). `mxl`
+  console: "stash pages ...". Harness verb `stashpage` (client side and game thread jobs).
 
 ## Diagnosis switch and state trace
 
