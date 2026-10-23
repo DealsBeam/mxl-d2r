@@ -348,6 +348,7 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `avoid <ref> melee\|missile\|evade [n]` | runs the game's avoid check `0x44ef70` n times (default 200, the hooked one with Median's caps; its first argument is the attacker unit, the player here) against the unit and tallies none / avoid (2) / dodge (4) / evade (8) / block (0x10); `evade` puts the unit into walk mode for the loop |
 | `wear <attacker ref> <defender ref> [n]` | n melee wear steps (`0x4526c0`, the function every hit runs; it calls the wear dispatcher `0x441b10`) and the summed durability of the player's worn items before and after |
 | `iflags <item unit id> [unid]` | flag word (0x10 identified), mode, quantity (stat 0x46), durability (0x48) and maximum (0x49) and position of any item unit, on the ground too; `unid` clears the identified flag first |
+| `itemdesc <item unit id> [eth]` | the text of the item's description as the inventory tooltip builds it: D2R's own builder `0x2be560` (out string, item, flags, flag, text, options) called on the client's copy of the item; one line `h: itemdesc id=<id> line <n>: <text>` per description line (colour codes removed) and `itemdesc id=<id> lines <n>`; `eth` makes the client's copy read as ethereal for that one call (the item itself is not changed). The `Durability: x of y` line is the output of `0x2c1640` (plugin part `durabilitytip`) |
 | `cursor` | the item on the player's cursor (id, code) or `empty`; a held item makes `0x4249f0` report "busy" and refuses every skill use (drop it with the client packet `17 <id u32>`) |
 | `manamin [reset]` | the lowest and highest mana of the player on any server frame since `manamin reset` (a skill's mana is charged a frame or more after `cast` returns and regenerates within a few frames, so one read afterwards sees nothing) |
 | `manacharge` | what the mana cost hook decided at the last charge site: calls, room, town test, cost, charge, site (1 server, 2 client, 3 the loader's server copy), and the return address of the last other caller |
@@ -714,6 +715,20 @@ Cause of every non-pass of the first 0.55.0 run (88 checks; 94 PASS / 9 FAIL / 4
 | heat, sprint (slot 1, found in the full run) | heat: the drain per tick is a share of the **maximum** mana, so a fixed 100-point bar was gone in one tick on the 6300-mana character; sprint: the slowest walk leg read 0.52 against 0.62 units per frame | check | heat sets the full bar; sprint repeats a walk leg that does not give the expected ratio |
 
 Final runs (same code, the two check edits for heat and sprint re-run on both slots afterwards): slot 1 (level 150) 106 PASS / 0 FAIL, slot 3 (level 34) 108 PASS / 0 FAIL of 111 rows each; the other rows are the standing REVIEW (short aliases, tooltip: screenshots to read by hand) and PARTIAL (map reveal: the level is already drawn whole on arrival) rows. Run folders `checks-20261023-062317-s1`, `-064559-s1`, `-071122-s1` and `checks-20261023-062317-s3`, `-064419-s3`, `-070748-s3`.
+
+### No durability in the UI (lane no-durability, 2026-10-23, slot 2, background mode, plugin 0.55.0 + durabilitytip / repairui)
+
+`py -3 tools/game_checks.py --slot 2 all nodurabilityui nodurability itemrolls vendors potions`: the new check and the four checks
+that touch what it changes. Control run: `mxl-core-off.txt` with `durabilitytip repairui` (the tbl2json ethereal text is data and stays).
+
+| Check | With the parts | Off words | Evidence |
+|---|---|---|---|
+| `nodurabilityui` (audit IT1, UI half) | PASS | FAIL | stats 72 / 73 > 0 on a Field Plate, a Battle Sword, a magic and an ethereal Field Plate; their descriptions (`itemdesc`, D2R's own builder) have no durability / repair / indestructible text; the ethereal one reads `Ethereal`, not `Ethereal (Cannot be Repaired)`; Charsi's menu ids are 0xd35, 0xd44 (no 0xd06), Gheed's 0xd35, 0xd44, 0xd46; the panel strip below the item grid, Charsi vs Gheed, differs by 0.12 (off words: `Durability: 48 of 48`, 0xd06 in Charsi's menu, strip diff 5.97) |
+| `nodurability`, `itemrolls` (ethereal keeps +25% and the 75% durability), `vendors`, `potions` (2 rows) | PASS | | unchanged behaviour |
+
+Screenshots (run folder `checks-20261023-093545-s2`): `nodur_tooltip_armour.png` and `nodur_tooltip_weapon.png` (the inventory
+tooltip of a Field Plate: Defense, Required Strength, Socketed, no Durability line), `nodur_charsi_menu.png` and `nodur_charsi_panel.png`
+(the plain trade panel, no Repair buttons), `nodur_gheed_menu.png` / `nodur_gheed_panel.png` for comparison.
 
 ### Buff / debuff icon bar (lane buff-icons, 2026-10-23, slot 3, background mode, plugin 0.55.0 + the lane's part)
 

@@ -156,7 +156,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons gamble hitfloor recast slowfloor
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons gamble hitfloor recast slowfloor
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -546,8 +546,8 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		std::snprintf(line, sizeof(line), "mxl-core: trophy timer %s", g_trophyReport);
 		context->LogInfo(line);
 		{
-			const ItemRulesParts parts{!Off("durability"), !Off("quantity")};
-			if (!parts.durability && !parts.quantity) {
+			const ItemRulesParts parts{!Off("durability"), !Off("quantity"), !Off("durabilitytip"), !Off("repairui")};
+			if (!parts.durability && !parts.quantity && !parts.tooltip && !parts.repairUi) {
 				std::snprintf(g_itemRulesReport, sizeof(g_itemRulesReport), "%s", OffNote);
 			} else {
 				InstallItemRules(context, parts, g_itemRulesReport, sizeof(g_itemRulesReport));

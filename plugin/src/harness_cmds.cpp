@@ -2925,7 +2925,7 @@ auto CmdCursor(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 auto CmdItemFlags(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long id = 0;
 	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id)) {
-		return Fail(c, "usage: iflags <item unit id>");
+		return Fail(c, "usage: iflags <item unit id> [unid]");
 	}
 	Unit* found = nullptr;
 	EachUnit(c->game, HashItems, [&](Unit* it) {
@@ -2945,6 +2945,67 @@ auto CmdItemFlags(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	d2r::UnitXY(found, &x, &y);
 	Out("iflags id=%u flags=0x%x identified=%d mode=%d quantity=%d durability=%d maxdurability=%d x=%d y=%d", IdOf(found), flags,
 	    (flags & 0x10) != 0 ? 1 : 0, ModeOf(found), Stat(found, 0x46), Stat(found, StatDurability), Stat(found, StatMaxDurabilityItem), x, y);
+	return true;
+}
+
+// `itemdesc <item unit id>`: the text of the item's description (the hover tooltip of the inventory), built by D2R's own
+// builder 0x2be560 (out string, item, flags, flag, text, options) on the client's copy of the item and printed one line
+// per `h: itemdesc id=<id> line <n>: <text>` with the colour codes (U+E07E and a digit) removed. The builder returns a
+// std::string-like block {char* text, size, capacity, inline buffer}; the line `Durability: x of y` is the output of
+// 0x2c1640, which the plugin part durabilitytip replaces (docs/median-rules-audit.md IT1).
+auto CmdItemDesc(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id)) {
+		return Fail(c, "usage: itemdesc <item unit id> [eth]");
+	}
+	static constexpr uint8_t BuilderEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57};
+	if (std::memcmp(reinterpret_cast<const void*>(g_base + 0x2be560), BuilderEntry, sizeof(BuilderEntry)) != 0) {
+		return Fail(c, "itemdesc: the description builder 0x2be560 is not where it was (image mismatch)");
+	}
+	Unit* item = Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(id), 4);
+	if (item == nullptr) {
+		return Fail(c, "itemdesc: the client has no such item unit");
+	}
+	using BuilderFn = void (*)(void* out, Unit* item, uint32_t flags, char flag, char* text, void* options);
+	alignas(16) uint8_t out[0x40] = {};
+	alignas(16) uint8_t options[0x10] = {};  // {u64 value, u8 present = 0}
+	auto* itemData = Fn<ItemDataFn>(RvaItemData)(item);
+	const bool eth = t.n > 2 && hcmd::LowerEq(t.tok[2], "eth");  // `eth`: the client's copy reads as ethereal for this one call
+	const uint32_t savedFlags = itemData != nullptr ? d2r::At<uint32_t>(itemData, ItemFlagsOffset) : 0;
+	if (eth && itemData != nullptr) {
+		*reinterpret_cast<uint32_t*>(itemData + ItemFlagsOffset) = savedFlags | ItemFlagEthereal;
+	}
+	Fn<BuilderFn>(0x2be560)(out, item, 0, 1, nullptr, options);
+	if (eth && itemData != nullptr) {
+		*reinterpret_cast<uint32_t*>(itemData + ItemFlagsOffset) = savedFlags;
+	}
+	const char* text = *reinterpret_cast<const char* const*>(out);
+	const uint64_t size = *reinterpret_cast<const uint64_t*>(out + 8);
+	if (text == nullptr || size > 0x4000) {
+		return Fail(c, "itemdesc: the builder returned no text");
+	}
+	char line[300];
+	size_t n = 0;
+	int lines = 0;
+	auto flush = [&] {
+		line[n] = '\0';
+		Out("itemdesc id=%u line %d: %s", static_cast<unsigned>(id), lines++, line);
+		n = 0;
+	};
+	for (uint64_t i = 0; i < size; ++i) {
+		const auto ch = static_cast<uint8_t>(text[i]);
+		if (ch == 0xee && i + 3 < size && static_cast<uint8_t>(text[i + 1]) == 0x81 && static_cast<uint8_t>(text[i + 2]) == 0xbe) {
+			i += 3;  // colour code: U+E07E (UTF-8 ee 81 be) and one digit
+		} else if (ch == '\n') {
+			flush();
+		} else if (n + 1 < sizeof(line)) {
+			line[n++] = static_cast<char>(ch);
+		}
+	}
+	if (n > 0) {
+		flush();
+	}
+	Out("itemdesc id=%u lines %d", static_cast<unsigned>(id), lines);
 	return true;
 }
 
@@ -4026,7 +4087,7 @@ const Verb Verbs[] = {
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
-    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
+    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"itemdesc", CmdItemDesc, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},
