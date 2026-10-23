@@ -200,8 +200,17 @@ entity at that path; the skeleton and state machine stay the donor's (goatman1).
 ## 3b. The Wereowl in game: Druid form and Corrupted Wereowl (lane wereowl-3d, 2026-10-23)
 
 Build step `tools/wereowl_models.py` (in `tools/build.py` after `hd_monsters.py`; rigging in `tools/sprite3d/rig_fit.py`; in game
-test scripts `tools/sprite3d/morph_shots.py` for the Druid and `ingame_shots.py` for the enemy). The assets are not in the repo:
-`MXL_3D_DIR` (default `D:\mxl-3d\out\wereowl\s3\tex`) holds `mesh_lods.npz` and `albedo.png`.
+test scripts `tools/sprite3d/morph_shots.py` for the Druid and `ingame_shots.py` for the enemy). The assets are in the repo
+(Git LFS, see "Assets in the repo" below): `assets/hd/wereowl/` holds `mesh_lods.npz` and `albedo.png` (`MXL_3D_DIR` overrides).
+
+### Assets in the repo (rule from 2026-10-23)
+Every HD model, texture and other custom art the port uses is committed, so any PC can build the full mod from a clone:
+- one folder per asset, `assets/hd/<name>/`: the build inputs the build step reads, `source/` with the generation sources
+  (meshes, `.glb`, references), and a `README.md` (what it is, which build step uses it, how it was made, known flaws);
+- everything under `assets/` is stored with **Git LFS** (`.gitattributes`); `.md` / `.json` there stay plain text;
+- build steps default to the repo folder; an environment variable may point elsewhere for work in progress;
+- on another PC: `git lfs install` once, then `git pull` (or `git lfs pull` in a clone made without LFS), then `tools/build.py`.
+  Without LFS the files are small pointer texts and the 3D steps fall back to their stand-ins.
 
 **Off switch:** `MXL_NO_3D=1` in the environment of the build (or `py -3 tools/wereowl_models.py --off`, or no assets in
 `MXL_3D_DIR`): the step does nothing and both uses keep the goatman1 stand-ins of `hd_monsters.py`. Nothing else in the build
