@@ -5,6 +5,10 @@
 //   Lam Esen's Tome    D2Game 0xe6496 (sub_6fd06420): 10 free stat points, vanilla 5.
 //   Stamina recovery   D2Game 0x79b7c redirects the stamina step of the per-frame regeneration to D2Sigma 0x100a1f90.
 //   Mana recovery      0x79b77 redirects the mana step to 0x100a1f60 (formula 0x100a1b50); the drain by stat 297 is heat_logic.h.
+//   Stat "+" click     Median's StatScreen (D2Sigma 0x101151f0): Shift-click spends 25 stat points, a plain click 1. D2R's server
+//                      handler of client packet 0x3a (0x4b3c70; [id u8][stat u16][count u16]) spends count + 1 points one after the
+//                      other and stops at the first refusal; its own Shift-click sends count 4 (5 points), Ctrl-click the number
+//                      of points left minus one.
 #pragma once
 
 #include <cstdint>
@@ -13,6 +17,16 @@ namespace statrules {
 
 constexpr int32_t PotionOfLifeLife = 0x3200;  // stat 7 (max life) += this; 50 life in the x256 stat units
 constexpr int32_t LamEsenStatPoints = 10;
+
+constexpr int32_t D2RShiftClickCount = 4;       // D2R's Shift-click: the packet's count (points after the first)
+constexpr int32_t MedianShiftClickCount = 24;   // Median's Shift-click: 25 points
+
+// The count the server handler gets: Shift-click's 4 becomes Median's 24, every other count (plain click 0, Ctrl-click: all that
+// is left, one point of 5 left is the same thing as Shift's) stays. The handler stops at the first refused point, so 25 never
+// spends more than the unused points the player has.
+constexpr auto StatClickCount(int32_t count) noexcept -> int32_t {
+	return count == D2RShiftClickCount ? MedianShiftClickCount : count;
+}
 
 // Unit modes the stamina step tells apart (unit +0xc in D2R, +0x10 in 1.13c).
 constexpr int32_t ModeNeutral = 1;

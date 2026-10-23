@@ -15,7 +15,12 @@
 //   a5q6 event 8   0x54fa70  AFTER the vanilla handler: Baal dies in Hell, every player in the Worldstone Chamber above
 //                            level 109 gets a relic orb (qrel) once (quest 40 bit 0xb)
 //   respec bookkeeping 0x5d9ae0  REPLACED (D2Sigma replaces the 1.13c call 0x6fc83bb0 by 0x9e600): above level 50
-//                            quest 41 bit 0 is cleared and bit 1 set; the respec token is never used up
+//                            quest 41 bit 0 is cleared and bit 1 set; the respec token is never used up. Before that, the
+//                            reset removes the player's timed buffs (audit DC7, off word "respecbuffs"): Median's D2Respec
+//                            0xa2330 walks the player's stat lists after the skill refund and, for every list that has a
+//                            skill id whose skills.txt row is neither a passive nor an aura, clears the state and frees the
+//                            list (lambda 0xa23a0). D2R's state lists are found by state id (0x2f5940); the timed ones (an
+//                            end frame at list +0x24) are cleared, passives and auras have none.
 //
 // Not ported (see docs/subsystems/quests-requirements.md section 5c): the quest 5 repeat guard (a Sigma artifact),
 // the quest 38 re-arm (D2R's own handler 0x54dd30 already does it), the empty act-intro event 2 handlers.
@@ -39,6 +44,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -65,6 +71,12 @@ constexpr uint64_t ForEachPlayerRva = 0x490de0;   // (game, 0, arg, callback(gam
 constexpr uint64_t GetStatRva = 0x2f5020;         // (unit, stat, layer)
 constexpr uint64_t UnitRoomRva = 0x34b440;        // (unit) -> room
 constexpr uint64_t RoomLevelIdRva = 0x2efc10;     // (room) -> level id
+constexpr uint64_t StateListRva = 0x2f5940;       // (unit, state) -> the unit's stat list for that state or null
+constexpr uint64_t ClearStateRva = 0x3354c0;      // (unit, state, 0): state bit off
+constexpr uint64_t DetachListRva = 0x2f7920;      // (unit, list)
+constexpr uint64_t FreeListRva = 0x2f4180;        // (dataFlag, list)
+constexpr int StateListExpiry = 0x24;             // float: the frame the state ends (0 = no end: passives, auras)
+constexpr int StateIdLimit = 1024;                // states.txt has 1013 rows
 
 // 0x5a5490: mov [rsp+8],rbx / push rdi / sub rsp,0x20
 constexpr uint8_t SummonerKillEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20};
@@ -86,6 +98,11 @@ constexpr uint8_t QualKehkEntry[] = {0x40, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec, 0
 constexpr uint8_t BaalKillEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x20, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57};
 // 0x5d9ae0: mov [rsp+0x10],rbx / push rdi / sub rsp,0x20
 constexpr uint8_t RespecDoneEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20};
+// called, not hooked (first bytes of the dump of build 93847)
+constexpr uint8_t StateListEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x8b, 0xda, 0x48, 0x8b, 0xf9};
+constexpr uint8_t ClearStateEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57};
+constexpr uint8_t DetachListEntry[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xda};
+constexpr uint8_t FreeListEntry[] = {0x48, 0x85, 0xd2, 0x74, 0x0a, 0x83, 0x7a, 0x1c, 0x00, 0x0f, 0x8d};
 
 constexpr int QuestFlagRecord = quests::FlagQuest;
 constexpr int StatLevel = 12;
@@ -99,6 +116,10 @@ using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
 using UnitRoomFn = void* (*)(Unit* unit);
 using RoomLevelIdFn = int32_t (*)(void* room);
 using RespecDoneFn = void (*)(Game* game, Unit* player);
+using StateListFn = void* (*)(Unit* unit, int32_t state);
+using ClearStateFn = void (*)(Unit* unit, int32_t state, int32_t zero);
+using DetachListFn = void (*)(Unit* unit, void* list);
+using FreeListFn = void (*)(uint32_t dataFlag, void* list);
 
 HandlerFn g_summonerKillOriginal = nullptr;
 HandlerFn g_summonerActivateOriginal = nullptr;
@@ -115,6 +136,11 @@ FindQuestFn g_findQuest = nullptr;
 GetStatFn g_getStat = nullptr;
 UnitRoomFn g_unitRoom = nullptr;
 RoomLevelIdFn g_roomLevelId = nullptr;
+StateListFn g_stateList = nullptr;
+ClearStateFn g_clearState = nullptr;
+DetachListFn g_detachList = nullptr;
+FreeListFn g_freeList = nullptr;
+bool g_clearBuffs = false;  // off word "respecbuffs"
 const D2RL::PluginContext* g_context = nullptr;
 
 void Log(const char* what, int a, int b) noexcept {
@@ -317,7 +343,31 @@ void BaalKillHook(void* quest, uint8_t* event) {
 
 // D2Sigma 0x9e600, hooked on the one caller of the respec bookkeeping (the respec packet and the NPC lane's respec
 // action both end in it). Replaces the original: vanilla would set bit 0 and clear bit 1 (token used up).
+// The reset removes the player's timed buffs (audit DC7): every state list with an end frame is cleared, detached and freed
+// the way the harness's `setstate <unit> <state> 0` does it. Returns how many were removed.
+auto ClearTimedBuffs(Game* game, Unit* player) noexcept -> int {
+	int removed = 0;
+	__try {
+		for (int state = 1; state < StateIdLimit; ++state) {
+			void* list = g_stateList(player, state);
+			if (list == nullptr || d2r::At<float>(list, StateListExpiry) <= 0.0f) {
+				continue;
+			}
+			g_clearState(player, state, 0);
+			g_detachList(player, list);
+			g_freeList(d2r::DataFlag(game), list);
+			++removed;
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		Log("respec buff clear crashed in a game call", removed, 0);
+	}
+	return removed;
+}
+
 void RespecDoneHook(Game* game, Unit* player) {
+	if (game != nullptr && player != nullptr && g_clearBuffs) {
+		Log("respec cleared buffs", ClearTimedBuffs(game, player), 0);
+	}
 	if (game == nullptr || player == nullptr || !quests::RespecRearms(g_getStat(player, StatLevel, 0))) {
 		return;
 	}
@@ -337,9 +387,16 @@ void RespecDoneHook(Game* game, Unit* player) {
 
 }  // namespace
 
-auto InstallQuestsAct2To5(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+auto InstallQuestsAct2To5(const D2RL::PluginContext* context, bool clearBuffs, char* report, size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;
 	g_context = context;
+	g_stateList = reinterpret_cast<StateListFn>(base + StateListRva);
+	g_clearState = reinterpret_cast<ClearStateFn>(base + ClearStateRva);
+	g_detachList = reinterpret_cast<DetachListFn>(base + DetachListRva);
+	g_freeList = reinterpret_cast<FreeListFn>(base + FreeListRva);
+	const auto same = [&](uint64_t rva, const uint8_t* bytes, size_t n) { return std::memcmp(reinterpret_cast<const void*>(base + rva), bytes, n) == 0; };
+	g_clearBuffs = clearBuffs && same(StateListRva, StateListEntry, sizeof(StateListEntry)) && same(ClearStateRva, ClearStateEntry, sizeof(ClearStateEntry)) &&
+	               same(DetachListRva, DetachListEntry, sizeof(DetachListEntry)) && same(FreeListRva, FreeListEntry, sizeof(FreeListEntry));
 	d2r::Bind(base);
 	questeng::Bind(base);
 	g_forEachPlayer = reinterpret_cast<ForEachPlayerFn>(base + ForEachPlayerRva);
@@ -369,9 +426,11 @@ auto InstallQuestsAct2To5(const D2RL::PluginContext* context, char* report, size
 	     reinterpret_cast<void**>(&g_baalKillOriginal));
 	hook(RespecDoneRva, RespecDoneEntry, sizeof(RespecDoneEntry), reinterpret_cast<void*>(&RespecDoneHook),
 	     reinterpret_cast<void**>(&g_respecDoneOriginal));
-	std::snprintf(report, reportSize,
-	              ok == Total ? "on: Summoner/Izual catalysts and re-issue, Jerhyn/Cain crystals, Ormus shrines, Qual-Kehk runes, Baal relic, respec flag"
-	                          : "partial: %d of 10 hooks installed (a hook failed; the others stay)",
-	              ok);
+	const char* buffs = !clearBuffs ? "respec buff clear off" : (g_clearBuffs ? "respec clears buffs" : "respec buff clear FAILED (entry bytes)");
+	if (ok == Total) {
+		std::snprintf(report, reportSize, "on: Summoner/Izual catalysts and re-issue, Jerhyn/Cain crystals, Ormus shrines, Qual-Kehk runes, Baal relic, respec flag, %s", buffs);
+	} else {
+		std::snprintf(report, reportSize, "partial: %d of 10 hooks installed (a hook failed; the others stay)", ok);
+	}
 	return ok == Total;
 }
