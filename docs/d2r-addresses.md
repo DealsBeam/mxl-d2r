@@ -1050,6 +1050,25 @@ items). Sigma runs it on the ground pickup into the inventory and on its quick-m
 | Unit data | `0x34a500(item)` | - | `+0` quality (7 = unique), `+0x34` unique index = the row of the migrated `uniqueitems.txt`; page byte `0x36cfe0` (0 backpack, 3 cube, 4 stash); unit mode at unit `+0xc` (0 stored, 1 equipped, 2 belt, 3 ground, 4 cursor); game at unit `+0xd8` (`0x48ff00`) |
 | Refusal text | - | - | Median string `12109` (`medianxl:12109`, "\xc3\xbfc1You can only carry one Relic"), sent as a system chat line (`SendClientMessage`). Sigma itself refuses with its own unit message `0x13`; 12109 is the only carry-limit text in Median's strings and is shown for every limit (the mapping of 0x13 to it was not proven) |
 
+## 23. Model and texture index: why new asset paths were invisible (lane new-asset-paths, 2026-10-23; tools/model_lod_desc.py)
+
+Read from the memory dump (`tools/d2r_find.py`, RVA = file offset); format and the in-game proof in [hd-models.md](hd-models.md) section 3c.
+The model asset cache is built once at startup from `data/hd/model_lod_desc.bin`; every model load goes through it.
+
+| What | RVA | Notes |
+|---|---|---|
+| Model asset cache init `(cache this)` | `0xf75c60` (called from `0xe21850` at `0xe218cd`) | opens `data/hd/model_lod_desc.bin` (string `0x1e17880`, open `0xa00c60`), reads it into `this+0x120`; a file whose first dword (count) is 0 calls `0xf75760`; no file: assert `Binary desc cache is missing! ALL model loads will be blocking!` (`model_asset_cache.cpp`, string `0x1e17800`) and an empty table (`count 0`, offsets -4 / -12 / -20) |
+| LOD resolver `(cache, name, lodHint, out)` | `0xf75fe0` | hashes the model name (FNV-1a 32 of the lower-cased path, `0x811c9dc5` / `0x1000193`, tail in `0x150140`), looks it up (`0xf75af0`), sets `out+0x178` = found; with an entry: LOD names `<name minus .model>` + `_lod` (string `0x1e17a78`) + `%d` (`0x1d070d4`), the entry's mask byte (`+0x1c`, bit k+1 = LOD k) says which exist; without one: `Failed to find LOD for model %s` (`0x1e17a80`, line 0xdd) and the plain name is used. The entry's bounds and stream records feed the later stages: an unlisted model loads but is never drawn |
+| Table lookup `(table, hash)` -> entry or end | `0xf75af0` | lower bound over array 1 (44-byte entries, key `u32` at `+0`, sorted); found when the key matches |
+| Model asset loader | `model_asset.cpp` (string `0x1e11d70`) | `:305` `MeshBindingCount >= 1` per `Model` (a file loaded by its plain name must bind a mesh in every `Model`), `:397` `isMeshFlipbook == GetModelInfo()->isMeshFlipbook` (fires when the stream offsets of the table are wrong: `d2rloader.log` shows `Invalid data detected!` and the game dies in the preload) |
+| Other strings of the same code | `dynamic_lod_system.cpp` `0x1e275f0` | LOD selection by distance; not needed for new paths |
+
+Why vanilla ignored new paths: the lookup key is the path's hash, not the file system, so a path that is not in the table is never
+resolved to its `_lodN` files. How the fix works: the mod folder's `data/hd/model_lod_desc.bin` replaces the game's and has the new
+paths added; the texture loader has the same kind of index (`data/hd/texture_desc_cache.json`, `filename` key, format / size / mips). No hook is
+involved. The D2RLoader ResourceService (plugin-side files at `data/.../d2rloader/<plugin-id>/...`) serves files at new paths too,
+but needs the same index entries.
+
 ## Unknown / next steps
 
 Solved in lane d2r-addresses-2 (sections 4, 5, 7-11): warp destination and the lockout refusal point, game frame, spawn, TC executor,

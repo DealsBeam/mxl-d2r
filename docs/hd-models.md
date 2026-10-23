@@ -191,11 +191,11 @@ Results on slot 2 (goatman1 torso, Hunyuan3D Wereowl mesh, 5 LODs, ~25k tris at 
 | Swapped model at the path of a vanilla model nothing in Median uses (`wargoatman/torso_lodN.model`; the others are `colossal1-3`, `corpsefire`, `cowking`, `darkelder`, `horse`, `pig`, `seagull`) | draws, only the Wereowl unit shows it; goatman1 keeps its own model |
 | Own `.texture` (RGBA8 from `d2r_texture.write_rgba`, a recoloured goatman albedo) written over an existing vanilla path (`pig/textures/pig_alb.texture`), the model's albedo map pointing at that path | draws, but see section 3b: an RGBA8 albedo is read wrongly (colour noise on the wolf material) and a 2048 px one lost the GPU device; BC3 (format 62) at 1024 is the format that works |
 
-So the engine loads a `.model` only when its path is one D2R already has (a folder mod overrides existing files; a new `.json`
-or `.texture` file name was not needed or tested in this step). The way to give one unit its own model without touching
-another unit's is to **override the files of a vanilla unit that no Median Id maps to** and point the unit JSON's model
-entity at that path; the skeleton and state machine stay the donor's (goatman1). New textures should be tried the same way
-(override a texture file of the same unused unit; not tested at a brand-new path).
+So the engine draws a `.model` only when its path is one that D2R's model index lists (section 3c: `data/hd/model_lod_desc.bin`;
+the files themselves can be anywhere in the mod folder). Until 3c was found (lane new-asset-paths, 2026-10-23) the way to give one
+unit its own model without touching another unit's was to **override the files of a vanilla unit that no Median Id maps to** and
+point the unit JSON's model entity at that path; the skeleton and state machine stay the donor's (goatman1). `MXL_OLD_PATHS=1`
+still builds the Wereowl that way.
 
 ## 3b. The Wereowl in game: Druid form and Corrupted Wereowl (lane wereowl-3d, 2026-10-23)
 
@@ -262,16 +262,13 @@ shell), LOD 1-3 name the material `enemy_bear_LOD` instead of `body`; `wereowl_m
 non-fur mesh, the other meshes are dropped (the fur shell and the trinkets with them).
 
 ### Path problem (new model files for player forms)
-The engine loads `.model` / `.texture` only at paths D2R already has (section 3 table: a new directory or file name is invisible;
-a folder mod overrides vanilla paths). **Unit JSON files are different**: a new `data/hd/character/enemy/<name>.json` is found
-through monsters.json (hd_monsters.py writes about 1,200 of them). Player forms are monsters to the renderer, so they use the same
-free route as enemies: **no new path and no plugin hook were needed.** The model and texture files are written over the vanilla
-paths of units Median never spawns: Druid `enemy/horse/torso_lod0..4.model` + `horse/textures/horse_alb.texture` (its ORM and normal
-maps are the werebear's own, see the findings table); enemy
-`enemy/wargoatman/torso_lod0..4.model` + `pig/textures/pig_{alb,nrm,orm,sss}.texture`. Nine such units exist (`colossal1-3`,
-`corpsefire`, `cowking`, `darkelder`, `horse`, `pig`, `seagull`, `wargoatman`); each new 3D model uses one. Registering new paths
-through D2RLoader's ResourceService (in-memory files under `data/...d2rloader/<plugin-id>/`) was not tried for models; it stays
-the fallback if the nine run out.
+Solved by section 3c: the Druid form and the Corrupted Wereowl live at **new paths** (`data/hd/character/mxl/wereowl/`,
+`.../corrupted_wereowl/`); no vanilla unit is overridden and the nine unused vanilla units (`colossal1-3`, `corpsefire`, `cowking`,
+`darkelder`, `horse`, `pig`, `seagull`, `wargoatman`) are no longer a limit. Before (and with `MXL_OLD_PATHS=1` or
+`wereowl_models.py --old-paths`) the files went over the vanilla paths of `enemy/horse` (+ `horse/textures/horse_alb.texture`; its
+ORM and normal maps are the werebear's own, see the findings table) and `enemy/wargoatman` (+ `pig/textures/pig_{alb,nrm,orm,sss}`).
+Unit JSON files were never a problem: a new `data/hd/character/enemy/<name>.json` is found through monsters.json (hd_monsters.py
+writes about 1,200 of them), and player forms are monsters to the renderer.
 **Scale:** the form is drawn at the unit JSON's root `TransformDefinitionComponent` scale, like a monster; the character's own
 scale does not apply. `set_scale` multiplies it by the rig's u (bear 1.0: the owl is about as tall as the vanilla werebear).
 
@@ -310,6 +307,69 @@ are stretched between the owl's hip and the bear's (long thin shins); the ORM / 
 albedo is a noisy dark chart atlas (grey-brown with black patches, nearly black in shadow); no fur shell, no jaw / ear animation;
 automatic skinning (some shoulder stretch in swings). The wolf-rig screenshots for comparison: `checks-20261023-093955-s1`
 (`wolfrig_*`).
+
+## 3c. Assets at new paths (lane new-asset-paths, 2026-10-23)
+
+**Result: `.model`, `.skeleton`, `.animations` and `.texture` files all work at new paths, as plain files of the mod folder. A new
+`.model` path only needs an entry in the engine's model index `data/hd/model_lod_desc.bin`, a new `.texture` path an entry in
+`data/hd/texture_desc_cache.json`. No plugin, hook or archive is needed.** Proved in game (build 93847, slot 1) with the real
+Wereowl units at `data/hd/character/mxl/` and with probe units at `enemy/mxl/probe/` (all five drawn: models, skeleton, animations,
+textures; screenshots local, run `checks-20261023-121029-s1`). Game check: `py -3 tools/game_checks.py --slot N all assetpaths`.
+
+### Why vanilla ignored new paths
+D2R keeps two prebuilt index files in CASC that the loaders consult by name, not the file system:
+
+| Index | Key | What a path that is not listed gets |
+|---|---|---|
+| `data/hd/model_lod_desc.bin` (5.5 MB, 14,310 entries) | FNV-1a 32 of the lower-cased game path of the unit's model, `data/hd/character/enemy/horse/torso.model` | requested as the plain file `torso.model`, loaded without an error, **never drawn** (no bounds, no LOD mask, no stream info) |
+| `data/hd/texture_desc_cache.json` (19 MB, 31,073 entries) | `filename` | the texture is read with the wrong format / size: an RGBA8 or 2048 px file was colour noise or lost the GPU device (section 3b findings) |
+
+A listed model path is opened as `<base>_lodN.model` for every LOD the entry's mask lists. The old results of section 3 (a copy of
+a working file at a new directory is invisible, the same bytes at a vanilla path draw) were this index: the vanilla paths have
+entries, the new ones had none. The mod folder's own copy of an index file replaces the game's (D2RLoader: active mod first), so
+`tools/wereowl_models.py` writes both files with the new paths added (`index_new_paths`; entries copy a vanilla one of the same
+kind, new model paths copy the entry of the vanilla unit they used to override). The files are made at build time from the
+installed game's CASC, nothing of Blizzard's is committed.
+
+### `model_lod_desc.bin` layout (little endian; tools/model_lod_desc.py reads and extends it)
+Header: three `{u32 count, i32 self-relative offset}` pairs (the offset is counted from its own field). Array 1: `count1` entries
+of 44 bytes sorted by key: `u32 key | f32 bbMin[3] | f32 bbMax[3] | u8 lodMask (bit k+1 = LOD k) + 3 bytes | u32 lodCount | u32
+streamOffset | u32 streamSize`; `streamOffset` is self-relative too (it points into array 2, 12-byte records that point into
+array 3, 32-byte records: per-mesh stream data). Adding an entry grows array 1 by 44 bytes and moves arrays 2 and 3, so **every
+entry's `streamOffset` has to be rewritten** (the first try did not: the loader asserted `isMeshFlipbook ==
+GetModelInfo()->isMeshFlipbook` (model_asset.cpp:397) on the player models and the game died during the first preload). The new
+entry copies the donor's stream records (a Wereowl mesh with other vertex counts drew fine with the horse's, as before).
+
+### The order of the investigation
+1. **Observe** (D2RLoader dev log `archive_file_opens.log`, config keys `casc_files` / `models`): for a base the index lists, the
+   engine opens `X/torso_lodN.model`; for an unknown base it opens only the literal `X/torso.model` and logs no error. A literal
+   file that exists loads (`create end` ok) and is not drawn, also when it is a fixed copy (a `Model` needs at least one mesh
+   binding: `model_asset.cpp:305 MeshBindingCount >= 1`; `d2r_mesh.replace_with_mesh` now binds the kept mesh in every `Model`).
+2. **ResourceService** (tried first, on the coordinator's request): the plugin registered the files at
+   `data/.../d2rloader/mxl-core/...` at load (plugin id `mxl-core`; 11 files, 4.5 MiB, every result `Success`) and the engine
+   opened them from there. Skeleton, animations and textures (with descriptor entries) worked; models stayed invisible without the
+   index entry and drew with it. The same files as plain mod-folder files behave the same, so the ResourceService part (about 140
+   lines: walk a folder, `registerResource` each file as `data/<path>`) is **not part of the build**. Its limits: 256 MiB per
+   plugin load, 64 MiB per file. The Wereowl needs 3.5 MB (Druid form) and 3.8 MB (Corrupted Wereowl) with five LODs and the
+   textures, so about 70 such units would fit; the mod folder has no such limit (the installed mod is 1.2 GB), so the files come
+   from the mod folder.
+3. **Index** (this section): the cause. Entries copied from a donor, new key, rewritten stream offsets.
+
+### Skeleton, animations, textures at new paths (probes, plain mod-folder files)
+- `.skeleton`: a copy of the werebear's at `enemy/mxl/probe/probe_skel/bear.skeleton`, the unit JSON's skeleton entity pointing
+  there: draws and animates.
+- `.animations`: the engine opens `<directory of the clip>/combined.animations` (a single `.animation` file at a new path is not
+  looked up); a copy of the werebear's state machine with every clip directory moved, plus the combined file in the new
+  directory: draws and animates.
+- `.texture`: BC3 albedo and BC5 normal / ORM at new paths with `texture_desc_cache.json` entries (size and mip count of the
+  file): draw. The Corrupted Wereowl uses three such textures, the Druid form one (its ORM and normal maps are the werebear's).
+- The unit JSON, `monsters.json` and the state machine JSON were never limited.
+
+### For the next unit
+Give the unit a directory under `data/hd/character/mxl/<name>/`, write its files there (`torso_lod0..4.model`, textures, optional
+skeleton / animations), and add its model path and textures to the two indexes: `wereowl_models.index_new_paths(data, {new model
+path: vanilla model path to copy}, {new texture path: vanilla texture path to copy})` extends a copy already in `work/mod`, so
+several build steps can add their own. Choose a template model with the same number of LODs (5) and a similar size.
 
 ## 4. Pipeline sketch: artist's Blender rig -> D2R unit
 

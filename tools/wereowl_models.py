@@ -10,10 +10,12 @@ variable MXL_NO_3D=1 (or --off), the step does nothing and the goatman1 stand-in
 What it writes under work/mod/data/hd/character:
 - the Druid's Wereowl form (skill wereowl_form -> state wereowl_form_state -> gfxclass monstats `wereowl` -> monsters.json -> unit):
   the Wereowl mesh rigged to D2R's werebear skeleton (enemy/bear, `rig_fit.py` profile bear; an upright biped like the owl), at the
-  model files of the unused vanilla unit `horse` (the engine only loads models at paths D2R has), as a new unit `mxl_wereowl3d`
+  model files of the unused vanilla unit `horse` (the engine only draws models at paths D2R's index has: see `place`), as a new unit `mxl_wereowl3d`
   (a copy of the bear unit: skeleton, werebear state machine and animations; its effects part stays; scale u of the rig profile);
 - the Corrupted Wereowl enemy: the same mesh rigged to goatman1 (profile goatman1) at the model files of `wargoatman`, patched into the
   unit hd_monsters.py chose for `corrupted_wereowl` (goatman1 donor, scale x1.25, corrupted colour adjustment).
+Where the files go (`place`): at NEW paths below data/hd/character/mxl/ (docs/hd-models.md section 3c; the model and texture
+indexes get entries, `index_new_paths`); with MXL_OLD_PATHS=1 (or --old-paths) over the vanilla `horse` / `wargoatman` / `pig` paths as before.
 Textures: `.texture` files (BC3 albedo 1024, BC5 flat normal / ORM / black mask) written over the vanilla paths of `horse` (alb only: the Druid
 form's ORM and normal maps are the werebear's own, see USES) and `pig` (alb/nrm/orm/sss), the material maps point there.
 """
@@ -40,13 +42,23 @@ DEFAULT_ASSETS = str(ROOT / "assets" / "hd" / "wereowl")  # in the repo (Git LFS
 # Median uses), texture stem for the albedo/orm/normal maps, the unit it patches. `shared`: maps taken from vanilla paths instead
 # of our own flat ones (the Druid form: flat ORM / normal maps drew the bear's body black in game, the werebear's own ones light it)
 USES = {
-    "druid": dict(profile="bear", donor="bear", lods=4, slot="horse",
+    "druid": dict(profile="bear", donor="bear", lods=4, slot="horse", new="wereowl",
                   tex="horse/textures/horse", unit="mxl_wereowl3d",
                   shared={"ORMTexture": ENEMY + "bear/textures/werebear_orm.texture",
                           "NormalTexture": ENEMY + "bear/textures/werebear_nrm.texture"}),
-    "corrupted": dict(profile="goatman1", donor="goatman1", lods=5, slot="wargoatman",
+    "corrupted": dict(profile="goatman1", donor="goatman1", lods=5, slot="wargoatman", new="corrupted_wereowl",
                       tex="pig/textures/pig", unit=None),
 }
+MXL = "data/hd/character/mxl/"  # the new directory of the port's models (docs/hd-models.md section 3c)
+OLD_PATHS = "--old-paths" in sys.argv or bool(os.environ.get("MXL_OLD_PATHS"))
+
+
+def place(cfg):
+    """(directory of the model files, stem of the texture files), game paths. New paths by default; the vanilla unit's own paths
+    (over which the files used to go) with MXL_OLD_PATHS."""
+    if OLD_PATHS:
+        return ENEMY + cfg["slot"] + "/", ENEMY + cfg["tex"]
+    return MXL + cfg["new"] + "/", MXL + cfg["new"] + "/textures/" + cfg["new"]
 ALBEDO_GAMMA = 0.5  # < 1 lifts the albedo (vanilla werewolf albedo mean ~90 of 255, ours 41: black under D2R's light)
 BLACK = ENEMY + "pig/textures/pig_sss.texture"  # mask and thickness: nothing tinted, no subsurface
 
@@ -80,11 +92,41 @@ def write_textures(data, albedo_png, stems):
     orm[...] = (255, 150, 0, 255)
     for stem, sufs in stems.items():
         for suf in sufs:
-            p = data / ENEMY / (stem + "_" + suf + ".texture")
+            p = data / (stem + "_" + suf + ".texture")
             if suf == "alb":
                 dt.write_bc3(p, alb, mips=11)
             else:
                 dt.write_bc5(p, {"nrm": nrm, "orm": orm, "sss": flat}[suf], mips=9)
+
+
+# a new texture path needs a descriptor in the engine's data/hd/texture_desc_cache.json (format, size, mips; 31073 entries), a new
+# model path an entry in data/hd/model_lod_desc.bin (tools/model_lod_desc.py); the entries copy a vanilla one of the same kind
+TEXTURE_TEMPLATES = {"alb": ENEMY + "horse/textures/horse_alb.texture", "nrm": ENEMY + "horse/textures/horse_orm.texture",
+                     "orm": ENEMY + "horse/textures/horse_orm.texture"}
+
+
+def index_new_paths(data, models, textures):
+    """Entries for the new paths in copies of the two index files, written into the mod folder (a copy already there, from another
+    step, is extended; else the game's). `models`: {new model path: vanilla model path whose entry it copies}; `textures`: {new
+    texture path: vanilla texture path whose descriptor it copies} (BC3 albedo 1024 with 11 mips, BC5 maps 256 with 9, as
+    write_textures makes them)."""
+    import model_lod_desc as ld
+    out = data / "data" / "hd"
+    out.mkdir(parents=True, exist_ok=True)
+    base = lambda name: out / name if (out / name).exists() else casc_cache(["data/hd/" + name])["data/hd/" + name]
+    (out / "model_lod_desc.bin").write_bytes(ld.add(base("model_lod_desc.bin").read_bytes(), models))
+    cache = json.loads(base("texture_desc_cache.json").read_text("utf-8"))
+    by = {e["filename"]: e for e in cache}
+    for path, template in textures.items():
+        e = copy.deepcopy(by[template])
+        alb = path.endswith("_alb.texture")
+        e["filename"] = path
+        e["width"] = e["height"] = 1024 if alb else 256
+        e["levels"] = 11 if alb else 9
+        if not alb:
+            e["thumbnailMip"] = e["levels"] - 1
+        cache = [x for x in cache if x["filename"] != path] + [e]
+    (out / "texture_desc_cache.json").write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8")
 
 
 def body_mesh(tree):
@@ -101,8 +143,9 @@ def build_models(data, npz, use, cfg):
     skel = casc_cache([ENEMY + cfg["donor"] + "/skeleton/" + cfg["donor"] + ".skeleton"])
     bones = rig_fit.skel_info.bones(next(iter(skel.values())))
     prof = rig_fit.PROFILES[cfg["profile"]]
-    maps = {"AlbedoTexture": ENEMY + cfg["tex"] + "_alb.texture", "ORMTexture": ENEMY + cfg["tex"] + "_orm.texture",
-            "NormalTexture": ENEMY + cfg["tex"] + "_nrm.texture", "MaskTexture": BLACK, "ThicknessTexture": BLACK}
+    mdir, tex = place(cfg)
+    maps = {"AlbedoTexture": tex + "_alb.texture", "ORMTexture": tex + "_orm.texture",
+            "NormalTexture": tex + "_nrm.texture", "MaskTexture": BLACK, "ThicknessTexture": BLACK}
     maps.update(cfg.get("shared", {}))
     for lod in range(5):
         sfx = "" if lod == 0 else "_%d" % lod
@@ -112,7 +155,7 @@ def build_models(data, npz, use, cfg):
         pos, nrm, bidx, wts, names, *_ = rig_fit.fit(prof, bones, npz["pos" + sfx], npz["nrm" + sfx], npz["tris" + sfx])
         dm.replace_with_mesh(tree, keep, pos, nrm, npz["uv" + sfx], npz["tris" + sfx], bone_idx=bidx, weights=wts, bones=names)
         dm.set_maps(tree, keep, maps)
-        n = dm.write_model(g, tree, data / ENEMY / cfg["slot"] / ("torso_lod%d.model" % lod))
+        n = dm.write_model(g, tree, data / mdir / ("torso_lod%d.model" % lod))
     return n
 
 
@@ -130,7 +173,7 @@ def set_scale(unit, factor):
 
 def point_unit(unit, cfg, textures):
     """The unit's torso model entity names the model files at the slot; the dependency lists follow."""
-    new = ENEMY + cfg["slot"] + "/torso.model"
+    new = place(cfg)[0] + "torso.model"
     if any(m["path"] == new for m in unit["dependencies"]["models"]):
         return False  # patched already (a rerun of this step)
     for e in unit["entities"]:
@@ -161,8 +204,8 @@ def main():
     hdc = data / "data" / "hd" / "character"
     npz = dict(np.load(assets / "mesh_lods.npz", allow_pickle=True))
     mj = json.loads((hdc / "monsters.json").read_text("utf-8"))
-    write_textures(data, assets / "albedo.png", {"horse/textures/horse": ("alb",),
-                                                  "pig/textures/pig": ("alb", "nrm", "orm", "sss")})
+    dtex, ctex = place(USES["druid"])[1], place(USES["corrupted"])[1]
+    write_textures(data, assets / "albedo.png", {dtex: ("alb",), ctex: ("alb", "nrm", "orm") + (("sss",) if OLD_PATHS else ())})
     sizes = {}
     for use, cfg in USES.items():
         sizes[use] = build_models(data, npz, use, cfg)
@@ -171,7 +214,7 @@ def main():
     donor = json.loads((ROOT / "extract" / "d2r" / "93847" / "data" / "hd" / "character" / "enemy" / (cfg["donor"] + ".json")).read_text("utf-8-sig"))
     unit = copy.deepcopy(donor)
     unit["name"] = cfg["unit"]
-    if point_unit(unit, cfg, [ENEMY + cfg["tex"] + "_alb.texture", *cfg["shared"].values(), BLACK]):
+    if point_unit(unit, cfg, [place(cfg)[1] + "_alb.texture", *cfg["shared"].values(), BLACK]):
         set_scale(unit, rig_fit.PROFILES[cfg["profile"]]["u"])
     (hdc / "enemy" / (cfg["unit"] + ".json")).write_text(json.dumps(unit, separators=(",", ":")), encoding="utf-8")
     mj["wereowl"] = cfg["unit"]
@@ -179,12 +222,17 @@ def main():
     cfg = USES["corrupted"]
     up = hdc / "enemy" / (mj["corrupted_wereowl"] + ".json")
     unit = json.loads(up.read_text("utf-8"))
-    if point_unit(unit, cfg, [ENEMY + cfg["tex"] + s for s in ("_alb.texture", "_orm.texture", "_nrm.texture", "_sss.texture")]):
+    if point_unit(unit, cfg, [place(cfg)[1] + s for s in ("_alb.texture", "_orm.texture", "_nrm.texture") + (("_sss.texture",) if OLD_PATHS else ())]):
         set_scale(unit, rig_fit.PROFILES[cfg["profile"]]["u"])
     up.write_text(json.dumps(unit, separators=(",", ":")), encoding="utf-8")
     (hdc / "monsters.json").write_text(json.dumps(mj, indent=2), encoding="utf-8")
-    print("Wereowl 3D: Druid form -> %s (%s skeleton, models at horse/), Corrupted Wereowl -> %s (goatman1 skeleton, models at wargoatman/); "
-          "model sizes %s" % (USES["druid"]["unit"], USES["druid"]["donor"], mj["corrupted_wereowl"], sizes))
+    if not OLD_PATHS:
+        index_new_paths(data, {place(c)[0] + "torso.model": ENEMY + c["slot"] + "/torso.model" for c in USES.values()},
+                        {place(USES["druid"])[1] + "_alb.texture": TEXTURE_TEMPLATES["alb"],
+                         **{place(USES["corrupted"])[1] + "_%s.texture" % k: t for k, t in TEXTURE_TEMPLATES.items()}})
+    print("Wereowl 3D: Druid form -> %s (%s skeleton, models at %s), Corrupted Wereowl -> %s (goatman1 skeleton, models at %s); "
+          "model sizes %s" % (USES["druid"]["unit"], USES["druid"]["donor"], place(USES["druid"])[0], mj["corrupted_wereowl"],
+                              place(USES["corrupted"])[0], sizes))
     return 0
 
 
