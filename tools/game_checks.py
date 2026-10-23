@@ -15,7 +15,8 @@ classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner 
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
-questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes.
+questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes
+respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -6229,42 +6230,60 @@ def mapcells():
 
 
 def check_mapreveal():
-    name = "Map reveal: the automap of a fresh level has more cells after the reveal"
+    name = "Map reveal (audit MU2): the reveal action adds automap cells to a freshly entered level (reached without debug mode)"
     if not need_game():
         return add(name, "BLOCKED", "not in a game")
-    # `cheat goto` (needs debug mode) arrives in a level whose automap is already drawn whole (the pictures show it), and the game's
-    # town map is whole from the start, so the cell count and the picture cannot show a reveal on a level reached this way; what
-    # the call does is measured in the layers: it adds the layers of the act's levels
-    st = goto(3)  # Cold Plains
-    if st["player"].get("area") != 3:
-        return add(name, "BLOCKED", "could not go to area 3")
-    time.sleep(2)
+    # `cheat goto` needs debug mode, and in debug mode the game draws every level's automap whole on arrival (an earlier run of this
+    # check measured +0 cells for that reason). So the level is entered with the plugin's `level` (the NPC travel, no debug mode) and
+    # the baseline is read for a few seconds before the reveal: cells that stream in by themselves are not the reveal's.
+    if DEBUG_ON["v"]:
+        return add(name, "BLOCKED", "debug mode was switched on earlier in this game (its automap is drawn whole): run `mapreveal` first or alone")
+    revive_if_dead()
+    log, notes = [], []
+    start = hstate()["player"].get("area")
+    # `level` is the NPC travel (towns of other acts only; a field level answers nothing, as run checks-20261023-185038-s3 showed): the
+    # freshly entered level is a town, Lut Gholein (a big one: most of its rooms are out of sight on arrival)
+    area = 40
+    if start == area:
+        H("level 1")
+        time.sleep(6)
+    H("level %d" % area)
+    t0 = time.time()
+    while time.time() - t0 < 40 and hstate()["player"].get("area") != area:
+        time.sleep(2)
+    if hstate()["player"].get("area") != area:
+        return add(name, "BLOCKED", "could not travel to area %d with `level`" % area)
     g.press("tab")  # automap overlay on (D2R's default key)
-    time.sleep(1.5)
-    a0 = mapcells()
+    series = []
+    for _ in range(4):
+        time.sleep(1.5)
+        series.append(mapcells())
+    a0 = series[-1]
     p0 = g.shot("mapreveal_before")
-    ok, lines = H("reveal")
+    c0 = travel_counts()
+    ok, lines = H("hotkey reveal")
     time.sleep(2.5)
     a1 = mapcells()
     p1 = g.shot("mapreveal")
-    ok2, lines2 = H("reveal")  # a second reveal finds nothing new
-    time.sleep(1)
+    c1 = travel_counts()
+    ok2, lines2 = H("hotkey reveal")  # a second reveal finds nothing new
+    time.sleep(1.5)
     a2 = mapcells()
     g.press("tab")
-    log = ["before %s" % a0, "after %s" % a1, "again %s" % a2] + lines + lines2
-    if not a0 or not a1:
+    log = ["baseline series %s" % series, "after %s" % a1, "again %s" % a2, c0["line"], c1["line"]] + lines + lines2
+    if not a0 or not a1 or not a2:
         return add(name, "BLOCKED", "no automap data: %s" % lines[:2], [], log)
-    flag_kept = a1["debugflag"] == a0["debugflag"] == (a2 or a1)["debugflag"]
-    cells_grew = a1["cells"] > a0["cells"]
-    layers_grew = a1["layers"] > a0["layers"]
-    again = (a2 or a1)["layers"] == a1["layers"] and (a2 or a1)["cells"] == a1["cells"]
-    status = "PASS" if ok and ok2 and cells_grew and flag_kept and again else              "PARTIAL" if ok and ok2 and layers_grew and flag_kept and again else "FAIL"
+    streaming = series[-1]["current"] - series[-2]["current"]
+    grew = a1["current"] - a0["current"]
+    again = a2["current"] - a1["current"]
+    pressed = c1.get("reveal_n") == (c0.get("reveal_n") or 0) + 1 and c1.get("reveals") == (c0.get("reveals") or 0) + 1
+    status = "PASS" if ok and ok2 and pressed and grew > max(50, 4 * abs(streaming)) and again <= max(5, abs(grew) // 50) else "FAIL"
     add(name, status,
-        "harness `reveal` (the R hotkey's call of the debug menu's Reveal Automap) in Cold Plains: automap cells %d -> %d (%+d), layers %d -> %d, "
-        "a second reveal %+d cells %+d layers; debug flag byte %d -> %d (kept: %s)%s" % (
-            a0["cells"], a1["cells"], a1["cells"] - a0["cells"], a0["layers"], a1["layers"], (a2 or a1)["cells"] - a1["cells"],
-            (a2 or a1)["layers"] - a1["layers"], a0["debugflag"], a1["debugflag"], flag_kept,
-            "" if status == "PASS" else "; PARTIAL: the level was already drawn whole on arrival (mapreveal_before.png = mapreveal.png), only the layers grew"),
+        "level %d entered with `level` (debug mode off): cells of the current layer %d (steady: the last two samples differ by %+d) -> %d after one reveal (%+d), a second reveal %+d; "
+        "all layers %d -> %d cells in %d -> %d layers, debug flag byte %d -> %d; presses %s -> %s, reveals %s -> %s. The port reveals the connected rooms of the current level; "
+        "Median's call (0x887c0) walks every level of the act, which the client cannot show (its other levels are not loaded)" % (
+            area, a0["current"], streaming, a1["current"], grew, again, a0["cells"], a1["cells"], a0["layers"], a1["layers"], a0["debugflag"], a1["debugflag"],
+            c0.get("reveal_n"), c1.get("reveal_n"), c0.get("reveals"), c1.get("reveals")),
         [os.path.basename(p0), os.path.basename(p1)], log)
 
 
@@ -8788,6 +8807,501 @@ def check_assetpaths():
         shots)
 
 
+# ------------------------------------------------------------------ lane p4-verify-a: the verify rows of docs/unported.md (audit DC5 DC7 GS10 IT16 CR5 CR6 XP6 XP7 XP9 MU2)
+
+
+def has_state(state):
+    """`h hasstate <id>` -> 1 / 0 (None when the answer is missing)."""
+    ok, lines = H("hasstate %d" % state)
+    m = re.search(r"hasstate %d: (\d)" % state, " ".join(lines))
+    return int(m.group(1)) if m else None
+
+
+def akara_respec(log, quiet=False):
+    """Akara's Reset Stat / Skill Points line: True when the click, Yes and the stat reset went through, False when the menu has no
+    plugin (respec) line, None when the menu did not open."""
+    menu = npc_menu(148)
+    if not menu:
+        return None
+    plugin_lines = [ln for ln in menu if "handler=plugin" in ln]
+    log.append("akara menu: %s" % [ln.strip() for ln in menu[1:]])
+    if not plugin_lines:
+        return False
+    idx = int(re.search(r"line (\d+)", plugin_lines[0]).group(1))
+    H("menu %d" % idx)
+    time.sleep(1.5)
+    H("menu confirm")
+    ok, out = H("menu yes")
+    time.sleep(1.5)
+    log += out
+    return ok
+
+
+def respec_stats():
+    """The four base stats and the unused points (the respec resets them; the checks put them back)."""
+    return [rd("player", i) for i in range(4)] + [rd("player", 4)]
+
+
+def restore_respec_stats(saved):
+    close_menu()
+    for i, v in enumerate(saved[:4]):
+        if v is not None:
+            setstat("player", i, v)
+    if saved[4] is not None:
+        setstat("player", 4, saved[4])
+
+
+def check_respecbuffs():
+    name = "Reset removes buffs (audit DC7): Akara's stat / skill reset clears the active buffs"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    H("quest 1 0 set")   # Den of Evil done
+    H("quest 41 1 set")  # its respec reward is waiting
+    H("quest 41 0 clear")
+    saved = respec_stats()
+    log = []
+    states = (32, 101, 26)  # battle orders, holy shield, shout
+    for s in states:
+        H("setstate player %d 0" % s)
+    # one real buff: Barbarian Shout (skill 138, state 26), cast on the player; the others are put on with the harness (a state list of ten minutes)
+    H("setskill 138 5")
+    ok, cl = H("cast 138 self")
+    log += cl
+    time.sleep(1.5)
+    real = has_state(26) == 1
+    for s in states:
+        if has_state(s) != 1:
+            H("setstate player %d 1" % s)
+    before = {s: has_state(s) for s in states}
+    log.append("states before: %s (shout from a real cast: %s)" % (before, real))
+    done = akara_respec(log)
+    after = {s: has_state(s) for s in states}
+    log.append("states after: %s" % after)
+    restore_respec_stats(saved)
+    for s in states:
+        H("setstate player %d 0" % s)
+    if any(v != 1 for v in before.values()):
+        return add(name, "BLOCKED", "the test states did not start: %s" % before, [], log)
+    if not done:
+        return add(name, "BLOCKED", "the respec did not run (%s)" % done, [], log)
+    gone = [s for s, v in after.items() if v == 0]
+    add(name, "PASS" if len(gone) == len(states) else "FAIL",
+        "states %s on before the Akara respec (Shout from a real cast: %s); after it: %s" % (before, real, after), [], log)
+
+
+def check_signet():
+    name = "Signet of Learning (audit GS10): +1 stat point each, at most 400 (Median stat 185 = D2R 370)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    TOTAL = 370
+    base_total, base_pts = rd("player", TOTAL), rd("player", 4)
+    log, rows, bad = [], [], []
+    # (signet code, signets' own amount, learning total before) -> expected points gained min(amount, 400 - total)
+    cases = [("01^", 1, 0), ("01^", 1, 399), ("01^", 1, 400), ("05^", 5, 397), ("06^", 6, 398), ("05^", 5, 400)]
+    H("packclear")
+    try:
+        for code, amount, total in cases:
+            setstat("player", TOTAL, total)
+            p0 = rd("player", 4)
+            ok, cl = H("item %s inv" % code)
+            log += cl
+            if not ok:
+                bad.append("item %s could not be created: %s" % (code, cl[:1]))
+                continue
+            ok, ul = H("use %s" % code)
+            log += ul
+            time.sleep(0.5)
+            t1, p1 = rd("player", TOTAL), rd("player", 4)
+            want = max(0, min(amount, 400 - total))
+            rows.append("%s at %d: used=%s, learning %d -> %d, stat points %d -> %d (want +%d)" % (code, total, ok, total, t1, p0, p1, want))
+            if t1 - total != want or p1 - p0 != want:
+                bad.append(rows[-1])
+            H("remove %s" % code)
+    finally:
+        setstat("player", TOTAL, base_total if base_total is not None else 0)
+        if base_pts is not None:
+            setstat("player", 4, base_pts)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
+
+
+def _ground_drops(seen):
+    out = []
+    for l in H("dump ground")[1]:
+        if l.startswith("ground ") and re.search(r"mode=[35] ", l):
+            d = {k: v for k, v in re.findall(r"(\w+)=(-?\d+)", l)}
+            if int(d["id"]) not in seen:
+                out.append(d)
+    return out
+
+
+def check_dropilvl():
+    name = "Drop item level (audit IT16 / DF10): a monster's drops do not take the town's level: the same after a trip to town as without one"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    areas, mons = _monlevel_tables()
+    log, rows, bad = [], [], []
+    seen = set()
+    god(True)
+    try:
+        # the reader: the item level of an item created with a known one (0x3730d0 reads item data +0x40)
+        goto(1)
+        H("packclear")
+        calib = []
+        # base items of low level (a Median signet or rune has its own, high `level`; ilvl cannot go below the base's)
+        for code in ("rin", "amu", "tow"):
+            for want in (1, 33, 77, 100, 150, 255):
+                ok, cl = H("item %s inv ilvl=%d" % (code, want))
+                log += cl
+                got = None
+                for ln in hstate()["lines"]:
+                    m = re.match(r"item id=\d+ code=%s .* ilvl=(\d+)" % code, ln)
+                    if m:
+                        got = int(m.group(1))
+                calib.append((code, want, got))
+                H("remove %s" % code)
+        rows.append("reader check (items created with ilvl 1 / 33 / 77 / 100 / 150 / 255 read): %s" % calib)
+        log.append(rows[-1])
+        reader_follows = any(w == g_ for _, w, g_ in calib)  # False: the generator gives every item the same level whatever is asked
+
+        def drops_in(area, diff, trip):
+            """Kills 4 monsters of a class with a treasure class, several times; returns (item levels, monster levels, drops)."""
+            if trip:
+                goto(1)  # the town trip
+            H("difficulty %d" % diff)
+            goto(area)
+            clear_mons()
+            seen.update(int(d["id"]) for d in _ground_drops(set()))
+            drops, levels = [], set()
+            for n in range(10):
+                # classes with a treasure class in the built monstats (class 18 and the other vanilla trash have none in Median)
+                ids = _spawn_ids((719, 722, 725, 714)[n % 4], 4)
+                for i in ids:
+                    levels.add(rd("m%d" % i, 12))
+                for i in ids:
+                    H("kill %d" % i)
+                time.sleep(1.5)
+                for d in _ground_drops(seen):
+                    seen.add(int(d["id"]))
+                    drops.append(d)
+                if len(drops) >= 8:
+                    break
+                clear_mons()
+            log.append("area %d diff %d trip %s: drops %s" % (area, diff, trip, sorted({(d["code"] if "code" in d else d.get("class"), int(d["ilvl"])) for d in drops}, key=str)[:14]))
+            return sorted({int(d["ilvl"]) for d in drops}), sorted(levels), len(drops)
+
+        for area, diff in ((2, 0), (76, 2)):
+            straight = drops_in(area, diff, False)
+            trip = drops_in(area, diff, True)
+            want, town = areas[area][diff], areas[1][diff]
+            rows.append("area %d %s (area level %d, the town's %d): monster level %s; item levels without a town trip %s (%d drops), after one %s (%d drops)" % (
+                area, ("Normal", "Nightmare", "Hell")[diff], want, town, trip[1], straight[0], straight[2], trip[0], trip[2]))
+            log.append(rows[-1])
+            if not straight[2] or not trip[2]:
+                bad.append(rows[-1] + " (no drop to judge)")
+            elif straight[0] != trip[0]:
+                bad.append("a trip to town changed the item levels: %s" % rows[-1])
+            elif town != want and trip[0] == [town]:
+                bad.append("the drops carry the town's level %d: %s" % (town, rows[-1]))
+    finally:
+        H("difficulty 0")
+        goto(1)
+        god(False)
+    status = "FAIL" if bad else ("PASS" if reader_follows else "PARTIAL")
+    if status == "PARTIAL":
+        rows.append("PARTIAL because the item levels do not vary with the area: every item the harness makes or a monster drops reads the same level, so this run shows only that the town's level does not appear")
+    add(name, status, "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
+
+
+def check_cowtowns():
+    name = "Cow portal (audit CR6): Wirt's Leg opens the Cow Level in any act's town"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    log, rows, bad = [], [], []
+    base_level = rd("player", 12)
+    try:
+        for act, town in enumerate(TOWNS, 1):
+            go(town)
+            time.sleep(1.5)
+            ensure_cube()
+            H("cubeclear")
+            H("difficulty 2")   # set in every town: the travel to another act can reset both
+            H("quest 40 0 set")  # the cow portal handler wants Baal killed in the game's difficulty
+            H("item leg cube")
+            _, cf = H("gameflag 4 11 clear")  # the portal opens once per game (the engine's own flag): clear it so every town is tried
+            log += ["clear: %s" % " / ".join(cf)]
+            if not any("= 0" in l for l in cf):
+                bad.append("act %d: `gameflag 4 11 clear` did not clear the flag: %s" % (act, cf))
+            before = {o["id"] for o in hstate()["objs"]}
+            ok, cl = H("cubecraft")
+            time.sleep(1.5)
+            new = new_portals(before)
+            ok_f, fl = H("gameflag 4 11 get")
+            flag = any("= 1" in l for l in fl)
+            log.append("mxl: %s" % next((l.strip() for l in mxl_text().splitlines() if "Cow portals" in l), "no Cow portal counters"))
+            if new and not flag:
+                bad.append("act %d: portal opened but the once-per-game flag was not set" % act)
+            if not new:
+                # a Cow Level portal stands in the town from an earlier act's craft? count every portal object of that class
+                log.append("act %d portals now: %s" % (act, [(o.get("class"), o.get("dest")) for o in hstate()["objs"] if o.get("class") in (59, 60, 600)]))
+            dests = [o.get("dest") for o in new]
+            rows.append("act %d town %d: cubecraft %s, new portal objects %s (dest %s)" % (act, town, "OK" if ok else "refused", [o["class"] for o in new], dests))
+            log.append(rows[-1])
+            log += cl
+            if not ok or not new:
+                bad.append(rows[-1])
+            elif act > 1:
+                # the portal has to work: the Cow Level (area 39) is an act 1 level
+                area = None
+                cow_ids = [o["id"] for o in new if o.get("dest") == 39] or [o["id"] for o in new]
+                # Median's dungeon table (mxl_dungeons.h) lets Moo Moo Farm in on Hell from character level 110: the plugin's
+                # lockout refuses the portal below that, which is the rule, so the level is raised for the walk-in
+                setstat("player", 12, 110)
+                for _ in range(3):
+                    time.sleep(2)
+                    ok_e, el = H("enter %d" % cow_ids[0])
+                    log += el
+                    if el and "moved" in el[0]:
+                        break
+                time.sleep(4)
+                area = hstate()["player"].get("area")
+                rows[-1] += "; entered it: area %s" % area
+                log.append(rows[-1])
+                if area != 39:
+                    bad.append("act %d: entering the portal ended in area %s, not the Cow Level (39)" % (act, area))
+                else:
+                    # the way back: the Cow Level's own portal leads to the town it was made in (another act again)
+                    time.sleep(3)
+                    # the Cow Level holds the portals of the towns visited before as well: take the one that leads to this town
+                    outs = [(o["id"], o.get("dest")) for o in hstate()["objs"] if o.get("class") in (59, 60, 600)]
+                    log.append("portals in the Cow Level (id, destination): %s" % outs)
+                    way_out = [i for i, d in outs if d == town]
+                    for _ in range(3):
+                        time.sleep(2)
+                        ok_b, bl = H("enter %d" % way_out[0]) if way_out else (False, ["no portal to town %d here" % town])
+                        log += bl
+                        if bl and "moved" in bl[0]:
+                            break
+                    time.sleep(4)
+                    back = hstate()["player"].get("area")
+                    rows[-1] += "; back through the Cow Level's portal: area %s" % back
+                    log.append(rows[-1])
+                    if back != town:
+                        bad.append("act %d: the portal out of the Cow Level ended in area %s, not the town %d" % (act, back, town))
+            H("cubeclear")
+    finally:
+        H("difficulty 0")
+        setstat("player", 12, base_level or 1)
+        go(1)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [sh("cowtowns")], log)
+
+
+def check_cubehotkey():
+    name = "Cube hotkey (audit CR5): the transmute action transmutes the cube's items while the cube panel is open and does nothing while it is closed"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    ensure_cube()
+    H("cubeclear")
+    H("difficulty 2")
+    H("quest 40 0 set")  # Wirt's Leg + nothing = the Cow portal recipe (Hell)
+    log, bad, notes = [], [], []
+    try:
+        H("gameflag 4 11 clear")
+        H("item leg cube")
+        H("stashpage uia PanelManager ClosePanel HoradricCubeLayout")
+        time.sleep(1.0)
+        t0 = travel_counts()
+        before = {o["id"] for o in hstate()["objs"]}
+        ok, hl = H("hotkey transmute")
+        time.sleep(1.5)
+        t1 = travel_counts()
+        closed_new = new_portals(before)
+        c_closed = ok and t1["transmute_n"] == t0["transmute_n"] + 1 and t1["transmutes"] == t0["transmutes"] and not closed_new
+        notes.append("cube closed: presses %s->%s, transmutes %s->%s (blocked %s), new portals %s" % (
+            t0["transmute_n"], t1["transmute_n"], t0["transmutes"], t1["transmutes"], t1.get("blocked"), len(closed_new)))
+        if not c_closed:
+            bad.append("closed cube: " + notes[-1])
+        ok_o, ol = H("stashpage uia PanelManager OpenPanel HoradricCubeLayout")
+        log += ol
+        time.sleep(1.5)
+        t2 = travel_counts()
+        shot = sh("cubehotkey_open")
+        if t2.get("cube") != "open":
+            bad.append("the cube panel did not open through the UI action (travel says cube %s; uia: %s)" % (t2.get("cube"), ol[:1]))
+        before = {o["id"] for o in hstate()["objs"]}
+        ok2, hl2 = H("hotkey transmute")
+        time.sleep(2.0)
+        t3 = travel_counts()
+        new = new_portals(before)
+        c_open = ok2 and t3["transmute_n"] == t2["transmute_n"] + 1 and t3["transmutes"] == t2["transmutes"] + 1 and bool(new)
+        notes.append("cube open: presses %s->%s, transmutes %s->%s, new portal objects %s (the leg's Cow portal recipe ran)" % (
+            t2["transmute_n"], t3["transmute_n"], t2["transmutes"], t3["transmutes"], [o["class"] for o in new]))
+        if not c_open:
+            bad.append("open cube: " + notes[-1])
+        log += [t0["line"], t1["line"], t2["line"], t3["line"]] + hl + hl2
+        H("stashpage uia PanelManager ClosePanel HoradricCubeLayout")
+        time.sleep(0.8)
+    finally:
+        H("difficulty 0")
+        H("cubeclear")
+    add(name, "PASS" if not bad else "FAIL", "; ".join(notes) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
+
+
+def check_freerespec():
+    name = "Free respec until level 50 (audit XP7): Akara resets stats and skills again and again at level 20; above level 50 the token is used up"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    base_level = rd("player", 12)
+    saved = respec_stats()
+    log, rows, bad = [], [], []
+    try:
+        for level, rounds in ((20, 3), (50, 2), (51, 2), (60, 2)):
+            H("quest 1 0 set")
+            H("quest 41 1 set")
+            H("quest 41 0 clear")
+            setstat("player", 12, level)
+            results, bits = [], []
+            for r in range(rounds):
+                setstat("player", 0, (rd("player", 0) or 30) + 10)  # a point spent, so there is something to reset
+                res = akara_respec(log)
+                _, q = H("quest 41 dump")
+                results.append(res)
+                mb = re.search(r"bits0-15 ([01]+)", " ".join(q))
+                bits.append(mb.group(1)[:2] if mb else "?")
+                log.append("level %d respec %d: %s, quest 41 %s" % (level, r + 1, res, q[0] if q else "?"))
+            rows.append("level %d: respec results %s, quest 41 bits 0-1 after each %s" % (level, results, bits))
+            if results != [True] * rounds:
+                bad.append("level %d: want every respec offered, got %s" % (level, results))
+            if level > 50 and any(b != "01" for b in bits):
+                # D2Sigma 0x9e600: above level 50 the token is put back (bit 0 clear, bit 1 set) after the bookkeeping
+                bad.append("level %d: quest 41 bits 0-1 should read 01 (token put back) after each respec, got %s" % (level, bits))
+    finally:
+        restore_respec_stats(saved)
+        if base_level is not None:
+            setstat("player", 12, base_level)
+        H("quest 41 1 set")
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
+
+
+def grit_formula(strength, level, clc1=1, clc2=0):
+    """Median's passive (class skill, e.g. 1272): min(25, clc2 + (clc1 * strength) / (((450 + ((98 * level) * level) / 100) * 200) / 22500)) in integers."""
+    denom = ((450 + ((98 * level) * level) // 100) * 200) // 22500
+    return min(25, clc2 + (clc1 * strength) // max(denom, 1))
+
+
+def check_grit():
+    name = "Grit (audit XP9): Strength grants damage reduction (Median stat 184 = D2R 369) through the class passive"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    GRIT = 369
+    log, rows, bad = [], [], []
+    # the stat comes from the class passive (skills.txt passivestat1 = itemstatcost 184 on rows 1090 / 1179 / 1272 / 1358 / 1456 / 1542 / 1618,
+    # D2R ids below by idmap.json): learn the one of the test character's class at level 1, as Median's characters have it
+    passive = None
+    for sid in (1162, 1251, 1344, 1430, 1528, 1614, 1690):
+        ok, sl = H("setskill %d 1" % sid)
+        log += sl
+        if ok:
+            passive = sid
+            break
+    if passive is None:
+        return add(name, "BLOCKED", "no class passive could be learned (setskill refused all seven)", [], log)
+    base_str = rd("player", 0)
+    base_lvl = rd("player", 12)
+    base_pts = rd("player", 4)
+    vals = []
+    packet = None
+    # Strength steps below the cap point (the test character's own 400 Strength is above it: min(25, ..) hides the growth) at level 20, where
+    # the divisor is 7 and a step of Strength moves the stat; the passive's stat is worked out when the passive is applied (skill level
+    # change), so every step re-applies it (level 0, then 1)
+    try:
+        setstat("player", 12, 20)
+        # `setskill` lowers a level by writing it (the passive's stat is not taken off), so there is no clean control here: the control is
+        # the stat following the passive's formula at five Strength values, which nothing else on the character gives
+        for target in (30, 100, 150, 200, 300):
+            H("setskill %d 0" % passive)
+            setstat("player", 0, target)
+            H("setskill %d 1" % passive)
+            time.sleep(0.5)
+            s_, grit, lvl = rd("player", 0), rd("player", GRIT), rd("player", 12)
+            want = grit_formula(s_, lvl)
+            vals.append((target, s_, grit, lvl, want))
+            rows.append("strength %s: grit %s (formula %s at level %s)" % (s_, grit, want, lvl))
+        # a shift-click on Strength (25 points): the engine re-evaluates the passives when an attribute point is spent
+        H("setskill %d 0" % passive)
+        setstat("player", 0, 100)
+        H("setskill %d 1" % passive)
+        setstat("player", 4, 60)
+        before = (rd("player", 0), rd("player", GRIT))
+        H("pkt 3a 00 00 04 00")
+        time.sleep(0.5)
+        after = (rd("player", 0), rd("player", GRIT))
+        packet = (before, after)
+        rows.append("shift-click on Strength: strength %s -> %s, grit %s -> %s (formula %s -> %s)" % (
+            before[0], after[0], before[1], after[1], grit_formula(before[0], 20), grit_formula(after[0], 20)))
+        if after[1] != grit_formula(after[0], 20):
+            bad.append("after spending points on Strength the stat is not recalculated: %s" % (packet,))
+    finally:
+        setstat("player", 12, base_lvl if base_lvl is not None else 150)
+        if base_str is not None:
+            setstat("player", 0, base_str)
+        if base_pts is not None:
+            setstat("player", 4, base_pts)
+        H("setskill %d 0" % passive)
+    log += rows
+    grits = [v[2] for v in vals]
+    if None in grits or not grits[-1] > grits[0]:
+        bad.append("grit does not grow with Strength: %s" % grits)
+    if any(g_ > 25 for g_ in grits if g_ is not None):
+        bad.append("grit above the 25 cap: %s" % grits)
+    mism = [v for v in vals if v[2] != v[4]]
+    if mism:
+        bad.append("grit differs from the passive's calc min(25, clc2 + clc1 * str / ((450 + 98 * lvl^2 / 100) * 200 / 22500)) at skill level 1: %s" % mism)
+    add(name, "PASS" if not bad else "FAIL", "passive skill %d at level 1: " % passive + "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
+
+
+def check_statclick():
+    name = "Stat point shift-click (audit XP6): the client's shift-click packet (0x3a, count 4) spends 25 points, a plain click 1 (Median 2.14: 25 per shift-click)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    txt = mxl_text()
+    log, rows, bad = [], [], []
+    if "shift-click on" not in txt:
+        bad.append("`mxl` does not say `shift-click on`: %s" % next((l for l in txt.splitlines() if "shift-click" in l), "-"))
+    saved = respec_stats()
+    try:
+        # the packet the stat panel's "+" sends: [0x3a][stat u16][count u16]; the server spends count + 1 points (D2R: shift-click = count 4 = 5 points)
+        for stat, count, want in ((1, 0, 1), (1, 4, 25), (2, 4, 25), (3, 0, 1), (0, 4, 25)):
+            setstat("player", 4, 60)
+            v0 = rd("player", stat)
+            ok, pl = H("pkt 3a %02x 00 %02x 00" % (stat, count))
+            log += pl
+            time.sleep(0.5)
+            v1, pts = rd("player", stat), rd("player", 4)
+            rows.append("stat %d count %d: used=%s, stat %s -> %s, unused points 60 -> %s (want +%d)" % (stat, count, ok, v0, v1, pts, want))
+            if not ok or v0 is None or v1 is None or v1 - v0 != want or pts != 60 - want:
+                bad.append(rows[-1])
+        # fewer points than the click wants: the game's own rule refuses it, nothing is spent
+        setstat("player", 4, 7)
+        v0 = rd("player", 1)
+        H("pkt 3a 01 00 04 00")
+        time.sleep(0.5)
+        v1, pts = rd("player", 1), rd("player", 4)
+        rows.append("7 unused points, shift-click: stat %s -> %s, points 7 -> %s (the game's own check, not Median's)" % (v0, v1, pts))
+    finally:
+        restore_respec_stats(saved)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
+
+
+
+
 # --- phase 4 lane p4-verify-b: town rules (SK4, NPC1, UQ5) ----------------------------------------------------------------------
 
 
@@ -9333,7 +9847,10 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("tplock", check_tplock),
           ("charmlimit", check_charmlimit),
           ("arealevel", check_arealevel),
-          ("bugfixes", check_bugfixes)]
+          ("bugfixes", check_bugfixes),
+          # lane p4-verify-a
+          ("respecbuffs", check_respecbuffs), ("signet", check_signet), ("dropilvl", check_dropilvl), ("cubehotkey", check_cubehotkey),
+          ("cowtowns", check_cowtowns), ("freerespec", check_freerespec), ("grit", check_grit), ("statclick", check_statclick)]
 
 
 def write_report(extra=""):
