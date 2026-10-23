@@ -17,11 +17,13 @@ int RunCombatTests();  // combat_test.cpp
 int RunStatColumnsTests();  // stat_columns_test.cpp
 int RunInfoPanelsTests();   // info_panels_test.cpp
 int RunItemTextTests();     // item_text_test.cpp
+int RunBuffIconsTests();    // buff_icons_test.cpp
 int RunSkillDamageTests();  // skill_damage_test.cpp
 int RunItemsExtTests();  // items_ext_test.cpp
 int RunItemGenTests();  // item_gen_test.cpp
 int RunItemRulesTests();  // item_rules_test.cpp
 int RunGambleTests();  // gamble_test.cpp
+int RunUniqueLimitsTests();  // unique_limits_test.cpp
 int RunEngineGapsTests();  // gamble_test.cpp
 int RunWaypointsTests();  // waypoints_test.cpp
 int RunTravelTests();     // travel_test.cpp
@@ -146,11 +148,13 @@ int main() {
 	failures += RunStatColumnsTests();
 	failures += RunInfoPanelsTests();
 	failures += RunItemTextTests();
+	failures += RunBuffIconsTests();
 	failures += RunSkillDamageTests();
 	failures += RunItemsExtTests();
 	failures += RunItemGenTests();
 	failures += RunItemRulesTests();
 	failures += RunGambleTests();
+	failures += RunUniqueLimitsTests();
 	failures += RunEngineGapsTests();
 	failures += RunWaypointsTests();
 	failures += RunTravelTests();

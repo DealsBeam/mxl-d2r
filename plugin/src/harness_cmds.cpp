@@ -9,6 +9,7 @@
 // "h: <verb> OK" or "h: <verb> FAIL <reason>".
 #include "harness_cmds_logic.h"
 
+#include "buff_icons.h"
 #include "client_messages.h"
 #include "collide_types.h"
 #include "craft_flags.h"
@@ -21,6 +22,7 @@
 #include "hirelings.h"
 #include "hirelings_logic.h"
 #include "info_panels.h"
+#include "stash_pages.h"
 #include "mxl_hirelings.h"
 #include "cooldowns.h"
 #include "no_corpse.h"
@@ -922,6 +924,61 @@ auto CmdInfoPanel(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	int asked = 0, opened = 0, failed = 0;
 	InfoPanelCounts(&asked, &opened, &failed);
 	Out("infopanel state0=%d state1=%d asked=%d opened=%d failed=%d", InfoPanelState(0), InfoPanelState(1), asked, opened, failed);
+	return true;
+}
+
+// Client side: `bufficons` prints the buff icon bar's counters and the icons of the last overlay frame (state, group, slot,
+// seconds left, -1 = no timer); `bufficons hover <x> <y>` / `hover state <n>` / `hover off` moves the cursor the bar sees (screen
+// pixels; `state` = the centre of that state's icon); `bufficons cstate <state> <0|1>` sets a state bit on the client's copy of
+// the player (the bar reads that copy; a state the server sets reaches it only through D2R's own packets).
+auto CmdBuffIcons(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long a = 0, b = 0;
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "hover")) {
+		if (t.n == 3 && hcmd::LowerEq(t.tok[2], "off")) {
+			BuffIconsHover(0.0F, 0.0F, false);
+			Out("bufficons hover off");
+			return true;
+		}
+		float x = 0.0F, y = 0.0F;
+		if (t.n == 4 && hcmd::LowerEq(t.tok[2], "state") && hcmd::ParseInt(t.tok[3], &a)) {
+			if (!BuffIconsCentre(static_cast<int>(a), &x, &y)) {
+				return Fail(c, "bufficons: state %lld is not shown", a);
+			}
+		} else if (t.n == 4 && hcmd::ParseInt(t.tok[2], &a) && hcmd::ParseInt(t.tok[3], &b)) {
+			x = static_cast<float>(a);
+			y = static_cast<float>(b);
+		} else {
+			return Fail(c, "usage: bufficons hover <x> <y> | state <n> | off");
+		}
+		BuffIconsHover(x, y, true);
+		Out("bufficons hover %.0f %.0f", static_cast<double>(x), static_cast<double>(y));
+		return true;
+	}
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "probe")) {
+		const bool on = t.n < 3 || !hcmd::LowerEq(t.tok[2], "off");
+		BuffIconsProbe(on);
+		Out("bufficons probe %s codes=0x%x", on ? "on" : "off", BuffIconsProbeCodes());
+		return true;
+	}
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "cstate")) {
+		if (t.n != 4 || !hcmd::ParseInt(t.tok[2], &a) || !hcmd::ParseInt(t.tok[3], &b) || a < 1 || a > 1023) {
+			return Fail(c, "usage: bufficons cstate <state> <0|1>");
+		}
+		if (!BuffIconsClientState(static_cast<int>(a), b != 0)) {
+			return Fail(c, "bufficons: no local player (or the part is off)");
+		}
+		Out("bufficons cstate %lld %lld", a, b);
+		return true;
+	}
+	char counters[512];
+	BuffIconShown shown[64];
+	const int n = BuffIconsStatus(counters, sizeof(counters), shown, 64);
+	Out("bufficons %s", counters);
+	for (int i = 0; i < n; ++i) {
+		Out("bufficons icon state=%d side=%d slot=%d row=%d secs=%d hover=%d x=%.0f y=%.0f size=%.0f", shown[i].state, shown[i].side,
+		    shown[i].slot, shown[i].row, shown[i].seconds, shown[i].hovered ? 1 : 0, static_cast<double>(shown[i].x),
+		    static_cast<double>(shown[i].y), static_cast<double>(shown[i].size));
+	}
 	return true;
 }
 
@@ -2870,7 +2927,7 @@ auto CmdCursor(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 auto CmdItemFlags(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long id = 0;
 	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id)) {
-		return Fail(c, "usage: iflags <item unit id>");
+		return Fail(c, "usage: iflags <item unit id> [unid]");
 	}
 	Unit* found = nullptr;
 	EachUnit(c->game, HashItems, [&](Unit* it) {
@@ -2890,6 +2947,67 @@ auto CmdItemFlags(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	d2r::UnitXY(found, &x, &y);
 	Out("iflags id=%u flags=0x%x identified=%d mode=%d quantity=%d durability=%d maxdurability=%d x=%d y=%d", IdOf(found), flags,
 	    (flags & 0x10) != 0 ? 1 : 0, ModeOf(found), Stat(found, 0x46), Stat(found, StatDurability), Stat(found, StatMaxDurabilityItem), x, y);
+	return true;
+}
+
+// `itemdesc <item unit id>`: the text of the item's description (the hover tooltip of the inventory), built by D2R's own
+// builder 0x2be560 (out string, item, flags, flag, text, options) on the client's copy of the item and printed one line
+// per `h: itemdesc id=<id> line <n>: <text>` with the colour codes (U+E07E and a digit) removed. The builder returns a
+// std::string-like block {char* text, size, capacity, inline buffer}; the line `Durability: x of y` is the output of
+// 0x2c1640, which the plugin part durabilitytip replaces (docs/median-rules-audit.md IT1).
+auto CmdItemDesc(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id)) {
+		return Fail(c, "usage: itemdesc <item unit id> [eth]");
+	}
+	static constexpr uint8_t BuilderEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57};
+	if (std::memcmp(reinterpret_cast<const void*>(g_base + 0x2be560), BuilderEntry, sizeof(BuilderEntry)) != 0) {
+		return Fail(c, "itemdesc: the description builder 0x2be560 is not where it was (image mismatch)");
+	}
+	Unit* item = Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(id), 4);
+	if (item == nullptr) {
+		return Fail(c, "itemdesc: the client has no such item unit");
+	}
+	using BuilderFn = void (*)(void* out, Unit* item, uint32_t flags, char flag, char* text, void* options);
+	alignas(16) uint8_t out[0x40] = {};
+	alignas(16) uint8_t options[0x10] = {};  // {u64 value, u8 present = 0}
+	auto* itemData = Fn<ItemDataFn>(RvaItemData)(item);
+	const bool eth = t.n > 2 && hcmd::LowerEq(t.tok[2], "eth");  // `eth`: the client's copy reads as ethereal for this one call
+	const uint32_t savedFlags = itemData != nullptr ? d2r::At<uint32_t>(itemData, ItemFlagsOffset) : 0;
+	if (eth && itemData != nullptr) {
+		*reinterpret_cast<uint32_t*>(itemData + ItemFlagsOffset) = savedFlags | ItemFlagEthereal;
+	}
+	Fn<BuilderFn>(0x2be560)(out, item, 0, 1, nullptr, options);
+	if (eth && itemData != nullptr) {
+		*reinterpret_cast<uint32_t*>(itemData + ItemFlagsOffset) = savedFlags;
+	}
+	const char* text = *reinterpret_cast<const char* const*>(out);
+	const uint64_t size = *reinterpret_cast<const uint64_t*>(out + 8);
+	if (text == nullptr || size > 0x4000) {
+		return Fail(c, "itemdesc: the builder returned no text");
+	}
+	char line[300];
+	size_t n = 0;
+	int lines = 0;
+	auto flush = [&] {
+		line[n] = '\0';
+		Out("itemdesc id=%u line %d: %s", static_cast<unsigned>(id), lines++, line);
+		n = 0;
+	};
+	for (uint64_t i = 0; i < size; ++i) {
+		const auto ch = static_cast<uint8_t>(text[i]);
+		if (ch == 0xee && i + 3 < size && static_cast<uint8_t>(text[i + 1]) == 0x81 && static_cast<uint8_t>(text[i + 2]) == 0xbe) {
+			i += 3;  // colour code: U+E07E (UTF-8 ee 81 be) and one digit
+		} else if (ch == '\n') {
+			flush();
+		} else if (n + 1 < sizeof(line)) {
+			line[n++] = static_cast<char>(ch);
+		}
+	}
+	if (n > 0) {
+		flush();
+	}
+	Out("itemdesc id=%u lines %d", static_cast<unsigned>(id), lines);
 	return true;
 }
 
@@ -3483,7 +3601,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	    "msg nearest|<npc class> <message id> | quest <id> <bit>|dump set|clear|get | item <code> [stat=value..] [q=n] [ilvl=n] [inv|cube|ground] | cubecraft | remove <code> [n] | pkt <hex bytes> | missile <row> [dx dy] | missilescan [row] | enter nearest|<portal id> | tile | packclear | cubeclear | cuberec <n> | class <0-6> | difficulty <0-2> | "
 	    "flag player|game <n> get|set|clear | waypoint <level>|n <number>|all [get|set|clear]|open|tabs|panel | gold get|set <carried> <bank> | level <id> | use <code> | stat player|<id>|<code> <stat> [layer] | text id|key|row|scan (resolved display strings)");
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
-	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
+	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | stashpage state|open|close|toggle|msgs|uia|widget|vis|put|fill|drop|list|move|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | gamble | gaps | levelact <id>..");
 	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
@@ -4053,6 +4171,103 @@ auto CmdStashProbe(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// stashpage (client side): state | open | close | toggle | msgs | uia <target> <command> [text] | widget <panel> [child] |
+// vis <panel> <child> 0|1 | put <code> [x y] | fill <1|2> | list | move <runtime id> <1|2> [x y] | result
+// (put / fill / list / move queue work on the game thread; `stashpage result` has the answer).
+auto CmdStashPage(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	const char* usage = "usage: stashpage state|open|close|toggle|msgs|uia <target> <command> [text]|widget <panel> [child]|vis <panel> <child> <0|1>|put <code> [x y]|fill <1|2>|drop <code>|list|move <id> <1|2> [x y]|result";
+	char text[1000];
+	if (t.n < 2) {
+		return Fail(c, usage);
+	}
+	const char* verb = t.tok[1];
+	if (hcmd::LowerEq(verb, "state")) {
+		char status[300];
+		StashPagesStatus(status, sizeof(status));
+		Out("stashpage state=%d %s", StashPageState(), status);
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "open") || hcmd::LowerEq(verb, "close") || hcmd::LowerEq(verb, "toggle")) {
+		const int mode = hcmd::LowerEq(verb, "close") ? 0 : hcmd::LowerEq(verb, "open") ? 1 : 2;
+		Out("stashpage %s %s", verb, StashPageOpen(mode) == 0 ? "queued" : "unavailable");
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "msgs")) {
+		StashPageMessages(text, sizeof(text));
+		Out("stashpage msgs %s", text);
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "uia")) {
+		if (t.n < 4) {
+			return Fail(c, usage);
+		}
+		Out("stashpage uia %s:%s(%s) = %d", t.tok[2], t.tok[3], t.n >= 5 ? t.tok[4] : "", StashPageUiAction(t.tok[2], t.tok[3], t.n >= 5 ? t.tok[4] : ""));
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "widget")) {
+		if (t.n < 3) {
+			return Fail(c, usage);
+		}
+		StashPageWidget(t.tok[2], t.n >= 4 ? t.tok[3] : "", text, sizeof(text));
+		Out("stashpage widget %s", text);
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "vis")) {
+		long long on = 0;
+		if (t.n < 5 || !hcmd::ParseInt(t.tok[4], &on)) {
+			return Fail(c, usage);
+		}
+		Out("stashpage vis %s/%s=%lld result %d", t.tok[2], t.tok[3], on, StashPageSetVisible(t.tok[2], t.tok[3], on != 0));
+		return true;
+	}
+	if (hcmd::LowerEq(verb, "result")) {
+		const int rc = StashPageResult(text, sizeof(text));
+		Out("stashpage result %d %s", rc, text);
+		return true;
+	}
+	long long a = 0, b = -1, d = -1;
+	int queued = 0;
+	if (hcmd::LowerEq(verb, "put")) {
+		if (t.n < 3) {
+			return Fail(c, usage);
+		}
+		if (t.n >= 5) {
+			hcmd::ParseInt(t.tok[3], &b);
+			hcmd::ParseInt(t.tok[4], &d);
+		}
+		queued = StashPageJob("put", b, d, 0, t.tok[2], text, sizeof(text));
+	} else if (hcmd::LowerEq(verb, "fill")) {
+		if (t.n < 3 || !hcmd::ParseInt(t.tok[2], &a)) {
+			return Fail(c, usage);
+		}
+		queued = StashPageJob("fill", a, 0, 0, "", text, sizeof(text));
+	} else if (hcmd::LowerEq(verb, "list")) {
+		queued = StashPageJob("list", 0, 0, 0, "", text, sizeof(text));
+	} else if (hcmd::LowerEq(verb, "drop")) {
+		if (t.n < 3) {
+			return Fail(c, usage);
+		}
+		queued = StashPageJob("drop", 0, 0, 0, t.tok[2], text, sizeof(text));
+	} else if (hcmd::LowerEq(verb, "move")) {
+		long long page = 0;
+		if (t.n < 4 || !hcmd::ParseInt(t.tok[2], &a) || !hcmd::ParseInt(t.tok[3], &page)) {
+			return Fail(c, usage);
+		}
+		if (t.n >= 6 && hcmd::ParseInt(t.tok[4], &b) && hcmd::ParseInt(t.tok[5], &d)) {
+			queued = StashPageJob("move", a, page, (d << 8) | (b & 0xff), "", text, sizeof(text));
+		} else {
+			queued = StashPageJob("move", a, page, -1, "", text, sizeof(text));
+		}
+	} else {
+		return Fail(c, usage);
+	}
+	if (queued == 0) {
+		return Fail(c, text);
+	}
+	Out("stashpage %s %s", verb, text);
+	return true;
+}
+
 // wpobj: every waypoint object of the game with its position and its distance to the player (the wpauto check walks to one).
 auto CmdWpObj(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	int32_t px = 0, py = 0;
@@ -4099,9 +4314,12 @@ const Verb Verbs[] = {
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false}, {"tip", CmdTip, true}, {"tiplog", CmdTipLog, true}, {"tipfmt", CmdTipFmt, true},
+    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"itemdesc", CmdItemDesc, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
+    {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"statorder", CmdStatOrder, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
+    {"stashpage", CmdStashPage, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

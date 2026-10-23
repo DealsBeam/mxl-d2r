@@ -20,6 +20,7 @@ inline constexpr const char* KeyClosingIn = "medianxl:mxl_11191";        // "Clo
 inline constexpr const char* KeySealed = "medianxl:mxl_11192";           // "Join another game to enter again\nThis area is locked"
 inline constexpr const char* KeyExitWarning = "medianxl:mxl_11193";      // "ONCE YOU EXIT YOU CANNOT GO BACK"
 inline constexpr const char* KeyGoblinAppears = "medianxl:StrPushNotifGoblinAppear";  // " appears!"
+inline constexpr const char* KeyUniqueLimit = "medianxl:12109";  // "c1You can only carry one Relic" (unique carry limit)
 
 // A string a generated table hands over: D2R's own numeric id for a native key, or the full key of a namespaced one
 // (id 0). `none` is a table cell without a string.

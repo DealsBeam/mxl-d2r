@@ -33,6 +33,7 @@
 #include "client_messages.h"
 #include "client_messages_logic.h"
 #include "d2r.h"
+#include "item_rules.h"
 #include "mxl_requirements.h"
 #include "npc_actions_logic.h"
 #include "npc_services.h"
@@ -440,6 +441,7 @@ void RestoreSavedRecord() noexcept {
 void BuilderHook(uint8_t dataFlag) {
 	g_lastDataFlag = dataFlag;
 	RestoreSavedRecord();
+	ItemRulesRetitleMenu();  // no repair in Median: the repair vendors' "trade/repair" line reads "trade" (item_rules.cpp)
 	const bool patch = g_packetOriginal != nullptr;  // lines the server cannot answer are not drawn
 	if (patch) {
 		PatchMenuTable();

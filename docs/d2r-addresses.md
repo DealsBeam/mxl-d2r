@@ -546,6 +546,14 @@ handler `0x1162f0`); 257 (first record) Repair only. All records can be listed a
 (`DecompOut.java 0x360d0`); the field layout is the table above. Maximum **5 lines per record** (the `+0x18` handler array has 5 slots, the id array 8);
 there are no spare slots for 16 actions.
 
+### Durability in the client UI (lane no-durability)
+
+| What | Where | Notes |
+|---|---|---|
+| `Durability: x of y` line of the item description | `0x2c1640 (item, text buffer)`, no result | gate: `0x373540` (the base has durability), `0x2f4b60` (maximum durability > 0), `0x374710` (throwable-like: no line); strings `ItemStats1d` and `newline` appended with `0x1412276a0` (strcat into a 0x400 buffer). Callers: `0x2bd480` (inventory tooltip, 9 args, one direct caller `0x150c377`) and `0x2be560` (`std::string out, item, flags, char, char* text, options*`; one direct caller `0x87e8ac`: `rcx` = a 0x28-byte block `{char* text, size, cap, inline buffer}`, `r8d` = 0, `r9b` = 1, `[rsp+0x20]` = 0, `[rsp+0x28]` = a block whose byte `+8` is 0). The harness verb `itemdesc` calls `0x2be560` that way |
+| Vendor panel mode | `0x2411e0` (VendorPanel set-up); dword `+0x168` of the panel: 0 trade, 1 repair vendor, 2 gambler | mode 1 for the NPC classes 0x9a Charsi, 0xb2, 0xfd, 0x101, 0x1ff Larzuk (the switch at `0x2412a3`, `mov [rbx+0x168],1` at `0x2412de`); mode 1 draws `button_repair`, `button_repair_all` and `background_repair` and hides `button_blank`, `button_close`, `background`; mode 2 draws `button_refresh` and the `tabs`. `0x22ba70` writes the same field of another panel (gold amount) and is not the vendor panel |
+| NPC menu "trade/repair" line | string id 0xd06 (`NPCMenuTradeRepair`, `trade/repair`) in the records of Charsi, Larzuk and record 257 | 0xd44 is `NPCMenuTrade` (`trade`), used by Akara, Gheed, Ormus, Malah, Anya; same click handler `0x112f30` |
+
 ### Adding Median's action lines
 
 Two options, both client-side data edits at load time (the table is on the heap, patch it after the process static-init, e.g. at the first
@@ -1027,6 +1035,20 @@ Harness verbs: `players <n>` (sets D2R's players setting: `0xe19e0()` then `0xd2
 | GetStat | `0x2f5020` | `(unit, stat, layer) -> int` | |
 | Local slot / slot unit | `0x8b2d0`, `0x9a480` | `() -> slot`; `(slot) -> player unit` | the entry bytes are checked before the hook is installed (as in `skill_tree.cpp`). |
 | Client unit lookup | `0x9a5d0` | `(id, type) -> unit` | type 4 = item. |
+## 22. Unique carry limits (lane unique-limits, 2026-10-23; plugin/src/unique_limits.cpp)
+
+D2Sigma's `uniqueitems2` (LimitGroup, LimitCount, PickDuplicates) is enforced by `D2Units` `0x100bd060` / `0x100bd0b0` (read from the 1.13c
+disassembly of D2Sigma.dll): the player's backpack (inventory page 0; equipped items, belt, stash, cube and cursor are not counted) is walked for
+unique-quality items; a limited unique is refused when the number of uniques of its group (group 0: of the same unique index) is `>= LimitCount`, or,
+for a group other than 0 with PickDuplicates 0, when a copy of that very unique is there. The check has no equip half (all 334 limited uniques are misc
+items). Sigma runs it on the ground pickup into the inventory and on its quick-move packet (cube / stash / belt to the inventory).
+
+| What | RVA | Bytes | Notes |
+|---|---|---|---|
+| Item move `bool (player, oldLocs, newLocs, ids, count, flag)` | `0x471e90` | entry `40 55 53 56 57 41 54 41 56 48 8d ac 24 58 56 ff ff` (17 bytes, hooked) | the funnel of the container packets: `0x18` cursor to container (`oldLoc` = `0x382e30` cursor, `newLoc` from the packet), `0x19` container to cursor, the stash / cube / belt moves (40 callers). `Loc` = 4 x int32 `{mode, page, x \| y << 16, body location}`; mode 0 page 0 is the backpack, `ids` are item unit ids (`0x48fe80(game, 4, id)`), `count` and `flag` are stack arguments 5 and 6 (`rbp + 0xaa00`, `rbp + 0xaa08`). False = the caller sends its refusal and the item stays where it was |
+| Pickup `bool (player, itemId, toInventory, distance, a5, a6)` | `0x471950` | entry `48 89 5c 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8d 6c 24 e9` (21 bytes, hooked) | ground item to the cursor (`toInventory` 0) or to the belt / backpack (1, the to-inventory flag of packet `0x16`); called by `0x4b9df0` (packet `0x16`) and six more. Looks the item up by id, checks the distance, then places it in the belt or the backpack (`0x4759e0`, `0x3865b0`; not read in detail) |
+| Unit data | `0x34a500(item)` | - | `+0` quality (7 = unique), `+0x34` unique index = the row of the migrated `uniqueitems.txt`; page byte `0x36cfe0` (0 backpack, 3 cube, 4 stash); unit mode at unit `+0xc` (0 stored, 1 equipped, 2 belt, 3 ground, 4 cursor); game at unit `+0xd8` (`0x48ff00`) |
+| Refusal text | - | - | Median string `12109` (`medianxl:12109`, "\xc3\xbfc1You can only carry one Relic"), sent as a system chat line (`SendClientMessage`). Sigma itself refuses with its own unit message `0x13`; 12109 is the only carry-limit text in Median's strings and is shown for every limit (the mapping of 0x13 to it was not proven) |
 
 ## Unknown / next steps
 

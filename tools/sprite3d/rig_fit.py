@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Rig a generated, posed character mesh to a D2R skeleton: proximity skin weights + "unposing" into the skeleton's bind pose.
 
-  rig_fit.py <mesh_lods.npz> <profile: wolf|goatman1> <out.npz> [--skeleton file.skeleton] [--png prefix]
+  rig_fit.py <mesh_lods.npz> <profile: wolf|goatman1|bear> <out.npz> [--skeleton file.skeleton] [--png prefix]
 
 <mesh_lods.npz> is the Wereowl set (pos/nrm/uv/tris and the _1.._4 level-of-detail suffixes; y up, faces +z, a standing figure
 with its arms spread). The mesh is not in the skeleton's bind pose (the arms are horizontal at shoulder height of a chunky body, the
@@ -17,7 +17,10 @@ legs are short), so the method is:
 4. The result (positions/normals in the skeleton's bind space, `bone_idx` (N,4), `weights`, `bones` names) is what
    `d2r_mesh.replace_with_mesh` writes.
 
-Profiles map the generic roles to the skeleton's bone names. Only the roles with weights end up in `bones`.
+Profiles map the generic roles to the skeleton's bone names. Only the roles with weights end up in `bones`. Optional profile
+fields: `k` (the mesh is scaled by k first), `dz` (and moved by it along z), `posed` (joint roles of the mesh that replace the
+POSED table), `skip` (roles the skeleton has no bone for: the weight chains bridge them), `leg_snap` (False: the leg joints stay
+where `posed` puts them instead of at the scaled bind skeleton), `keep` ({axis: roles} carried without travel along that axis).
 """
 import json
 import sys
@@ -39,11 +42,12 @@ POSED = {
     "toe": (1.2, 0.15, 0.4), "toe_end": (1.25, 0.05, 0.9),
 }
 SIDED = {"clav", "upperarm", "forearm", "hand", "hand_end", "thigh", "calf", "ankle", "foot", "toe", "toe_end"}
-# weight segments: (role, next role, capsule radius)
-CHAINS = [("pelvis", "spine_a", 1.3), ("spine_a", "spine_b", 1.3), ("spine_b", "chest", 1.3), ("chest", "neck", 1.2),
-          ("neck", "head", 1.2), ("head", "head_end", 1.9),
-          ("clav", "upperarm", 0.6), ("upperarm", "forearm", 0.6), ("forearm", "hand", 0.55), ("hand", "hand_end", 0.5),
-          ("thigh", "calf", 0.6), ("calf", "ankle", 0.5), ("ankle", "foot", 0.5), ("foot", "toe", 0.5), ("toe", "toe_end", 0.4)]
+# weight chains per limb (a skipped role is bridged) and the capsule radius of a segment by its start role
+LIMBS = [("pelvis", "spine_a", "spine_b", "chest", "neck", "head", "head_end"),
+         ("clav", "upperarm", "forearm", "hand", "hand_end"),
+         ("thigh", "calf", "ankle", "foot", "toe", "toe_end")]
+RADIUS = {"pelvis": 1.3, "spine_a": 1.3, "spine_b": 1.3, "chest": 1.2, "neck": 1.2, "head": 1.9, "clav": 0.6, "upperarm": 0.6,
+          "forearm": 0.55, "hand": 0.5, "thigh": 0.6, "calf": 0.5, "ankle": 0.5, "foot": 0.5, "toe": 0.4}
 LEG_ROLES = {"thigh", "calf", "ankle", "foot", "toe"}
 ENDS = {"head_end", "hand_end", "toe_end"}
 NO_ROT = {"pelvis", "neck", "head", "hand", "foot", "toe", "ankle"}  # rigid: carried by the parent's turn, no own unposing
@@ -60,6 +64,20 @@ PROFILES = {
         "upperarm": "{S}_upr_arm_bind_jnt", "forearm": "{S}_lwr_arm_bind_jnt", "hand": "{S}_hand_bind_jnt",
         "thigh": "{S}_leg_01_bind_jnt", "calf": "{S}_leg_02_bind_jnt", "ankle": "{S}_leg_03_bind_jnt",
         "foot": "{S}_leg_04_bind_jnt", "toe": "{S}_leg_05_bind_jnt"}),
+    # D2R's werebear (enemy/bear, 93 bones): a T-pose, upright biped (hip 4.2, shoulders 7.2, head top 8.5, arm span 13.6). The bear
+    # has no ankle: the owl's ankle takes the bear's foot bone, its toe the ball (`skip` bridges the foot role).
+    # k scales the mesh to about the bear's height, `posed` moves joint roles of the mesh to where the owl's own parts are (the head
+    # joint to the middle of the big head), `keep_x` carries those roles without sideways travel (the owl stands wider than the bear).
+    "bear": dict(u=1.0, k=1.25, dz=0.6, skip={"foot"}, leg_snap=False,
+                 keep={"x": {"thigh", "calf", "ankle", "toe"}, "z": {"pelvis", "spine_a", "spine_b", "chest", "neck", "head", "clav",
+                                                                     "upperarm", "forearm", "hand", "thigh", "calf", "ankle", "toe"}},
+                 posed={"pelvis": (0, 2.9, -0.45), "spine_a": (0, 3.3, -0.45), "spine_b": (0, 3.8, -0.45), "chest": (0, 4.4, -0.4),
+                        "neck": (0, 4.9, -0.35), "head": (0, 5.7, -0.3), "head_end": (0, 6.7, -0.3), "thigh": (1.05, 2.3, -0.3),
+                        "calf": (1.1, 1.4, -0.05), "ankle": (1.1, 0.5, -0.45), "toe": (1.2, 0.15, 0.4)},
+                 bones={"pelvis": "pelvis", "spine_a": "C_Spine_spine1", "spine_b": "C_Spine_spine2", "chest": "chest",
+                        "neck": "C_Neck_neck1", "head": "head", "clav": "{S}_Clavicle_Clavicle", "upperarm": "{S}_Arm_UpperArm",
+                        "forearm": "{S}_Arm_ForeArm", "hand": "{S}_Arm_Wrist", "thigh": "{S}_Leg_Thigh", "calf": "{S}_Leg_Calf",
+                        "ankle": "{S}_Leg_Foot", "toe": "{S}_Leg_Ball"}),
 }
 
 
@@ -75,36 +93,49 @@ def rot_between(a, b):
 
 
 def instances(profile, bones):
-    """(posed role key, side) -> (posed point, bind point, bone name). Role keys are 'pelvis' or 'L_thigh'."""
+    """(posed role key, side) -> (posed point, bind point, bone name, carry point). Role keys are 'pelvis' or 'L_thigh'.
+    The carry point is where the role's vertices are measured from (the posed point, but for `keep_x` roles with the bind x)."""
     byname = {b["name"]: b for b in bones}
+    posed = dict(POSED, **profile.get("posed", {}))
+    k, skip, keep = profile.get("k", 1.0), profile.get("skip", ()), profile.get("keep", {})
     out = {}
-    for role, p in POSED.items():
+    for role, p in posed.items():
+        if role in skip:
+            continue
         for side in ("R", "L") if role in SIDED else (None,):
-            p3 = np.array(p, float)
+            p3 = np.array(p, float) * k
+            p3[2] += profile.get("dz", 0.0)
             if side == "R":
                 p3[0] = -p3[0]
             key = role if side is None else "%s_%s" % (side, role)
             if role in ENDS:  # a posed end point only shapes the capsule; no bone
-                out[key] = (p3, None, None)
+                out[key] = (p3, None, None, p3)
                 continue
             name = profile["bones"][role].replace("{S}", side or "")
             if name not in byname:
                 raise KeyError("%s: no bone %s" % (role, name))
             b3 = np.array(byname[name]["pos"], float)
-            if role in LEG_ROLES:  # the posed leg joints sit where the scaled bind skeleton has them (feet on the ground)
+            if role in LEG_ROLES and profile.get("leg_snap", True):  # the posed leg joints sit where the scaled bind skeleton has them (feet on the ground)
                 p3[1:] = b3[1:] * profile["u"]
-            out[key] = (p3, b3, name)
+            c3 = p3.copy()
+            for ax, roles in keep.items():  # carried without travel along that axis
+                if role in roles:
+                    c3["xyz".index(ax)] = b3["xyz".index(ax)] * profile["u"]
+            out[key] = (p3, b3, name, c3)
     return out
 
 
-def segments(inst):
+def segments(inst, profile=None):
+    skip = (profile or {}).get("skip", ())
     segs = []
-    for a, b, r in CHAINS:
-        for side in ("R", "L") if a in SIDED else (None,):
-            ka = a if side is None else "%s_%s" % (side, a)
-            kb = b if side is None else "%s_%s" % (side, b)
-            if ka in inst and kb in inst:
-                segs.append((ka, kb, r))
+    for limb in LIMBS:
+        roles = [r for r in limb if r not in skip]
+        for a, b in zip(roles, roles[1:]):
+            for side in ("R", "L") if a in SIDED else (None,):
+                ka = a if side is None else "%s_%s" % (side, a)
+                kb = b if side is None else "%s_%s" % (side, b)
+                if ka in inst and kb in inst:
+                    segs.append((ka, kb, RADIUS[a]))
     return segs
 
 
@@ -129,9 +160,9 @@ def smooth(w, tris, it=4):
 
 def fit(profile, bones, pos, nrm, tris, soft=2.0):
     inst = instances(profile, bones)
-    segs = segments(inst)
+    segs = segments(inst, profile)
     u = profile["u"]
-    keys = sorted({k for s in segs for k in s[:2]} - set())
+    pos = pos * profile.get("k", 1.0) + np.array([0, 0, profile.get("dz", 0.0)])  # the mesh scaled into the unit's size
     # rotation per segment start joint
     rot = {k: np.eye(3) for k in inst}
     for ka, kb, r in segs:
@@ -147,10 +178,9 @@ def fit(profile, bones, pos, nrm, tris, soft=2.0):
         rot[k] = np.eye(3)
     rot = {k: v for k, v in rot.items() if inst[k][1] is not None}
     for side in ("R", "L"):
-        rot[side + "_hand"] = rot[side + "_forearm"]
-        rot[side + "_foot"] = rot[side + "_calf"]
-        rot[side + "_ankle"] = rot[side + "_calf"]
-        rot[side + "_toe"] = rot[side + "_calf"]
+        for role, parent in (("hand", "forearm"), ("foot", "calf"), ("ankle", "calf"), ("toe", "calf")):
+            if side + "_" + role in inst:
+                rot[side + "_" + role] = rot[side + "_" + parent]
     # weights: one column per joint instance that starts a segment; a segment gives its start joint the weight at the start
     # and its end joint the weight at the end by interpolation along the segment
     cols = []
@@ -183,9 +213,9 @@ def fit(profile, bones, pos, nrm, tris, soft=2.0):
     out = np.zeros_like(pos)
     on = np.zeros_like(nrm)
     for j, k in enumerate(cols):
-        p, b, _ = inst[k]
+        b, c = inst[k][1], inst[k][3]
         R = rot[k]
-        moved = b + ((pos - p) / u) @ R.T
+        moved = b + ((pos - c) / u) @ R.T
         out += W[:, [j]] * moved
         on += W[:, [j]] * (nrm @ R.T)
     on /= np.linalg.norm(on, axis=1, keepdims=True) + 1e-9

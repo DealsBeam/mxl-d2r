@@ -18,6 +18,7 @@
 // MXL_GOBLINS_FORCE=1 in the environment makes every roll pass, =2 also ignores the last-kill requirement (testing).
 #include "goblins.h"
 
+#include "buff_icons.h"
 #include "client_messages.h"
 #include "client_messages_logic.h"
 #include "d2r.h"
@@ -194,6 +195,7 @@ void FrameHook(Game* game) {
 	TravelGameFrame(game, d2r::At<uint32_t>(game, GameFrame));  // waypoint auto-activation (every fifth frame)
 	FlushClientMessages(game);  // quest notices held until the NPC menu is up
 	TrophyTimerFrame(game);  // trophy challenge windows (trophy_timer.cpp)
+	BuffIconsFrame(game);  // remaining time of the local player's states for the buff icon bar (buff_icons.cpp)
 	const uint32_t frame = d2r::At<uint32_t>(game, GameFrame);
 	g_state.Touch(game, frame);
 	if (goblins::IsTickFrame(frame)) {

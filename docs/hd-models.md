@@ -225,28 +225,55 @@ player as that monster: monsters.json[Id] -> unit JSON -> model, skeleton, state
 pointed at a different monster). D2R's own wolf and bear forms (430 / 431) are unchanged.
 
 ### Skeleton rigged to, and why
-The Wereowl mesh is rigged to **the werewolf skeleton** (`enemy/wolf`, 111 bones, the unit of the vanilla werewolf form). The
-unit is a copy of `wolf.json` (`mxl_wereowl3d`: state machine, Traversal / Fidget / LookAt, `vfxshell` part and all werewolf
-animations are reused), only its torso model entity is pointed at our model. The Wereowl is a bipedal beast with the werewolf's
-proportions, so the werebear fallback and goatman1 were not needed for the Druid. The enemy uses **goatman1** (the donor
-`hd_monsters.py` already chose for `corrupted_wereowl`, so its clips, the x1.25 scale and the corrupted colour stay).
-Rigging (`rig_fit.py`): the mesh is posed to the skeleton's bind proportions with hand-placed joint roles (arms, legs, spine, head,
-tail), vertex weights are the 4 nearest capsule segments (smoothed), each role's vertices are un-posed into the bone's bind space,
-and a unit scale u (wolf 0.55, goatman1 0.75) goes into the unit JSON's root transform so the in-game size is that of the Median
-sprite. The vertex layout is the donor's (28 byte skinned vertices, bone bindings with boxes).
+**The Druid's Wereowl is rigged to the werebear skeleton** (`enemy/bear`, 93 bones; not `druidbear`, that is the summoned Grizzly;
+the unit's textures are `werebear_*`). The unit is a copy of `bear.json` (`mxl_wereowl3d`: state machine, Traversal / Fidget /
+LookAt, the `ObjectFX` effects part and all werebear animations are reused), only its torso model entity is pointed at our model.
+The enemy uses **goatman1** (the donor `hd_monsters.py` already chose for `corrupted_wereowl`, so its clips, the x1.25 scale and
+the corrupted colour stay).
+
+*Why the wolf rig was dropped (first version, same day).* The Wereowl was fitted to the werewolf skeleton (`enemy/wolf`, profile
+`wolf`, u 0.55). The werewolf is a hunched, digitigrade beast (its animations stand and run low on bent legs and swing the
+front limbs like a wolf), the owl is an upright biped with arms: on the wolf skeleton the owl was drawn as a small crouching
+four-legged thing, smaller than the werewolf and nothing like the Median sprite. The werebear is a T-pose, upright biped (hip
+4.2, shoulders 7.2, head top 8.5, arm span 13.6 units; its stand is upright, its walk a hunched stride), its animations are those
+of a beast with arms, so the owl is on it. The `wolf` profile stays in `rig_fit.py` (nothing uses it; it is the regression
+reference of the generalised code).
+
+Rigging (`rig_fit.py`): the mesh is posed to the skeleton's bind proportions with hand-placed joint roles (arms, legs, spine, head),
+vertex weights are the 4 nearest capsule segments (smoothed), each role's vertices are un-posed into the bone's bind space, and a
+unit scale u goes into the unit JSON's root transform so the in-game size is the mesh's own. The vertex layout is the donor's
+(28 byte skinned vertices, bone bindings with boxes). **Profile `bear`** (u 1.0, mesh scale k 1.25: the owl is 8.2 tall, about 9.0
+with the head, against the werebear's 8.5; arms span 11.4 against 13.6):
+
+| Owl part (role) | Bear bone | Note |
+|---|---|---|
+| hip / belly (pelvis, spine_a, spine_b, chest) | `pelvis`, `C_Spine_spine1`, `C_Spine_spine2`, `chest` | joints placed at the owl's belly and chest; the bear's torso is 3 units long, the owl's about 2.4 x 1.25 |
+| neck, head (huge ruff and beak) | `C_Neck_neck1`, `head` | the head joint sits in the middle of the head mass (y 5.7), not at its base, or the head would stand 2 units above the bear's |
+| shoulder, upper arm, forearm, wrist | `{S}_Clavicle_Clavicle`, `{S}_Arm_UpperArm`, `{S}_Arm_ForeArm`, `{S}_Arm_Wrist` | the owl's arms leave its body at y 3.5 x 1.25, the bear's at 7.2: arms are carried up 2.6-3.2 and join the body behind the head ruff |
+| thigh, calf | `{S}_Leg_Thigh`, `{S}_Leg_Calf` | `keep` x: legs stay as wide as the owl's (the bear's stand 0.7 apart) |
+| ankle -> bear foot, toe -> bear ball | `{S}_Leg_Foot`, `{S}_Leg_Ball` | the bear has no ankle (`skip` foot); the owl's posed ankle is tilted back like the bear's shin, else the un-posing turned the foot 21 degrees into the ground (feet at y -0.77, now +0.06) |
+| fingers, jaw, ears, tail, eyes | not weighted | the owl has no tail, its beak and ears ride on the head bone |
+
+New `rig_fit` fields for this: `k`, `dz` (mesh moved 0.6 forward over the spine), `posed` (joint overrides per profile), `skip`,
+`leg_snap`, `keep` (no travel along an axis). The old profiles run through the same code and give identical output.
+Template meshes: the werebear's torso models have 4 LODs (`torso_lod0..3`; LOD 4 of ours uses the template of LOD 3); LOD 0
+holds eight meshes (the real `bear_bodyShape` and a `bear_body_proxyShape` of the same size, teeth, tongue, eyes, trinkets, fur
+shell), LOD 1-3 name the material `enemy_bear_LOD` instead of `body`; `wereowl_models.body_mesh` takes the biggest non-proxy,
+non-fur mesh, the other meshes are dropped (the fur shell and the trinkets with them).
 
 ### Path problem (new model files for player forms)
 The engine loads `.model` / `.texture` only at paths D2R already has (section 3 table: a new directory or file name is invisible;
 a folder mod overrides vanilla paths). **Unit JSON files are different**: a new `data/hd/character/enemy/<name>.json` is found
 through monsters.json (hd_monsters.py writes about 1,200 of them). Player forms are monsters to the renderer, so they use the same
 free route as enemies: **no new path and no plugin hook were needed.** The model and texture files are written over the vanilla
-paths of units Median never spawns: Druid `enemy/horse/torso_lod0..4.model` + `horse/textures/horse_{alb,nrm,orm}.texture`; enemy
+paths of units Median never spawns: Druid `enemy/horse/torso_lod0..4.model` + `horse/textures/horse_alb.texture` (its ORM and normal
+maps are the werebear's own, see the findings table); enemy
 `enemy/wargoatman/torso_lod0..4.model` + `pig/textures/pig_{alb,nrm,orm,sss}.texture`. Nine such units exist (`colossal1-3`,
 `corpsefire`, `cowking`, `darkelder`, `horse`, `pig`, `seagull`, `wargoatman`); each new 3D model uses one. Registering new paths
 through D2RLoader's ResourceService (in-memory files under `data/...d2rloader/<plugin-id>/`) was not tried for models; it stays
 the fallback if the nine run out.
 **Scale:** the form is drawn at the unit JSON's root `TransformDefinitionComponent` scale, like a monster; the character's own
-scale does not apply. `set_scale` multiplies it by the rig's u, in game the form is about as tall as the werewolf form.
+scale does not apply. `set_scale` multiplies it by the rig's u (bear 1.0: the owl is about as tall as the vanilla werebear).
 
 ### Findings that cost time (keep)
 | Test (slot 2) | Result |
@@ -259,16 +286,30 @@ scale does not apply. `set_scale` multiplies it by the rig's u, in game the form
 | Albedo BC3 (format 62, `d2r_texture.write_bc3`) 1024 px | correct colours |
 | Normal / ORM / mask as BC3 | too dark (decoded as sRGB); BC5 (format 61, `write_bc5`: red and green only) is what D2R uses for them |
 | Albedo as baked (mean 41 of 255) | reads as black in game; `ALBEDO_GAMMA` 0.5 in `wereowl_models.py` lifts it |
+| Bear rig with our flat BC5 normal + ORM (the wolf rig took them fine) | the whole body drew **black** (only specks of the albedo showed); the same mesh with the werebear's own `werebear_orm` / `werebear_nrm` (and our albedo) is lit and textured. Not understood (not the material parameters, the unit JSON or the normals: those are equal or checked). `USES["druid"]["shared"]` points the two maps at the vanilla werebear paths; their fur detail lies noisily over our UV atlas, which reads as fur |
+| Bear rig, werebear albedo too (UV mismatch test) | lit brown: geometry, normals and bone bindings are fine |
 
 Crash notes: three D2R instances at about 6.5 GB VRAM each exceed 16 GB, and a device lost in one game can take the others down;
 run in-game tests while at most one other lane's game is up. The unit keeps its `vfxshell` entity (a copy without it was tried
 inside a confounded series of runs and is not recommended).
 
-### In-game result (2026-10-23, build 93847, slot 2)
-Druid casting Wereowl (`cast 1364 self` from `morph_shots.py`): morph, neutral, walk, run, attack, cast and get hit draw the
-textured model with the werewolf animations. Corrupted Wereowl (`cheat mspawn 1985`): neutral, walk, attack, get hit and death draw.
-Known gaps: the fur is flat (flat normal and ORM, no fur shell layer), the albedo is gamma lifted, both uses share one mesh and one
-texture, the skinning is automatic (some limb stretch in the attack frames).
+### In-game result (2026-10-23, build 93847)
+Wolf rig (first version, slot 2): morph, neutral, walk, run, attack, cast and get hit drew the textured model with the werewolf
+animations, as a small hunched four-legged beast. Corrupted Wereowl (`cheat mspawn 1985`): neutral, walk, attack, get hit and death
+draw.
+
+Werebear rig (lane wereowl-bear, slot 1, `morph_shots.py --tag bear`, Blood Moor, Druid casting skill 1364): all phases draw with
+the werebear animations; the owl is an upright, shaggy biped about the vanilla werebear's height, and clearly nearer to the Median
+sprite than on the wolf. By animation, from the screenshots (local only, run folders `checks-20261023-095739-s1`, `-100032-s1`):
+neutral: stands on bent legs, torso leaning a little forward, arms at its sides, head forward (the bear idle's breathing bob);
+walk and run: a hunched forward stride (the bear's: the torso leans about 30 degrees, not a straight-backed human walk), big steps,
+the legs look long and thin under the heavy body; attack: head and shoulders lunge forward, the arms are hidden in the fur mass so
+the swipe reads as a body lunge; cast and get hit: a subtle bob and recoil.
+Known flaws: the owl is wider and its torso shorter than the bear, so the arms are carried up behind the head ruff and the legs
+are stretched between the owl's hip and the bear's (long thin shins); the ORM / normal maps are the bear's, not the owl's; the
+albedo is a noisy dark chart atlas (grey-brown with black patches, nearly black in shadow); no fur shell, no jaw / ear animation;
+automatic skinning (some shoulder stretch in swings). The wolf-rig screenshots for comparison: `checks-20261023-093955-s1`
+(`wolfrig_*`).
 
 ## 4. Pipeline sketch: artist's Blender rig -> D2R unit
 

@@ -63,7 +63,7 @@ SAVES = _savepath()
 LOCK_OWNER = os.environ.get("MXL_RUN") or f"run-{os.getpid()}"
 TITLE = "Diablo II: Resurrected"
 CLIENT_W, CLIENT_H = 1600, 900
-CHAR_NAME = "MxlBarb"
+CHAR_NAME = os.environ.get("MXL_CHAR", "MxlBarb")  # a lane that must not touch the shared test character names its own
 
 if "--foreground" in sys.argv:
     sys.argv.remove("--foreground")

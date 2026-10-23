@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20)
 project(mxl_core_tests LANGUAGES CXX)
 
 set(src ${CMAKE_CURRENT_SOURCE_DIR}/../src)
-add_executable(mxl_tests EXCLUDE_FROM_ALL requirements_test.cpp quests_test.cpp dungeon_test.cpp npc_actions_test.cpp npc_services_test.cpp requirement_gates_test.cpp hirelings_test.cpp combat_test.cpp items_ext_test.cpp item_gen_test.cpp waypoints_test.cpp monster_ai_test.cpp item_events_test.cpp monster_looks_test.cpp stat_columns_test.cpp info_panels_test.cpp skill_restrict_test.cpp heat_test.cpp trophy_timer_test.cpp travel_test.cpp skill_damage_test.cpp item_rules_test.cpp gamble_test.cpp stat_rules_test.cpp monster_rules_test.cpp collide_types_test.cpp skill_starts_test.cpp item_text_test.cpp
+add_executable(mxl_tests EXCLUDE_FROM_ALL requirements_test.cpp item_text_test.cpp quests_test.cpp dungeon_test.cpp npc_actions_test.cpp npc_services_test.cpp requirement_gates_test.cpp hirelings_test.cpp combat_test.cpp items_ext_test.cpp item_gen_test.cpp waypoints_test.cpp monster_ai_test.cpp item_events_test.cpp monster_looks_test.cpp stat_columns_test.cpp info_panels_test.cpp skill_restrict_test.cpp heat_test.cpp trophy_timer_test.cpp travel_test.cpp skill_damage_test.cpp item_rules_test.cpp gamble_test.cpp unique_limits_test.cpp stat_rules_test.cpp monster_rules_test.cpp collide_types_test.cpp skill_starts_test.cpp buff_icons_test.cpp
                ${src}/requirements.cpp)
 add_executable(craft_tests EXCLUDE_FROM_ALL craft_test.cpp)
 add_executable(goblin_tests EXCLUDE_FROM_ALL goblins_test.cpp)

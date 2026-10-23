@@ -84,9 +84,9 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | GS2 | All teleport and warping skills pick gold up. | P1.6.0 | missing | `teleport.cpp` header: "Not ported: D2Sigma's gold auto-pickup after a player's teleport". Check: teleport onto a gold pile |
 | GS3 | Gold drops and vendor prices were rebalanced (vendors buy cheap, potions and oils cost more). | P1.0.0, P2.0.0 | ported | D:monstats, D:treasureclassex replaced by Median's; D:npc buy mult 52 (D2R 512), sell mult 1024; stock in `docs/vendors.md` |
 | GS4 | Larger inventory and stash. | P1.0.0 | ported (unverified) | `inventory.txt` gridX/gridY via `txt_migrate`; HD panels; in-game look pending (`docs/testing.md` "Median stash size") |
-| GS5 | Shared stash and multi-page personal stash in Single Player. | P2.0.0 | partly | Median's panel counts "n / 10" pages in both modes (D2Sigma `0x1130a0`). `tools/install_mod.py` writes `add_shared_tabs = 7` (D2R's 3 normal shared tabs + 7 = 10) into `d2rloader.toml`; `game_checks stashpages` PASS: ItemService puts an item into tabs 0-9, tab 10 is refused. The personal stash stays one page; Median's Prev / Next / Sort / Mode buttons are not ported (`docs/unported.md` "Stash pages") |
+| GS5 | Shared stash and multi-page personal stash in Single Player. | P2.0.0 | partly | Median's panel counts "n / 10" pages in both modes (D2Sigma `0x1130a0`). `tools/install_mod.py` writes `add_shared_tabs = 7` (D2R's 3 normal shared tabs + 7 = 10) into `d2rloader.toml`; `game_checks stashpages` PASS: ItemService puts an item into tabs 0-9, tab 10 is refused. Personal stash: 2 pages (stock page + D2RLoader's custom page, "1 / 2" strip; `game_checks stashpage2` PASS; `docs/stash-pages.md`); pages 3-10 and Median's Mode / Sort buttons are not ported (`docs/unported.md` "Stash pages") |
 | GS6 | Shared stash on TCP/IP had stability problems (disabled in 2.0, "potential fix" in 2.9). | P2.0.0, P2.9.0 | unknown | D2R/D2RLoader share the stash file in TCP/IP; bug #20 (stash link check) is "mostly fixed" (`docs/bugs.md`). Check: TCP/IP game with two profiles |
-| GS7 | A sort button in the stash; a button in the inventory that collects every item that fits a container (AC, runes, shrines). | P2.2.0, P2.9.0 | missing | container right-click is ported (`item_spells.cpp`, pSpell 18); the two buttons are Median UI with no panel code |
+| GS7 | A sort button in the stash; a button in the inventory that collects every item that fits a container (AC, runes, shrines). | P2.2.0, P2.9.0 | missing | container right-click is ported (`item_spells.cpp`, pSpell 18); the two buttons are Median UI with no panel code; not built in lane stash-pages (no item size source for a sort, see `docs/stash-pages.md` section 7) |
 | GS8 | Containers: Greater Signets of Learning, Enchanted Runes, Corrupted Treasures; shrines and vessels are 1x1. | P2.11.0, P2.12.0 | partly | pSpell 18 logic ported; which container items exist in the built data was not counted. Check: `item` each code, `use` |
 | GS9 | Ctrl+Click moves items between inventory, stash, cube and the ground; charms can be dropped into the stash/cube while another charm is carried. | P1.0.0, P1.2.0 | ported (D2R native) | D2R quick-move. Charm limit rule: unknown |
 | GS10 | Signets of Learning give 1 stat point each, capped at 400; experience signets removed. | P1.0.0 | unknown | pSpell 3 with calc `min(1, 400 - stat 185)` (`ubers-events.md`) relies on D2R reading it the same way. Check: `item` a signet, `use`, `stat player 185` |
@@ -107,11 +107,11 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
-| IT1 | Items have no durability; repair, durability warnings and breakage are gone. | P2.4.0 ("Removed durability"), P2.7.0 | ported (verified) | plugin part `durability` (`item_rules.cpp`, off word `durability`): D2R's wear dispatcher `0x441b10` and the skill-use wear `0x5590c0` are no-ops, the equivalent of Median's NOP of the wear call (D2Game+0xdee28). `game_checks nodurability`: 600 wear steps, weapon 110 -> 110, armour 48 -> 48 (off word: 110 -> 101, 48 -> 16) |
+| IT1 | Items have no durability; repair, durability warnings and breakage are gone. | P2.4.0 ("Removed durability"), P2.7.0 | ported (verified; the UI half reopened and fixed by lane `no-durability`, see below) | **Wear** (plugin part `durability`, `item_rules.cpp`): D2R's wear dispatcher `0x441b10` and the skill-use wear `0x5590c0` are no-ops, the equivalent of Median's NOP of the wear call (D2Game+0xdee28). `game_checks nodurability`: 600 wear steps, weapon 110 -> 110, armour 48 -> 48 (off word: 110 -> 101, 48 -> 16). **UI** (parts `durabilitytip`, `repairui`, data `ID_PAIRS` in `tools/tbl2json.py`; check `nodurabilityui`): the tooltip line, the Charsi/Larzuk repair mode and the `trade/repair` line are gone, an ethereal item reads `Ethereal`; see "IT1 in detail" |
 | IT2 | Thrown/quantity items are no longer used up by attacking or throwing; ammunition warnings gone. | P2.7.0 ("Quantity is no longer reduced by normal attack and throw") | ported (verified) | plugin part `quantity`: D2R's quantity use `0x439130` leaves the stack alone, the equivalent of Median's NOP of the `dec ebp` (D2Game+0xa16be). `game_checks nodurability`: 4 Throws, quantity 58 -> 58 (off word: 110 -> 109) |
 | IT3 | Items dropped by monsters are identified (Median: no identify scrolls). | P1.0.0 | ported (verified) | plugin part `autoid`: the magic, set, rare and unique generators of Median push 1 into `SetItemFlag(item, 0x10)` (D2Game `0x104c1`, `0x15443`, `0x13daa`, the unique picker; sigma-patch-audit.md item 1); the plugin calls D2R's `SetItemFlag` `0x36d8f0` after the item generator `0x442d60` for qualities 4-7. `game_checks autoid` (Andariel kills): 6 of 6 drops identified (off word: 0 of 6) |
-| IT4 | Repair All with a hotkey at the smith (before durability was removed). | P2.0.0 | deviation | superseded by IT1 |
-| IT5 | Ethereal and socket rolls, ethereal drop chance, ethereal durability penalty. | P1.1.0, D2Sigma | partly | `itemrolls`; listed (Ethereal roll approx, Socket roll verified) |
+| IT4 | Repair All with a hotkey at the smith (before durability was removed). | P2.0.0 | deviation | superseded by IT1: the repair buttons, repair cost and the `trade/repair` menu line are removed in the port as in Median (IT1 in detail) |
+| IT5 | Ethereal and socket rolls, ethereal drop chance, ethereal durability penalty. | P1.1.0, D2Sigma | partly | `itemrolls`; listed (Ethereal roll approx, Socket roll verified). The durability penalty stays (Median's make-ethereal function multiplies the maximum by 0.75; it is invisible without the durability line, `itemrolls` still asserts it). The ethereal text is `Ethereal`, not `Ethereal (Cannot be Repaired)` (IT1 in detail) |
 | IT6 | Class-locked items. | D2Sigma | ported | verified, `classlock`; listed |
 | IT7 | Resist cap (physical cap bug fixed, 75%/max) and absorb. | P1.6.0 | ported | verified, `resistcap`, `absorb`; listed |
 | IT8 | Andariel catalyst and bonus drops. | D2Sigma | ported | verified, `bonusdrops`; listed |
@@ -125,6 +125,44 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | IT16 | Item drop level uses the area level the monster was found in, not the town's. | P2.3.0 | unknown | D2R's own drop code with Median's treasure classes; not compared. Check: kill a monster after a portal trip to town and read the dropped item level |
 | IT17 | Shrines/runes/containers right-click use. | P2.11.0 | ported | pSpell 18 in `item_spells.cpp` |
 | IT18 | Halloween chest treasure class (`Treasureclass_H`). | objects2 | missing | listed (Halloween chest `Treasureclass_H`) |
+
+### IT1 in detail: durability in the UI (lane `no-durability`)
+
+**What a Median player sees: no durability anywhere.** The item has the stats (a base has `durability`, an item has stat 72 current
+and 73 maximum, ethereal items are made x0.75), nothing shows them and nothing uses them.
+
+| Where | Median | The port before this lane | The port now |
+|---|---|---|---|
+| Wear | the wear call is NOPed (D2Game+0xdee28); the stats stay | `0x441b10` / `0x5590c0` no-ops (PR #114, part `durability`) | same |
+| Item description | no `Durability: x of y` line: `engine/D2ItemDesc.cpp` never loads string `ItemStats1d` (id 0xd81); stats 72 / 73 have no description in `itemstatcost`, stat 152 (indestructible) has no `descfunc` | the line was drawn by D2R's `0x2c1640` | part `durabilitytip`: `0x2c1640` is a no-op |
+| Repair at Charsi / Larzuk | `ui/Merchant.cpp` has no repair button, no repair-all button, no repair cost; `ui/NpcMenu.cpp` never loads the `trade/repair` line (0xd06), the smiths' menus read `trade` (0xd44) | repair panel mode (dword `+0x168` = 1 of the vendor panel, set at `0x2412de`) with `button_repair`, `button_repair_all`, `background_repair`; menu line `trade/repair` | part `repairui`: the mode byte is patched 1 -> 0 (the smiths open the plain trade panel) and the 0xd06 ids of the NPC menu records are rewritten to 0xd44 before each menu is built |
+| Ethereal | "Ethereal" (the item is not repairable anyway, there is nothing to say about repair); the durability x0.75 stays | `Ethereal (Cannot be Repaired)` (string 22745) | data: `tools/tbl2json.py` `ID_PAIRS` overrides `strethereal` with `{}` and `strItemModEtherealSocketed` with `{}, Socketed (%i)` |
+| Indestructible, breakage warning | no line, no icon (nothing can break) | no durability to lose, so nothing breaks; D2R's own warning icon has nothing to show | nothing to do |
+
+What Median **keeps**: the base durability columns of `armor` / `weapons`, stat 72 / 73 on items, the ethereal x0.75 (`itemrolls`
+keeps asserting 75%), mercenary items. None of it is visible, it only costs the player nothing.
+
+**Why the port missed it.** The port was built from [sigma-patch-audit.md](sigma-patch-audit.md), which lists the patches D2Sigma
+applies to the *original* 1.13c DLLs. The wear call is such a patch (item 12, game6-016), so wear was ported and verified. The
+tooltip line, the repair button and the menu line are not patches: they are things Median's **own** code
+(`engine/D2ItemDesc.cpp`, `ui/Merchant.cpp`, `ui/NpcMenu.cpp`) *does not draw*. A thing a replacement leaves out leaves no row in
+any table, so no checklist derived from the tables could contain it. The buff icon bar (lane `buff-icons`) was the same blind
+spot. The note "Limits of this audit" in sigma-patch-audit.md says so and says how to look for the next one (strings Median's
+code never loads, widget names per panel, Median's own screenshots panel by panel).
+
+**How the port does it** (plugin `item_rules.cpp`, pure logic `RetitleRepairLines` in `item_rules_logic.h` with unit tests; off
+words `durabilitytip` and `repairui`, the `mxl` line reports `tooltip line on (0x2c1640), repair ui on (0x2412de), N menu lines now
+read trade (0x2a48830)`). The tooltip hook is an inline hook of 13 bytes at `0x2c1640` (`48 89 5c 24 20 56 48 81 ec 40 04 00 00`, whole
+instructions, no rip-relative operand), the vendor mode is a 4-byte immediate patch with original-bytes verification, and the NPC menu
+records (table `0x2a48830`, stride 0x48, ids `u16[8]` at `+0x08`) are rewritten in place so the click handler `0x112f30` still
+opens the same panel.
+
+**Evidence** (`py -3 tools/game_checks.py --slot 2 nodurabilityui`, harness verb `itemdesc <id> [eth]` builds the item description with
+D2R's own `0x2be560` and prints it): stats 72 / 73 > 0 on a Field Plate, a Battle Sword, a magic Field Plate and an ethereal one;
+none of the four descriptions mention durability, repair or indestructible; the ethereal one reads `Ethereal`; Charsi's menu has
+0xd44 and no 0xd06; the strip of the panel below the item grid differs from Gheed's trade panel by 0.13 (mean pixel difference), where
+the control run with both parts off shows `Durability: 48 of 48`, 0xd06 in Charsi's menu and a diff of 5.97. Median's own tooltips
+for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this lane show no durability line on armour or weapon.
 
 ## 5. Crafting and the cube
 

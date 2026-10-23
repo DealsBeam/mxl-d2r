@@ -28,7 +28,8 @@ Overlap with other lanes: `audit-rules` audits the same gap from the player-rule
   no detour library, no IAT patching and no other store into a game-DLL address range: a search of the D2Sigma code for stores
   through the 236 game `.data` pointers in `research/sigma_imports.json` found none. `DllModInit` also loads `d2fps.dll` (a frame-rate
   limiter, no game logic).
-* So **the 19 tables are the complete set of run-time changes to game code and data**: 2,121 raw writes, grouped by
+* So **the 19 tables are the complete set of run-time changes to game code and data of the original DLLs** (what the
+  limits below leave out is Median's *own* code, which no table lists): 2,121 raw writes, grouped by
   `tools/sigma_patches.py` into **2,027 logical patches** in **767 distinct 1.13c functions** (some are data tables in `.data`).
 
 | Module | Patches | Functions |
@@ -50,6 +51,29 @@ table now points at D2Sigma data), `nop` 380, `const` 284 (an immediate or a tab
 `D2Party_1009b4b0+0x..`). The real replacement is what the stub calls; `tools/sigma_patches.py` resolves each as
 `STUB[calls X; resumes Y]`. The Ghidra export of D2Sigma (Sep 21 build) does not match the installed `D2Sigma.dll` (Oct 2 build) above about
 `0x1007eb00`, notably near `0x1008b1xx` and `0x100bb6xx`-`0x100bb8xx`: stub names and `tools/sigma_fn.py sigma` output are unreliable there, so those entries were read from the installed DLL with `tools/disasm.py`. The 1.13c function table is also mislabelled for the AI patches (D2R's `monai.txt` order differs from 1.13c's).
+
+### Limits of this audit: what a list of patches cannot show
+
+The audit lists **patches to the original 1.13c game**. It says what Median changes in code that already existed. It does not
+say what Median's **own code** (D2Sigma's `engine/*.cpp` and the whole of `ui/*.cpp`: HUD, inventory, merchant, NPC menu, item
+description, buff bar, ...) does, because that code is not a patch of anything. D2Sigma replaces the original panels at a
+few entry points (for the NPC menu one row, client2-034, a 97-byte function replaced by a jump to `ui_NpcMenu`), and from there on
+the replacement decides what is drawn and what is left out. **Something Median leaves out of its own screens leaves no row at
+all**: there is no original byte that was changed, so the table is silent about it. Two gaps found that way:
+
+* **Durability in the UI** (lane `no-durability`). The audit had the wear call (item 12, game6-016) and the port stopped the wear.
+  But D2R still drew everything the original game draws around durability, because in Median nothing draws it:
+  `engine/D2ItemDesc.cpp` never loads the string `ItemStats1d` ("Durability: %d of %d", id 0xd81) so no tooltip has the line,
+  `ui/Merchant.cpp` has no repair button, repair-all button or repair cost (its widgets are the item grid, the filter, refresh
+  and close buttons, the gold text), and `ui/NpcMenu.cpp` never loads the "trade/repair" line (id 0xd06; Median's repair vendors
+  read "trade"). Median's own screenshots show tooltips without the line. The port showed `Durability: x of y`, a Repair
+  button at Charsi and Larzuk and the "trade/repair" menu line until [median-rules-audit.md](median-rules-audit.md) IT1 was reopened.
+* **The buff icon bar** (lane `buff-icons`): the same blind spot, a part of Median's own screen code that no patch row names.
+
+How to look for the next one: the audit's input is patches, so the question "what does Median **not** draw / not offer"
+cannot come from it. Read the strings Median's code never loads (compare the ids D2Sigma loads with the D2R string table, as
+this lane did for 0xd81 and 0xd06), the widget names of each `ui/*.cpp` panel against D2R's panel of the same job, and Median's
+screenshots, panel by panel.
 
 ## 2. Method
 

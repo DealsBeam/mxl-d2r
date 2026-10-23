@@ -9,12 +9,13 @@ variable MXL_NO_3D=1 (or --off), the step does nothing and the goatman1 stand-in
 
 What it writes under work/mod/data/hd/character:
 - the Druid's Wereowl form (skill wereowl_form -> state wereowl_form_state -> gfxclass monstats `wereowl` -> monsters.json -> unit):
-  the Wereowl mesh rigged to D2R's werewolf skeleton (enemy/wolf, `rig_fit.py` profile wolf), at the model files of the unused
-  vanilla unit `horse` (the engine only loads models at paths D2R has), as a new unit `mxl_wereowl3d` (a copy of the wolf unit:
-  skeleton, werewolf state machine and animations; its vfxshell part stays; scale u of the rig profile);
+  the Wereowl mesh rigged to D2R's werebear skeleton (enemy/bear, `rig_fit.py` profile bear; an upright biped like the owl), at the
+  model files of the unused vanilla unit `horse` (the engine only loads models at paths D2R has), as a new unit `mxl_wereowl3d`
+  (a copy of the bear unit: skeleton, werebear state machine and animations; its effects part stays; scale u of the rig profile);
 - the Corrupted Wereowl enemy: the same mesh rigged to goatman1 (profile goatman1) at the model files of `wargoatman`, patched into the
   unit hd_monsters.py chose for `corrupted_wereowl` (goatman1 donor, scale x1.25, corrupted colour adjustment).
-Textures: `.texture` files (BC3 albedo 1024, BC5 flat normal / ORM / black mask) written over the vanilla paths of `horse` (alb/orm/nrm) and `pig` (alb/nrm/orm/sss), the material maps point there.
+Textures: `.texture` files (BC3 albedo 1024, BC5 flat normal / ORM / black mask) written over the vanilla paths of `horse` (alb only: the Druid
+form's ORM and normal maps are the werebear's own, see USES) and `pig` (alb/nrm/orm/sss), the material maps point there.
 """
 import copy
 import json
@@ -36,10 +37,13 @@ ENEMY = "data/hd/character/enemy/"
 DEFAULT_ASSETS = str(ROOT / "assets" / "hd" / "wereowl")  # in the repo (Git LFS, assets/hd/wereowl/README.md)
 
 # per use: rig profile, template model (donor unit dir, number of vanilla LODs), where the files go (a vanilla unit nothing in
-# Median uses), texture stem for the albedo/orm/normal maps, the unit it patches
+# Median uses), texture stem for the albedo/orm/normal maps, the unit it patches. `shared`: maps taken from vanilla paths instead
+# of our own flat ones (the Druid form: flat ORM / normal maps drew the bear's body black in game, the werebear's own ones light it)
 USES = {
-    "druid": dict(profile="wolf", donor="wolf", lods=4, slot="horse",
-                  tex="horse/textures/horse", unit="mxl_wereowl3d"),
+    "druid": dict(profile="bear", donor="bear", lods=4, slot="horse",
+                  tex="horse/textures/horse", unit="mxl_wereowl3d",
+                  shared={"ORMTexture": ENEMY + "bear/textures/werebear_orm.texture",
+                          "NormalTexture": ENEMY + "bear/textures/werebear_nrm.texture"}),
     "corrupted": dict(profile="goatman1", donor="goatman1", lods=5, slot="wargoatman",
                       tex="pig/textures/pig", unit=None),
 }
@@ -84,8 +88,12 @@ def write_textures(data, albedo_png, stems):
 
 
 def body_mesh(tree):
-    """The template mesh: the biggest one with a `body` material (names differ per LOD)."""
-    body = [m for m in tree["Meshes"] if m["MaterialBindings"][0]["Material"]["Name"].startswith("body")]
+    """The template mesh: the biggest one with a `body` material (names differ per LOD); the bear's LOD 1-3 meshes share a material
+    `enemy_bear_LOD` (body, mouth, eyes), there the biggest one that is not fur or trinkets. The bear's LOD 0 also has `*_proxyShape`
+    meshes of the same size as the real ones; those are not taken."""
+    mat = lambda m: m["MaterialBindings"][0]["Material"]["Name"]
+    body = [m for m in tree["Meshes"] if mat(m).startswith("body")] or [m for m in tree["Meshes"] if mat(m) not in ("fur", "trinkets")]
+    body = [m for m in body if "proxy" not in m["Name"].lower()] or body
     return max(body, key=lambda m: len(m["PrimaryVertexData"]["Vertices"].obj))["Name"]
 
 
@@ -95,6 +103,7 @@ def build_models(data, npz, use, cfg):
     prof = rig_fit.PROFILES[cfg["profile"]]
     maps = {"AlbedoTexture": ENEMY + cfg["tex"] + "_alb.texture", "ORMTexture": ENEMY + cfg["tex"] + "_orm.texture",
             "NormalTexture": ENEMY + cfg["tex"] + "_nrm.texture", "MaskTexture": BLACK, "ThicknessTexture": BLACK}
+    maps.update(cfg.get("shared", {}))
     for lod in range(5):
         sfx = "" if lod == 0 else "_%d" % lod
         tmpl = casc_cache([ENEMY + "%s/torso_lod%d.model" % (cfg["donor"], min(lod, cfg["lods"] - 1))])
@@ -152,17 +161,17 @@ def main():
     hdc = data / "data" / "hd" / "character"
     npz = dict(np.load(assets / "mesh_lods.npz", allow_pickle=True))
     mj = json.loads((hdc / "monsters.json").read_text("utf-8"))
-    write_textures(data, assets / "albedo.png", {"horse/textures/horse": ("alb", "nrm", "orm"),
+    write_textures(data, assets / "albedo.png", {"horse/textures/horse": ("alb",),
                                                   "pig/textures/pig": ("alb", "nrm", "orm", "sss")})
     sizes = {}
     for use, cfg in USES.items():
         sizes[use] = build_models(data, npz, use, cfg)
-    # the Druid's form: a copy of the wolf unit
+    # the Druid's form: a copy of the donor unit (werebear)
     cfg = USES["druid"]
-    wolf = json.loads((ROOT / "extract" / "d2r" / "93847" / "data" / "hd" / "character" / "enemy" / "wolf.json").read_text("utf-8-sig"))
-    unit = copy.deepcopy(wolf)
+    donor = json.loads((ROOT / "extract" / "d2r" / "93847" / "data" / "hd" / "character" / "enemy" / (cfg["donor"] + ".json")).read_text("utf-8-sig"))
+    unit = copy.deepcopy(donor)
     unit["name"] = cfg["unit"]
-    if point_unit(unit, cfg, [ENEMY + cfg["tex"] + s for s in ("_alb.texture", "_orm.texture", "_nrm.texture")] + [BLACK]):
+    if point_unit(unit, cfg, [ENEMY + cfg["tex"] + "_alb.texture", *cfg["shared"].values(), BLACK]):
         set_scale(unit, rig_fit.PROFILES[cfg["profile"]]["u"])
     (hdc / "enemy" / (cfg["unit"] + ".json")).write_text(json.dumps(unit, separators=(",", ":")), encoding="utf-8")
     mj["wereowl"] = cfg["unit"]
@@ -174,8 +183,8 @@ def main():
         set_scale(unit, rig_fit.PROFILES[cfg["profile"]]["u"])
     up.write_text(json.dumps(unit, separators=(",", ":")), encoding="utf-8")
     (hdc / "monsters.json").write_text(json.dumps(mj, indent=2), encoding="utf-8")
-    print("Wereowl 3D: Druid form -> %s (wolf skeleton, models at horse/), Corrupted Wereowl -> %s (goatman1 skeleton, models at wargoatman/); "
-          "model sizes %s" % (USES["druid"]["unit"], mj["corrupted_wereowl"], sizes))
+    print("Wereowl 3D: Druid form -> %s (%s skeleton, models at horse/), Corrupted Wereowl -> %s (goatman1 skeleton, models at wargoatman/); "
+          "model sizes %s" % (USES["druid"]["unit"], USES["druid"]["donor"], mj["corrupted_wereowl"], sizes))
     return 0
 
 
