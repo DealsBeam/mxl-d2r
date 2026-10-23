@@ -15,7 +15,7 @@ classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner 
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
-questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths.
+questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -124,7 +124,7 @@ class Watchdog(threading.Thread):
                     # (never moved by this run) is not an abort reason; a move into it is, whoever made it.
                     self.abort = "real cursor moved %s -> %s into the game window %s" % (prev, cur, (l, t, r, b))
                 self.inside_prev = inside
-                if fg == h and not self.abort:
+                if fg == h and not self.abort and time.time() >= g.FG_GRACE_UNTIL:
                     self.abort = "the game window became the foreground window"
             time.sleep(0.025)
 
@@ -3620,6 +3620,11 @@ def check_scrollportals():
     god(True)
     base = {}
     try:
+        # the check's first screenshot is taken from a minimized window: game_ctl restores it without activating it (restore_noactivate)
+        h_win = g.find_window()
+        if h_win:
+            g.user32.ShowWindow(h_win, 7)  # SW_SHOWMINNOACTIVE: minimized, the foreground window stays
+            time.sleep(1.0)
         goto(1)
         base = {n: stat_of(H("stat player %d" % n)[1]) for n in (12, 6, 7)}  # level, life, max life: the character is saved on exit
         H("difficulty 2")  # Hell rules and a high level: the dungeon lockout refuses a low character (docs/plugin-spec.md)
@@ -3674,6 +3679,12 @@ def check_scrollportals():
         for n, v in base.items():
             if v is not None:
                 H("stat player %d set %d" % (n, v))
+    # a minimized game window is restored by game_ctl without activation (restore_noactivate): the foreground window must not change
+    for win, before, after, handed in g.RESTORES:
+        rows.append("game window %s was minimized and restored; foreground window %s -> %s%s" % (
+            win, before, after, " (D2R activated itself on the restore, the focus went back at once)" if handed else ""))
+        if before != after:
+            bad.append("restoring the minimized window left a different foreground window (%s -> %s)" % (before, after))
     add(name, "PASS" if not bad else "FAIL",
         "use the scroll in its act's town (Hell rules, level 150), `enter <portal id>`, read the area: %s%s" % ("; ".join(rows), ("; " + "; ".join(bad)) if bad else ""), shots, rows)
 
@@ -8777,6 +8788,508 @@ def check_assetpaths():
         shots)
 
 
+# --- phase 4 lane p4-verify-b: town rules (SK4, NPC1, UQ5) ----------------------------------------------------------------------
+
+
+def _skills_by_town(intown, limit=60, need_mana=True):
+    """Selectable skills of the built skills.txt (any class: `setskill` gives them) without a restrict value: those with InTown 1 (intown True) or without
+    it, by required level: [(id, name, mana)]. The mana filter keeps the skills whose cast costs something (D2R shows the result)."""
+    t = _tsv(os.path.join(BUILT_EXCEL, "skills.txt"))
+    h = t[0]
+    col = {c: h.index(c) for c in ("skill", "*Id", "InTown", "mana", "leftskill", "rightskill", "restrict", "reqlevel", "passive", "charclass")}
+    out = []
+    for r in t[1:]:
+        if len(r) < len(h) or r[col["passive"]] == "1" or r[col["restrict"]]:
+            continue
+        if (r[col["InTown"]] == "1") != intown:
+            continue
+        if need_mana and r[col["mana"]] in ("", "0"):
+            continue
+        if r[col["leftskill"]] != "1" and r[col["rightskill"]] != "1":
+            continue
+        out.append((int(r[col["reqlevel"]] or 0), int(r[col["*Id"]]), r[col["skill"]], r[col["mana"]]))
+    out.sort()
+    return [(i, n, m) for _lv, i, n, m in out[:limit]]
+
+
+def _mxl_line(word):
+    return next((ln for ln in mxl_text().splitlines() if word in ln), "")
+
+
+def check_towncast():
+    """Audit SK4 (P1.1.0 .. P2.1.0): Median's `InTown` column decides which skills may be cast in town (buffs, totems, warp, summons) and
+    which may not. The game's usability test (`usable=`) does not look at the town; the town refusal is the unit staying in its town-neutral mode (5)
+    instead of entering the skill's cast mode. So a cast counts as started when the mode after it is neither 1 (field neutral) nor 5. Skills the
+    character cannot use at all (usable not 0: other class) are left out of the count. Skills with InTown must start in the Rogue Encampment,
+    skills without it must not, and the same skills must start in the Blood Moor (control: the refusal is the town, not the skill)."""
+    nm = "Skills in town (audit SK4): the InTown column decides"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    pos = _skills_by_town(True)
+    neg = _skills_by_town(False, limit=12)
+    if len(pos) < 5 or len(neg) < 3:
+        return add(nm, "FAIL", "the data has too few skills to judge: %d with InTown, %d without" % (len(pos), len(neg)))
+    log, rows, bad = [], [], []
+    saved = {s_: rd("player", s_) for s_ in (12, 9, 8)}
+
+    def prep(skill):
+        setstat("player", 12, 90)
+        setstat("player", 9, 5000 * 256)
+        setstat("player", 8, 5000 * 256)
+        H("setskill %d 5" % skill)
+
+    def try_cast(skill):
+        """'cast' (the skill started), 'town' (usable, but the unit did not leave its neutral mode) or 'class' (not usable by this character)."""
+        drop_cursor_item(log)
+        ok, lines = H("cast %d self" % skill)
+        log.extend(lines)
+        time.sleep(1.2)
+        close_menu()
+        text = " ".join(lines)
+        us, md = re.search(r"usable=(\d+)", text), re.search(r"mode now (\d+)", text)
+        if not us or us.group(1) != "0":
+            return "class"
+        return "cast" if md and md.group(1) not in ("1", "5") else "town"
+
+    def sweep(skills):
+        res = {"cast": [], "town": [], "class": []}
+        for sid, sname, _mana in skills:
+            prep(sid)
+            res[try_cast(sid)].append("%d %s" % (sid, sname))
+            kill_all_near()
+        return res
+
+    goto(1)
+    close_menu()
+    kill_all_near()
+    r1 = sweep(pos)
+    rows.append("InTown skills in the Rogue Encampment: %d started, %d refused, %d not judged (other class: %s)" % (
+        len(r1["cast"]), len(r1["town"]), len(r1["class"]), ", ".join(r1["class"][:4])))
+    if r1["town"]:
+        bad.append("skills with InTown=1 refused in town: %s" % ", ".join(r1["town"]))
+    if len(r1["cast"]) < 3:
+        bad.append("fewer than 3 InTown skills could be judged (%d)" % len(r1["cast"]))
+    r2 = sweep(neg)
+    rows.append("skills without InTown in the Rogue Encampment: %d refused, %d started, %d not judged" % (len(r2["town"]), len(r2["cast"]), len(r2["class"])))
+    if r2["cast"]:
+        bad.append("skills without InTown started in town: %s" % ", ".join(r2["cast"]))
+    if len(r2["town"]) < 3:
+        bad.append("fewer than 3 skills without InTown could be judged (%d)" % len(r2["town"]))
+    goto(2)
+    close_menu()
+    kill_all_near()
+    r3 = sweep(neg)
+    rows.append("the same skills in the Blood Moor: %d started, %d refused" % (len(r3["cast"]), len(r3["town"])))
+    if len(r3["cast"]) < len(r2["town"]):
+        bad.append("the control skills are not usable in the field either (refused: %s)" % ", ".join(r3["town"]))
+    for s_, v in saved.items():
+        if v is not None:
+            setstat("player", s_, v)
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
+
+
+NPC_TABLE_CLASSES = [148, 146, 154, 150, 147, 155, 266, 175, 176, 177, 178, 202, 200, 210, 201, 198, 199, 377, 378, 265, 244, 245, 251, 252, 253,
+                     254, 255, 264, 246, 406, 367, 408, 257, 405, 297, 331, 513, 512, 511, 514, 515, 521, 520]
+
+
+def check_npcheal():
+    """Audit NPC1 (P2.2.0): in Median every NPC heals you when you talk to him. D2R runs the heal function at every talk but heals only at
+    the NPCs whose entry in the static NPC table (0x237ea60) has byte +6 set; the plugin part `npcheal` sets the byte on all 43 entries. Each
+    class of the table is spawned in Act 1's Blood Moor (no town crowd), the character is hurt to a quarter of life and mana, the NPC is
+    talked to (`interact`) and life must be full. With the part off (control run, mxl-core-off.txt word `npcheal`) only the act healers heal."""
+    nm = "NPC healing (audit NPC1): every NPC heals on talk"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    line = _mxl_line("town rules")
+    control = "npc heal off" in line or "left out by mxl-core-off.txt" in line
+    if not control and "npc heal on" not in line:
+        return add(nm, "FAIL", "the `mxl` command has no `npc heal on` line: %s" % (line or "no town rules line"))
+    res, log = {}, [line]
+
+    def cur():
+        p = hstate()["player"]
+        a, b = p.get("life").split("/")
+        return int(a), int(b)
+
+    def one(cls):
+        ok, _sl = H("spawn %d" % cls)
+        if not ok:
+            return "spawn failed"
+        time.sleep(0.8)
+        maxl, maxm = rd("player", 7), rd("player", 9)
+        setstat("player", 6, int(maxl * 0.25))
+        setstat("player", 8, int(maxm * 0.25))
+        ok, lines = H("interact %d" % cls)
+        log.extend(lines[:1])
+        if not ok:
+            return "interact failed"
+        healed = False
+        for _ in range(4):
+            time.sleep(3)
+            a, b = cur()
+            if a >= b:
+                healed = True
+                break
+        close_menu()
+        H("kill nearest %d" % cls)
+        time.sleep(0.5)
+        return "healed" if healed else "no heal"
+
+    pending = list(NPC_TABLE_CLASSES)
+    for _round in range(5):  # the area fills up after ~14 spawns: leave and come back, retry what failed to spawn
+        if not pending:
+            break
+        goto(2, timeout=60)
+        close_menu()
+        kill_all_near()
+        for cls in list(pending)[:12]:
+            r = one(cls)
+            if not r.endswith("failed"):
+                res[cls] = r
+                pending.remove(cls)
+        goto(1, timeout=60)
+    healed = sorted(c for c, r in res.items() if r == "healed")
+    not_healed = sorted(c for c, r in res.items() if r != "healed")
+    log.append("healed %s; not healed %s; not reached %s" % (healed, not_healed, pending))
+    if control:
+        good = 1 <= len(healed) <= 12 and bool(not_healed)
+        return add(nm, "PASS" if good else "FAIL", "control run (npcheal off): %d of %d NPC classes healed (D2R's act healers), %d did not: %s" % (
+            len(healed), len(res), len(not_healed), not_healed), [], log)
+    ok = not not_healed and len(res) >= 38
+    add(nm, "PASS" if ok else "FAIL", "%d of the 43 NPC classes of D2R's table talked to; %d healed, %d did not %s; %d could not be reached (spawn failed) %s" % (
+        len(res), len(healed), len(not_healed), not_healed, len(pending), pending), [], log)
+
+
+def _tplock_levels():
+    """Levels with Median's Tplock flag (levels.bin +0x155) as the plugin was built with them: plugin/src/mxl_dungeons.h (D2R ids; the
+    built levels.txt has no such column)."""
+    txt = open(os.path.join(REPO, "plugin", "src", "mxl_dungeons.h"), encoding="utf-8").read()
+    return [int(a) for a, b in re.findall(r"\{(\d+), \d+, \d+, \d+, \{[^}]*\}, \d+, \d+, (\d+),", txt) if b != "0"]
+
+
+def _tplock_refusals():
+    m = re.search(r"portal refusals (-?\d+)", _mxl_line("town rules"))
+    return int(m.group(1)) if m else None
+
+
+def check_tplock():
+    """Audit UQ5 (P1.6.0): Median's levels.txt column Tplock closes the Town Portal skill in some zones (Edge of Nothingness corridor and
+    others). The plugin part `tplock` hooks the skill's do function 0x5822b0. The itemless Town Portal is cast in levels with the flag and must
+    be refused (no portal object, no mana spent, the part's refusal counter rises); in the Blood Moor a portal opens. With the part off
+    (control run, word `tplock`) the portal opens in the locked level too."""
+    nm = "Town portals disabled in some zones (audit UQ5): Tplock levels"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    line = _mxl_line("town rules")
+    control = "town portal lock off" in line or "left out by mxl-core-off.txt" in line
+    if not control and "town portal lock on" not in line:
+        return add(nm, "FAIL", "the `mxl` command has no `town portal lock on` line: %s" % (line or "no town rules line"))
+    by_name, _t, _h = _skill_ids_by_name()
+    tp = by_name.get("town_portal")
+    locked = _tplock_levels()
+    if tp is None or not locked:
+        return add(nm, "BLOCKED", "no town_portal skill or no Tplock level in the data (%s, %s)" % (tp, locked))
+    log, rows, bad = [line], [], []
+    base = {s_: rd("player", s_) for s_ in (12, 9, 8)}
+
+    def cast_tp():
+        setstat("player", 12, 90)
+        setstat("player", 9, 5000 * 256)
+        setstat("player", 8, 5000 * 256)
+        H("setskill %d 5" % tp)
+        before = _portal_ids()
+        m0 = rd("player", 8)
+        ok, lines = H("cast %d self" % tp)
+        log.extend(lines)
+        time.sleep(3.0)
+        new = _portal_ids() - before
+        return ok, bool(new), m0 - rd("player", 8)
+
+    reached = 0
+    try:
+        c0 = _tplock_refusals()
+        for lv in locked:
+            if reached >= (1 if control else 3):
+                break
+            st = goto(lv, timeout=45)
+            if st["player"].get("area") != lv:
+                log.append("level %d: not reachable with goto" % lv)
+                continue
+            reached += 1
+            kill_all_near()
+            ok, opened, spent = cast_tp()
+            rows.append("level %d (Tplock): cast %s, portal %s, mana spent %d" % (lv, "accepted" if ok else "refused", "OPENED" if opened else "none", spent >> 8))
+            if control:
+                if not opened:
+                    bad.append("control run (tplock off): no portal in level %d" % lv)
+            elif opened or spent > 0:
+                bad.append("a portal opened (%s) or mana was spent (%d) in the locked level %d" % (opened, spent >> 8, lv))
+        if not reached:
+            bad.append("no Tplock level could be reached with goto (%s)" % locked)
+        c1 = _tplock_refusals()
+        rows.append("refusals %s -> %s" % (c0, c1))
+        if not control and reached and (c0 is None or c1 is None or c1 - c0 < reached):
+            bad.append("the part's refusal counter did not rise by %d (%s -> %s)" % (reached, c0, c1))
+        goto(2, timeout=60)
+        kill_all_near()
+        time.sleep(8)  # the cooldown of a portal opened above
+        ok, opened, spent = cast_tp()
+        rows.append("Blood Moor (no Tplock): cast %s, portal %s" % ("accepted" if ok else "refused", "opened" if opened else "NONE"))
+        if not opened:
+            bad.append("no portal in the Blood Moor (the control)")
+    finally:
+        for s_, v in base.items():
+            if v is not None:
+                setstat("player", s_, v)
+        goto(1)
+    add(nm, "PASS" if not bad else "FAIL", ("control run (tplock off): " if control else "") + "; ".join(rows + bad), [], log)
+
+
+# --- phase 4 lane p4-verify-b: charm limit (IC5) --------------------------------------------------------------------------------
+
+
+def _charm_uniques():
+    """Unique rows of the built uniqueitems.txt whose base item is a charm (itemtypes chain to `char`, relics excluded):
+    [(row, code, carry1, nolimit, in the plugin's unique-limit table, 'width x height')]."""
+    u = _tsv(os.path.join(BUILT_EXCEL, "uniqueitems.txt"))
+    uh = u[0]
+    uc, c1, nl = uh.index("code"), uh.index("carry1"), uh.index("nolimit")
+    m = _tsv(os.path.join(BUILT_EXCEL, "misc.txt"))
+    mh = m[0]
+    mc, mt_, mw, mhh = mh.index("code"), mh.index("type"), mh.index("invwidth"), mh.index("invheight")
+    base = {r[mc]: (r[mt_], r[mw], r[mhh]) for r in m[1:] if len(r) > mhh}
+    t = _tsv(os.path.join(BUILT_EXCEL, "itemtypes.txt"))
+    tc, e1, e2 = t[0].index("Code"), t[0].index("Equiv1"), t[0].index("Equiv2")
+    par = {r[tc]: [r[e1], r[e2]] for r in t[1:] if len(r) > e2}
+
+    def is_charm(tp, depth=0):
+        return tp == "char" or (depth < 6 and any(is_charm(p, depth + 1) for p in par.get(tp, []) if p))
+
+    limited = {r[0] for r in _unique_limit_rows()}
+    out = []
+    for i, r in enumerate(u[1:]):
+        if len(r) > uc and r[uc] in base and base[r[uc]][0] != "reli" and is_charm(base[r[uc]][0]):
+            out.append((i, r[uc], r[c1] == "1", r[nl] == "1", i in limited, "%sx%s" % (base[r[uc]][1], base[r[uc]][2])))
+    return out
+
+
+def check_charmlimit():
+    """Audit IC5 (P1.0.0): only one charm of a kind may be carried (Median's fixed bug: more than one). D2R's rule is the `carry1` column of
+    uniqueitems.txt (placement refuses a second copy), Median's own limits are the uniqueitems2 table (plugin part uniquelimits, tested by
+    `uniquelimits`). Unique charms flagged carry1 (not in the plugin's table, so D2R alone decides) and ones with a plugin limit of one: the first
+    copy is created in the backpack, the second must be refused (`item` places through the game's rules); a unique charm without either rule
+    takes two copies (the control)."""
+    nm = "Charm limit (audit IC5): one charm of a kind"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    rows_all = _charm_uniques()
+    limits = {r[0]: r for r in _unique_limit_rows()}
+    carry = [r for r in rows_all if r[2] and not r[4]][:3]
+    plug = [r for r in rows_all if r[4] and limits[r[0]][1] == 0 and limits[r[0]][2] == 1][:3]
+    free = [r for r in rows_all if not r[2] and not r[4]][:4]
+    if not (carry or plug) or not free:
+        return add(nm, "FAIL", "the data has no charm unique to test (carry1 and not limited %d, single-copy limits %d, without a rule %d of %d charm uniques)" % (
+            len(carry), len(plug), len(free), len(rows_all)))
+    log, rows, bad = [], [], []
+    goto(1)
+    close_menu()
+
+    def count(row, code):
+        return len([i for i in items(hstate(), code, 0) if i.get("unique") == row and i.get("quality") == 7])
+
+    def two(row, code, size):
+        H("packclear")
+        drop_cursor_item(log)
+        ok1, l1 = H("item %s inv uniq=%d" % (code, row))
+        ok2, l2 = H("item %s inv uniq=%d" % (code, row))
+        log.extend(l1[:1] + l2[:1])
+        n = count(row, code)
+        H("remove %s 9" % code)
+        return ok1, ok2, n
+
+    for kind, group in (("carry1", carry), ("plugin limit 1", plug)):
+        for row, code, _c1, _nl, _lim, size in group:
+            ok1, ok2, n = two(row, code, size)
+            rows.append("%s unique %d (%s, %s): first %s, second %s, %d in the backpack" % (kind, row, code, size, "placed" if ok1 else "refused", "PLACED" if ok2 else "refused", n))
+            if not ok1:
+                bad.append("could not place the first copy of unique %d (%s)" % (row, code))
+            elif ok2 or n != 1:
+                bad.append("%s unique %d (%s): a second copy was carried (%d in the backpack)" % (kind, row, code, n))
+    twice = 0
+    for row, code, _c1, _nl, _lim, size in free:
+        ok1, ok2, n = two(row, code, size)
+        rows.append("control unique %d (%s, %s, no carry rule): first %s, second %s, %d in the backpack" % (row, code, size, "placed" if ok1 else "refused", "placed" if ok2 else "refused", n))
+        twice += 1 if (ok1 and ok2 and n == 2) else 0
+    if not twice:  # a control that cannot be placed twice for another reason (the harness found no second cell) is not counted against the rule
+        bad.append("no unique charm without a carry rule took two copies (%d tried)" % len(free))
+    H("packclear")
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
+
+
+# --- phase 4 lane p4-verify-b: area level (MU3, engine / data part) -------------------------------------------------------------
+
+
+def check_arealevel():
+    """Audit MU3 (P1.0.0): Median can show the area level in the corner. The drawing is client UI (docs/unported.md); the engine / data part is the
+    number it shows: levels.txt MonLvlEx per difficulty, which the game must use for the monsters it generates (plugin part monlevel). Here the
+    areas with the most different Hell area levels (up to the highest, 150) are visited, a monster is spawned in each difficulty and its level
+    (stat 12) must be the area's level; the three areas of `monlevel` are not repeated."""
+    nm = "Area level (audit MU3, engine/data part): monsters take levels.txt MonLvlEx of the difficulty in the highest areas"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    areas, mons = _monlevel_tables()
+    town = set(_town_levels()) if "_town_levels" in globals() else set()
+    byhell = {}
+    for a, lv in sorted(areas.items()):
+        if lv[2] and a not in (2, 76, 111) and a not in town and a < 256:
+            byhell.setdefault(lv[2], a)
+    pick = [byhell[k] for k in sorted(byhell, reverse=True)][:3] + [byhell[k] for k in sorted(byhell)][:2]
+    bad, rows, log = [], [], []
+    god(True)
+    try:
+        H("players 1")
+        done = 0
+        for area in pick:
+            st = goto(area, timeout=45)
+            if st["player"].get("area") != area:
+                log.append("area %d: not reachable with goto" % area)
+                continue
+            for diff in (0, 2):
+                H("difficulty %d" % diff)
+                ids = _spawn_ids(18, 1)
+                if not ids:
+                    bad.append("area %d diff %d: nothing spawned" % (area, diff))
+                    continue
+                got, want = rd("m%d" % ids[0], 12), areas[area][diff]
+                rows.append("area %d %s: monster level %s, levels.txt MonLvlEx %d" % (area, ("Normal", "Nightmare", "Hell")[diff], got, want))
+                if got != want:
+                    bad.append(rows[-1])
+                H("kill %d" % ids[0])
+            done += 1
+        if done < 3:
+            bad.append("only %d of the %d areas could be visited (%s)" % (done, len(pick), pick))
+    finally:
+        god(False)
+        H("difficulty 0")
+        goto(1)
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
+
+
+# --- phase 4 lane p4-verify-b: D2 bugfix list (OT4) ---------------------------------------------------------------------------------
+
+
+def check_bugfixes():
+    """Audit OT4 (P1.0.0): the D2 bugs Median fixed, as far as they are engine behaviour that the harness reaches: life / mana above 32,767 do not roll
+    over, a percentage above the 8 / 16-bit range (resist 286 = 256 + 30, 65586 = 65536 + 50) does not wrap, the damage of one hit is applied in full
+    far above the old caps (up to 2^31 - 1), a character in a shapeshift state (wolf 139, bear 140) or with an aura state (might 33) dies from a
+    lethal hit, loses the states with its death and is alive after the respawn (no ghost state, no aura left). Not reachable: the str / dex glitch
+    (the order of equipping needs real input), whirlwind chance-to-cast (a strike with the item), see docs/unported.md."""
+    nm = "D2 bugfixes (audit OT4): no rollover or wrap of life / mana / percentages / damage, no immortal morph, no ghost state"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    log, rows, bad = [], [], []
+    goto(2)
+    close_menu()
+    kill_all_near()
+    god(False)
+    P = 256
+    big = 60000 * P
+    # 1. life and mana above 32,767
+    for stt in (7, 6, 9, 8):
+        setstat("player", stt, big)
+    got = [rd("player", stt) for stt in (6, 7, 8, 9)]
+    rows.append("life / max life / mana / max mana set to 60000: %s" % [None if v is None else v // P for v in got])
+    if any(v is None or v < 59999 * P for v in got):
+        bad.append("life or mana above 32,767 did not hold: %s" % got)
+    hv("hit player phys %d" % (1000 * P), "hit")
+    hv("hit player mana %d" % (1000 * P), "hit")
+    life, mana = rd("player", 6), rd("player", 8)
+    rows.append("after a hit of 1000 and a `mana` hit of 1000: life %s, mana %s" % (None if life is None else life // P, None if mana is None else mana // P))
+    if life is None or not (59000 * P < life < big):
+        bad.append("life after a hit of 1000 left 60000 range: %s" % life)
+    if mana is None or not (59000 * P < mana <= rd("player", 9)):
+        bad.append("mana after a drain of 1000 left the 60000 range: %s" % mana)
+    # 2. percentages above the 8 / 16-bit range
+    fields = {}
+    for res in (0, 75, 255, 286, 300, 1000, 65586, 2 ** 31 - 1):
+        for stt in (7, 6):
+            setstat("player", stt, big)
+        setstat("player", 39, res)
+        ok, line, ls = hv("hit player fire 100000", "hit")
+        log.extend(ls)
+        m = re.search(r"field=(-?\d+)", line)
+        fields[res] = int(m.group(1)) if m else None
+    rows.append("fire damage left of 100000 by fire resist (capped by the max resist): %s" % ", ".join("%d: %s" % (k, v) for k, v in fields.items()))
+    if None in fields.values():
+        bad.append("a hit gave no field value")
+    else:
+        if not fields[0] > fields[75] >= fields[255] > 0:
+            bad.append("resist does not reduce in order: 0 -> %s, 75 -> %s, 255 -> %s" % (fields[0], fields[75], fields[255]))
+        for res in (286, 300, 1000, 65586, 2 ** 31 - 1):
+            if fields[res] != fields[255]:
+                bad.append("fire resist %d wraps: %s left, %d at 255" % (res, fields[res], fields[255]))
+    setstat("player", 39, 0)
+    # 3. damage far above the old caps
+    god(True)
+    ids = _spawn_ids(18, 1)
+    if not ids:
+        bad.append("no monster for the damage test")
+    else:
+        mon = "mon:%d" % ids[0]
+        start = 2000000000
+        for amt in (1000000000, 1500000000):
+            setstat(mon, 7, start)
+            setstat(mon, 6, start)
+            ok, line, ls = hv("hit %s phys %d" % (mon, amt), "hit")
+            log.extend(ls)
+            left = rd(mon, 6)
+            rows.append("hit of %d on a monster with %d life: %s left" % (amt, start, left))
+            if left is None or abs((start - amt) - left) > 2000000:
+                bad.append("a hit of %d took %s of %d life" % (amt, None if left is None else start - left, start))
+        setstat(mon, 7, start)
+        setstat(mon, 6, start)
+        hv("hit %s phys 2147483647" % mon, "hit")
+        left = rd(mon, 6)
+        rows.append("hit of 2^31 - 1: %s left" % left)
+        if left != 0:
+            bad.append("a hit of 2^31 - 1 did not kill a monster with %d life (%s left)" % (start, left))
+        H("kill %d" % ids[0])
+    god(False)
+    # 4. death in a shapeshift or aura state, respawn
+    setstat("player", 7, 1000 * P)
+    setstat("player", 6, 1000 * P)
+    on = []
+    for stt in (139, 140, 33):
+        H("setstate player %d 1" % stt)
+        on.append(stt)
+    ok, line, ls = hv("hit player phys %d" % (5000 * P), "hit")
+    log.extend(ls)
+    time.sleep(2)
+    p = hstate()["player"]
+    dead = bool(p) and player_dead(p)
+    left = [stt for stt in on if "hasstate %d: 1" % stt in " ".join(H("hasstate %d" % stt)[1])]
+    rows.append("lethal hit in states wolf / bear / might: %s, states left on the dead character: %s" % ("died" if dead else "STILL ALIVE", left or "none"))
+    if not dead:
+        bad.append("the character in a shapeshift / aura state survived a lethal hit")
+    if left:
+        bad.append("states %s stayed on the dead character" % left)
+    revive_if_dead()
+    time.sleep(3)
+    p = hstate()["player"]
+    alive = bool(p) and not player_dead(p)
+    again = [stt for stt in on if "hasstate %d: 1" % stt in " ".join(H("hasstate %d" % stt)[1])]
+    rows.append("after the respawn: %s, mode %s, life %s, states on: %s" % ("alive" if alive else "NOT ALIVE", p.get("mode") if p else None, p.get("life") if p else None, again or "none"))
+    if not alive:
+        bad.append("the character is not alive after the respawn")
+    if again:
+        bad.append("states %s are on after the respawn" % again)
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -8814,7 +9327,13 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards),
           ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash),
           ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons), ("uniquelimits", check_uniquelimits),
-          ("assetpaths", check_assetpaths)]
+          ("assetpaths", check_assetpaths),
+          ("towncast", check_towncast),
+          ("npcheal", check_npcheal),
+          ("tplock", check_tplock),
+          ("charmlimit", check_charmlimit),
+          ("arealevel", check_arealevel),
+          ("bugfixes", check_bugfixes)]
 
 
 def write_report(extra=""):

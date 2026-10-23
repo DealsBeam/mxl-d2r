@@ -47,6 +47,7 @@
 #include "dungeon_lockout.h"
 #include "engine_gaps.h"
 #include "gamble.h"
+#include "town_rules.h"
 #include "unique_limits.h"
 #include "goblins.h"
 #include "monster_ai.h"
@@ -77,7 +78,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.56.0";
+constexpr const char* PluginVersion = "0.57.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -132,6 +133,7 @@ char g_buffIconsReport[256] = "off: not the expected game image";
 char g_gambleReport[192] = "off: not the expected game image";
 char g_uniqueLimitsReport[192] = "off: not the expected game image";
 char g_engineGapsReport[256] = "off: not the expected game image";
+char g_townRulesReport[256] = "off: not the expected game image";
 char g_itemEventsReport[448] = "off: not the expected game image";
 char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
@@ -165,7 +167,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits npcheal tplock
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -407,6 +409,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "engine gaps %s", g_engineGapsReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "town rules %s (portal refusals %d)", g_townRulesReport, TownPortalRefusals());
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "stat columns %s", g_statColumnsReport);
 	Say(command, line);
@@ -902,6 +906,16 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallEngineGaps(context, hit, rc, sl, g_engineGapsReport, sizeof(g_engineGapsReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: engine gaps %s", g_engineGapsReport);
+			context->LogInfo(line);
+		}
+		{
+			const bool heal = !Off("npcheal"), lock = !Off("tplock");
+			if (!heal && !lock) {
+				std::snprintf(g_townRulesReport, sizeof(g_townRulesReport), "%s", OffNote);
+			} else {
+				InstallTownRules(context, heal, lock, g_townRulesReport, sizeof(g_townRulesReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: town rules %s", g_townRulesReport);
 			context->LogInfo(line);
 		}
 		{

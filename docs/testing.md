@@ -766,6 +766,22 @@ the console, `mxl` should say `buff icons on`; cast a self buff or run `h setsta
 (left group beside the health orb, curses on the right), a countdown under each icon, a tooltip box when the cursor is on an icon. Tell me: the
 placement at your resolution, whether the art and tints look like Median's, and the frame rate in a fight with many states.
 
+### Town rules, charms, area levels, D2 bugfixes, minimized window (lane p4-verify-b, 2026-10-23, slots 1 and 3, background mode, plugin 0.56.0)
+
+`py -3 tools/game_checks.py --slot N all cain scrollportals towncast npcheal tplock charmlimit arealevel bugfixes`, run folder `%USERPROFILE%\mxl-d2r-runs\checks-20261023-195127-s1` (slot 1). Two earlier runs (`checks-20261023-194007-s1`, `checks-20261023-194334-s3`) aborted in `scrollportals` on the focus watchdog until the minimized-window give-back below worked. Control run with `mxl-core-off.txt` = `npcheal tplock` (slot 3): `checks-20261023-200935-s3`.
+
+| Check | Result |
+|---|---|
+| `cain` (bug #23) | **PASS**: `menu list` has the 3 lines of Cain's popup, no `menu record is full` log line. The picture of the popup is `cain_menu_page.png` of `checks-20261023-190644-s1` (check `cainsub`): TALK / CRAFTING MATERIALS / CANCEL, read by eye |
+| `scrollportals` (#17) | **PASS** with the window minimized: the check minimizes the window (`SW_SHOWMINNOACTIVE`) before its first screenshot and `game_ctl.restore_noactivate` brings it back with `SW_SHOWNOACTIVATE` and sends it to the bottom of the z-order. D2R activates its own window about a second after it is restored. The foreground goes back to the window that had it (`game_ctl.RESTORES`, log line `focus handed back`). A plain `SetForegroundWindow` is refused for this process (returns 0), so the give-back attaches the thread's input queue to the two windows' threads for the call (no input is sent), and the watchdog of game_checks lets those milliseconds pass (`FG_GRACE_UNTIL`). The old BLOCKED "game window minimized or has no size" is gone |
+| `towncast` (SK4) | **PASS**: 3 class-free InTown skills start in the Rogue Encampment, 12 skills without InTown are refused there (the unit stays in its town-neutral mode 5; the usability code `0x33f360` does not look at the town) and all 12 start in the Blood Moor. The 8 other InTown skills are Warlock skills (`usable=3` for the test character), not judged |
+| `npcheal` (NPC1) | **PASS**: 42 of the 43 NPC classes heal on talk (251 could not be spawned). Control (word `npcheal` off): 6 heal, 37 do not |
+| `tplock` (UQ5) | **PASS**: levels 61, 73, 171 refuse (refusals 0 -> 3), the Blood Moor opens a portal. Control (word `tplock` off): level 61 opens a portal |
+| `charmlimit` (IC5) | **PASS**: carry1 unique 106 and the limited uniques 7, 8, 9: the second copy is refused; unique 82 without a rule takes two |
+| `arealevel` (MU3, data part) | **PASS**: monster levels of areas 216, 205, 204, 137, 3 in Normal and Hell equal levels.txt MonLvlEx |
+| `bugfixes` (OT4) | **PASS** in the control run (in the first run my own assertion failed: the max resist caps every value from 75 up at the same damage): life / mana 60000 hold, resist 286 / 300 / 1000 / 65586 / 2^31-1 give the damage of 255, hits of 1e9 / 1.5e9 / 2^31-1 take exactly that much, death in the wolf / bear / might states leaves no state, alive after the respawn |
+
+TCP/IP with two clients (slots 1 + 3, background input, LAN-only unlisted host): the session runs and both clients show the stash pages ready, but the harness cannot run stash verbs on the joiner (game-thread runner refuses), so the shared stash row stays `verify` (docs/unported.md "Shared stash in TCP/IP"). Not tested: the str / dex glitch and whirlwind chance-to-cast (OT4).
 ### Release suite on main (eccc3ad): slot 1 cluster, uniquelimits, engine asserts (lane suite-regressions, 2026-10-23, slots 1 and 2, background mode)
 
 **The slot 1 cluster was the character, not the code.** The 13:45 run had Akara / Cain / Tyrael menus not opening, every harness cast doing nothing, zombie clicks
