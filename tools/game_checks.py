@@ -17,7 +17,7 @@ cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes s
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes
 respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick
-teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer.
+teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -281,13 +281,64 @@ def play(difficulty="normal"):
 STATE = {"in_game": False}
 
 
-def enter_game():
-    """From the main menu: play the selected character (the first card: the slot's most recently played one) in Normal."""
-    g.click(0.87, 0.076)
+def enter_game(card=1):
+    """From the main menu: play the selected character (card 1: the slot's most recently played one; card n: the n-th most recently
+    played, see `card_of`) in Normal."""
+    g.click(0.87, 0.076 + 0.091 * (card - 1))
     time.sleep(0.8)
     ok = play("normal")
     STATE["in_game"] = ok
     return ok
+
+
+def card_of(name):
+    """Position (1 = first) of a character on the main menu's list: the list is ordered by the time the character was last saved,
+    newest first (what the .d2s files' modification times say). None when the character does not exist in this slot."""
+    import glob
+    files = sorted(glob.glob(os.path.join(SAVES, "*.d2s")), key=os.path.getmtime, reverse=True)
+    names = [os.path.splitext(os.path.basename(f))[0] for f in files]
+    return names.index(name) + 1 if name in names else None
+
+
+# Hero select (fractions of the client rect, measured on slot 3 2026-10-24): the class figures stand in a row
+HERO_X = {"amazon": 0.166, "assassin": 0.26, "necromancer": 0.35, "barbarian": 0.44, "paladin": 0.556, "sorceress": 0.65, "druid": 0.866}
+
+
+def create_character(cls, name):
+    """From the main menu: Create New, pick the class figure, type the name, Create (enters the game in Normal). The first click on
+    the menu is swallowed, so one goes to empty scenery first."""
+    g.click(0.62, 0.40)
+    time.sleep(1)
+    g.click(*g.UI["char_create"])
+    time.sleep(3)
+    g.click(HERO_X[cls], 0.50)
+    time.sleep(2)
+    g.click(*g.UI["name_box"])
+    g.type_text(name)
+    time.sleep(1)
+    g.click(*g.UI["create_ok"])
+    ok = wait_in_game(60)
+    STATE["in_game"] = ok
+    return ok
+
+
+def switch_character(name, cls, class_id):
+    """Save and Exit, then play another character of the slot (created first when it does not exist); True when the game shows that
+    class (`h state` class). A character that is already open is left as it is."""
+    p = hstate()["player"]
+    if p.get("class") == class_id:
+        return True
+    g.key("esc")
+    time.sleep(1.5)
+    g.click(*g.UI["save_exit"])
+    time.sleep(9)
+    if g.in_game():
+        return False
+    STATE["in_game"] = False
+    time.sleep(2)
+    card = card_of(name)
+    ok = create_character(cls, name) if card is None else enter_game(card)
+    return bool(ok) and hstate()["player"].get("class") == class_id
 
 
 def _checksum(d):
@@ -10678,8 +10729,9 @@ def check_bugfixes():
     """Audit OT4 (P1.0.0): the D2 bugs Median fixed, as far as they are engine behaviour that the harness reaches: life / mana above 32,767 do not roll
     over, a percentage above the 8 / 16-bit range (resist 286 = 256 + 30, 65586 = 65536 + 50) does not wrap, the damage of one hit is applied in full
     far above the old caps (up to 2^31 - 1), a character in a shapeshift state (wolf 139, bear 140) or with an aura state (might 33) dies from a
-    lethal hit, loses the states with its death and is alive after the respawn (no ghost state, no aura left). Not reachable: the str / dex glitch
-    (the order of equipping needs real input), whirlwind chance-to-cast (a strike with the item), see docs/unported.md."""
+    lethal hit, loses the states with its death and is alive after the respawn (no ghost state, no aura left). The states are SET here (`setstate`);
+    the other rows of the D2 bugfix list have their own checks: `strdex` (str / dex glitch), `wwproc` (whirlwind chance-to-cast) and `morphdeath`
+    (a Druid casts the morph skills for real and dies morphed), see docs/unported.md."""
     nm = "D2 bugfixes (audit OT4): no rollover or wrap of life / mana / percentages / damage, no immortal morph, no ghost state"
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
@@ -11201,8 +11253,11 @@ def check_strdex():
     """D2 bugfix list (audit OT4), the str / dex glitch in D2R's code: an item whose requirement the character misses is inactive
     (its stats are not on the character), becomes active when a worn item adds the strength and goes inactive again when that
     item is taken off (D2's glitch keeps it active). Armor '841' (reqstr 455) with fire resist 77 and a ring with +600 strength,
-    in both orders of putting them on. The other two rows of the list stay untested: D2R's usable test refuses Median's class
-    skills for this character with code 5 (whirlwind 1234, werebear morph 1303; docs/unported.md)."""
+    in both orders of putting them on. The other two rows of the list have the checks `wwproc` (whirlwind 1306) and `morphdeath` (werebear
+    morph 1375, werewolf 1380, wereowl 1364). The first attempt (check strdex, lane p4-quests-verify) used 1234 / 1303 and was refused with
+    code 5: those are the `Id` values of Median's original table (assets/median/2_txt/skills.txt: Whirlwind 1234, Werebear Morph 1303);
+    the build renumbers these rows by +72 (`*Id` 1306 / 1375, and 1234 / 1303 became `energize` / `runemaster`). `_skill_ids_by_name()` reads
+    the built table and is right."""
     name = "D2 bugfix str / dex glitch: a worn item loses its stats when the strength item is taken off (both orders)"
     if not need_game():
         return add(name, "BLOCKED", "not in a game")
@@ -11238,6 +11293,236 @@ def check_strdex():
     if not (b1 == r0 + 77 and b2 == r0):
         bad.append("ring first: the armor kept its stats after the ring came off (%s, %s from %s)" % (b1, b2, r0))
     H("unequip body")
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
+
+
+# ------------------------------------------------------------------ lane p4-ww-morph (docs/unported.md row "D2 bugfix list")
+WW_SKILL = 1306  # Median's Barbarian Whirlwind `whirlwind_2` (charclass bar, srvdofunc 76); D2R's own Whirlwind 151 has no class in Median
+
+
+def _missiles_seen(cls=58):
+    """Missiles of one class the harness tracker has seen since `missiles reset` (class 58: Fire Bolt's missile)."""
+    m = re.search(r"class %d x(\d+)" % cls, " ".join(H("missiles")[1]))
+    return int(m.group(1)) if m else 0
+
+
+def _mon_lives(cls):
+    return {m["id"]: m["life"] for m in hstate()["mons"] if m.get("class") == cls}
+
+
+def _ww_group(cls=18):
+    """Five monsters with the engine's top life next to the player (the spin and the attacks hit them and cannot kill them)."""
+    for _ in range(6):
+        H("kill nearest %d" % cls)
+    ids = [tough_target(cls) for _ in range(5)]
+    time.sleep(2)
+    return ids
+
+
+def check_wwproc():
+    """Whirlwind chance-to-cast (docs/unported.md "D2 bugfix list", audit OT4). Median fixes D2's bug that a Whirlwind hit does not
+    trigger a chance to cast on striking (stat 198) or on attack (stat 195). A ring with Fire Bolt level 5 at 100 % (skill 36, layer
+    (36 << 6) | 5) is worn by the Barbarian; four spins with Median's Whirlwind (`whirlwind_2`, 1306, cast at a point 10 sub-tiles
+    away, because a cast at an adjacent monster is a normal attack) through five monsters are counted in Fire Bolt missiles (class 58)
+    and compared with eight normal attacks with the same ring and with spins without the ring (none). D2R refuses the item-event cast
+    while the caster has state 54 (uninterruptable), which a spin holds: without the plugin's hook (plugin/src/whirlwind.cpp, off
+    word `wwproc`, control run MXL_CONTROL="wwproc") the spins give 0 missiles and the attacks still do."""
+    name = "Whirlwind chance-to-cast: a spin triggers 'cast on striking' (198) and 'cast on attack' (195) like a normal attack"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    ctl = _ctl("wwproc")
+    rows, bad, log = [], [], []
+    if not switch_character("MxlBarb", "barbarian", 4):
+        return add(name, "BLOCKED", "the Barbarian test character cannot be opened")
+    revive_if_dead()
+    goto(2)
+    close_menu()
+    kill_all_near()
+    god(False)
+    txt = mxl_text()
+    m = re.search(r"whirlwind procs (on|off)[^\n]*", txt)
+    rows.append("plugin line: %s" % (m.group(0)[:150] if m else "missing"))
+    if not m or m.group(1) != ("off" if ctl else "on"):
+        bad.append("the `mxl` whirlwind procs line does not match this run (control %s): %s" % (ctl, m.group(0)[:100] if m else "no line"))
+    log += H("setskill %d 20" % WW_SKILL)[1]
+    layer = (36 << 6) | 5
+
+    def spins(n):
+        hurt = 0
+        for k in range(n):
+            p = hstate()["player"]
+            dx, dy = ((10, 10), (-10, 10), (-10, -10), (10, -10))[k % 4]
+            before = _mon_lives(18)
+            log.extend(H("cast %d %d %d" % (WW_SKILL, p["x"] + dx, p["y"] + dy))[1])
+            time.sleep(2.5)
+            after = _mon_lives(18)
+            hurt += sum(1 for i in before if i in after and after[i] < before[i])
+        return hurt
+
+    def attacks(n):
+        for _ in range(n):
+            log.extend(H("cast 0 nearest")[1])
+            time.sleep(1.2)
+
+    # spins without the ring: the missiles below can only come from procs
+    _ww_group()
+    H("missiles reset")
+    spins(2)
+    base = _missiles_seen()
+    rows.append("spins without the ring: %d class-58 missiles" % base)
+    if base:
+        bad.append("class-58 missiles appeared without the ring (%d): the counts below prove nothing" % base)
+    for stat in (198, 195):
+        H("unequip lring")
+        H("unequip rring")
+        ok, lines = H("equip rin %d:%d=100 lring" % (stat, layer))
+        log += lines
+        if not ok:
+            bad.append("the ring with stat %d did not equip: %s" % (stat, lines[-1:] if lines else ""))
+            continue
+        _ww_group()
+        H("missiles reset")
+        hurt = spins(4)
+        ww = _missiles_seen()
+        H("missiles reset")
+        attacks(8)
+        at = _missiles_seen()
+        rows.append("stat %d: 4 spins hurt %d monsters and made %d Fire Bolts; 8 attacks made %d" % (stat, hurt, ww, at))
+        if hurt < 4:
+            bad.append("stat %d: the spins hurt only %d monsters" % (stat, hurt))
+        if at < 1:
+            bad.append("stat %d: the normal attacks made no Fire Bolt (the ring does not work at all)" % stat)
+        if ctl:
+            if ww:
+                bad.append("stat %d: control run (wwproc off) but the spins made %d Fire Bolts" % (stat, ww))
+        elif ww < 1:
+            bad.append("stat %d: no Fire Bolt during the spins (D2R refuses the cast while the spin holds state 54)" % stat)
+    H("unequip lring")
+    kill_all_near()
+    m = re.search(r"\((\d+) casts let through during a spin, (\d+) refused", mxl_text())
+    rows.append("`mxl` counters after the run: %s" % (m.group(0) if m else "missing"))
+    if not m or (int(m.group(1)) == 0) != ctl:
+        bad.append("the plugin's counter of casts let through during a spin does not match this run (control %s): %s" % (ctl, m.group(0) if m else "missing"))
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad) + ("; control run: off word wwproc" if ctl else ""), [], log)
+
+
+# Druid forms of Median's own skill table (charclass dru, srvdofunc 116): the skill, the form state it sets and the weapon it needs
+# (skills.txt itypea1: axe / swor / knif; the weapon rows with no requirement are 114, 100 and 142)
+MORPH_FORMS = (("werebear_morph", 1375, 140, "114"), ("werewolf_form", 1380, 300, "100"), ("wereowl_form", 1364, 278, "142"))
+
+
+def _state_on(state):
+    return bool(re.search(r"hasstate %d: 1\b" % state, " ".join(H("hasstate %d" % state)[1])))
+
+
+def check_morphdeath():
+    """Real shapeshift immortality (docs/unported.md "D2 bugfix list", audit OT4). Median fixes D2's bug that a character who dies
+    while morphed stays alive or stuck. A Druid test character (MxlDru, created in the slot when missing) casts Median's morph skills
+    for real (`cast <skill> self`, not `setstate`): werebear_morph 1375 (state 140), werewolf_form 1380 (300), wereowl_form 1364 (278); each
+    needs a weapon of its type in the hand (axe / sword / knife), so a zero-requirement weapon is put on first.
+    Each form takes a lethal hit (`hit player phys`); the bear is also killed by a real monster (Andariel). The character has to die
+    (mode 0 / 17, life 0), the form state has to end with the death and the respawn (Esc) has to give a living character in town
+    without the form. The Barbarian is played again afterwards."""
+    name = "Real shapeshift death: Druid casts werebear / werewolf / wereowl for real, dies morphed, state ends, respawn works"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    rows, bad, log = [], [], []
+    ids = _skill_ids_by_name()[0]
+    for nm, sid, st, wpn in MORPH_FORMS:
+        if ids.get(nm) != sid:
+            bad.append("skills.txt: %s is %s, the check expects %d" % (nm, ids.get(nm), sid))
+    if not switch_character("MxlDru", "druid", 5):
+        return add(name, "BLOCKED", "the Druid test character cannot be opened")
+    P = 256
+
+    def morph(sid, state, weapon):
+        H("unequip rhand")
+        H("equip %s rhand" % weapon)
+        for _ in range(3):
+            setstat("player", 7, 2000 * P)
+            setstat("player", 6, 2000 * P)
+            setstat("player", 9, 10000 * P)
+            setstat("player", 8, 10000 * P)
+            H("setskill %d 1" % sid)
+            log.extend(H("cast %d self" % sid)[1])
+            for _ in range(8):
+                time.sleep(1)
+                if _state_on(state):
+                    return True
+        return False
+
+    def died(timeout):
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            time.sleep(1)
+            p = hstate()["player"]
+            if p and player_dead(p):
+                return True
+        return False
+
+    def after_death(label, state):
+        time.sleep(2)
+        if _state_on(state):
+            bad.append("%s: the form state %d is still on the dead character" % (label, state))
+        was = revive_if_dead()
+        time.sleep(3)
+        p = hstate()["player"]
+        alive = bool(p) and not player_dead(p)
+        rows.append("%s: respawn %s, area %s, life %s, form %s" % (label, "alive" if alive else "NOT ALIVE", p.get("area") if p else None,
+                                                                 p.get("life") if p else None, "on" if _state_on(state) else "off"))
+        if not was:
+            bad.append("%s: revive_if_dead found the character alive after the death" % label)
+        if not alive:
+            bad.append("%s: not alive after the respawn" % label)
+        if _state_on(state):
+            bad.append("%s: the form state %d is on after the respawn" % (label, state))
+
+    try:
+        revive_if_dead()
+        clear_shape_states()
+        for nm, sid, st, wpn in MORPH_FORMS:
+            goto(2)
+            close_menu()
+            kill_all_near()
+            god(False)
+            if not morph(sid, st, wpn):
+                bad.append("%s (%d): the cast did not set state %d" % (nm, sid, st))
+                continue
+            setstat("player", 7, 100 * P)
+            setstat("player", 6, 100 * P)
+            for _ in range(8):  # result 0: the engine ignored the hit (just arrived in the area); try again
+                ok, line, ls = hv("hit player phys %d" % (5000 * P), "hit")
+                log.extend(ls)
+                m = re.search(r"result=0x(\w+)", line)
+                if m and int(m.group(1), 16) != 0:
+                    break
+                time.sleep(1)
+            if not died(8):
+                bad.append("%s (%d): the morphed character survived a lethal hit (%s)" % (nm, sid, line[:100]))
+                clear_shape_states()
+                continue
+            after_death("%s lethal hit" % nm, st)
+        # a real monster as the killer, in the bear form
+        nm, sid, st, wpn = MORPH_FORMS[0]
+        goto(2)
+        close_menu()
+        kill_all_near()
+        god(False)
+        if morph(sid, st, wpn):
+            setstat("player", 7, 100 * P)
+            setstat("player", 6, 100 * P)
+            log.extend(H("spawn 156")[1])
+            if died(40):
+                after_death("%s killed by Andariel" % nm, st)
+            else:
+                bad.append("%s: Andariel did not kill the morphed character in 40 s" % nm)
+                clear_shape_states()
+        else:
+            bad.append("%s: the cast did not set state %d for the monster kill" % (nm, st))
+    finally:
+        kill_all_near()
+        if not switch_character("MxlBarb", "barbarian", 4):
+            bad.append("the Barbarian could not be opened again")
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
 
 
@@ -11295,7 +11580,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("soulstealer", check_soulstealer),
           # lane p4-quests-verify
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
-          ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex)]
+          ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
+          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath)]
 
 
 def write_report(extra=""):

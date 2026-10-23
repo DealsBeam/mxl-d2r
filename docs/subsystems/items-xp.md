@@ -298,6 +298,9 @@ How it works (read in the game with the harness verb `evtrace`, and in `D2RCore.
   skill 47 level 10); function 20 itself works for real skills (861 -> 64 class-3456 missiles, 855 -> 64 class-3124 missiles,
   Fire Bolt 36 -> a class-58 missile). Check `itemevents` asserts all of this; a cast-on-kill of Teleport 54 reaches the handler
   with warp 1 but the player was not seen to move (not investigated).
+- **Whirlwind (lane p4-ww-morph, plugin 0.63.0).** Function 20 is native to D2RCore and calls the exe's item cast `0x5896e0`, which
+  refuses while the caster has state 54; a Whirlwind spin holds it, so no strike of a spin cast anything. The plugin's detour
+  (`whirlwind.cpp`, word `wwproc`) clears the bit during the cast when state 174 is on. Check `wwproc`.
 - **Not ported / open**, listed in docs/unported.md: function 32 (no stat of the mod's itemstatcost uses it).
 - **Harness.** `evtrace on|off|clear|dump` (thunk-slot logger), `list`, `rec <stat>` (the record's event words), `peek`, `watch`
   (debug-register watch), `fire <event> player|m<id> player|m<id>|none` (calls `0x44d570`; the harness's `kill` does not raise the

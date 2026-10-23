@@ -82,7 +82,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.62.0";
+constexpr const char* PluginVersion = "0.63.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -101,6 +101,7 @@ char g_itemRulesReport[320] = "off: not the expected game image";
 char g_skillDamageReport[160] = "off: not the expected game image";
 char g_skillRestrictReport[160] = "off: not the expected game image";
 char g_heatReport[200] = "off: not the expected game image";
+char g_whirlwindProcReport[200] = "off: not the expected game image";
 char g_statRulesReport[320] = "off: not the expected game image";
 char g_trophyReport[200] = "off: not the expected game image";
 char g_missileHitsReport[1024] = "";
@@ -177,7 +178,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits vendorstock npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits vendorstock npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -283,6 +284,12 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "heat %s", g_heatReport);
 	Say(command, line);
+	{
+		long cast = 0, refused = 0;
+		WhirlwindProcStats(&cast, &refused);
+		std::snprintf(line, sizeof(line), "whirlwind procs %s (%ld casts let through during a spin, %ld refused)", g_whirlwindProcReport, cast, refused);
+		Say(command, line);
+	}
 	std::snprintf(line, sizeof(line), "stat rules %s", g_statRulesReport);
 	Say(command, line);
 	{
@@ -678,6 +685,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallWhirlwind(context, report, sizeof(report));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: whirlwind %s", report);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("wwproc")) {
+				std::snprintf(g_whirlwindProcReport, sizeof(g_whirlwindProcReport), "%s", OffNote);
+			} else {
+				InstallWhirlwindProcs(context, g_whirlwindProcReport, sizeof(g_whirlwindProcReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: whirlwind procs %s", g_whirlwindProcReport);
 			context->LogInfo(line);
 		}
 		{
