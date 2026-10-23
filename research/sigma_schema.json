@@ -2750,16 +2750,14 @@
    {
     "off": 0,
     "type": "u16",
-    "name": "X",
-    "note": "steps by 100 per row; unread, probably the page's x position",
-    "col": "PosX"
+    "name": "PosX",
+    "note": "skill tree UI position; FUN_100b09b0 reads the first word of the row returned by FUN_100b09f0, and FUN_101114c0 (ui/SkillTree.cpp) uses it; seven values step by 100"
    },
    {
     "off": 2,
     "type": "u16",
-    "name": "Y",
-    "note": "steps by 100 per row",
-    "col": "PosY"
+    "name": "PosY",
+    "note": "skill tree UI position; FUN_100b09d0 reads the second word of the row returned by FUN_100b09f0, and FUN_101114c0 (ui/SkillTree.cpp) uses it; seven values step by 100"
    }
   ]
  },
@@ -2910,7 +2908,7 @@
     "off": 25,
     "type": "u32",
     "name": "Min",
-    "note": "zero in every row",
+    "note": "unread (no reader found): searched FUN_10117c10's statScreen dispatch and the engine/ui/StatScreen.cpp Ghidra functions for reads of row +0x19; zero in all 242 rows. Name comes from the D2Sigma field descriptor, not an inferred behavior",
     "col": "min"
    },
    {
