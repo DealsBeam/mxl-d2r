@@ -113,6 +113,16 @@ field; before, 402 of 428 were named and 27 of 37 tables were complete).
   one) and the currency pattern as a **cost to operate** an object (`OperateCurrencyBank/Cost/Shared`).
 
 ## Still unnamed
-Nothing: every txt column is named. Fields that change game behaviour and that the port does not read yet are listed in
-[unported.md](unported.md) ("Sigma table fields found in the phase 1 leftover"). Offsets whose note says "probable" or
-"unread" in `research/sigma_schema.json` have a weaker basis (skilltree, pettypeext UI groups).
+Nothing: every txt column is named. For the former Phase 1 remainder, the field descriptors in
+`../mxl_extracted/4_sigma_source/tables/sigma_tables.h` and the headers in `assets/median/2_txt/sigma_named/`
+agree with the schema. The read paths are in the schema notes: `FUN_100e6040` / `FUN_10084df0` for item flags and
+classes, `FUN_1008b100` for missile palette shifts, `FUN_10078fb0` for hidden item levels, and the property wrappers
+documented in [combat-stats.md](subsystems/combat-stats.md). `statscreen` fields are also checked against the UI reads
+in [stat-screen.md](subsystems/stat-screen.md). Fields that change game behaviour and that the port does not read yet
+are listed in [unported.md](unported.md) ("Sigma table fields found in the phase 1 leftover").
+
+The `skilltree` words are `PosX` and `PosY` in the field descriptors and decoded txt header. A direct
+`sigma_evidence.py 0x80 4` scan reports no field accesses because the code uses wrappers: `FUN_100b09f0` gets the row,
+`FUN_100b09b0` reads its first word, `FUN_100b09d0` reads its second, and `FUN_101114c0` in `ui/SkillTree.cpp` uses
+both. The old "unread, probably" note was incorrect. Where a schema note says "no reader found", it describes a
+searched field with an official txt name, not an inferred name.

@@ -2750,16 +2750,14 @@
    {
     "off": 0,
     "type": "u16",
-    "name": "X",
-    "note": "steps by 100 per row; unread, probably the page's x position",
-    "col": "PosX"
+    "name": "PosX",
+    "note": "skill tree UI position; FUN_100b09b0 reads the first word of the row returned by FUN_100b09f0, and FUN_101114c0 (ui/SkillTree.cpp) uses it; seven values step by 100"
    },
    {
     "off": 2,
     "type": "u16",
-    "name": "Y",
-    "note": "steps by 100 per row",
-    "col": "PosY"
+    "name": "PosY",
+    "note": "skill tree UI position; FUN_100b09d0 reads the second word of the row returned by FUN_100b09f0, and FUN_101114c0 (ui/SkillTree.cpp) uses it; seven values step by 100"
    }
   ]
  },
