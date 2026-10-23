@@ -71,7 +71,9 @@ After the player's item list: `JM` + u16 corpse count (0 or 1); a corpse has a 1
 item list of the items it holds; then `jf` and the mercenary's `JM` item list, then `kf` (golem). Seen in a test save after a death:
 `4a 4d 01 00 | 00 00 00 00 14 16 00 00 92 15 00 00 | 4a 4d 01 00 ...` = one corpse at (5652, 5522) with one item. With the plugin part
 `nocorpse` (docs/subsystems/death.md) a dying character no longer gets one: the count stays 0. A save that already holds a corpse
-loads through D2R's own path and the corpse can be picked up as before.
+is loaded by D2R's own path, and with the part `corpsepickup` (default on) the corpse is picked up the moment the character enters a level
+(D2R's own pickup: the items return to their body locations, a taken place sends the item to the inventory); the next save has corpse count
+0 (`JM 00 00 jf`) and D2RLoader writes the `.d2rl` sidecar with it. Checked by `py -3 tools/game_checks.py all corpsepickup`.
 
 ## Warning: hand-written items are rejected (2026-10-06)
 

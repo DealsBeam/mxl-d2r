@@ -1,4 +1,4 @@
-# Death, corpse, penalties and respawn (lane no-corpse, 2026-10-22)
+# Death, corpse, penalties and respawn (lanes no-corpse 2026-10-22, no-corpse-2 2026-10-23)
 
 Median XL players leave no corpse. This file records what Median's engine does when a player dies, with addresses, what D2R
 does instead, and what the plugin part `nocorpse` (plus `respawnwait`) ports. Audit rows: `docs/median-rules-audit.md`
@@ -43,8 +43,9 @@ client side of a resurrect (stats 6 / 8 / 10 set, state `0x36` toggled); it is t
 
 - Part `nocorpse` (off word `nocorpse`): inline hooks on `0x42c110` (entry bytes `40 55 53 56 57 41 54 41 55 41 56 41 57 48 8d ac 24 18 f9 ff ff 48 81 ec e8 07 00 00`, 28 bytes) and `0x424ac0` (`40 53 56 57 48 83 ec 40 49 8b d8 48 8b f2 48 8b f9`, 17 bytes). Both detours return at once (the original is never called), as Median's NOPs remove the calls. Nothing else of the death path is changed: the player still passes mode 0 and 0x11, the death screen and the respawn button work, the death announcement is sent.
 - Part `respawnwait` (off word `respawnwait`, needs `nocorpse`): the death hooks stamp the server frame (`game + 0x170`, 25 per second) per player; a hook on the respawn request `0x4b6160` (entry `40 55 41 55 41 56 48 8d 6c 24 b9 48 81 ec b0 00 00 00`) ignores a request that comes less than 125 frames (5 s) after the stamp and passes later ones on. Characters without a stamp are never held.
-- `mxl` prints a `no corpse` line (calls swallowed) and a `respawn wait` line (requests held / let through). `h state` prints `corpses N players=N self=N | no corpse on: skipped corpse calls=.. penalty calls=.. respawns held=.. let=.. xp=..` (a corpse is a second player-type unit; the scan counts player units other than the character in mode 0x11).
-- The client needs nothing: the corpse unit and its sprite come to the client from the server's unit creation; with no unit created, no client object exists (`h state` on the server and the in-game screenshot in the check show none).
+- Part `corpsepickup` (off word `corpsepickup`, needs `nocorpse`): a corpse that is already stored in a save is picked up for the character when it enters a level (section 8).
+- `mxl` prints a `no corpse` line (calls swallowed), a `respawn wait` line (requests held / let through) and a `corpse pickup` line (stored corpses picked up / kept / faults, level entries). `h state` prints `corpses N players=N self=N | no corpse on: skipped corpse calls=.. penalty calls=.. respawns held=.. let=.. xp=..` (player-type units other than the character in mode 0x11) and `bodies other=N stored=N id0=U hidden=N | corpse pickup on: enters=.. picked=.. kept=.. faults=..` (`other` = every player-type unit other than the character that stands somewhere, in any mode; `stored` = entries in the character's corpse list; `hidden` = D2R's ten inert player-type units, ids 2-11 without a position, which are no body). The client verb `h ccorpses` counts the same on the CLIENT's own unit table (`0x2a23910`, type 0).
+- The client needs nothing for a death: the corpse unit and its sprite come to the client from the server's unit creation; with no unit created, no client object exists (`h state` and `h ccorpses` show none on both sides).
 
 ## 4. Save format: characters with and without a corpse
 
@@ -55,13 +56,17 @@ corpse holds; then `jf` and the mercenary's `JM` list, `kf` (golem). Real exampl
 holding one item.
 
 - **A character saved without a corpse** (corpse count 0, which is every character that dies with the port after this part) loads cleanly: nothing in the load path is changed, and the part never creates a corpse.
-- **A character saved with a pre-existing corpse** (made before the part, with D2R's own death): the loader recreates the corpse unit from the save through D2R's load path, which is not one of the two callers of `0x42c110` (callers are the death mode transitions only), so the hook does not touch it. The corpse stands where it died and can be picked up as in D2 (the items return to the inventory). This is the sensible handling: nothing is deleted, no item is lost, and the player decides. Median never had this case (its saves have no corpse). Not tested in game (it needs a death save from before the part and a slot; by code reading and the save layout above).
+- **A character saved with a pre-existing corpse** (made before the part, by D2R's own death, or by a harness death with the part off): D2R's level-entry function `0x485350` re-creates the corpse unit from the save's corpse list every time the character enters a level, and again at every respawn - which is why a body was visible after the 2026-10-22 lane even though the creator hook worked, and why it "followed the character to town". The first check counted it as pre-existing ("1 before, 1 after") and passed. Since lane no-corpse-2 the corpse is picked up right there (section 8): the saved corpse count is 0 after the first save.
 
 ## 5. Check and results
 
-`py -3 tools/game_checks.py all nocorpse --slot N` (check `nocorpse` in tools/game_checks.py): equips a ring, an amulet and a sash (the harness cannot fill a belt; the belt's potions go to the corpse in D2 and are not touched without one), sets gold, bank and a big experience value, kills the character with `hit`, then asserts: no second player unit before or after the respawn, the same items on the same body locations, same gold, bank and experience, no gold pile on the ground, the plugin counted the swallowed calls, Esc at once is held back (still dead, `respawns held` rises), Esc after 130 frames respawns the character in a town (`let` rises, frames between death and respawn >= 125).
+`py -3 tools/game_checks.py all nocorpse --slot N` (check `nocorpse` in tools/game_checks.py, lane no-corpse-2 version): equips a ring, an amulet and a sash (the harness cannot fill a belt; the belt's potions go to the corpse in D2 and are not touched without one), sets gold, bank and a big experience value, then kills the character three times in a row (two in Blood Moor with a 2e9 `hit`, then the attempt in the town). **"No corpse" is absolute**: at the start, while dead, after the early Esc and after every respawn there must be no player-type unit other than the character on the server (any mode), none on the client (`h ccorpses`), none in mode 0x11, no entry in the character's corpse list, the same items on the same body locations, the same gold, bank and experience, no gold pile; the plugin counted the swallowed calls at every death; Esc at once is held back (`respawns held` rises), Esc after 130 frames respawns the character in a town (`let` rises, frames >= 125). After the first death the field is entered again, the death spot is photographed (`nocorpse_death_spot`) and the units there are counted. At the end Save and Exit + Play: the saved .d2s has corpse count 0 (`JM 00 00 jf`) and the reloaded character has no body and the same gear. The counters of the stored-corpse pickup are printed (a stored corpse the character brought into the game must have been picked up: `kept` 0, `faults` 0).
 
-Results: see the bottom of this file (section 7).
+A death in the town is not possible in the engine: a monster's hit does nothing there (`result=0`), and a 2e9 hit or the unit death function `0x44db20` leaves the character at 100 life in mode 5. The third round is therefore an attempt: nothing may change (no body, same gear, gold, bank, experience).
+
+`py -3 tools/game_checks.py all corpsepickup --slot N` (check `corpsepickup`) makes its own stored corpse with D2R's creator and loads it: (1) mxl-core-off.txt `nocorpse` - the control for `nocorpse`: the character dies in the field, D2R makes a corpse that follows it to town, the gear is gone from the character, Save and Exit writes corpse count 1; (2) off word `corpsepickup` - the control for the pickup: the character loads with the body on the server, on the client and in the list; (3) all parts on - the load picks the body up: no body anywhere, the same gear back on the same body locations, `picked` >= 1, `kept` 0, `faults` 0; Save and Exit + Play: the saved .d2s has corpse count 0.
+
+Results: see sections 7 and 9.
 
 ## 6. The 5 second respawn wait: what is known
 
@@ -96,3 +101,40 @@ as a player-type unit in mode 0x11 (count 1 before the death, 1 after, 1 at resp
 **Not covered:** the belt's potions (the harness cannot put potions in a belt; D2 moves them to the corpse, the port never takes them off), Hardcore (the test
 character is Softcore), a mercenary death, a second death and respawn in the same game (the stamp is cleared by a let-through request and
 set again by the next death; unit tested), and a client-side view of the missing corpse beyond `h state` (screenshots `nocorpse_dead`, `nocorpse_respawned` in the run folder).
+
+## 8. Stored corpses: pickup at load (lane no-corpse-2)
+
+**Root cause of the visible corpses.** The creator hook works (a new death makes no corpse), but a corpse that was already in a character's save is brought back by D2R itself: the level-entry function `0x485350` (client, player, game, room, x, y) walks the player's corpse list (`inventory + 0x50`, nodes `{flag, id, ..., next at +0x10}`) and creates the body in the room (`0x4245c0`) on every level entry and every respawn. The creator `0x42c110` has two callers only (both death transitions, both hooked), so no other path makes a body. The test characters of slots 1 and 2 carried such a corpse (`MxlBarb.d2s` corpse count 1) since the first, un-hooked deaths, so the body stood next to them in every test window, followed them to town, and the first `nocorpse` check read it as "one body before, one after" = PASS.
+
+**Median's rule** is that a character never has a body. A character that arrives with one must lose nothing and walk nowhere, so the body is picked up at load, the way D2R picks it up when its owner clicks it:
+
+- Hook `0x485350` (entry 21 bytes, checked with the other probe bytes before installing; part `corpsepickup`, needs `nocorpse` - with the creator on, bodies are D2R's again). The original runs first (it places the body), then for every corpse in the list (flag 1; ids copied out first because the pickup edits the list):
+  1. the unit is looked up by id (`0x48fe80`, type 0) and D2R's own pickup `0x42b220` (out, game, player, corpse) runs: it puts the body-location items back where they were and places an item whose body location is taken in the inventory, exactly as the click does. No item is built by hand.
+  2. only if the pickup said ok, `remaining == 0` and the corpse holds no item any more (`CorpseMayBeRemoved`, unit tested) the interact handler's removal sequence follows: out of the owner's corpse list (`0x389730`), out of the room (`0x2ef4d0`), the clients are told (`0x476fc0`, packet `0x8e`), the unit's collision is cleared (`0x348b00`) and it is freed (`0x48faa0`).
+  3. otherwise the corpse stays exactly as it was (`kept` rises) and nothing is deleted. Exceptions inside a game call are caught per corpse (`faults`).
+- `mxl`: `corpse pickup on: stored corpses are picked up when a character enters a level (0x485350): picked N, kept N, faults N (level entries N)`; off word `corpsepickup`.
+- The next save writes corpse count 0 (docs/save-format.md); the `.d2rl` sidecar is written by D2RLoader with the save as always.
+
+Not covered: a corpse that holds an item the character cannot take (all places full) stays and is retried at the next level entry; a Hardcore corpse (no such character in the test set).
+
+## 9. Verification of lane no-corpse-2
+
+Plugin 0.55.0 + this lane, background mode, locks `no-corpse-2` (slots 1 and 3). Run folders under `%USERPROFILE%\mxl-d2r-runs\`.
+
+| Run | Result |
+|---|---|
+| `checks-20261023-175403-s1` | `nocorpse` **PASS**. The slot-1 character had a stored corpse (`save-backup-20261023-175403-s1\MxlBarb.d2s`: 1125 bytes, corpse count 1, one item). After the load: no body on server, client or in the list; the next save is 1048 bytes with `JM 00 00 jf` (count 0): a real old save picked up by the plugin. |
+| `checks-20261023-182327-s1` | `nocorpse` **PASS** and `corpsepickup` **PASS** (first complete run of both). |
+| `checks-20261023-184142-s3` | `mxl` **PASS** (16 feature lines incl. `corpse pickup on`), `deathcrash` **PASS**, `nocorpse` **PASS**, `corpsepickup` **PASS** (slot 3). |
+| `checks-20261023-185858-s1` | `corpsepickup` **PASS** with the final check text; screenshots `corpsepickup_off_loaded.png` (the character stands in the Rogue Encampment with "MxlBarb's Corpse" lying next to it: exactly what the owner saw) and `corpsepickup_on_loaded.png` (same place, no body). |
+| `checks-20261023-183709-s1` | **Control**, `mxl-core-off.txt` = `nocorpse respawnwait`: `nocorpse` **FAIL** as intended: a body appears on the server (1), in mode 0x11 (1), in the corpse list (1) and on the client (1); the three items are gone (`[]`), gold 23456 -> 0; the respawn works at once; the second death makes a second body (2); the swallowed-call counters stay 0. |
+
+`nocorpse` in detail (`checks-20261023-184142-s3`): before the first death bodies srv / mode17 / stored / client = 0/0/0/0, gear ring, amulet, belt, armour; death 1 (Blood Moor): hooks swallowed corpse 1 -> 2 and penalty 1 -> 2, mode 17, bodies 0/0/0/0 dead and after the respawn (area 2 -> 1), gold 23456, bank 7890, experience 1,000,000,000 unchanged, Esc at once held (frame 953 -> 999), the respawn after 125 frames let through (frame 1222); the death spot (5463, 5738) revisited: 0/0/0/0, screenshot `nocorpse_death_spot.png` (the character, no body on the ground); death 2 the same (corpse calls 2 -> 3); death 3 in the town: the engine leaves the character at 100 life in mode 5, nothing changed; Save and Exit + Play: saved `.d2s` corpse count 0, reloaded gear identical, bodies 0/0/0.
+
+`corpsepickup` in detail (`checks-20261023-185858-s1`): (1) `nocorpse` off: the character dies, bodies 1/1/1/1, gear `[]`, in town the stored corpse follows (srv 0, stored 1), Save and Exit writes corpse count 1; (2) `corpsepickup` off: bodies 1/1/1/1 on load, the corpse is in the screenshot; (3) all on: bodies 0/0/0/0, gear `[('629', 8), ('amu', 2), ('rin', 7)]` = the gear before the death, `picked=1 kept=0 faults=0`; after Save and Exit + Play corpse count 0 and the same gear.
+
+Iterations that failed on the way (check bugs, not the part): `checks-20261023-172326-s3` (D2R keeps ten inert player-type units, ids 2-11 without a position, on both sides: counted as bodies; now reported as `hidden`), `-173332-s3` (a town death: the engine does not allow it; Esc on a not-dead character paused the game), `-180040-s1` (the control's `state` could not read the corpse list with `nocorpse` off; Save and Exit right after a load needs a retry).
+
+Test saves: slot 1's `MxlBarb` (corpse of an earlier harness death) was picked up in `-175403-s1`; slot 3's had none; slot 2's `MxlBarb.d2s` (corpse count 1) was not touched (the lock of slot 2 belonged to other lanes the whole time): it is picked up at its next load with this plugin. Backups: `save-backup-20261023-*-s1` / `-s3` (every game_checks run copies the save folder first) and `nc2\save-backup-s3`.
+
+Not covered: Hardcore, a corpse that cannot be picked up completely (kept path is unit tested, not seen in game), the belt's potions, a death in the town (not possible).

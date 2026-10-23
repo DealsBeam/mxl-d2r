@@ -69,6 +69,28 @@ int main() {
 	Check(st.Get(10, 39) == 1039 && st.Get(10, 38) == 1038, "full table keeps the newest stamps");
 	Check(st.Get(10, 0) == 0, "full table overwrites the oldest");
 
+	// stored-corpse pickup: a body may be deleted only when the pickup said yes and nothing is left on it
+	Check(CorpseMayBeRemoved({true, 0, 0}), "pickup ok, nothing left: remove the body");
+	Check(!CorpseMayBeRemoved({false, 0, 0}), "pickup said no: keep the body");
+	Check(!CorpseMayBeRemoved({true, 1, 0}), "an item could not be placed: keep the body");
+	Check(!CorpseMayBeRemoved({true, 0, 2}), "items still inside: keep the body (they would be lost)");
+	Check(!CorpseMayBeRemoved(PickupResult{}), "default result keeps the body");
+
+	CorpseIds ids;
+	Check(ids.Count() == 0, "no corpse ids at first");
+	Check(!ids.Add(0, 5) && ids.Count() == 0, "list entry with flag 0 is no corpse");
+	Check(!ids.Add(1, 0) && ids.Count() == 0, "id 0 is no corpse");
+	Check(ids.Add(1, 77) && ids.Count() == 1 && ids.At(0) == 77, "one corpse");
+	Check(!ids.Add(1, 77) && ids.Count() == 1, "a repeated id is taken once");
+	for (uint32_t i = 1; i < 40; ++i) {
+		ids.Add(1, 1000 + i);
+	}
+	Check(ids.Count() == CorpseIds::Max, "at most Max ids");
+
+	char pk[200];
+	FormatPickupReport(pk, sizeof(pk), 1, 0, 0);
+	Check(std::strstr(pk, "picked 1, kept 0, faults 0") != nullptr && std::strstr(pk, "0x485350") != nullptr, "pickup report");
+
 	if (failures == 0) {
 		std::printf("no_corpse tests: ok\n");
 	}
