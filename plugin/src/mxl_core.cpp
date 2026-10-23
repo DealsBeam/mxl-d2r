@@ -101,6 +101,7 @@ char g_gameEndReport[96] = "off: not the expected game image";
 char g_mapMemoryReport[128] = "off: not the expected game image";
 char g_noCorpseReport[160] = "off: not the expected game image";
 char g_respawnWaitReport[160] = "off: not the expected game image";
+char g_corpsePickupReport[200] = "off: not the expected game image";
 char g_cooldownsReport[320] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
 char g_quests2Report[224] = "off: not the expected game image";
@@ -164,7 +165,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -274,6 +275,14 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		std::snprintf(line, sizeof(line), "no corpse %s", report);
 		Say(command, line);
 		std::snprintf(line, sizeof(line), "respawn wait %s (held %ld, let through %ld)", g_respawnWaitReport, held, respawns);
+		Say(command, line);
+		long enters = 0, picked = 0, kept = 0, faults = 0;
+		if (CorpsePickupCounts(&enters, &picked, &kept, &faults)) {
+			nocorpse::FormatPickupReport(report, sizeof(report), picked, kept, faults);
+		} else {
+			std::snprintf(report, sizeof(report), "%s", g_corpsePickupReport);
+		}
+		std::snprintf(line, sizeof(line), "corpse pickup %s (level entries %ld)", report, enters);
 		Say(command, line);
 	}
 	{
@@ -617,6 +626,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: map memory %s", g_mapMemoryReport);
 			context->LogInfo(line);
+			NoCorpseRememberImage(context);  // the harness reads the corpse list also with the parts off (the controls of check corpsepickup)
 			if (Off("nocorpse")) {
 				std::snprintf(g_noCorpseReport, sizeof(g_noCorpseReport), "%s", OffNote);
 			} else {
@@ -630,6 +640,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallRespawnWait(context, g_respawnWaitReport, sizeof(g_respawnWaitReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: respawn wait %s", g_respawnWaitReport);
+			context->LogInfo(line);
+			if (Off("corpsepickup")) {
+				std::snprintf(g_corpsePickupReport, sizeof(g_corpsePickupReport), "%s", OffNote);
+			} else {
+				InstallCorpsePickup(context, g_corpsePickupReport, sizeof(g_corpsePickupReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: corpse pickup %s", g_corpsePickupReport);
 			context->LogInfo(line);
 			if (Off("cooldowns")) {
 				std::snprintf(g_cooldownsReport, sizeof(g_cooldownsReport), "%s", OffNote);
