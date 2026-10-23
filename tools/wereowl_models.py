@@ -16,8 +16,8 @@ What it writes under work/mod/data/hd/character:
   unit hd_monsters.py chose for `corrupted_wereowl` (goatman1 donor, scale x1.25, corrupted colour adjustment).
 Where the files go (`place`): at NEW paths below data/hd/character/mxl/ (docs/hd-models.md section 3c; the model and texture
 indexes get entries, `index_new_paths`); with MXL_OLD_PATHS=1 (or --old-paths) over the vanilla `horse` / `wargoatman` / `pig` paths as before.
-Textures: `.texture` files (BC3 albedo 1024, BC5 flat normal / ORM / black mask) written over the vanilla paths of `horse` (alb only: the Druid
-form's ORM and normal maps are the werebear's own, see USES) and `pig` (alb/nrm/orm/sss), the material maps point there.
+Textures: `.texture` files (BC3 albedo 1024, flat normal / ORM as BC3 read linearly, black mask / thickness) of their own for both
+forms (old paths: over those of `horse` and `pig`), the material maps point there.
 """
 import copy
 import json
@@ -39,16 +39,16 @@ ENEMY = "data/hd/character/enemy/"
 DEFAULT_ASSETS = str(ROOT / "assets" / "hd" / "wereowl")  # in the repo (Git LFS, assets/hd/wereowl/README.md)
 
 # per use: rig profile, template model (donor unit dir, number of vanilla LODs), where the files go (a vanilla unit nothing in
-# Median uses), texture stem for the albedo/orm/normal maps, the unit it patches. `shared`: maps taken from vanilla paths instead
-# of our own flat ones (the Druid form: flat ORM / normal maps drew the bear's body black in game, the werebear's own ones light it)
+# Median uses), texture stem for the albedo/orm/normal maps, the unit it patches, `weights`: bind-space meshes with Blender heat
+# weights (assets, tools/sprite3d/owl_weights.py; without the file rig_fit's own capsule weights are used).
 USES = {
-    "druid": dict(profile="bear", donor="bear", lods=4, slot="horse", new="wereowl",
-                  tex="horse/textures/horse", unit="mxl_wereowl3d",
-                  shared={"ORMTexture": ENEMY + "bear/textures/werebear_orm.texture",
-                          "NormalTexture": ENEMY + "bear/textures/werebear_nrm.texture"}),
-    "corrupted": dict(profile="goatman1", donor="goatman1", lods=5, slot="wargoatman", new="corrupted_wereowl",
+    "druid": dict(profile="bear", donor="bear", lods=4, slot="horse", new="wereowl", gamma=1.0,
+                  tex="horse/textures/horse", unit="mxl_wereowl3d", weights="druid_lods.npz"),
+    "corrupted": dict(profile="goatman1", donor="goatman1", lods=5, slot="wargoatman", new="corrupted_wereowl", gamma=1.7,
                       tex="pig/textures/pig", unit=None),
 }
+# `gamma`: albedo gamma per use (the build input is already exposed like the vanilla werebear, tools/sprite3d/albedo_clean.py; > 1 darkens:
+# the Corrupted's boss lighting blew the bright albedo out to white)
 MXL = "data/hd/character/mxl/"  # the new directory of the port's models (docs/hd-models.md section 3c)
 OLD_PATHS = "--old-paths" in sys.argv or bool(os.environ.get("MXL_OLD_PATHS"))
 
@@ -59,8 +59,14 @@ def place(cfg):
     if OLD_PATHS:
         return ENEMY + cfg["slot"] + "/", ENEMY + cfg["tex"]
     return MXL + cfg["new"] + "/", MXL + cfg["new"] + "/textures/" + cfg["new"]
-ALBEDO_GAMMA = 0.5  # < 1 lifts the albedo (vanilla werewolf albedo mean ~90 of 255, ours 41: black under D2R's light)
-BLACK = ENEMY + "pig/textures/pig_sss.texture"  # mask and thickness: nothing tinted, no subsurface
+
+
+BLACK = ENEMY + "pig/textures/pig_sss.texture"  # old paths: mask and thickness of both forms (written with the Corrupted's textures)
+
+
+def black(cfg):
+    """The mask / thickness map: nothing tinted, no subsurface. The werebear material's own mask on our UVs drew the body black."""
+    return BLACK
 
 
 def casc_cache(rels):
@@ -79,24 +85,26 @@ def casc_cache(rels):
     return out
 
 
-def write_textures(data, albedo_png, stems):
-    """The maps in the engine's own formats: albedo BC3 (sRGB) at 1024 (an RGBA8 or 2048 albedo showed noise or lost the GPU
-    device), normal / ORM / mask BC5 (linear, two channels: flat normal, occlusion 1 and roughness 0.82, nothing tinted)."""
+def write_textures(data, albedo_png, stems):  # stems: {texture stem: (suffixes, albedo gamma)}
+    """The maps in the engine's own formats (docs/hd-models.md 3b, d2r_texture.py): albedo BC3 sRGB (format 62) at 1024 (an RGBA8
+    or 2048 albedo showed noise or lost the GPU device); normal and ORM maps BC3 read linearly (format 61): flat normal DXT5nm
+    (255, y 128, 0, x 128), ORM (occlusion 255, roughness, metal 0, 255); the black thickness / mask map BC3 sRGB."""
     from PIL import Image
     im = Image.open(albedo_png).convert("RGB").resize((1024, 1024), Image.LANCZOS)
-    rgb = 255.0 * (np.array(im).astype(np.float32) / 255.0) ** ALBEDO_GAMMA  # the baked albedo (mean 41) is black under D2R's light
-    alb = np.dstack([np.rint(rgb).astype(np.uint8), np.full((1024, 1024), 255, np.uint8)])
-    flat = np.zeros((256, 256, 4), np.uint8)
-    nrm, orm = flat.copy(), flat.copy()
-    nrm[...] = (128, 128, 255, 255)
-    orm[...] = (255, 150, 0, 255)
-    for stem, sufs in stems.items():
+    base = np.array(im).astype(np.float32) / 255.0
+    nrm = np.full((256, 256, 4), (255, 128, 0, 128), np.uint8)
+    orm = np.full((256, 256, 4), (255, 160, 0, 255), np.uint8)
+    black = np.full((256, 256, 4), (0, 0, 0, 255), np.uint8)
+    for stem, (sufs, gamma) in stems.items():
         for suf in sufs:
             p = data / (stem + "_" + suf + ".texture")
             if suf == "alb":
-                dt.write_bc3(p, alb, mips=11)
+                rgb = 255.0 * base ** gamma
+                dt.write_bc3(p, np.dstack([np.rint(rgb).astype(np.uint8), np.full((1024, 1024), 255, np.uint8)]), mips=11)
+            elif suf == "sss":
+                dt.write_bc3(p, black, mips=9)
             else:
-                dt.write_bc5(p, {"nrm": nrm, "orm": orm, "sss": flat}[suf], mips=9)
+                dt.write_bc3(p, {"nrm": nrm, "orm": orm}[suf], mips=9, linear=True)
 
 
 # a new texture path needs a descriptor in the engine's data/hd/texture_desc_cache.json (format, size, mips; 31073 entries), a new
@@ -108,7 +116,7 @@ TEXTURE_TEMPLATES = {"alb": ENEMY + "horse/textures/horse_alb.texture", "nrm": E
 def index_new_paths(data, models, textures):
     """Entries for the new paths in copies of the two index files, written into the mod folder (a copy already there, from another
     step, is extended; else the game's). `models`: {new model path: vanilla model path whose entry it copies}; `textures`: {new
-    texture path: vanilla texture path whose descriptor it copies} (BC3 albedo 1024 with 11 mips, BC5 maps 256 with 9, as
+    texture path: vanilla texture path whose descriptor it copies} (BC3 albedo 1024 with 11 mips, the other maps 256 with 9, as
     write_textures makes them)."""
     import model_lod_desc as ld
     out = data / "data" / "hd"
@@ -116,9 +124,9 @@ def index_new_paths(data, models, textures):
     base = lambda name: out / name if (out / name).exists() else casc_cache(["data/hd/" + name])["data/hd/" + name]
     (out / "model_lod_desc.bin").write_bytes(ld.add(base("model_lod_desc.bin").read_bytes(), models))
     cache = json.loads(base("texture_desc_cache.json").read_text("utf-8"))
-    by = {e["filename"]: e for e in cache}
+    by = {e["filename"].lower(): e for e in cache}  # the engine's paths are case-insensitive (`pig_SSS.texture`)
     for path, template in textures.items():
-        e = copy.deepcopy(by[template])
+        e = copy.deepcopy(by[template.lower()])
         alb = path.endswith("_alb.texture")
         e["filename"] = path
         e["width"] = e["height"] = 1024 if alb else 256
@@ -139,21 +147,25 @@ def body_mesh(tree):
     return max(body, key=lambda m: len(m["PrimaryVertexData"]["Vertices"].obj))["Name"]
 
 
-def build_models(data, npz, use, cfg):
+def build_models(data, npz, use, cfg, pre=None):
     skel = casc_cache([ENEMY + cfg["donor"] + "/skeleton/" + cfg["donor"] + ".skeleton"])
     bones = rig_fit.skel_info.bones(next(iter(skel.values())))
     prof = rig_fit.PROFILES[cfg["profile"]]
     mdir, tex = place(cfg)
     maps = {"AlbedoTexture": tex + "_alb.texture", "ORMTexture": tex + "_orm.texture",
-            "NormalTexture": tex + "_nrm.texture", "MaskTexture": BLACK, "ThicknessTexture": BLACK}
-    maps.update(cfg.get("shared", {}))
+            "NormalTexture": tex + "_nrm.texture", "MaskTexture": black(cfg), "ThicknessTexture": black(cfg)}
     for lod in range(5):
         sfx = "" if lod == 0 else "_%d" % lod
         tmpl = casc_cache([ENEMY + "%s/torso_lod%d.model" % (cfg["donor"], min(lod, cfg["lods"] - 1))])
         g, tree = dm.load_model(next(iter(tmpl.values())))
         keep = body_mesh(tree)
-        pos, nrm, bidx, wts, names, *_ = rig_fit.fit(prof, bones, npz["pos" + sfx], npz["nrm" + sfx], npz["tris" + sfx])
-        dm.replace_with_mesh(tree, keep, pos, nrm, npz["uv" + sfx], npz["tris" + sfx], bone_idx=bidx, weights=wts, bones=names)
+        if pre:  # bind-space meshes with their own (Blender heat) weights: tools/sprite3d/owl_weights.py
+            pos, nrm, uv, tris = pre["pos" + sfx], pre["nrm" + sfx], pre["uv" + sfx], pre["tris" + sfx]
+            bidx, wts, names = pre["bone_idx" + sfx], pre["weights" + sfx], [str(n) for n in pre["bones" + sfx]]
+        else:
+            pos, nrm, bidx, wts, names, *_ = rig_fit.fit(prof, bones, npz["pos" + sfx], npz["nrm" + sfx], npz["tris" + sfx])
+            uv, tris = npz["uv" + sfx], npz["tris" + sfx]
+        dm.replace_with_mesh(tree, keep, pos, nrm, uv, tris, bone_idx=bidx, weights=wts, bones=names)
         dm.set_maps(tree, keep, maps)
         n = dm.write_model(g, tree, data / mdir / ("torso_lod%d.model" % lod))
     return n
@@ -205,16 +217,19 @@ def main():
     npz = dict(np.load(assets / "mesh_lods.npz", allow_pickle=True))
     mj = json.loads((hdc / "monsters.json").read_text("utf-8"))
     dtex, ctex = place(USES["druid"])[1], place(USES["corrupted"])[1]
-    write_textures(data, assets / "albedo.png", {dtex: ("alb",), ctex: ("alb", "nrm", "orm") + (("sss",) if OLD_PATHS else ())})
+    write_textures(data, assets / "albedo.png", {dtex: (("alb", "nrm", "orm"), USES["druid"]["gamma"]),
+                                                 ctex: (("alb", "nrm", "orm") + (("sss",) if OLD_PATHS else ()), USES["corrupted"]["gamma"])})
     sizes = {}
     for use, cfg in USES.items():
-        sizes[use] = build_models(data, npz, use, cfg)
+        wf = assets / cfg["weights"] if cfg.get("weights") else None
+        pre = dict(np.load(wf, allow_pickle=True)) if wf is not None and wf.exists() and not wf.read_bytes()[:40].startswith(b"version https://git-lfs") else None
+        sizes[use] = build_models(data, npz, use, cfg, pre)
     # the Druid's form: a copy of the donor unit (werebear)
     cfg = USES["druid"]
     donor = json.loads((ROOT / "extract" / "d2r" / "93847" / "data" / "hd" / "character" / "enemy" / (cfg["donor"] + ".json")).read_text("utf-8-sig"))
     unit = copy.deepcopy(donor)
     unit["name"] = cfg["unit"]
-    if point_unit(unit, cfg, [place(cfg)[1] + "_alb.texture", *cfg["shared"].values(), BLACK]):
+    if point_unit(unit, cfg, [place(cfg)[1] + s for s in ("_alb.texture", "_nrm.texture", "_orm.texture")] + [black(cfg)]):
         set_scale(unit, rig_fit.PROFILES[cfg["profile"]]["u"])
     (hdc / "enemy" / (cfg["unit"] + ".json")).write_text(json.dumps(unit, separators=(",", ":")), encoding="utf-8")
     mj["wereowl"] = cfg["unit"]
@@ -222,14 +237,13 @@ def main():
     cfg = USES["corrupted"]
     up = hdc / "enemy" / (mj["corrupted_wereowl"] + ".json")
     unit = json.loads(up.read_text("utf-8"))
-    if point_unit(unit, cfg, [place(cfg)[1] + s for s in ("_alb.texture", "_orm.texture", "_nrm.texture") + (("_sss.texture",) if OLD_PATHS else ())]):
+    if point_unit(unit, cfg, [place(cfg)[1] + s for s in ("_alb.texture", "_orm.texture", "_nrm.texture")] + [black(cfg)]):
         set_scale(unit, rig_fit.PROFILES[cfg["profile"]]["u"])
     up.write_text(json.dumps(unit, separators=(",", ":")), encoding="utf-8")
     (hdc / "monsters.json").write_text(json.dumps(mj, indent=2), encoding="utf-8")
     if not OLD_PATHS:
         index_new_paths(data, {place(c)[0] + "torso.model": ENEMY + c["slot"] + "/torso.model" for c in USES.values()},
-                        {place(USES["druid"])[1] + "_alb.texture": TEXTURE_TEMPLATES["alb"],
-                         **{place(USES["corrupted"])[1] + "_%s.texture" % k: t for k, t in TEXTURE_TEMPLATES.items()}})
+                        {place(c)[1] + "_%s.texture" % k: t for c in USES.values() for k, t in TEXTURE_TEMPLATES.items()})
     print("Wereowl 3D: Druid form -> %s (%s skeleton, models at %s), Corrupted Wereowl -> %s (goatman1 skeleton, models at %s); "
           "model sizes %s" % (USES["druid"]["unit"], USES["druid"]["donor"], place(USES["druid"])[0], mj["corrupted_wereowl"],
                               place(USES["corrupted"])[0], sizes))

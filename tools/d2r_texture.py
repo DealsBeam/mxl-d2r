@@ -5,7 +5,12 @@ mip a (size, offset) pair, the offset counted from its own field to the mip's da
 directly, largest mip first). Formats seen in D2R's own files:
   0x3f (63)  BC4, one 8-bit channel (masks, flipbook frames), 8 bytes per 4x4 block, at least 8 bytes per mip
   0x1f (31)  RGBA8, 4 bytes per pixel (gradients; red, green, blue, alpha)
-The other codes (61, 62, 65: 8 bits per pixel, probably BC7/BC3 colour and normal maps; 58: BC1) are not written here.
+  0x3e (62)  BC3 / DXT5, sRGB (albedo)
+  0x3d (61)  BC3 / DXT5 data read as linear (normal and ORM maps; found 2026-10-23 by decoding D2R's own werebear maps as DXT5:
+             the normal map is DXT5nm, red 255, green = normal y, blue 0, alpha = normal x; the ORM map is red = occlusion,
+             green = roughness, blue = metal (0), alpha 255. Earlier notes called 61 BC5; BC5 data under 61 decodes as a
+             wrong normal (green 16 = a normal tilted by 60 degrees) and drew a whole body black)
+The other codes (65: 8 bits per pixel, probably BC7; 58: BC1) are not written here.
 """
 import struct
 
@@ -13,8 +18,8 @@ import numpy as np
 
 FMT_BC4 = 0x3F
 FMT_RGBA8 = 0x1F
-FMT_BC3 = 0x3E  # 62: DXT5 colour maps (albedo)
-FMT_BC5 = 0x3D  # 61: two-channel linear maps (normal, ORM)
+FMT_BC3 = 0x3E  # 62: DXT5 colour maps (albedo), sRGB
+FMT_BC3_LIN = 0x3D  # 61: DXT5 data decoded linearly (normal, ORM maps)
 
 
 def mip_chain(a: np.ndarray, levels: int) -> list[np.ndarray]:
@@ -118,15 +123,11 @@ def _dds_levels(a: np.ndarray, mips: int, pixel_format: str, mode: str) -> list[
     return levels
 
 
-def write_bc3(path, a: np.ndarray, mips: int = 1) -> None:
-    """BC3 / DXT5 (format 62, sRGB colour: albedo) from (h, w, 4) uint8 pixels, encoded by Pillow's DDS writer."""
-    write_texture(path, FMT_BC3, a.shape[1], a.shape[0], _dds_levels(a, mips, "DXT5", "RGBA"))
-
-
-def write_bc5(path, a: np.ndarray, mips: int = 1) -> None:
-    """BC5 (format 61, linear two-channel data: normal maps, ORM maps) from (h, w, >=2) pixels; red and green are kept."""
-    a = np.dstack([a[..., :2], np.zeros(a.shape[:2], np.uint8)])
-    write_texture(path, FMT_BC5, a.shape[1], a.shape[0], _dds_levels(a, mips, "BC5", "RGB"))
+def write_bc3(path, a: np.ndarray, mips: int = 1, linear: bool = False) -> None:
+    """BC3 / DXT5 from (h, w, 4) uint8 pixels, encoded by Pillow's DDS writer: format 62 (sRGB colour: albedo) or, with
+    `linear`, format 61 (the engine's linear maps). Normal map: (255, y, 0, x) with 128 = flat; ORM map: (occlusion, roughness,
+    metal, 255)."""
+    write_texture(path, FMT_BC3_LIN if linear else FMT_BC3, a.shape[1], a.shape[0], _dds_levels(a, mips, "DXT5", "RGBA"))
 
 
 def read_texture(path):

@@ -45,8 +45,15 @@ def run(skill, tag, area, form_state):
     gc.goto(area)
     gc.H("class 5")  # Druid skills on the test character
     god()
-    for cmd in ("stat player 0 set 400", "stat player 2 set 400", "unequip rhand", "equip 143 rhand"):  # the form needs a knife (skills.txt itypea1 knif; Median code 143 is a knife)
+    for cmd in ("stat player 0 set 400", "stat player 2 set 400"):
         gc.H(cmd)
+    # the form needs a knife (skills.txt itypea1 knif; Median code 143 is a knife). A character that already holds one keeps it
+    # (the equip is refused: occupied); otherwise both hands are emptied (a shield or off-hand weapon blocks the place too)
+    # and the knife equipped.
+    if not gc.H("equip 143 rhand")[0]:
+        gc.H("unequip lhand")
+        gc.H("unequip rhand")
+        g.log("knife: %s" % gc.H("equip 143 rhand")[0])
     for sk in (skill, 1367, 1366):
         gc.H("setskill %d 1" % sk)
     g.log("usable %s: %s" % (skill, gc.skill_usable(skill)))
