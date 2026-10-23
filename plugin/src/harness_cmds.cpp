@@ -31,6 +31,7 @@
 #include "cooldowns.h"
 #include "no_corpse.h"
 #include "item_events.h"
+#include "item_spells.h"
 #include "npc_actions.h"
 #include "item_gen.h"
 #include "mana_costs.h"
@@ -874,14 +875,17 @@ auto CmdEnter(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
-// `missile <row> [dx dy]`: a missile of missiles.txt row <row> from the player towards (player + dx, dy) (default 12, 0),
+// `missile <row> [dx dy [skill level]]`: a missile of missiles.txt row <row> from the player towards (player + dx, dy) (default 12, 0), made by skill
+// <skill> at level <level> (default 0 / 0: the hit calcs of hit function 20 read that skill's row),
 // the same call the skills use (0x5371a0). Bug #24b: the client's missile "do" function table has no entry for a
 // missile row whose pCltDoFunc is empty, so any such missile crashes the client; this creates one on demand.
 auto CmdMissile(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
-	long long row = 0, dx = 12, dy = 0;
+	long long row = 0, dx = 12, dy = 0, skill = 0, level = 0;
 	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &row) || row < 0 || row > 0x7fff ||
-	    (t.n >= 3 && !hcmd::ParseInt(t.tok[2], &dx)) || (t.n >= 4 && !hcmd::ParseInt(t.tok[3], &dy))) {
-		return Fail(c, "usage: missile <missiles.txt row> [dx dy]");
+	    (t.n >= 3 && !hcmd::ParseInt(t.tok[2], &dx)) || (t.n >= 4 && !hcmd::ParseInt(t.tok[3], &dy)) ||
+	    (t.n >= 5 && (!hcmd::ParseInt(t.tok[4], &skill) || skill < 0 || skill > 0x7fff)) ||
+	    (t.n >= 6 && (!hcmd::ParseInt(t.tok[5], &level) || level < 0 || level > 0xff))) {
+		return Fail(c, "usage: missile <missiles.txt row> [dx dy [skill level]]");
 	}
 	int32_t px = 0, py = 0;
 	if (!d2r::UnitXY(c->player, &px, &py)) {
@@ -895,6 +899,8 @@ auto CmdMissile(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	params.missile = static_cast<int32_t>(row);
 	params.targetX = px + static_cast<int32_t>(dx);
 	params.targetY = py + static_cast<int32_t>(dy);
+	params.skill = static_cast<int32_t>(skill);
+	params.skillLevel = static_cast<int32_t>(level);
 	Unit* m = d2r::api.createMissile(c->game, &params);
 	Out("missile row %lld: %s", row, m != nullptr ? "created" : "refused");
 	return m != nullptr ? true : Fail(c, "missile: createMissile returned no unit");
@@ -908,8 +914,8 @@ auto CmdMissileScan(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long dumpRow = -1;
 	if (t.n >= 2 && hcmd::ParseInt(t.tok[1], &dumpRow)) {  // `missilescan <row>`: the record's first 0x60 bytes
 		const uint8_t* r = Fn<const uint8_t* (*)(uint32_t, int32_t)>(0x166040)(flag, static_cast<int32_t>(dumpRow));
-		char hex[0x60 * 3 + 1] = "";
-		for (int i = 0; r != nullptr && i < 0x60; ++i) {
+		char hex[0xa0 * 3 + 1] = "";
+		for (int i = 0; r != nullptr && i < 0xa0; ++i) {
 			std::snprintf(hex + i * 3, 4, "%02x ", r[i]);
 		}
 		Out("missile record %lld: %s", dumpRow, r != nullptr ? hex : "none");
@@ -1353,6 +1359,164 @@ auto CmdCountessReward(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	QuestsTowerKillSet(nullptr, nullptr);
 	Out("countessreward done=%d", static_cast<int>(data[0x119]));
 	return data[0x119] != 0;
+}
+
+// `questobj <id> [active <0|1>]`: the game's quest object (0x518220): bytes +0x00..+0x2f (the dispatcher 0x518ec0 calls a handler
+// only while byte +0x12 is 1), its event 8 (kill) handler slot as an exe offset, and optionally a new value for +0x12.
+auto CmdQuestObj(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0;
+	long long active = -1, pokeOff = -1, pokeVal = 0;
+	const bool poke = t.n > 4 && hcmd::LowerEq(t.tok[2], "poke");
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id) ||
+	    (t.n > 3 && !poke && (!hcmd::LowerEq(t.tok[2], "active") || !hcmd::ParseInt(t.tok[3], &active))) ||
+	    (poke && (!hcmd::ParseInt(t.tok[3], &pokeOff) || !hcmd::ParseInt(t.tok[4], &pokeVal) || pokeOff < 0 || pokeOff >= 0x270))) {
+		return Fail(c, "usage: questobj <id> [active <0|1> | poke <offset below 0x270> <byte>]");
+	}
+	uint8_t* quest = Fn<FindQuestFn>(RvaFindQuest)(c->game, static_cast<int32_t>(id));
+	if (quest == nullptr) {
+		return Fail(c, "questobj: no quest %lld", id);
+	}
+	if (active >= 0) {
+		quest[0x12] = static_cast<uint8_t>(active);
+	}
+	if (poke) {
+		quest[pokeOff] = static_cast<uint8_t>(pokeVal);
+	}
+	char hex[100] = "";
+	for (int i = 0; i < 0x30; ++i) {
+		std::snprintf(hex + i * 2, sizeof(hex) - static_cast<size_t>(i) * 2, "%02x", quest[i]);
+	}
+	const uint64_t kill = *reinterpret_cast<const uint64_t*>(quest + 0x270 + 8 * 8);
+	Out("questobj %lld at %p active=%d bytes=%s kill=exe+%llx", id, static_cast<void*>(quest), static_cast<int>(quest[0x12]), hex,
+	    static_cast<unsigned long long>(kill - g_base));
+	return true;
+}
+
+// `questreg <monster id> <quest id>`: the game's own registration of a unit with a quest (0x514100: appends the quest object to the
+// unit's quest list, unit +0xc0). The kill wrapper 0x515640 hands the death to a quest only for a victim that has such a list; the
+// level code registers the real Countess when she is created, a `spawn`ed one has to be registered here.
+auto CmdQuestReg(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0, quest = 0;
+	if (t.n < 3 || !hcmd::ParseInt(t.tok[1], &id) || !hcmd::ParseInt(t.tok[2], &quest)) {
+		return Fail(c, "usage: questreg <monster id> <quest id>");
+	}
+	Unit* u = FindMonsterById(c, static_cast<uint32_t>(id));
+	if (u == nullptr) {
+		return Fail(c, "questreg: no such live monster");
+	}
+	const int64_t rc = Fn<int64_t (*)(Game*, Unit*, int32_t)>(0x514100)(c->game, u, static_cast<int32_t>(quest));
+	Out("questreg unit id=%u class=%d quest %lld: %lld; unit quest list %s", IdOf(u), ClassOf(u), quest, static_cast<long long>(rc),
+	    Fn<void* (*)(Unit*)>(0x34b3c0)(u) != nullptr ? "set" : "empty");
+	return true;
+}
+
+// `objects [class]`: every object unit of the level (any distance) with its class, mode and position.
+auto CmdObjects(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long cls = -1;
+	if (t.n > 1 && !hcmd::ParseInt(t.tok[1], &cls)) {
+		return Fail(c, "usage: objects [class]");
+	}
+	int n = 0;
+	EachUnit(c->game, HashObjects, [&](Unit* u) {
+		if (TypeOf(u) != 2 || (cls >= 0 && ClassOf(u) != cls) || n >= 150) {
+			return;
+		}
+		++n;
+		int32_t ox = 0, oy = 0;
+		d2r::UnitXY(u, &ox, &oy);
+		Out("object id=%u class=%d mode=%d dist=%.0f at %d,%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(c->player, u), ox, oy);
+	});
+	Out("objects %d", n);
+	return true;
+}
+
+// `object <class> [dx dy]`: an object unit of the class (objects.txt row, e.g. 376 the Hellforge, 252 Gidbinn's altar, 563 the final
+// portal) next to the player (default 3 tiles to the east), made by D2R's unit creator 0x490410 as the portal routine 0x432ce0 does
+// for its portal objects. The object is plain: its mode is the default one, no quest or level logic has run for it.
+auto CmdObject(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long cls = 0, dx = 3, dy = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &cls) || cls < 0 || cls > 0xffff || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &dx)) ||
+	    (t.n > 3 && !hcmd::ParseInt(t.tok[3], &dy))) {
+		return Fail(c, "usage: object <objects.txt class> [dx dy]");
+	}
+	int32_t px = 0, py = 0;
+	if (!d2r::UnitXY(c->player, &px, &py)) {
+		return Fail(c, "object: player has no position");
+	}
+	void* room = Fn<void* (*)(Unit*)>(0x34b440)(c->player);
+	const int32_t x = px + static_cast<int32_t>(dx), y = py + static_cast<int32_t>(dy);
+	void* at = room != nullptr ? Fn<void* (*)(void*, int32_t, int32_t)>(0x38dfb0)(room, x, y) : nullptr;
+	if (at == nullptr) {
+		return Fail(c, "object: no room at %d,%d", x, y);
+	}
+	Unit* u = Fn<Unit* (*)(int32_t, int32_t, int32_t, int32_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t)>(0x490410)(
+		2, static_cast<int32_t>(cls), x, y, reinterpret_cast<uint64_t>(c->game), reinterpret_cast<uint64_t>(at), 1, 1, 0, 0);
+	if (u == nullptr) {
+		return Fail(c, "object: the creator returned no unit");
+	}
+	Out("object created: id=%u class=%d mode=%d at %d,%d", IdOf(u), ClassOf(u), ModeOf(u), x, y);
+	return true;
+}
+
+// `operate <object id> <function>`: the object operate function <function> (table 0x23a51c0, objects.txt OperateFn) with the
+// context the game builds for a click: {game, object, player, 0, class}. Prints its result and the object's mode afterwards.
+auto CmdOperate(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0, fn = 0;
+	if (t.n < 3 || !hcmd::ParseInt(t.tok[1], &id) || !hcmd::ParseInt(t.tok[2], &fn) || fn < 0 || fn > 120) {
+		return Fail(c, "usage: operate <object id> <operate function>");
+	}
+	Unit* obj = nullptr;
+	EachUnit(c->game, HashObjects, [&](Unit* u) {
+		if (TypeOf(u) == 2 && IdOf(u) == static_cast<uint32_t>(id)) {
+			obj = u;
+		}
+	});
+	if (obj == nullptr) {
+		return Fail(c, "operate: no such object");
+	}
+	const uint64_t entry = *reinterpret_cast<const uint64_t*>(g_base + 0x23a51c0 + 8 * static_cast<uint64_t>(fn));
+	if (entry == 0) {
+		return Fail(c, "operate: function %lld has no entry", fn);
+	}
+	int64_t ctx[8] = {reinterpret_cast<int64_t>(c->game), reinterpret_cast<int64_t>(obj), reinterpret_cast<int64_t>(c->player), 0,
+	                  ClassOf(obj), 0, 0, 0};
+	const int64_t rc = reinterpret_cast<int64_t (*)(int64_t*)>(entry)(ctx);
+	Out("operate object id=%u class=%d with function %lld (exe+%llx): result %lld, object mode now %d", IdOf(obj), ClassOf(obj), fn,
+	    static_cast<unsigned long long>(entry - g_base), static_cast<long long>(rc), ModeOf(obj));
+	return true;
+}
+
+// `objmode <object id> <mode>`: the game's set-mode call (0x34e5f0) on an object; the operate functions test the mode (state 2 = open
+// for the Worldstone / Throne objects 563 / 569 and Tyrael's portal object 566).
+auto CmdObjMode(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0, mode = 0;
+	if (t.n < 3 || !hcmd::ParseInt(t.tok[1], &id) || !hcmd::ParseInt(t.tok[2], &mode) || mode < 0 || mode > 20) {
+		return Fail(c, "usage: objmode <object id> <mode>");
+	}
+	Unit* obj = nullptr;
+	EachUnit(c->game, HashObjects, [&](Unit* u) {
+		if (TypeOf(u) == 2 && IdOf(u) == static_cast<uint32_t>(id)) {
+			obj = u;
+		}
+	});
+	if (obj == nullptr) {
+		return Fail(c, "objmode: no such object");
+	}
+	const int64_t rc = Fn<int64_t (*)(Unit*, int32_t)>(0x34e5f0)(obj, static_cast<int32_t>(mode));
+	Out("objmode object id=%u class=%d: set-mode returned %lld, mode now %d", IdOf(obj), ClassOf(obj), static_cast<long long>(rc), ModeOf(obj));
+	return true;
+}
+
+// `portal <median level id>`: the cube recipe's red portal to a Median level (item_spells.cpp CubeLevelPortal, the same rules as
+// the portal scrolls: same act, a linkable level), opened next to the player.
+auto CmdPortal(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long level = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &level) || level < 0 || level > 0x7fff) {
+		return Fail(c, "usage: portal <median level id>");
+	}
+	const bool ok = CubeLevelPortal(c->game, c->player, static_cast<int32_t>(level));
+	Out("portal to Median level %lld: %s", level, ok ? "opened" : "refused");
+	return ok ? true : Fail(c, "portal: refused");
 }
 
 // `hellforgereward [monster class]`: the Hellforge reward function 0x5e4540 (quest 27, called by the quest dispatcher 0x516370
@@ -2400,23 +2564,22 @@ auto CmdDump(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 		HexDump("monstats", rec, 0x200);
 		return true;
 	}
-	if (hcmd::LowerEq(t.tok[1], "ground")) {
-		int n = 0, listed = 0;
+	if (hcmd::LowerEq(t.tok[1], "ground")) {  // `dump ground nogold` leaves the gold piles out
+		const bool noGold = t.n > 2 && hcmd::LowerEq(t.tok[2], "nogold");
+		int n = 0;
 		EachUnit(c->game, HashItems, [&](Unit* it) {
-			if (TypeOf(it) != 4 || n >= 200 || (ModeOf(it) != 3 && ModeOf(it) != 5)) {  // the character's own items are not "ground"
+			if (TypeOf(it) != 4 || n >= 400 || (ModeOf(it) != 3 && ModeOf(it) != 5)) {  // the character's own items are not "ground"
 				return;
 			}
-			++n;
-			if (listed >= 400) {
-				return;
-			}
-			++listed;
 			int32_t x = 0, y = 0;
 			d2r::UnitXY(it, &x, &y);
 			char code[5];
 			ItemCode(c, it, code);
-			const auto* data = Fn<ItemDataFn>(0x34a500)(it);
+			if (noGold && std::strncmp(code, "gld", 3) == 0) {
+				return;
+			}
 			++n;
+			const auto* data = Fn<ItemDataFn>(0x34a500)(it);
 			const uint32_t flags = data != nullptr ? d2r::At<uint32_t>(data, 0x18) : 0;
 			Out("ground id=%u code=%s class=%d mode=%d at %d,%d ilvl=%d quality=%d identified=%d", IdOf(it), code, ClassOf(it), ModeOf(it), x, y,
 			    static_cast<int>(Fn<ItemLevelFn>(RvaItemLevel)(it)), data != nullptr ? d2r::At<int32_t>(data, 0) : -1, (flags & 0x10) != 0 ? 1 : 0);
@@ -4871,7 +5034,7 @@ const Verb Verbs[] = {
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"itemdesc", CmdItemDesc, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
-    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},
+    {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"questobj", CmdQuestObj, false}, {"questreg", CmdQuestReg, false}, {"objects", CmdObjects, false}, {"object", CmdObject, false}, {"operate", CmdOperate, false}, {"objmode", CmdObjMode, false}, {"portal", CmdPortal, false},{"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"hotkey", CmdHotkey, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
     {"stashpage", CmdStashPage, true}, {"ccorpses", CmdClientCorpses, true}, {"afford", CmdAfford, false}, {"hc", CmdHardcore, false}, {"tpgold", CmdTeleportGold, false}, {"modewatch", CmdModeWatch, false}, {"peek", CmdPeek, false},
 };

@@ -56,6 +56,10 @@ constexpr uint64_t UnitMessageRva = 0x491960;  // (player, message, subject)
 constexpr uint64_t GetStatRva = 0x2f5020;      // (unit, stat, layer)
 constexpr uint64_t TravelRva = 0x4f2e40;       // (game, player, level, 0): the NPC travel / waypoint warp, it changes the act too
 constexpr uint64_t LevelActRva = 0x3e2b5c8;    // (dataFlag, level id) -> act
+constexpr uint64_t ThroneRva = 0x548c40;       // object function 70 (Worldstone / Throne objects): (int64_t* ctx) -> 1 moved, 0 not
+constexpr uint64_t ObjectStateRva = 0x34ab60;  // (object) -> its operate state; the function wants 2
+constexpr uint64_t FindQuestRva = 0x518220;    // (game, quest id) -> quest object
+constexpr uint64_t LevelWarpRva = 0x488180;    // (game, player, level, 0xb): the move the function ends with
 
 // 0x491ff0: mov rax,rsp / push rbx / push rbp / push rdi / push r14 / sub rsp,0x68 / mov rbx,r8 (15 bytes; dump of
 // build 93847, timestamp 0x6ab3782c)
@@ -64,12 +68,18 @@ constexpr uint8_t WarpEntry[] = {0x48, 0x8b, 0xc4, 0x53, 0x55, 0x57, 0x41, 0x56,
 constexpr uint8_t PortalEntry[] = {0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8b, 0xec};
 // 0x4f2e40: mov [rsp+8],rbx / mov [rsp+16],rbp / mov [rsp+32],rsi / push rdi (16 bytes)
 constexpr uint8_t TravelEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57};
+// 0x548c40: mov [rsp+8],rbx / push rdi / sub rsp,0x20 / mov rbx,rcx / mov rcx,[rcx+8] (17 bytes)
+constexpr uint8_t ThroneEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x49, 0x08};
 
 constexpr int GameDifficulty = 0x104;  // byte
 constexpr int GameFrame = 0x170;       // u32
 constexpr int UnitClass = 0x04;        // u32: player class / object class
 constexpr int32_t StatLevel = 12;
 constexpr int32_t MessageFailed = 0x14;  // the portal function's own failure message
+constexpr int32_t ThroneLevel = 131;         // Throne of Destruction
+constexpr int32_t ChamberLevel = 132;        // Worldstone Chamber
+constexpr int32_t BaalQuest = 36;            // quest a5q6: byte +0xa6 is set by Baal's death
+constexpr int BaalDoneByte = 0xa6;
 constexpr uint64_t LocalPlayerSlotRva = 0x2a23704;  // client: u32, the local player's slot
 constexpr uint64_t UnitBySlotRva = 0x9a480;         // client: (slot < 8) -> that player's unit or null
 
@@ -85,10 +95,18 @@ using TravelFn = void (*)(Game* game, Unit* player, int32_t level, int32_t zero)
 using LevelActFn = uint8_t (*)(uint32_t dataFlag, int32_t level);
 using QuestBitFn = int32_t (*)(void* record, int32_t quest, int32_t bit);
 using UnitBySlotFn = Unit* (*)(uint32_t slot);
+using ObjectStateFn = int32_t (*)(Unit* object);
+using FindQuestFn = uint8_t* (*)(Game* game, int32_t quest);
+using LevelWarpFn = void (*)(Game* game, Unit* player, int32_t level, int32_t how);
 
 UnitBySlotFn g_unitBySlot = nullptr;
 WarpFn g_warpOriginal = nullptr;
 PortalFn g_portalOriginal = nullptr;
+PortalFn g_throneOriginal = nullptr;
+ObjectStateFn g_objectState = nullptr;
+FindQuestFn g_findQuest = nullptr;
+LevelWarpFn g_levelWarp = nullptr;
+int g_throneWarps = 0;
 FindTileFn g_findTile = nullptr;
 RoomLevelFn g_roomLevel = nullptr;
 UnitRoomFn g_unitRoom = nullptr;
@@ -398,6 +416,41 @@ int64_t PortalHook(int64_t* ctx) {
 	return moved;
 }
 
+// Object function 70, the Worldstone / Throne objects (563, 569). D2Sigma's version (FUN_10097340): when Baal is dead it
+// swaps the player between the Throne of Destruction (131) and the Worldstone Chamber (132), through the same lockout as
+// every other move, and answers a refusal with a failure message. D2R's own (0x548c40) only goes one way, 131 to 132, and
+// is silent otherwise; the object state test (2 = the portal is open) stays D2R's.
+int64_t ThroneHook(int64_t* ctx) {
+	auto* game = reinterpret_cast<Game*>(ctx != nullptr ? ctx[0] : 0);
+	auto* object = reinterpret_cast<Unit*>(ctx != nullptr ? ctx[1] : 0);
+	auto* player = reinterpret_cast<Unit*>(ctx != nullptr ? ctx[2] : 0);
+	if (game == nullptr || object == nullptr || !IsPlayer(player)) {
+		return g_throneOriginal(ctx);
+	}
+	if (g_objectState(object) != 2) {
+		return 0;
+	}
+	const uint8_t* quest = g_findQuest(game, BaalQuest);
+	if (quest == nullptr || quest[BaalDoneByte] == 0) {
+		g_unitMessage(player, MessageFailed, player);
+		return 0;
+	}
+	const int32_t src = LevelOf(player);
+	const int32_t dst = src == ThroneLevel ? ChamberLevel : ThroneLevel;
+	if (!Allowed(game, player, src, dst)) {
+		return 0;
+	}
+	const auto flag = d2r::At<uint8_t>(game, d2r::GameDataFlag);
+	if (g_travel != nullptr && src > 0 && g_levelAct(flag, dst) != g_levelAct(flag, src)) {
+		g_travel(game, player, dst, 0);
+	} else {
+		g_levelWarp(game, player, dst, 0xb);
+	}
+	++g_throneWarps;
+	Entered(game, player, src, dst);
+	return 1;
+}
+
 void ForgetGame(const void* game) noexcept {
 	std::lock_guard<std::mutex> lock(g_mutex);
 	g_lockout.Forget(game);
@@ -436,7 +489,11 @@ auto DungeonActTravels() noexcept -> int {
 	return g_actTravels;
 }
 
-auto InstallDungeonLockout(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+auto DungeonThroneWarps() noexcept -> int {
+	return g_throneWarps;
+}
+
+auto InstallDungeonLockout(const D2RL::PluginContext* context, char* report, size_t reportSize, bool throne) noexcept -> bool {
 	g_context = context;
 	RegisterGameEnd(&ForgetGame);
 	const uint64_t base = context->exeBase;
@@ -453,12 +510,18 @@ auto InstallDungeonLockout(const D2RL::PluginContext* context, char* report, siz
 	                                               reinterpret_cast<void*>(&PortalHook),
 	                                               reinterpret_cast<void**>(&g_portalOriginal));
 	const bool timer = InstallTimerOverlay(context);
+	g_objectState = reinterpret_cast<ObjectStateFn>(base + ObjectStateRva);
+	g_findQuest = reinterpret_cast<FindQuestFn>(base + FindQuestRva);
+	g_levelWarp = reinterpret_cast<LevelWarpFn>(base + LevelWarpRva);
+	const bool worldstone = throne && context->InstallInlineHook(ThroneRva, ThroneEntry, sizeof(ThroneEntry), reinterpret_cast<void*>(&ThroneHook),
+	                                                            reinterpret_cast<void**>(&g_throneOriginal));
 	g_levelAct = reinterpret_cast<LevelActFn>(base + LevelActRva);
 	g_travel = std::memcmp(reinterpret_cast<const void*>(base + TravelRva), TravelEntry, sizeof(TravelEntry)) == 0
 	               ? reinterpret_cast<TravelFn>(base + TravelRva)
 	               : nullptr;
-	std::snprintf(report, reportSize, "%s: %d levels; tile warps %s, portals %s (across acts %s), countdown %s", warp && portal ? "on" : "partly off",
-	              static_cast<int>(mxl_dungeons::EntryCount), warp ? "on" : "hook failed", portal ? "on" : "hook failed",
-	              g_travel != nullptr ? "by travel" : "refused: entry bytes differ", timer ? "on screen" : "in chat lines only");
+	std::snprintf(report, reportSize, "%s: %d levels; tile warps %s, portals %s (across acts %s), Worldstone / Throne objects %s, countdown %s",
+	              warp && portal ? "on" : "partly off", static_cast<int>(mxl_dungeons::EntryCount), warp ? "on" : "hook failed",
+	              portal ? "on" : "hook failed", g_travel != nullptr ? "by travel" : "refused: entry bytes differ",
+	              !throne ? "off (off word worldstone)" : worldstone ? "both ways" : "hook failed", timer ? "on screen" : "in chat lines only");
 	return warp && portal;
 }
