@@ -16,7 +16,7 @@
   gfx_placeholders.py  D2R graphics for Median-only monsters (until the art port) + hd/character/monsters.json
   art_provenance.py  Median's missile/overlay/monster DCCs matched to D2R's own by image (exact/recolour/rescale/mashup) -> work/mod/art_provenance.json (cached in work/art_provenance/; first run about 2 minutes)
   hd_monsters.py     donor, scale and colour per Median-only monster (HD units) -> hd/character
-  wereowl_models.py  the generated 3D Wereowl as the Druid form and the Corrupted Wereowl (needs the local assets; MXL_NO_3D=1 skips) -> hd/character
+  wereowl_models.py  the generated 3D Wereowl as the Druid form and the Corrupted Wereowl (assets/hd/wereowl via Git LFS; MXL_NO_3D=1 skips) -> hd/character
   animdata_merge.py  merge Median animation data into D2R's animdata
   hd_skill_anims.py  HD skill animation data for Median skills
   missile_hd.py      HD models for Median's missiles (by CelFile) -> hd/missiles/missiles.json

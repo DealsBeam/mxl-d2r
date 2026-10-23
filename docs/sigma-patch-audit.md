@@ -95,6 +95,15 @@ screenshots, panel by panel.
 5. Confidence is per row in the TSV (`high` / `medium` / `low`). Most `missing` rows were checked against the plugin source; a
    handful are low confidence and say what would settle them. No game was run for this audit (static reading only); section 6 says which rows an in-game check or a look at D2R's own code would settle.
 
+### Limits of this audit
+
+This audit covers the patches D2Sigma applies to the original game DLLs. It does not cover D2Sigma's own code: widgets, tooltips, sounds,
+packets, hotkeys, options, the loot filter and the 46 tables it loads. That code is not reachable through a patch table, so a feature
+there never shows up in the 2,027 sites above, and `median-rules-audit.md` only has what Median's documentation says. The buff / debuff
+icon bar and the removal of durability were both found that way. [sigma-owncode-audit.md](sigma-owncode-audit.md) (lane
+audit-owncode) lists the areas of D2Sigma's own code with a port status each, ranks what is missing, and adds the new rows to
+[unported.md](unported.md). Read both for the full picture of what D2Sigma does.
+
 ## 3. Totals
 
 All 767 functions and 2,027 patch sites of the patch tables are classified, in 307 rows.
