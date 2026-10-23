@@ -6,5 +6,6 @@
 #include <cstddef>
 
 // Hooks nine quest handlers (a2q5 events 8 and 0, a2q6, a3q3, a3q5, a4q1 events 8 and 0, a5q2, a5q6) and the respec
-// bookkeeping 0x5d9ae0. True when all ten installed.
-auto InstallQuestsAct2To5(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;
+// bookkeeping 0x5d9ae0. True when all ten installed. clearBuffs (off word "respecbuffs") makes the respec remove the player's
+// timed buffs (audit DC7).
+auto InstallQuestsAct2To5(const D2RL::PluginContext* context, bool clearBuffs, char* report, size_t reportSize) noexcept -> bool;

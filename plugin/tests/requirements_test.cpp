@@ -25,6 +25,7 @@ int RunItemRulesTests();  // item_rules_test.cpp
 int RunGambleTests();  // gamble_test.cpp
 int RunVendorStockTests();  // vendor_stock_test.cpp
 int RunUniqueLimitsTests();  // unique_limits_test.cpp
+int RunTownRulesTests();  // town_rules_test.cpp
 int RunEngineGapsTests();  // gamble_test.cpp
 int RunWaypointsTests();  // waypoints_test.cpp
 int RunTravelTests();     // travel_test.cpp
@@ -157,6 +158,7 @@ int main() {
 	failures += RunGambleTests();
 	failures += RunVendorStockTests();
 	failures += RunUniqueLimitsTests();
+	failures += RunTownRulesTests();
 	failures += RunEngineGapsTests();
 	failures += RunWaypointsTests();
 	failures += RunTravelTests();

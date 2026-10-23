@@ -329,6 +329,9 @@ caster comes from a second hook, on the skill use function `0x43acb0` (entry `48
 (unit type 0) counts. The Sigma formulas therefore also reach the server charge now (before, only the client charge site
 matched). The harness verb `manacharge` shows the last decision (calls, room, town test, cost, charge, site).
 
+**Town rules: NPC healing and the town portal lock (`town_rules.cpp`, `town_rules_logic.h`, audit NPC1 and UQ5; off words `npcheal`, `tplock`; `mxl` line `town rules`).**
+*NPC healing (Median P2.2.0: every NPC heals).* The packet 0x2f handler (`0x4c2410`) always calls the heal function `0x53fc50`, which heals only when the NPC table entry's byte `+6` is set (static table at `0x237ea60`, 43 entries of 0x1c bytes, indexed by the NPC class position). At install the plugin sets that byte in every entry (the expected value 0 or 1 is checked; the report says how many were set and how many already healed). *Town portal lock (Median P1.6.0: some zones disable town portals).* Median's `Tplock` column is levels.bin `+0x155` (`unk155` in `mxl_dungeons.h`, 22 levels, written by `tools/sigma_data.py`). The Town Portal skill function is srvdofunc 109 at `0x5822b0` `(game, player, skill)` -> 1 / 0 (entry `48 89 5c 24 08 57 48 83 ec 20 48 8b fa 48 8b d9`, checked): the inline hook gets the player's room (`0x34b440`) and level (`0x2efc10`); on a locked level it sends unit message 0x14 (`0x491960`, "failed"), returns 0 and counts the refusal (`mxl`: `portal refusals N`), so no portal object is made and no mana is spent. Pure logic in `town_rules_logic.h` (tests `plugin/tests/town_rules_test.cpp`). Verified in game by the checks `npcheal` and `tplock` (docs/unported.md).
+
 ## Item rules (`item_rules.cpp`, `item_gen.cpp`, audit IT1, IT2, IT3; off words `durability`, `durabilitytip`, `repairui`, `quantity`, `autoid`)
 
 Median keeps the durability and quantity columns and removes the behaviour from D2Game.dll with binary patches (D2Sigma's
@@ -472,6 +475,35 @@ already; with stat 297 = 0 it now runs D2R's step when the base is at least 1 or
 otherwise applies `statrules::ManaDelta` (base scaled by (100 + stat 27)%, plus stat 26, clamped to [-mana, max - mana]).
 Free mana in a town (audit SK3, `mana_costs.cpp`) is the skill-cost hook, a separate part. Off words: `potionamounts` (the two
 patches), `stamina` (the stamina hook), `manaregen` (the floor of 1 returns to D2R; the heat drain stays under `heat`).
+
+## Phase 4 verification parts (lane p4-verify-a; off words `respecbuffs`, `statclick`)
+
+**Reset removes buffs (DC7, `respecbuffs`).** The respec bookkeeping hook (`0x5d9ae0`, quests_act2_5.cpp) first clears every timed
+state of the player (`ClearTimedBuffs`: D2R's state lists are found by state id with `0x2f5940`; those with an end frame at list
+`+0x24` are cleared, passives and auras have none), then runs the quest 41 bookkeeping. `mxl` line `act 2-5 quests ... respec
+clears buffs`. `game_checks respecbuffs`.
+
+**Stat point shift-click (XP6, `statclick`).** Hook on the packet 0x3a handler `0x4b3c70` (game, player, packet, length): D2R's
+shift-click sends count 4 and the handler spends count + 1 points, so count 4 becomes 24 (`StatClickCount`, 25 points as in
+Median 2.14). After a point goes into Strength the hook calls D2R's passive refresh `0x33f830(unit, 1)` (the call D2R makes after
+every skill point, entry bytes checked first) so the class passive's Grit (Median stat 184, D2R 369: `min(25, clc2 + clc1 *
+Strength / ((450 + 98 * level^2 / 100) * 200 / 22500))`) follows the new Strength. `mxl` line `stat rules ... shift-click on`.
+`game_checks statclick`, `game_checks grit`.
+
+**Cow portal in any town (CR6, part of `craftflags` and `lockout`).** The cube output handler for byte 1 (table entry `0x52a9d0`, swapped for
+`PortalHook`) sends the Cow Level recipe (Wirt's Leg, Median level 39) to `CubeCowPortal` (item_spells.cpp): Rogue Encampment stays
+D2R's own handler (act 1, once per game through the game flag word 4 bit 0xb, Baal quest of the difficulty: quest 0x28 bit 0, or
+0x1a when the data flag is 1); in every other town the same three tests are made here and the portal is made with the Cow Level as its
+destination. D2R's creator `0x432ce0` refuses a destination in another act than the room's (compare `cmp bl,al / jnz` at `0x432dd5`,
+8 bytes `3a d8 0f 85 8a 01 00 00`), so `InstallCraftFlags` turns that jump into a no-op (`PatchBytes`, expected bytes checked; the
+report text says "portals cross acts" or "portals stay in their act"). The portal's operate function `0x58f680` only moves inside the act
+it stands in (an act 1 level generated inside act 5's level data ends the process: "Outdoor map generation stopped ... outdoor
+dimensions are too small", run `checks-20261023-203019-s1`), so the lockout hook (dungeon_lockout.cpp `PortalHook`) takes a portal whose
+destination lies in another act than the player's level through the NPC travel function `0x4f2e40` (entry bytes checked), which sets the
+act up; the same goes for the way back out. Median's lockout table applies to the Cow Level too (`mxl_dungeons.h`: Hell only, level 110),
+so the check raises the level before entering. Counters on the `mxl` line: `Cow portals outside act 1: N opened, M refused (...)` and
+`portals taken across acts N` on the dungeon lockout line. `game_checks cowtowns` (with the harness verb `gameflag 4 11 clear` between towns,
+the way in and the way out in every act).
 
 ## Trophy timer (`trophy_timer.cpp`, off word `trophy`)
 

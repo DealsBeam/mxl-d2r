@@ -73,5 +73,10 @@ int RunStatRulesTests() {
 	Check(ManaDelta(25590, 25600, 85, 0, 0) == 10, "kept below the maximum");
 	Check(ManaDelta(5, 25600, 0, 0, -50) == -5, "kept above empty");
 	Check(ManaDelta(0, 25600, 85, -100, 0) == 0, "a bonus of -100% removes the base");
+	// audit XP6: the stat "+" click
+	Check(StatClickCount(0) == 0, "a plain click (one point) stays");
+	Check(StatClickCount(D2RShiftClickCount) == MedianShiftClickCount, "D2R's Shift-click (5 points) becomes 25");
+	Check(MedianShiftClickCount + 1 == 25, "Median's Shift-click is 25 points");
+	Check(StatClickCount(3) == 3 && StatClickCount(5) == 5 && StatClickCount(99) == 99, "other counts (Ctrl-click: all that is left) stay");
 	return failures;
 }

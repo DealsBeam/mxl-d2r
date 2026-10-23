@@ -28,6 +28,9 @@
 #include "item_spells.h"
 #include "missile_hits.h"
 #include "mana_costs.h"
+#include "hardcore_death.h"
+#include "required_level.h"
+#include "teleport.h"
 #include "item_rules.h"
 #include "stat_rules.h"
 #include "skill_damage.h"
@@ -48,6 +51,7 @@
 #include "engine_gaps.h"
 #include "gamble.h"
 #include "vendor_stock.h"
+#include "town_rules.h"
 #include "unique_limits.h"
 #include "goblins.h"
 #include "monster_ai.h"
@@ -78,7 +82,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.56.0";
+constexpr const char* PluginVersion = "0.59.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -89,6 +93,10 @@ char g_levelTypesReport[160] = "off: not the expected game image";
 char g_calcReport[160] = "off: not the expected game image";
 char g_itemSpellsReport[160] = "off: not the expected game image";
 char g_manaCostsReport[160] = "off: not the expected game image";
+char g_skillAffordReport[160] = "off: not the expected game image";
+char g_teleportGoldReport[200] = "off: not the expected game image";
+char g_hardcoreDeathReport[200] = "off: not the expected game image";
+char g_requiredLevelReport[200] = "off: not the expected game image";
 char g_itemRulesReport[320] = "off: not the expected game image";
 char g_skillDamageReport[160] = "off: not the expected game image";
 char g_skillRestrictReport[160] = "off: not the expected game image";
@@ -97,7 +105,7 @@ char g_statRulesReport[320] = "off: not the expected game image";
 char g_trophyReport[200] = "off: not the expected game image";
 char g_missileHitsReport[1024] = "";
 char g_cubeReport[192] = "off: not the expected game image";
-char g_craftReport[96] = "off: not the expected game image";
+char g_craftReport[160] = "off: not the expected game image";
 char g_gameEndReport[96] = "off: not the expected game image";
 char g_mapMemoryReport[128] = "off: not the expected game image";
 char g_noCorpseReport[160] = "off: not the expected game image";
@@ -134,6 +142,7 @@ char g_gambleReport[192] = "off: not the expected game image";
 char g_vendorStockReport[256] = "off: not the expected game image";
 char g_uniqueLimitsReport[192] = "off: not the expected game image";
 char g_engineGapsReport[256] = "off: not the expected game image";
+char g_townRulesReport[256] = "off: not the expected game image";
 char g_itemEventsReport[448] = "off: not the expected game image";
 char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
@@ -167,7 +176,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits vendorstock
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits vendorstock npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -220,7 +229,7 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	if (command == nullptr || command->plugin == nullptr || g_context == nullptr) {
 		return D2RL::ConsoleCommandResult::Failed;
 	}
-	char line[256];
+	char line[384];
 	std::snprintf(line, sizeof(line), "mxl-core %s | D2R %s | image 0x%08x (expects 0x%08x, %s) | exe base 0x%llx",
 	              PluginVersion, g_context->buildVersion ? g_context->buildVersion : "?", ImageStamp(g_context),
 	              ExpectedImage, BuildMatches(g_context) ? "match" : "MISMATCH, hooks off",
@@ -242,6 +251,29 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "mana costs %s", g_manaCostsReport);
 	Say(command, line);
+	{
+		std::snprintf(line, sizeof(line), "required level %s (%d of 2 sites patched)", g_requiredLevelReport, RequiredLevelPatchedSites());
+		Say(command, line);
+	}
+	{
+		unsigned deaths = 0, converted = 0;
+		HardcoreDeathStats(&deaths, &converted);
+		std::snprintf(line, sizeof(line), "hardcore death %s (%u Hardcore deaths, %u converted)", g_hardcoreDeathReport, deaths, converted);
+		Say(command, line);
+	}
+	{
+		unsigned teleports = 0, seen = 0, piles = 0;
+		TeleportGoldStats(&teleports, &seen, &piles);
+		std::snprintf(line, sizeof(line), "teleport gold %s (%u teleports looked, %u piles in reach, %u taken)", g_teleportGoldReport, teleports, seen,
+		              piles);
+		Say(command, line);
+	}
+	{
+		const AffordLog afford = SkillAffordLog();
+		std::snprintf(line, sizeof(line), "skill afford %s (%u tests answered, %u differ from D2R's)", g_skillAffordReport, afford.calls,
+		              afford.changed);
+		Say(command, line);
+	}
 	std::snprintf(line, sizeof(line), "item rules %s", g_itemRulesReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "skill damage %s", g_skillDamageReport);
@@ -260,7 +292,12 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	}
 	std::snprintf(line, sizeof(line), "cube conditions %s", g_cubeReport);
 	Say(command, line);
-	std::snprintf(line, sizeof(line), "craft flags %s", g_craftReport);
+	{
+		uint32_t cowOutside = 0, cowRefused = 0, noQuest = 0, flagSet = 0, noPortal = 0;
+		CowPortalCounts(&cowOutside, &cowRefused, &noQuest, &flagSet, &noPortal);
+		std::snprintf(line, sizeof(line), "craft flags %s | Cow portals outside act 1: %u opened, %u refused (quest not done %u, flag set %u, portal not created %u)", g_craftReport, cowOutside, cowRefused,
+		              noQuest, flagSet, noPortal);
+	}
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "game end %s (games ended %d)", g_gameEndReport, GameEndCount());
 	Say(command, line);
@@ -311,7 +348,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	{
 		int refused = 0, started = 0;
 		DungeonLockoutCounts(&refused, &started);
-		std::snprintf(line, sizeof(line), "dungeon lockout %s (refused %d, clocks started %d)", g_lockoutReport, refused, started);
+		std::snprintf(line, sizeof(line), "dungeon lockout %s (refused %d, clocks started %d, portals taken across acts %d)", g_lockoutReport, refused, started,
+		              DungeonActTravels());
 		Say(command, line);
 	}
 	{
@@ -411,6 +449,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "engine gaps %s", g_engineGapsReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "town rules %s (portal refusals %d)", g_townRulesReport, TownPortalRefusals());
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "stat columns %s", g_statColumnsReport);
 	Say(command, line);
@@ -544,6 +584,35 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: mana costs %s", g_manaCostsReport);
 		context->LogInfo(line);
+		if (Off("reqlevel")) {
+			std::snprintf(g_requiredLevelReport, sizeof(g_requiredLevelReport), "%s", OffNote);
+		} else {
+			InstallRequiredLevel(context, g_requiredLevelReport, sizeof(g_requiredLevelReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: required level %s", g_requiredLevelReport);
+		context->LogInfo(line);
+		if (Off("hcdeath")) {
+			std::snprintf(g_hardcoreDeathReport, sizeof(g_hardcoreDeathReport), "%s", OffNote);
+		} else {
+			InstallHardcoreDeath(context, g_hardcoreDeathReport, sizeof(g_hardcoreDeathReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: hardcore death %s", g_hardcoreDeathReport);
+		context->LogInfo(line);
+		if (Off("teleportgold")) {
+			std::snprintf(g_teleportGoldReport, sizeof(g_teleportGoldReport), "%s", OffNote);
+		} else {
+			InstallTeleportGold(context, g_teleportGoldReport, sizeof(g_teleportGoldReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: teleport gold %s", g_teleportGoldReport);
+		context->LogInfo(line);
+		if (Off("afford")) {
+			ResolveAffordFunctions(context);
+			std::snprintf(g_skillAffordReport, sizeof(g_skillAffordReport), "%s", OffNote);
+		} else {
+			InstallSkillAfford(context, g_skillAffordReport, sizeof(g_skillAffordReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: skill afford %s", g_skillAffordReport);
+		context->LogInfo(line);
 		if (Off("skilldmg")) {
 			std::snprintf(g_skillDamageReport, sizeof(g_skillDamageReport), "%s", OffNote);
 		} else {
@@ -566,8 +635,8 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		std::snprintf(line, sizeof(line), "mxl-core: heat %s", g_heatReport);
 		context->LogInfo(line);
 		{
-			const StatRulesParts parts{!Off("potionamounts"), !Off("stamina")};
-			if (!parts.potionAmounts && !parts.stamina) {
+			const StatRulesParts parts{!Off("potionamounts"), !Off("stamina"), !Off("statclick")};
+			if (!parts.potionAmounts && !parts.stamina && !parts.shiftClick) {
 				std::snprintf(g_statRulesReport, sizeof(g_statRulesReport), "%s", OffNote);
 			} else {
 				InstallStatRules(context, parts, g_statRulesReport, sizeof(g_statRulesReport));
@@ -661,7 +730,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 		{
-			char report[96];
+			char report[160];
 			if (Off("craftflags")) {
 				std::snprintf(report, sizeof(report), "%s", OffNote);
 			} else {
@@ -684,7 +753,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			if (Off("quests2")) {
 				std::snprintf(g_quests2Report, sizeof(g_quests2Report), "%s", OffNote);
 			} else {
-				InstallQuestsAct2To5(context, g_quests2Report, sizeof(g_quests2Report));
+				InstallQuestsAct2To5(context, !Off("respecbuffs"), g_quests2Report, sizeof(g_quests2Report));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: act 2-5 quests %s", g_quests2Report);
 			context->LogInfo(line);
@@ -915,6 +984,16 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallEngineGaps(context, hit, rc, sl, g_engineGapsReport, sizeof(g_engineGapsReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: engine gaps %s", g_engineGapsReport);
+			context->LogInfo(line);
+		}
+		{
+			const bool heal = !Off("npcheal"), lock = !Off("tplock");
+			if (!heal && !lock) {
+				std::snprintf(g_townRulesReport, sizeof(g_townRulesReport), "%s", OffNote);
+			} else {
+				InstallTownRules(context, heal, lock, g_townRulesReport, sizeof(g_townRulesReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: town rules %s", g_townRulesReport);
 			context->LogInfo(line);
 		}
 		{

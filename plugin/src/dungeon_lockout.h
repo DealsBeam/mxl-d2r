@@ -12,6 +12,10 @@ auto InstallDungeonLockout(const D2RL::PluginContext* context, char* report, siz
 // Counters for the `mxl` console command (this session): refused entries, clocks started.
 void DungeonLockoutCounts(int* refused, int* started) noexcept;
 
+// Portals into another act's level taken through the NPC travel function 0x4f2e40 this session (the Cow Level portal made in
+// another act's town, and the way back out of it).
+auto DungeonActTravels() noexcept -> int;
+
 // Test harness (`lockcheck <level>`): what the warp test says about the player entering `dst`, without sending anything or
 // counting: 0 allowed, 1 requirements, 2 quest-table condition, 3 sealed, -1 no row for the level / no player.
 auto DungeonLockoutProbe(void* game, void* player, int dst) noexcept -> int;

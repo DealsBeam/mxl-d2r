@@ -70,18 +70,18 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | DC2 | No experience loss on death. | P1.0.0 | ported (verified by the lane no-corpse check: no experience change on death with or without the hook; the hook also removes the penalty call for any later non-blank value) | D:difficultylevels `DeathExpPenalty` is blank in the built mod (D2R has 0/5/10). Check: kill the player on Nightmare, `stat player 13` before and after |
 | DC3 | No gold loss on death. | P1.0.0 | ported (verified: D2R takes and drops ALL carried gold on death; with the lane no-corpse hooks carried gold and bank are unchanged) | was: no gold-on-death code or table value. Evidence docs/subsystems/death.md section 7. Check: `gold set 100000 0`, kill the player, `gold get` |
 | DC4 | Respawning after death has a 5 second cooldown (replaces the loss penalties; discourages suicide-rushing). | P1.0.0 | ported (plugin part `respawnwait`, 125 frames; no Median code found for it, rule from the patch note) | was: no respawn delay in plugin or data; D2R revived at once. Check: Esc 45 frames after the death is held, respawn at 275 frames works. Check: time the revive after a kill |
-| DC5 | Soulstealer bosses heal (10% of max life) only when they kill a player, not minions; fire teleport and Chaos Orb heal the boss only if they kill a player (40%). | P1.1.0, P2.1.0, P2.8.0, P2.13.0 | unknown | boss kill hooks are D2Sigma monster code the monsters-ai triage never listed; nothing in `plugin/src` besides the goblin kill hook. Check: let a spawned Soulstealer boss kill the harness player and read its life before and after |
+| DC5 | Soulstealer bosses heal (10% of max life) only when they kill a player, not minions; fire teleport and Chaos Orb heal the boss only if they kill a player (40%). | P1.1.0, P2.1.0, P2.8.0, P2.13.0 | open | Looked at in lane p4-verify-a (2026-10-23): no data column or state names the rule, 11 monsters carry the Soulstealer description (monstats rows 1913, 1983-1988, 2004, 2907, 2033, 2049), the heal is D2Sigma monster code. The kill wrapper `0x515640` (goblins.cpp) only sees monster victims. Not ported, see `docs/unported.md` |
 | DC6 | Dying, or entering another zone, voids an active trophy challenge. | P2.10.0 ("Dying or entering another zone with a trophy challenge will void the one you've already started") | ported | `trophy_timer.cpp`: the stat 202 (D2R 378) window is voided on death (mode 0 / 17) or an area change, with a chat line, and the cube refuses the recipe. `game_checks trophytimer` (zone change, death). See CR4 |
-| DC7 | Resetting skills and stats removes every active buff. | P1.6.0 | unknown | check `respec` covers stats and skills only. Check: buff, respec at Akara, `state` states |
+| DC7 | Resetting skills and stats removes every active buff. | P1.6.0 | verified | plugin part `respecbuffs` (`ClearTimedBuffs` in the respec bookkeeping hook). `game_checks respecbuffs` PASS, run `checks-20261023-185038-s3`: states 32 / 101 / 26 on before the Akara reset, off after; with the part off the states stay (run `checks-20261023-182242-s2`) |
 | DC8 | Monsters flagged "no monster corpses" (labyrinth modifier, Twisted Clawstorms, Corrupted Barbarians) leave none; others do. | P1.0.0, P1.6.0, P2.11.0 | ported | monstats corpse data migrates unchanged |
-| DC9 | A Hardcore character that dies converts to Softcore on Single Player. | P1.6.0 ("Fixed bugs with the Hardcore to Softcore conversion on Single Player") | missing | no hardcore code; D2R deletes or locks the character. See HC1 |
+| DC9 | A Hardcore character that dies converts to Softcore on Single Player. | P1.6.0 ("Fixed bugs with the Hardcore to Softcore conversion on Single Player") | ported (verified) | `hardcore_death.cpp` (check `hcdeath`, docs/unported.md). See HC1 |
 
 ## 2. Gold, stash and shared stash
 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
 | GS1 | Gold (and waypoints) are collected by walking over them; larger pickup range. | P1.0.0, P1.8.0 | partly | D2R picks up gold by walking too (not checked for range). Waypoint auto-activation is WP2 |
-| GS2 | All teleport and warping skills pick gold up. | P1.6.0 | missing | `teleport.cpp` header: "Not ported: D2Sigma's gold auto-pickup after a player's teleport". Check: teleport onto a gold pile |
+| GS2 | All teleport and warping skills pick gold up. | P1.6.0 | ported (verified) | `teleport.cpp` picks up the gold within 36 sub-tiles of the arrival point after a player's Teleport; check `teleportgold` |
 | GS3 | Gold drops and vendor prices were rebalanced (vendors buy cheap, potions and oils cost more). | P1.0.0, P2.0.0 | ported | D:monstats, D:treasureclassex replaced by Median's; D:npc buy mult 52 (D2R 512), sell mult 1024; stock in `docs/vendors.md` |
 | GS4 | Larger inventory and stash. | P1.0.0 | ported (unverified) | `inventory.txt` gridX/gridY via `txt_migrate`; HD panels; in-game look pending (`docs/testing.md` "Median stash size") |
 | GS5 | Shared stash and multi-page personal stash in Single Player. | P2.0.0 | partly | Median's panel counts "n / 10" pages in both modes (D2Sigma `0x1130a0`). `tools/install_mod.py` writes `add_shared_tabs = 7` (D2R's 3 normal shared tabs + 7 = 10) into `d2rloader.toml`; `game_checks stashpages` PASS: ItemService puts an item into tabs 0-9, tab 10 is refused. Personal stash: 2 pages (stock page + D2RLoader's custom page, "1 / 2" strip; `game_checks stashpage2` PASS; `docs/stash-pages.md`); pages 3-10 and Median's Mode / Sort buttons are not ported (`docs/unported.md` "Stash pages") |
@@ -89,7 +89,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | GS7 | A sort button in the stash; a button in the inventory that collects every item that fits a container (AC, runes, shrines). | P2.2.0, P2.9.0 | missing | container right-click is ported (`item_spells.cpp`, pSpell 18); the two buttons are Median UI with no panel code; not built in lane stash-pages (no item size source for a sort, see `docs/stash-pages.md` section 7) |
 | GS8 | Containers: Greater Signets of Learning, Enchanted Runes, Corrupted Treasures; shrines and vessels are 1x1. | P2.11.0, P2.12.0 | partly | pSpell 18 logic ported; which container items exist in the built data was not counted. Check: `item` each code, `use` |
 | GS9 | Ctrl+Click moves items between inventory, stash, cube and the ground; charms can be dropped into the stash/cube while another charm is carried. | P1.0.0, P1.2.0 | ported (D2R native) | D2R quick-move. Charm limit rule: unknown |
-| GS10 | Signets of Learning give 1 stat point each, capped at 400; experience signets removed. | P1.0.0 | unknown | pSpell 3 with calc `min(1, 400 - stat 185)` (`ubers-events.md`) relies on D2R reading it the same way. Check: `item` a signet, `use`, `stat player 185` |
+| GS10 | Signets of Learning give 1 stat point each, capped at 400; experience signets removed. | P1.0.0 | verified | pSpell 3 with calc `min(1, 400 - stat 185)` works as written in D2R. `game_checks signet` PASS, run `checks-20261023-182242-s2`: used at 0 and 399 (+1 point each), refused at 400, stacks of 5 and 6 clip at 400 |
 | GS11 | Gold costs on recipes (item designs, jewelcrafting, access scrolls). | P1.8.0, P2.1.0 | ported | `cube_conditions.cpp` gold payment; checks `goldcraft`, `goldclient` |
 | GS12 | Realm services: web stash, vault, hibernated characters, bounties, Stash Stat Search, in-game ladders. | P2.13.0 | missing | realm only, Phase 7 (`docs/realm-plan.md`) |
 
@@ -101,7 +101,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | IC2 | Trade window and NPC stores are larger. | P1.0.0 | ported (unverified) | `inventory.txt` Trade Page and Monster rows; listed (Trade window) |
 | IC3 | Belt UI and the show-belt-rows hotkey work. | P1.2.0 | ported (D2R native) | D2R belts.txt carried |
 | IC4 | Set bonuses with more than 6 pieces. | Median sets | unknown | `docs/services.md` L10: set size >6 unknown in D2R. Check: equip a 7-piece set |
-| IC5 | Only one charm of a type may be carried (fixed bug: more than one charm). | P1.0.0 | unknown | D2R's rule applies; Median's fix not compared |
+| IC5 | Only one charm of a type may be carried (fixed bug: more than one charm). | P1.0.0 | ported and verified (lane p4-verify-b: check `charmlimit`, run `checks-20261023-195127-s1`) | D2R's `carry1` column plus the plugin's unique limits; the second copy of a carry1 / limited charm is refused, an unlimited charm takes two |
 
 ## 4. Item rules
 
@@ -122,7 +122,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | IT13 | Item event ids (use, drop, equip hooks). | D2Sigma | partly | listed (Item event ids; id 32 open) |
 | IT14 | Loot filter lists and rules. | D2LootFilter | deviation | listed (Loot filter fields) |
 | IT15 | Tiered uniques, sacred uniques with varying level requirements and ilvls, tiered runewords, superior items. | P1.0.0, P2.0.0 | ported | tables replaced by Median's |
-| IT16 | Item drop level uses the area level the monster was found in, not the town's. | P2.3.0 | unknown | D2R's own drop code with Median's treasure classes; not compared. Check: kill a monster after a portal trip to town and read the dropped item level |
+| IT16 | Item drop level uses the area level the monster was found in, not the town's. | P2.3.0 | partial | D2R's default item level of a monster is the monster's own level (`0x43e8a0`), set from the area; a trip to town does not touch it. `game_checks dropilvl` PARTIAL, run `checks-20261023-194315-s1`: drops read item level 101 with and without a town trip, never the town's level; but every item reads 101 whatever the area or `ilvl=`, so the area level itself is not seen (cause open, `docs/unported.md`) |
 | IT17 | Shrines/runes/containers right-click use. | P2.11.0 | ported | pSpell 18 in `item_spells.cpp` |
 | IT18 | Halloween chest treasure class (`Treasureclass_H`). | objects2 | missing | listed (Halloween chest `Treasureclass_H`) |
 
@@ -172,8 +172,8 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 | CR2 | Median cube conditions (ops 29-42: gold payment, craft guards, class conditions). | D2Sigma | ported | `cube_conditions.cpp`; `docs/plugin-spec.md` |
 | CR3 | Craft guard flags: once per game or per character. | D2Sigma | ported | ops 38, 39, 41 |
 | CR4 | Trophy challenge charms: kill the boss and cube the charm within the limit (10 seconds unless stated, e.g. 25 s); death or zone change voids it. | P2.10.0 | ported (kill trigger open) | Median has no cube timer op: the recipes (op 6, param 202) compare the stat that 15 timed aura states put on the player (`auralencalc` 250 frames = 10 s), so the timer is the state duration. Ported: the cube condition on stat 378 also needs the plugin's window (in time per trophy, same area, alive; `docs/plugin-spec.md` "Trophy timer"), `game_checks trophytimer` (in time passes, 12 s later refused). Open: which skill a boss kill casts is in no table, so the real kill path is untested (the check sets the stat) |
-| CR5 | Cube transmute hotkey (Median's default V; here K). | P1.0.0 | partly | D2Sigma `0x69820` transmutes while the cube panel is open. `travel.cpp` registers an InputService action (default K: V and the first port's C are D2R keys) that calls the panel's Transmute `0x2cd720`, only while the panel is open (UI messages). `game_checks hotkeys`: the key with the cube closed is counted and ignored (PASS); see `docs/unported.md` "Cube hotkey" for the open-cube press |
-| CR6 | The "Cow Level" portal can be made in any Act town. | P1.0.0 | unknown | recipe is in D:cubemain; the town restriction check was not looked at. Check: make the portal in Act 5 |
+| CR5 | Cube transmute hotkey (Median's default V; here K). | P1.0.0 | verified | D2Sigma `0x69820` transmutes while the cube panel is open. `travel.cpp` InputService action (default K) calls the panel's Transmute `0x2cd720` only while the panel is open. `game_checks cubehotkey` PASS, run `checks-20261023-182242-s2`: cube closed -> press counted, nothing transmuted; cube open -> transmuted (Wirt's Leg portal). The check runs the plugin's handler through the `hotkey` harness verb; the key delivery is `game_checks hotkeys` |
+| CR6 | The "Cow Level" portal can be made in any Act town. | P1.0.0 | verified | D2R's cow handler is act 1 only; the plugin makes the portal in the other towns (`CubeCowPortal`), turns the creator's act compare (`0x432dd5`) into a no-op and takes cross-act portals through the NPC travel `0x4f2e40`. Check `cowtowns` (run `checks-20261023-210200-s3`): portal, walk-in (area 39, Hell, level 110 as Median's table says) and way back in acts 2-5 |
 | CR7 | Imbue, socket and personalize rewards highlight the eligible items. | P2.0.0 | missing | Median UI |
 
 ## 6. Experience, party and level cap
@@ -185,10 +185,10 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 | XP3 | Skill and stat points per level. | P1.0.0 | ported | D:charstats `SkillsPerLevel`, `StatPerLevel` |
 | XP4 | Kill experience: reworked level-difference penalty. | P2.9.0 | ported (unverified) | inline hook `0x44fef0`, check `xp`; listed (`docs/services.md` I3) |
 | XP5 | Party kill experience is awarded without a split. | D2Sigma | unknown | listed (Party experience award, multiplayer) |
-| XP6 | Shift+Click on a stat point adds 25. | P1.1.0 | unknown | D2R adds 5 or all. Check: shift-click a stat |
-| XP7 | Unlimited respecs until level 50 after Den of Evil on Normal. | P2.0.0 | unknown | `respec` check covers the Akara respec; the free-until-50 rule is a quest flag. Check: respec twice at level 20 after the quest |
+| XP6 | Shift+Click on a stat point adds 25. | P1.1.0 | verified | plugin part `statclick` (`stat_rules.cpp`, hook on the packet 0x3a handler `0x4b3c70`: count 4 -> 24). `game_checks statclick` PASS, run `checks-20261023-185038-s3`: count 0 spends 1, count 4 spends 25 on all four stats, 7 points left spends 7. The client's own shift-click was not driven (the harness sends the packet) |
+| XP7 | Unlimited respecs until level 50 after Den of Evil on Normal. | P2.0.0 | verified (free respec); limit above 50 not found | `0x5d9ae0` replaced as D2Sigma's `0x9e600`: at 50 or below the token is not taken, above 50 it is put back. `game_checks freerespec` PASS, run `checks-20261023-185038-s3`: 3 respecs at level 20, 2 each at 50, 51, 60, all offered. Nothing in the port or in D2Sigma's tables limits a respec above level 50 (see `docs/unported.md`) |
 | XP8 | Extended stats screen: sum of all stats, damage, poison length reduction by difficulty penalty. | P2.0.0, P2.9.0 | ported (unverified) | `docs/subsystems/stat-screen.md`; listed (Character sheet approx) |
-| XP9 | Grit: Strength grants a stat that reduces damage taken. | P2.11.0 | unknown | no mention of Grit in docs or plugin; may be table driven. Check: raise Strength and read the stat |
+| XP9 | Grit: Strength grants a stat that reduces damage taken. | P2.11.0 | verified | the class passive's data formula plus a passive refresh after a Strength point (`StatClickHook`, `stat_rules.cpp`). `game_checks grit` PASS, run `checks-20261023-194315-s1`: Strength 30 / 100 / 150 / 200 / 300 at level 20 -> Grit 4 / 14 / 21 / 25 / 25 (the formula); a shift-click on Strength moves it 14 -> 17. See `docs/unported.md` |
 
 ## 7. Difficulty, area levels and monster scaling
 
@@ -203,7 +203,7 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 | DF7 | Players X: monster count and life scale with party size. | D2Sigma | ported | lane pa2-monsters: hook `0x543e90`, off word `playersx`; check `monlevel`: 8 players vs 1 in Hell, life x4.49, experience equal |
 | DF8 | Hell difficulty needs the previous difficulty completed; difficulty names are vanilla. | P1.0.0 | ported | D2R |
 | DF9 | Monsters do not drop guaranteed uniques on Nightmare/Hell act bosses. | P1.0.0 | ported | treasure classes replaced by Median's |
-| DF10 | Monster level for skill/hit formulas uses the area level the monster was found in. | P2.3.0 | unknown | not compared |
+| DF10 | Monster level for skill/hit formulas uses the area level the monster was found in. | P2.3.0 | verified (monster level) | the plugin's `monlevel` part (monsters take the area level in every difficulty); `game_checks dropilvl` reads monster level 1 in the Blood Moor (Normal, area level 1) and 105 in area 76 (Hell, area level 105) after a town trip, run `checks-20261023-194315-s1`. The skill and hit formulas that read it were not run |
 
 ## 8. Uber and quest content
 
@@ -213,7 +213,7 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 | UQ2 | Access scrolls, keys, signets, oils, riftwalks, rune and crystal systems. | W:Items | ported | tables and `item_spells.cpp` |
 | UQ3 | Goblins and treasure goblins. | P2.2.0 | ported | `goblins` check; listed (sighted packet approx) |
 | UQ4 | Quest reward notices. | P2.0.0 | partly | listed (Quest reward notices, approx) |
-| UQ5 | Some zones disable town portals (Edge of Nothingness corridor). | P1.6.0 | unknown | only the cooldown is ported. Check: open a portal in the corridor |
+| UQ5 | Some zones disable town portals (Edge of Nothingness corridor). | P1.6.0 | ported and verified (lane p4-verify-b: check `tplock`, run `checks-20261023-195127-s1`; control `checks-20261023-200935-s3`) | Tplock column of levels.txt (22 levels) read by a hook on the Town Portal skill; off word `tplock` |
 | UQ6 | The ubers and endgame events work without a dedicated module. | `docs/subsystems/ubers-events.md` | partly | data + item spell 16 + lockout + goblins |
 | UQ7 | Seasonal/Halloween/Christmas events. | P2.4.0, P2.13.0 | missing | listed (Halloween chest) |
 
@@ -224,11 +224,11 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 | SK1 | Skill points cap (max base level) and soft levels. | P1.0.0 | ported | D:skills |
 | SK2 | Akara respec with a confirmation dialog. | P1.6.0 | ported | check `respec`; listed (Akara respec confirm, done) |
 | SK3 | Skills cost no mana in town. | P2.1.0 | ported (verified; mechanism differs) | plugin part `townmana`: the mana cost hook returns 0 at the charge sites when the caster is in a town; it needed a caster hook on `0x43acb0` because D2RLoader re-assembles the server charge function (docs/plugin-spec.md, Mana costs). `game_checks townmana`: town 5000 -> 5000, field -> 4993 (off word: 4993 in town) |
-| SK4 | Many skills castable in town (buffs, totems, warp, Shadow Refuge, Acid aura). | P1.1.0, P1.2.0, P1.7.0, P2.1.0 | unknown | skills.txt `town` column carried from Median; not tested. Check: `cast` each in town |
+| SK4 | Many skills castable in town (buffs, totems, warp, Shadow Refuge, Acid aura). | P1.1.0, P1.2.0, P1.7.0, P2.1.0 | ported and verified (lane p4-verify-b: check `towncast`, run `checks-20261023-195127-s1`) | `InTown` column carried from Median; 3 class-free InTown skills start in town, 12 others are refused and start in the field. The 8 Warlock InTown skills are not judged (need a Warlock character) |
 | SK5 | Town Portal is an innate skill (no scrolls) with a 10 s cooldown, and a 1 second delay when opening. | P1.0.0, P2.2.0 | partly | D:skills town_portal srvdofunc 109, localdelay 250; the 1 s delay is not checked |
 | SK6 | Skill cooldowns are computed dynamically; skill groups no longer share cooldowns. | P1.0.0 | ported | D2Sigma's cooldown start: one timer per skill or per skills2 cooldown group, no unit-wide delay state; `cooldowns.cpp` ports it on D2R's cooldown starts. Check `cooldowns` (PASS 2026-10-22, Blast Wave (group 4, localdelay 500): 494 frames without and 390 with stat 309 = 100, the six other group skills got the same end frame; server start only, the client twin is not reached by the harness cast) |
 | SK7 | Run/walk toggle is renamed "Toggle Sprint"; a sprint lasts about 5 seconds and is much faster than walking. The patch note's "stamina removed" means the vitality and level stamina gains, not the stamina bar. | P1.0.0, patch strings, D:charstats | ported (verified) | Median's sprint is data: `charstats` stamina 50, WalkVelocity 10, RunVelocity 15 (Barbarian 14), RunDrain 60, StaminaPerLevel and StaminaPerVitality blank, built identical to Median's. D2Game's drain (RunDrain x2 per frame, forced to walk at 0) is vanilla 1.13c code in both games; there is no sprint state or skill and no cooldown timer (the bar refilling is the cooldown). Game check `sprint` (exact, per frame): run from full drains exactly 120 raw per frame with no regeneration = 107 frames (4.3 s), walking from empty gains exactly 37 raw per frame, standing exactly 50, run/walk speed about 1.3 (data 1.40), a run starts at 2 points of stamina, R toggles run and walk. Median's stamina regen is D2Sigma's `0x100a1f90` (decompiled), ported by `stat_rules.cpp` (docs/sigma-patch-audit.md item 15; game check `manarules`): standing 100% of max / 256 raw per frame, walking and other modes 75%, running 0, state 136 (Stamina Shrine) fills the bar |
-| SK8 | Most melee skills can be used with Shift without a target. | P2.3.0 | missing | no code. Check: shift-click a Great Hunt with no target |
+| SK8 | Most melee skills can be used with Shift without a target. | P2.3.0 | ported (verified) | native in D2R 3.3 (Shift + click runs the skill at the ground point); check `meleenotarget` for three melee skills |
 | SK9 | Skill tree UI: base/max levels, Alt shows soft level, prerequisite arrows, Shift+Click maxes a skill. | P2.0.0 | missing | Median UI, no panel code |
 | SK10 | Druid bow "steady aim" pseudo-resource. | P1.7.0 | ported | stat 220 layer 5 on state `sk1296_state`: Steady Shot +1 (cap 6), Heartseeker -1 per hit, Cascade all; the "requires" gate is the new restrict mode 5 (`skill_restrict.cpp`). `game_checks steadyaim` (4 shots read 1-2-3-4, Heartseeker usable only with charges, spends to 0) |
 | SK11 | Fire Sorceress "Heat" replaces mana (degenerates outside town). | P2.13.0 | ported (no UI relabel) | stat 297 (Molten Core's loss rate) turns D2R's mana regeneration into a drain, negative 297 from fire skills builds it, none in town (`heat.cpp`). `game_checks heat`. The bar is still labelled mana; Emberstep was not cast in the test |
@@ -249,7 +249,7 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
-| NPC1 | All NPCs can heal you. | P2.2.0 | unknown | no NPC-heal code. Check: damage the player and talk to a vendor |
+| NPC1 | All NPCs can heal you. | P2.2.0 | ported and verified (lane p4-verify-b: check `npcheal`, run `checks-20261023-195127-s1`; control `checks-20261023-200935-s3`) | the heal flag of all 43 NPC table entries is set by the plugin (off word `npcheal`) |
 | NPC2 | Vendor stock and refresh rules. | P2.0.0 | ported | `docs/vendors.md` |
 | NPC3 | Gheed gamble, Akara respec, Larzuk sockets, Charsi. | W:Vendors | ported | `npc.txt`, `docs/vendors.md` |
 | NPC4 | New towns: vendors and stash in the new town areas; dying or town portal in some places lead to the new towns. | P1.1.0 | ported (unverified) | D:levels, DS1 files |
@@ -268,8 +268,8 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
 | MU1 | Median adds new areas (Rifts, Dungeons, Labyrinth, the new towns). | W:Areas | ported | `docs/maps-hd.md`, levels, DS1 files |
-| MU2 | Map Reveal: accessible from the UI or the L key (Median's default; the first port's R is D2R's run toggle) (shows Cairn Stones, shrines, Staff altar, Tal Rasha tomb, Act 5 waypoints). | P1.0.0 | partly | D2Sigma `0x887c0` reveals the act once per game. `travel.cpp`: L (InputService action) calls D2R's debug Reveal Automap `0xd42b0` on the current level (preset objects included); `game_checks mapreveal` PARTIAL: layers 1 -> 25, repeat adds nothing, flag kept; the drawn map did not visibly change because `cheat goto` arrives with it whole. Starts from the player's room, repeatable, no UI button |
-| MU3 | Area level can be displayed in the corner of the screen (optional). | P1.0.0 | unknown | no area-level HUD code. Check: look for the option in settings |
+| MU2 | Map Reveal: accessible from the UI or the L key (Median's default; the first port's R is D2R's run toggle) (shows Cairn Stones, shrines, Staff altar, Tal Rasha tomb, Act 5 waypoints). | P1.0.0 | partly (verified) | D2Sigma `0x887c0` reveals the act once per game. `travel.cpp`: L calls D2R's debug Reveal Automap `0xd42b0` on the current level (preset objects included). `game_checks mapreveal` PASS, run `checks-20261023-191456-s1`: Harrogath entered without debug mode, current-layer cells 15 -> 2269, a second press +0. The earlier PARTIAL was the check's (town maps arrive whole, the all-layer count mixed in layers the call creates). Not Median's act-wide walk; no UI button |
+| MU3 | Area level can be displayed in the corner of the screen (optional). | P1.0.0 | not ported (client drawing); the data it shows is verified (lane p4-verify-b: check `arealevel`, run `checks-20261023-195127-s1`) | the corner text is UI, listed in docs/unported.md |
 | MU4 | Terror zones removed. | docs/PLAN.md | deviation | removed in the port plan |
 
 ## 14. Player-visible UI
@@ -297,7 +297,7 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
-| HC1 | On Single Player a dead Hardcore character converts to Softcore. | P1.6.0 | missing | no hardcore code; see DC9 |
+| HC1 | On Single Player a dead Hardcore character converts to Softcore. | P1.6.0 | ported (verified) | see DC9 |
 | HC3 | Hardcore players cannot join softcore games. | D2R | ported (D2R native) | D2R rule |
 
 ## 17. Anything else Median documents as different
@@ -307,4 +307,4 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 | OT1 | Higher resolution and field of view (1024x768) and glide settings. | P1.0.0 | deviation | D2R HD instead |
 | OT2 | Median's strings replace D2R's. | `docs/strings-namespace.md` | ported | strings contract |
 | OT3 | Custom HD art and the classic graphics mode. | `docs/PLAN.md` | deviation | deferred |
-| OT4 | D2 bugfixes: overflow percentages, damage cap, str/dex glitch, 32,767 rollover of life/mana, druid immortal while morphed, ghost state after death, whirlwind chance-to-cast. | P1.0.0 | unknown | D2R fixed some of these itself; none compared. Check: raise life above 32767, cast whirlwind with a chance-to-cast item |
+| OT4 | D2 bugfixes: overflow percentages, damage cap, str/dex glitch, 32,767 rollover of life/mana, druid immortal while morphed, ghost state after death, whirlwind chance-to-cast. | P1.0.0 | verified for the engine parts (lane p4-verify-b: check `bugfixes`, runs `checks-20261023-195127-s1` and `checks-20261023-200935-s3`) | percent overflow, damage cap, 32,767 rollover, death in a shapeshift state, ghost state and aura after death are fine in D2R; str/dex glitch and whirlwind chance-to-cast could not be reached with the harness (docs/unported.md) |

@@ -1,29 +1,34 @@
-// Disassembly of the functions at the given RVAs (or addresses), one instruction per line. Functions the analysis
-// did not find are defined on the fly (the project is opened read-only, so nothing is saved).
-// Args: rva [rva...]   Output: "ASM <rva>: <instruction>"
+// Disassembly of an RVA range with the instruction bytes. Args: startRva endRva
+// Output: "INS <rva> <bytes> <text>"
 //@category mxl
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 
 public class Disasm extends GhidraScript {
     @Override
     protected void run() throws Exception {
         long base = currentProgram.getImageBase().getOffset();
-        for (String arg : getScriptArgs()) {
-            long v = Long.decode(arg);
-            Address a = toAddr(v >= base ? v : base + v);
-            Function f = getFunctionContaining(a);
-            if (f == null) {  // only reached through a pointer table: disassemble and define it (not saved; -readOnly)
-                disassemble(a);
-                f = createFunction(a, null);
+        String[] args = getScriptArgs();
+        long from = Long.decode(args[0]);
+        long to = Long.decode(args[1]);
+        Address a = toAddr(from >= base ? from : base + from);
+        Address end = toAddr(to >= base ? to : base + to);
+        while (a.compareTo(end) < 0) {
+            Instruction ins = currentProgram.getListing().getInstructionAt(a);
+            if (ins == null) {
+                ins = currentProgram.getListing().getInstructionContaining(a);
+                if (ins == null) {
+                    a = a.add(1);
+                    continue;
+                }
             }
-            if (f == null) { println("no function at " + a); continue; }
-            println(String.format("FUNC %s@0x%x", f.getName(), f.getEntryPoint().getOffset() - base));
-            for (Instruction ins : currentProgram.getListing().getInstructions(f.getBody(), true)) {
-                println(String.format("ASM 0x%x: %s", ins.getAddress().getOffset() - base, ins));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : ins.getBytes()) {
+                sb.append(String.format("%02x ", b & 0xff));
             }
+            println("INS 0x" + Long.toHexString(ins.getAddress().getOffset() - base) + " " + sb + " " + ins);
+            a = ins.getAddress().add(ins.getLength());
         }
     }
 }

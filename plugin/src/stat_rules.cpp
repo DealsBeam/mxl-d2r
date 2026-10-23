@@ -15,6 +15,10 @@
 // The town rule of Median's infinite running is not in this step: the drain of a run (D2Game 0x6fc97bb0 in 1.13c, a room
 // in a town: 1 = no drain) is D2R's own code and works the same in both games (game check `manarules`).
 //
+// Stat "+" click (audit XP6). Median's Shift-click spends 25 stat points; D2R's own spends 5 (Ctrl-click all). Both send client
+// packet 0x3a [id][stat u16][count u16]; D2R's server handler 0x4b3c70 spends count + 1 points and stops at the first refusal. The
+// hook widens count 4 (Shift) to 24 and calls the handler (stat_rules_logic.h StatClickCount); counts 0 and all-points pass as they are.
+//
 // Entry bytes of the dump of build 93847 (timestamp 0x6ab3782c); each has whole instructions without rip-relative operands
 // in its first 5 bytes. The hooked function is replaced, the original is not called.
 #include "stat_rules.h"
@@ -22,8 +26,10 @@
 #include "d2r.h"
 #include "stat_rules_logic.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -36,6 +42,7 @@ constexpr uint64_t HasStateRva = 0x3351b0;      // (unit, state) -> non-zero whe
 constexpr uint64_t UnitModeRva = 0x34ab60;      // (unit) -> mode
 constexpr uint64_t PotionImmediateRva = 0x5806b5;
 constexpr uint64_t TomeRva = 0x5ed70d;
+constexpr uint64_t StatClickRva = 0x4b3c70;  // client packet 0x3a handler (game, player, packet, length)
 
 constexpr int32_t StatStamina = 10;
 constexpr int32_t StatMaxStamina = 11;
@@ -52,11 +59,24 @@ constexpr uint8_t PotionPatched[] = {0x41, 0xb8, 0x00, 0x32, 0x00, 0x00};
 constexpr uint8_t TomeOriginal[] = {0x8d, 0x50, 0x03, 0x44, 0x8d, 0x40, 0x04};
 constexpr uint8_t TomePatched[] = {0x8d, 0x50, 0x03, 0x44, 0x8d, 0x40, 0x09};
 
+// 0x4b3c70: push rbx / push rbp / push rsi / push rdi / push r13 / push r14 / push r15
+constexpr uint8_t StatClickEntry[] = {0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57};
+// The skill passives' stat refresh D2R runs after every skill point (0x438670 calls it as (unit, 1)): the class passive that gives Grit
+// (Median stat 184, D2R 369) is worked out from Strength when it is applied, and D2R's stat-point handler does not apply it again.
+constexpr uint64_t PassiveRefreshRva = 0x33f830;
+constexpr uint8_t PassiveRefreshEntry[] = {0x88, 0x54, 0x24, 0x10, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x58};
+constexpr int32_t StatStrength = 0;
+
+using PacketFn = void (*)(void* game, Unit* player, uint8_t* packet, int32_t length);
+using PassiveRefreshFn = void (*)(Unit* unit, int32_t flag);
 using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
 using SetStatFn = void (*)(Unit* unit, int32_t stat, int32_t value, int32_t layer);
 using HasStateFn = uint64_t (*)(Unit* unit, int32_t state);
 using UnitModeFn = int32_t (*)(Unit* unit);
 
+PacketFn g_statClickOriginal = nullptr;
+PassiveRefreshFn g_passiveRefresh = nullptr;  // null when the entry bytes differ: Grit then follows Strength only when the passive is applied
+std::atomic<uint32_t> g_statClicksWidened{0};
 GetStatFn g_getStat = nullptr;
 SetStatFn g_setStat = nullptr;
 HasStateFn g_hasState = nullptr;
@@ -76,6 +96,25 @@ void StaminaStep(void* game, Unit* unit) noexcept {
 	const int32_t next = statrules::StaminaAfter(s);
 	if (s.infinite || next != s.stamina) {
 		g_setStat(unit, StatStamina, next, 0);
+	}
+}
+
+void StatClickHook(void* game, Unit* player, uint8_t* packet, int32_t length) noexcept {
+	uint8_t widened[8];
+	if (packet != nullptr && length == 5 && packet[0] == 0x3a) {
+		const int32_t count = packet[3] | (packet[4] << 8);
+		const int32_t wanted = statrules::StatClickCount(count);
+		if (wanted != count) {
+			std::memcpy(widened, packet, 5);
+			widened[3] = static_cast<uint8_t>(wanted & 0xff);
+			widened[4] = static_cast<uint8_t>(wanted >> 8);
+			g_statClicksWidened.fetch_add(1);
+			packet = widened;
+		}
+	}
+	g_statClickOriginal(game, player, packet, length);
+	if (g_passiveRefresh != nullptr && player != nullptr && packet != nullptr && length == 5 && packet[0] == 0x3a && (packet[1] | (packet[2] << 8)) == StatStrength) {
+		g_passiveRefresh(player, 1);
 	}
 }
 
@@ -102,7 +141,19 @@ auto InstallStatRules(const D2RL::PluginContext* context, const StatRulesParts& 
 		stamina = ok ? "on" : "FAILED";
 		all = all && ok;
 	}
-	std::snprintf(report, reportSize, "%s: potion amounts %s (Potion of Life +%d life, Lam Esen %d points), stamina %s (0x42e850)",
-	              all ? "ok" : "partly failed", potions, statrules::PotionOfLifeLife >> 8, statrules::LamEsenStatPoints, stamina);
+	const char* click = "off";
+	if (parts.shiftClick) {
+		const bool ok = context->InstallInlineHook(StatClickRva, StatClickEntry, sizeof(StatClickEntry), reinterpret_cast<void*>(&StatClickHook),
+		                                           reinterpret_cast<void**>(&g_statClickOriginal));
+		click = ok ? "on" : "FAILED";
+		if (ok && std::memcmp(reinterpret_cast<const void*>(base + PassiveRefreshRva), PassiveRefreshEntry, sizeof(PassiveRefreshEntry)) == 0) {
+			g_passiveRefresh = reinterpret_cast<PassiveRefreshFn>(base + PassiveRefreshRva);
+			click = "on, Grit follows Strength";
+		}
+		all = all && ok;
+	}
+	std::snprintf(report, reportSize, "%s: potion amounts %s (Potion of Life +%d life, Lam Esen %d points), stamina %s (0x42e850), shift-click %s (%d points, 0x4b3c70)",
+	              all ? "ok" : "partly failed", potions, statrules::PotionOfLifeLife >> 8, statrules::LamEsenStatPoints, stamina, click,
+	              statrules::MedianShiftClickCount + 1);
 	return all;
 }

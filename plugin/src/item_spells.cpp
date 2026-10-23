@@ -53,6 +53,7 @@
 #include "mxl_items.h"
 #include "strings.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
@@ -99,6 +100,10 @@ constexpr int UnitObjectData = 0x10;             // object unit -> object data
 constexpr int ObjPortalLevelHigh = 0x78;         // portal destination, high byte (low byte at +0x08)
 constexpr uint64_t GameCounterRva = 0x5d88b0;    // (game + 0x1aac8, &key) -> int* (per-game counters of the cube's
                                                  // Red Portal, keyed by recipe)
+constexpr uint64_t GameFlagSetRva = 0x325c00;    // (flag record, word, bit): the bit set the quest records use; the game's flags are one (game +0x21d8 -> +0x10)
+constexpr int GameFlagHolder = 0x21d8;           // game -> holder; holder +0x10 = the game's flag record (the wrappers 0x514fd0 / 0x5181c0 pass it on)
+constexpr uint64_t PlayerDataRva = 0x34b240;     // (player) -> player data; +0x40 + difficulty * 8 = the difficulty's quest record
+constexpr uint64_t QuestBitRva = 0x325c50;       // (quest record, quest, bit) -> 1 when set
 constexpr uint64_t UnitMessageRva = 0x491960;    // (player, message, player): 0x15 = "can't do that"
 constexpr int GameDifficulty = 0x104;            // byte: 0 normal, 1 nightmare, 2 hell
 constexpr int GameCounters = 0x1aac8;
@@ -166,6 +171,9 @@ using EventSkillFn = uint64_t (*)(d2r::Game* game, d2r::Unit* caster, int32_t sk
                                   int32_t y, void* out1, void* out2, void* out3, void* out4, int32_t zero);
 using GameCounterFn = int32_t* (*)(void* counters, const int32_t* key);
 using UnitMessageFn = void (*)(d2r::Unit* player, int32_t message, d2r::Unit* subject);
+using GameFlagSetFn = void (*)(void* record, int32_t word, int32_t bit);
+using PlayerDataFn = const uint8_t* (*)(d2r::Unit* player);
+using QuestBitFn = uint64_t (*)(const void* record, int32_t quest, int32_t bit);
 using UnitInventoryFn = void* (*)(d2r::Unit* unit, const char* file, int32_t line);
 using InventoryFirstFn = d2r::Unit* (*)(void* inventory);
 using InventoryNextFn = d2r::Unit* (*)(d2r::Unit* item);
@@ -207,6 +215,10 @@ TravelFn g_travel = nullptr;
 EventSkillFn g_eventSkill = nullptr;
 GameCounterFn g_gameCounter = nullptr;
 UnitMessageFn g_unitMessage = nullptr;
+GameFlagSetFn g_gameFlagSet = nullptr;
+PlayerDataFn g_playerData = nullptr;
+QuestBitFn g_questBit = nullptr;
+std::atomic<uint32_t> g_cowOutsideAct1{0}, g_cowRefused{0}, g_cowNoQuest{0}, g_cowFlagSet{0}, g_cowNoPortal{0};
 UnitInventoryFn g_unitInventory = nullptr;
 InventoryFirstFn g_inventoryFirst = nullptr;
 InventoryNextFn g_inventoryNext = nullptr;
@@ -636,6 +648,50 @@ auto CubeLevelPortal(d2r::Game* game, d2r::Unit* player, int32_t median) noexcep
 	return level != 0 && OpenPortal(game, player, level, ObjectRedPortal);
 }
 
+// The Cow Level recipe (Wirt's Leg, row 2, Median level 39): D2Sigma's handler above takes the same path for it, so the portal opens in
+// any town (patch notes P1.0.0, audit CR6). D2R's own handler 0x5da2a0 only opens it in Rogue Encampment (level 1), once per game (game
+// flag word 4 bit 0xb) and only with the Baal quest of the game's difficulty done (quest 0x1a bit 0 when the game's data flag is 1, else
+// quest 0x28 bit 0). The same three tests are made here for the other towns; Rogue Encampment stays D2R's (-1). The Cow Level is a level
+// of act 1 and D2R's portal creator (0x432ce0) refuses a destination in another act, so craft_flags.cpp only sends the other towns here
+// once it has patched that act compare out. 1 = opened, 0 = refused.
+auto CubeCowPortal(d2r::Game* game, d2r::Unit* player) noexcept -> int {
+	if (game == nullptr || player == nullptr || g_createPortal == nullptr || g_gameFlagSet == nullptr || g_questBit == nullptr) {
+		return -1;
+	}
+	void* room = g_unitRoom(player);
+	if (room == nullptr || g_roomLevelId(room) == 1) {
+		return -1;
+	}
+	const int32_t level = mxl_items::LevelIds[39];
+	const uint8_t* data = g_playerData(player);
+	const uint8_t difficulty = d2r::At<uint8_t>(game, GameDifficulty);
+	uint8_t* holder = d2r::At<uint8_t*>(game, GameFlagHolder);
+	void* flags = holder != nullptr ? d2r::At<void*>(holder, 0x10) : nullptr;
+	const void* record = data != nullptr && difficulty < 3 ? d2r::At<const void*>(data, 0x40 + difficulty * 8) : nullptr;
+	const bool questDone = record != nullptr && (d2r::DataFlag(game) == 1 ? g_questBit(record, 0x1a, 0) != 0 : g_questBit(record, 0x28, 0) != 0);
+	if (!questDone || flags == nullptr || g_questBit(flags, 4, 0xb) != 0 || level <= 0) {
+		(!questDone ? g_cowNoQuest : g_cowFlagSet).fetch_add(1);
+		g_cowRefused.fetch_add(1);
+		return 0;
+	}
+	if (!OpenPortal(game, player, level, ObjectRedPortal)) {
+		g_cowNoPortal.fetch_add(1);
+		g_cowRefused.fetch_add(1);
+		return 0;
+	}
+	g_gameFlagSet(flags, 4, 0xb);
+	g_cowOutsideAct1.fetch_add(1);
+	return 1;
+}
+
+auto CowPortalCounts(uint32_t* outsideAct1, uint32_t* refused, uint32_t* noQuest, uint32_t* flagSet, uint32_t* noPortal) noexcept -> void {
+	*outsideAct1 = g_cowOutsideAct1.load();
+	*refused = g_cowRefused.load();
+	*noQuest = g_cowNoQuest.load();
+	*flagSet = g_cowFlagSet.load();
+	*noPortal = g_cowNoPortal.load();
+}
+
 // D2Sigma missile hit 30 (0x1008d220 -> D2Objects.cpp 0x10097870 / 0x100976d0): a portal where the missile is, to
 // Median level sHitPar1. With sHitPar2 set, D2Sigma's one-way portal (Median object 586) and only once per level and
 // game (D2Sigma's level flag 4, shared with the keys: the same game counter here); without, a red portal (D2Sigma
@@ -691,6 +747,9 @@ auto InstallItemSpells(const D2RL::PluginContext* context, char* report, size_t 
 	g_eventSkill = reinterpret_cast<EventSkillFn>(base + EventSkillRva);
 	g_gameCounter = reinterpret_cast<GameCounterFn>(base + GameCounterRva);
 	g_unitMessage = reinterpret_cast<UnitMessageFn>(base + UnitMessageRva);
+	g_gameFlagSet = reinterpret_cast<GameFlagSetFn>(base + GameFlagSetRva);
+	g_playerData = reinterpret_cast<PlayerDataFn>(base + PlayerDataRva);
+	g_questBit = reinterpret_cast<QuestBitFn>(base + QuestBitRva);
 	g_unitInventory = reinterpret_cast<UnitInventoryFn>(base + UnitInventoryRva);
 	g_inventoryFirst = reinterpret_cast<InventoryFirstFn>(base + InventoryFirstRva);
 	g_inventoryNext = reinterpret_cast<InventoryNextFn>(base + InventoryNextRva);
