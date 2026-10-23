@@ -468,6 +468,27 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Out("corpses %d players=%d self=%d | no corpse %s: skipped corpse calls=%ld penalty calls=%ld respawns held=%ld let=%ld xp=%u", corpses,
 	    players, self ? 1 : 0, noCorpseOn ? "on" : "off", skippedCorpses, skippedPenalties, respawnsHeld, respawns,
 	    static_cast<uint32_t>(Stat(p, 13)));
+	// Every body there is on the server: player-type units other than this one in ANY mode (a dead player left as a unit counts),
+	// and the corpse list in the character's inventory (what a save writes as the "JM" corpse section). Median: both zero.
+	// D2R keeps ten inert player-type units (ids 2-11, no position) next to the character; they are no body, and are counted apart.
+	int otherPlayers = 0, hiddenPlayers = 0;
+	EachUnit(c->game, HashPlayers, [&](Unit* u) {
+		if (TypeOf(u) == 0 && u != p) {
+			int32_t ux = 0, uy = 0;
+			d2r::UnitXY(u, &ux, &uy);
+			if (ux != 0 || uy != 0) {
+				++otherPlayers;
+			} else {
+				++hiddenPlayers;
+			}
+		}
+	});
+	unsigned stored[16] = {};
+	const int storedCount = StoredCorpseIds(p, stored, 16);
+	long pickEnters = 0, pickPicked = 0, pickKept = 0, pickFaults = 0;
+	const bool pickupOn = CorpsePickupCounts(&pickEnters, &pickPicked, &pickKept, &pickFaults);
+	Out("bodies other=%d stored=%d id0=%u hidden=%d | corpse pickup %s: enters=%ld picked=%ld kept=%ld faults=%ld", otherPlayers, storedCount, stored[0],
+	    hiddenPlayers, pickupOn ? "on" : "off", pickEnters, pickPicked, pickKept, pickFaults);
 	long cdStarts = 0, cdReduced = 0, cdShared = 0, cdDropped = 0, cdMonsters = 0;
 	const bool cooldownsOn = CooldownCounts(&cdStarts, &cdReduced, &cdShared, &cdDropped, &cdMonsters);
 	Out("cooldowns %s: starts=%ld reduced=%ld shared=%ld dropped=%ld monsters=%ld", cooldownsOn ? "on" : "off", cdStarts, cdReduced, cdShared, cdDropped,
@@ -1170,10 +1191,24 @@ auto CmdSpawn(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 auto CmdKill(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (t.n < 2) {
-		return Fail(c, "usage: kill <unit id> | kill nearest [class]");
+		return Fail(c, "usage: kill <unit id> | kill nearest [class] | kill player [monster id]");
 	}
 	Unit* victim = nullptr;
 	long long v = 0;
+	if (hcmd::LowerEq(t.tok[1], "player")) {
+		// The unit death function on the character itself (a death where `hit` does not work, the town: monsters cannot damage
+		// there), killed by the given monster or, without one, by the character.
+		Unit* killer = c->player;
+		if (t.n > 2 && hcmd::ParseInt(t.tok[2], &v)) {
+			killer = FindMonsterById(c, static_cast<uint32_t>(v));
+		}
+		if (killer == nullptr) {
+			return Fail(c, "kill player: no such live monster");
+		}
+		Fn<KillFn>(RvaKill)(c->game, c->player, killer, 1);
+		Out("kill player: mode now %d (0 or 17 = dead)", ModeOf(c->player));
+		return true;
+	}
 	if (hcmd::LowerEq(t.tok[1], "nearest")) {
 		long long cls = -1;
 		if (t.n > 2 && !hcmd::ParseInt(t.tok[2], &cls)) {
@@ -3305,6 +3340,45 @@ auto CmdMapMem(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
+// Client side (UI thread): `ccorpses` counts the player-type units of the CLIENT's unit table (D2R's client table 0x2a23910, one
+// 128-bucket hash per unit type, 0x400 bytes each, chained through +0x158 as the server's): the character itself and every
+// other one - a corpse is a second player unit. Prints "ccorpses players=N self=S other=O ids=..." plus each other unit's
+// id, mode and position. Median: other=0 always.
+auto CmdClientCorpses(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	constexpr uint64_t RvaClientUnits = 0x2a23910;
+	if (g_playerId == 0) {
+		return Fail(c, "ccorpses: no player seen yet");
+	}
+	int players = 0, self = 0, other = 0, hidden = 0, guard = 0;
+	char ids[160] = "";
+	size_t used = 0;
+	for (int b = 0; b < 128; ++b) {
+		auto* u = *reinterpret_cast<Unit* const*>(g_base + RvaClientUnits + static_cast<uint64_t>(b) * 8);
+		for (; u != nullptr && guard < 20000; u = d2r::At<Unit*>(u, UnitNextInHash), ++guard) {
+			if (TypeOf(u) != 0) {
+				continue;
+			}
+			++players;
+			if (static_cast<LONG>(IdOf(u)) == g_playerId) {
+				++self;
+				continue;
+			}
+			int32_t ux = 0, uy = 0;
+			d2r::UnitXY(u, &ux, &uy);
+			if (ux == 0 && uy == 0) {  // the ten inert player-type units of D2R (ids 2-11): no position, no body
+				++hidden;
+				continue;
+			}
+			++other;
+			if (used < sizeof(ids) - 48) {
+				used += static_cast<size_t>(std::snprintf(ids + used, sizeof(ids) - used, "%u@%d,%d/m%d ", IdOf(u), ux, uy, ModeOf(u)));
+			}
+		}
+	}
+	Out("ccorpses players=%d self=%d other=%d hidden=%d ids=%s", players, self, other, hidden, other > 0 ? ids : "-");
+	return true;
+}
+
 // --- lane bug-backlog-b: verbs for the old "fix to test" rows of docs/bugs.md ----------------------------------------
 
 // Client side (UI thread): `skilltab [n]` the selected tab of the skill tree panel (bug #3), or select tab n through the
@@ -4395,7 +4469,7 @@ const Verb Verbs[] = {
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"hotkey", CmdHotkey, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
-    {"stashpage", CmdStashPage, true},
+    {"stashpage", CmdStashPage, true}, {"ccorpses", CmdClientCorpses, true},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

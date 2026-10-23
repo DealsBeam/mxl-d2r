@@ -329,6 +329,9 @@ caster comes from a second hook, on the skill use function `0x43acb0` (entry `48
 (unit type 0) counts. The Sigma formulas therefore also reach the server charge now (before, only the client charge site
 matched). The harness verb `manacharge` shows the last decision (calls, room, town test, cost, charge, site).
 
+**Town rules: NPC healing and the town portal lock (`town_rules.cpp`, `town_rules_logic.h`, audit NPC1 and UQ5; off words `npcheal`, `tplock`; `mxl` line `town rules`).**
+*NPC healing (Median P2.2.0: every NPC heals).* The packet 0x2f handler (`0x4c2410`) always calls the heal function `0x53fc50`, which heals only when the NPC table entry's byte `+6` is set (static table at `0x237ea60`, 43 entries of 0x1c bytes, indexed by the NPC class position). At install the plugin sets that byte in every entry (the expected value 0 or 1 is checked; the report says how many were set and how many already healed). *Town portal lock (Median P1.6.0: some zones disable town portals).* Median's `Tplock` column is levels.bin `+0x155` (`unk155` in `mxl_dungeons.h`, 22 levels, written by `tools/sigma_data.py`). The Town Portal skill function is srvdofunc 109 at `0x5822b0` `(game, player, skill)` -> 1 / 0 (entry `48 89 5c 24 08 57 48 83 ec 20 48 8b fa 48 8b d9`, checked): the inline hook gets the player's room (`0x34b440`) and level (`0x2efc10`); on a locked level it sends unit message 0x14 (`0x491960`, "failed"), returns 0 and counts the refusal (`mxl`: `portal refusals N`), so no portal object is made and no mana is spent. Pure logic in `town_rules_logic.h` (tests `plugin/tests/town_rules_test.cpp`). Verified in game by the checks `npcheal` and `tplock` (docs/unported.md).
+
 ## Item rules (`item_rules.cpp`, `item_gen.cpp`, audit IT1, IT2, IT3; off words `durability`, `durabilitytip`, `repairui`, `quantity`, `autoid`)
 
 Median keeps the durability and quantity columns and removes the behaviour from D2Game.dll with binary patches (D2Sigma's

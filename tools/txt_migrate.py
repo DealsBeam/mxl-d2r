@@ -2012,6 +2012,44 @@ class Migrator:
             if bank == "base" and filled:
                 self.report.append(f"\nskills: {len(filled)} class skills had no skilldesc; set to 'attack'")
 
+    # Skills that item properties name (oskill / charges / skill on hit, aura layers) but that Median gives no
+    # description: Median prints a blank name for them. D2R's formatter reads the skilldesc row of the named skill
+    # and asserts (nDesc >= 0 && nDesc < skillDescTbl.size()) when there is none (tooltip-verify, tooltiptext).
+    # 36 and 126 are the skills the harness casts as "Fire Bolt" and "Bash" (check casts): the client reads the
+    # description of a skill when it is cast, so a cast of any skill without one asserts too (nDesc, then `false`).
+    # Only these are listed: 1049 skills with ItemEffect 1 have no skilldesc, and a row each would change the lists
+    # the skill menus build from skilldesc.
+    BLANK_NAME_SKILLS = (36, 126, 669, 741, 2001, 2004, 2073, 2076)
+
+    def blank_skilldesc(self) -> None:
+        """A skilldesc row `blank` (no name, icon cel 0, no page: the shape of the 29 rows Median already has with an
+        empty `str name`, e.g. `avoid`) for the BLANK_NAME_SKILLS, so the item tooltip prints a blank like Median."""
+        for bank in ("base", ""):
+            sp = OUT / "data" / "global" / "excel" / bank / "skills.txt"
+            dp = OUT / "data" / "global" / "excel" / bank / "skilldesc.txt"
+            if not (sp.exists() and dp.exists()):
+                continue
+            h, rows = read_tsv(sp)
+            ident, sd = h.index("*Id"), h.index("skilldesc")
+            todo = [r for r in rows if is_record(r) and r[ident].isdigit() and int(r[ident]) in self.BLANK_NAME_SKILLS
+                    and not r[sd]]
+            if not todo:
+                continue
+            for r in todo:
+                r[sd] = "blank"
+            write_tsv(sp, h, rows)
+            dh, drows = read_tsv(dp)
+            if not any(r and r[0] == "blank" for r in drows):
+                new = [""] * len(dh)
+                new[0] = "blank"
+                new[dh.index("IconCel")] = "0"
+                if "*eol" in dh:
+                    new[dh.index("*eol")] = "0"
+                drows.append(new)
+                write_tsv(dp, dh, drows)
+            if bank == "base":
+                self.report.append(f"\nskills: {len(todo)} item-property skills had no skilldesc; set to 'blank' (empty name)")
+
     # Which strings D2R's skill description line types read (D2Client UI/SkillDesc.cpp, 0x287a50: a switch on the
     # line type that asserts "stringIndex1 != strdummy [&& stringIndex2 != strdummy]" when one is missing).
     DESCLINE_NEEDS = {2: "AB", 3: "AB", 4: "A", 5: "A", 6: "A", 7: "A", 12: "A", 13: "A", 15: "AB", 17: "A",
@@ -2454,6 +2492,7 @@ def main() -> int:
     m.sound_rows()
     m.skill_costs()
     m.fill_skilldesc()
+    m.blank_skilldesc()
     m.skilldesc_lines()
     m.clean_cube_outputs()
     m.skill_rules()

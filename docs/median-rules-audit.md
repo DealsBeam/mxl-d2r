@@ -101,7 +101,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | IC2 | Trade window and NPC stores are larger. | P1.0.0 | ported (unverified) | `inventory.txt` Trade Page and Monster rows; listed (Trade window) |
 | IC3 | Belt UI and the show-belt-rows hotkey work. | P1.2.0 | ported (D2R native) | D2R belts.txt carried |
 | IC4 | Set bonuses with more than 6 pieces. | Median sets | unknown | `docs/services.md` L10: set size >6 unknown in D2R. Check: equip a 7-piece set |
-| IC5 | Only one charm of a type may be carried (fixed bug: more than one charm). | P1.0.0 | unknown | D2R's rule applies; Median's fix not compared |
+| IC5 | Only one charm of a type may be carried (fixed bug: more than one charm). | P1.0.0 | ported and verified (lane p4-verify-b: check `charmlimit`, run `checks-20261023-195127-s1`) | D2R's `carry1` column plus the plugin's unique limits; the second copy of a carry1 / limited charm is refused, an unlimited charm takes two |
 
 ## 4. Item rules
 
@@ -213,7 +213,7 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 | UQ2 | Access scrolls, keys, signets, oils, riftwalks, rune and crystal systems. | W:Items | ported | tables and `item_spells.cpp` |
 | UQ3 | Goblins and treasure goblins. | P2.2.0 | ported | `goblins` check; listed (sighted packet approx) |
 | UQ4 | Quest reward notices. | P2.0.0 | partly | listed (Quest reward notices, approx) |
-| UQ5 | Some zones disable town portals (Edge of Nothingness corridor). | P1.6.0 | unknown | only the cooldown is ported. Check: open a portal in the corridor |
+| UQ5 | Some zones disable town portals (Edge of Nothingness corridor). | P1.6.0 | ported and verified (lane p4-verify-b: check `tplock`, run `checks-20261023-195127-s1`; control `checks-20261023-200935-s3`) | Tplock column of levels.txt (22 levels) read by a hook on the Town Portal skill; off word `tplock` |
 | UQ6 | The ubers and endgame events work without a dedicated module. | `docs/subsystems/ubers-events.md` | partly | data + item spell 16 + lockout + goblins |
 | UQ7 | Seasonal/Halloween/Christmas events. | P2.4.0, P2.13.0 | missing | listed (Halloween chest) |
 
@@ -224,7 +224,7 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 | SK1 | Skill points cap (max base level) and soft levels. | P1.0.0 | ported | D:skills |
 | SK2 | Akara respec with a confirmation dialog. | P1.6.0 | ported | check `respec`; listed (Akara respec confirm, done) |
 | SK3 | Skills cost no mana in town. | P2.1.0 | ported (verified; mechanism differs) | plugin part `townmana`: the mana cost hook returns 0 at the charge sites when the caster is in a town; it needed a caster hook on `0x43acb0` because D2RLoader re-assembles the server charge function (docs/plugin-spec.md, Mana costs). `game_checks townmana`: town 5000 -> 5000, field -> 4993 (off word: 4993 in town) |
-| SK4 | Many skills castable in town (buffs, totems, warp, Shadow Refuge, Acid aura). | P1.1.0, P1.2.0, P1.7.0, P2.1.0 | unknown | skills.txt `town` column carried from Median; not tested. Check: `cast` each in town |
+| SK4 | Many skills castable in town (buffs, totems, warp, Shadow Refuge, Acid aura). | P1.1.0, P1.2.0, P1.7.0, P2.1.0 | ported and verified (lane p4-verify-b: check `towncast`, run `checks-20261023-195127-s1`) | `InTown` column carried from Median; 3 class-free InTown skills start in town, 12 others are refused and start in the field. The 8 Warlock InTown skills are not judged (need a Warlock character) |
 | SK5 | Town Portal is an innate skill (no scrolls) with a 10 s cooldown, and a 1 second delay when opening. | P1.0.0, P2.2.0 | partly | D:skills town_portal srvdofunc 109, localdelay 250; the 1 s delay is not checked |
 | SK6 | Skill cooldowns are computed dynamically; skill groups no longer share cooldowns. | P1.0.0 | ported | D2Sigma's cooldown start: one timer per skill or per skills2 cooldown group, no unit-wide delay state; `cooldowns.cpp` ports it on D2R's cooldown starts. Check `cooldowns` (PASS 2026-10-22, Blast Wave (group 4, localdelay 500): 494 frames without and 390 with stat 309 = 100, the six other group skills got the same end frame; server start only, the client twin is not reached by the harness cast) |
 | SK7 | Run/walk toggle is renamed "Toggle Sprint"; a sprint lasts about 5 seconds and is much faster than walking. The patch note's "stamina removed" means the vitality and level stamina gains, not the stamina bar. | P1.0.0, patch strings, D:charstats | ported (verified) | Median's sprint is data: `charstats` stamina 50, WalkVelocity 10, RunVelocity 15 (Barbarian 14), RunDrain 60, StaminaPerLevel and StaminaPerVitality blank, built identical to Median's. D2Game's drain (RunDrain x2 per frame, forced to walk at 0) is vanilla 1.13c code in both games; there is no sprint state or skill and no cooldown timer (the bar refilling is the cooldown). Game check `sprint` (exact, per frame): run from full drains exactly 120 raw per frame with no regeneration = 107 frames (4.3 s), walking from empty gains exactly 37 raw per frame, standing exactly 50, run/walk speed about 1.3 (data 1.40), a run starts at 2 points of stamina, R toggles run and walk. Median's stamina regen is D2Sigma's `0x100a1f90` (decompiled), ported by `stat_rules.cpp` (docs/sigma-patch-audit.md item 15; game check `manarules`): standing 100% of max / 256 raw per frame, walking and other modes 75%, running 0, state 136 (Stamina Shrine) fills the bar |
@@ -249,7 +249,7 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 
 | ID | Rule | Source | Status | Port evidence / check idea |
 |---|---|---|---|---|
-| NPC1 | All NPCs can heal you. | P2.2.0 | unknown | no NPC-heal code. Check: damage the player and talk to a vendor |
+| NPC1 | All NPCs can heal you. | P2.2.0 | ported and verified (lane p4-verify-b: check `npcheal`, run `checks-20261023-195127-s1`; control `checks-20261023-200935-s3`) | the heal flag of all 43 NPC table entries is set by the plugin (off word `npcheal`) |
 | NPC2 | Vendor stock and refresh rules. | P2.0.0 | ported | `docs/vendors.md` |
 | NPC3 | Gheed gamble, Akara respec, Larzuk sockets, Charsi. | W:Vendors | ported | `npc.txt`, `docs/vendors.md` |
 | NPC4 | New towns: vendors and stash in the new town areas; dying or town portal in some places lead to the new towns. | P1.1.0 | ported (unverified) | D:levels, DS1 files |
@@ -269,7 +269,7 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 |---|---|---|---|---|
 | MU1 | Median adds new areas (Rifts, Dungeons, Labyrinth, the new towns). | W:Areas | ported | `docs/maps-hd.md`, levels, DS1 files |
 | MU2 | Map Reveal: accessible from the UI or the L key (Median's default; the first port's R is D2R's run toggle) (shows Cairn Stones, shrines, Staff altar, Tal Rasha tomb, Act 5 waypoints). | P1.0.0 | partly (verified) | D2Sigma `0x887c0` reveals the act once per game. `travel.cpp`: L calls D2R's debug Reveal Automap `0xd42b0` on the current level (preset objects included). `game_checks mapreveal` PASS, run `checks-20261023-191456-s1`: Harrogath entered without debug mode, current-layer cells 15 -> 2269, a second press +0. The earlier PARTIAL was the check's (town maps arrive whole, the all-layer count mixed in layers the call creates). Not Median's act-wide walk; no UI button |
-| MU3 | Area level can be displayed in the corner of the screen (optional). | P1.0.0 | unknown | no area-level HUD code. Check: look for the option in settings |
+| MU3 | Area level can be displayed in the corner of the screen (optional). | P1.0.0 | not ported (client drawing); the data it shows is verified (lane p4-verify-b: check `arealevel`, run `checks-20261023-195127-s1`) | the corner text is UI, listed in docs/unported.md |
 | MU4 | Terror zones removed. | docs/PLAN.md | deviation | removed in the port plan |
 
 ## 14. Player-visible UI
@@ -307,4 +307,4 @@ for comparison: screenshots of Median 2.14.4 inventory tooltips taken by this la
 | OT1 | Higher resolution and field of view (1024x768) and glide settings. | P1.0.0 | deviation | D2R HD instead |
 | OT2 | Median's strings replace D2R's. | `docs/strings-namespace.md` | ported | strings contract |
 | OT3 | Custom HD art and the classic graphics mode. | `docs/PLAN.md` | deviation | deferred |
-| OT4 | D2 bugfixes: overflow percentages, damage cap, str/dex glitch, 32,767 rollover of life/mana, druid immortal while morphed, ghost state after death, whirlwind chance-to-cast. | P1.0.0 | unknown | D2R fixed some of these itself; none compared. Check: raise life above 32767, cast whirlwind with a chance-to-cast item |
+| OT4 | D2 bugfixes: overflow percentages, damage cap, str/dex glitch, 32,767 rollover of life/mana, druid immortal while morphed, ghost state after death, whirlwind chance-to-cast. | P1.0.0 | verified for the engine parts (lane p4-verify-b: check `bugfixes`, runs `checks-20261023-195127-s1` and `checks-20261023-200935-s3`) | percent overflow, damage cap, 32,767 rollover, death in a shapeshift state, ghost state and aura after death are fine in D2R; str/dex glitch and whirlwind chance-to-cast could not be reached with the harness (docs/unported.md) |
