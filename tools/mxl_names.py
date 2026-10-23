@@ -25,10 +25,11 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import vanilla113
+
 ROOT = Path(__file__).resolve().parent.parent
 SUGMA = ROOT.parent
 DEFAULT_MXL = ROOT / "assets" / "median"
-DEFAULT_VANILLA = SUGMA / "D2R Modding Tools" / "D2Compare_102" / "TXT" / "113c"
 DEFAULT_D2R = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "excel"
 
 # entity -> (placeholder prefix, table file, key column, Median ID column or None, index-addressed?)
@@ -184,7 +185,7 @@ class Resolver:
         self.strings = Strings(txt / "strings")
         self.tables = {p.stem: Table(p.stem, *read_tsv(p)) for p in sorted(txt.glob("*.txt"))
                        if not p.stem.endswith("code")}
-        self.vanilla_files = {p.stem.lower(): p for p in args.vanilla.glob("*.txt")}
+        self.vanilla_dir = args.vanilla  # optional folder of classic 1.13c tables (A/B check); default: D2R-derived view
         self.d2r = args.d2r
         # Reverse maps for columns the first decoder already turned into display names.
         self.skill_display = {}  # "Attack (sk0)" / "Kick" -> skill row
@@ -267,6 +268,15 @@ class Resolver:
                     refs[PREFIX_ENTITY[prefix]][int(row)] += 1
         return refs
 
+    def vanilla(self, tname: str) -> tuple[list[str], list[list[str]]] | None:
+        """The table as 1.13c has it, or None when the build has no vanilla reference for it (arena, belts, ...)."""
+        if self.vanilla_dir:
+            p = self.vanilla_dir / f"{tname}.txt"
+            return read_tsv(p, "latin-1") if p.exists() else None
+        if tname in vanilla113.ROW_COUNTS:
+            return vanilla113.load(tname, lambda p: read_tsv(p, "utf-8-sig"), self.d2r / "base")
+        return None
+
     # ---- ID and name assignment --------------------------------------------------------------------------
     def assign_ids(self, refs: dict[str, Counter]) -> list[str]:
         notes = []
@@ -276,8 +286,8 @@ class Resolver:
             # (monseq's first group has an empty name and counts as group 0, like any empty-key record)
             rows_of = data_rows
             vrows: list[str] = []
-            if tname in self.vanilla_files:
-                vh, vr = read_tsv(self.vanilla_files[tname], "latin-1")
+            if (van := self.vanilla(tname)):
+                vh, vr = van
                 vk = vh.index(keycol) if keycol in vh else 0
                 vrows = [r[vk] for r in rows_of(vr)]
             banks = []
@@ -290,7 +300,7 @@ class Resolver:
                 vrows = list(dict.fromkeys(vrows))
                 banks = [list(dict.fromkeys(b)) for b in banks]
             d2r_rows = max(banks, key=len) if banks else []  # RotW is the larger bank; IDs stay valid in both
-            if not vrows and tname not in self.vanilla_files:
+            if not vrows and not van:
                 vrows = d2r_rows  # no 1.13c reference file: D2R's rows stand in for the vanilla ones
             self.taken[ent] = {n.lower() for b in banks for n in b} | {n.lower() for n in vrows}
 
@@ -543,7 +553,8 @@ class Resolver:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mxl", type=Path, default=DEFAULT_MXL)
-    ap.add_argument("--vanilla", type=Path, default=DEFAULT_VANILLA)
+    ap.add_argument("--vanilla", type=Path, default=None,
+                    help="folder of classic 1.13c tables to use instead of the view tools/vanilla113.py builds from --d2r")
     ap.add_argument("--d2r", type=Path, default=DEFAULT_D2R)
     ap.add_argument("--out", type=Path, default=ROOT / "work" / "named")
     args = ap.parse_args()
