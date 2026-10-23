@@ -82,6 +82,8 @@ key in it. (The text below is the history of the exceptions that existed before 
     (index cell `medianxl:mxlname_16`) shows **"SUNSTONE OF THE TWIN SEAS"** as its ground label (Alt held through the
     plugin's virtual modifier block). Not read in game: the set item (the harness cannot create a set quality item, `uniq=`
     forces unique) and the level warp text on screen; no tooltip is drawn in background mode.
+    Owner review 2026-10-23 (run `checks-20261023-153434-s1`, `nslong_labels0-2.png`): all ground labels show the correct
+    names, so the check's REVIEW counts as PASS.
   - validate.py fails when any cell is longer than its field (with the prefix), when a reference still names a
     long key that has an alias (unqualified), and when an alias is missing from the namespace list. `tools/strings_native.json` is
     empty again; add a key there only for a string the plugin must give D2R as a fixed numeric ID.
