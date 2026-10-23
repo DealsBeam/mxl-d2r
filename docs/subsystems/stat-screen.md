@@ -69,8 +69,10 @@ skills (the layer is fixed at 0).
   are `advdisplay` 1, shown even at 0: attack rating, block chance, the five speeds and six resistances.
 - The text of 65 of those stats read "+30 %+d to Strength" (the value twice): tbl2json.py keeps D2R's printf text
   ("%+d to Strength") where Median's has no placeholders, while Median's descfunc 1-4 puts the value in front. `advanced_stats`
-  sets descfunc 19 (D2R's own: the text formats the value) on every listed stat whose text contains "%". This changes the
-  tooltip line of those stats on items too (for the better; before: the doubled value).
+  used to set descfunc 19 (D2R's own: the text formats the value) on every listed stat whose text contains "%". Since lane
+  tooltip-verify the text comes from `<key>_mxl` alias keys (Median's wording, [strings-namespace.md](../strings-namespace.md)) and
+  that conversion finds nothing left to do; the plugin hook `item_text.cpp` draws the lines of Median's descfuncs 32-38
+  ([item-tooltips.md](../item-tooltips.md)), items and panel alike.
 - Not listed: stat 83 (class skills) and 185 (signets, no description). 299 / 300 are listed (`advdisplay` 1: shown even at
   0, like Median) and filled by the plugin; the percent stats that are columns now (below) are not rows.
 
