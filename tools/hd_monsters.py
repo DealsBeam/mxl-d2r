@@ -43,7 +43,7 @@ from strings_ns import bare  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 D2R = ROOT / "extract" / "d2r" / "93847"
-MXL_MON = ROOT / "extract" / "mxl" / "data" / "global" / "monsters"
+MXL_MON = ROOT / "assets" / "median" / "data" / "global" / "monsters"
 GAME = r"C:\Program Files (x86)\Diablo II Resurrected"
 HDC = D2R / "data" / "hd" / "character"
 PARTS = {"HD": "head", "TR": "torso", "LG": "legs", "RA": "rarm", "LA": "larm", "RH": "rhand", "LH": "lhand",

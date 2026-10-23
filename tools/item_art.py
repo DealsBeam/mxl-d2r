@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from skill_icons import decode_frame, palette, read_dc6  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-MXL_ITEMS = ROOT / "extract" / "mxl" / "data" / "global" / "items"
+MXL_ITEMS = ROOT / "assets" / "median" / "data" / "global" / "items"
 D2R_FILELIST = ROOT / "extract" / "d2r" / "93847" / "filelist.txt"
 OUT = ROOT / "work" / "mod" / "data" / "hd" / "global" / "ui" / "items"
 CELL_CLASSIC, CELL_HD, CELL_LOW = 28, 98, 49

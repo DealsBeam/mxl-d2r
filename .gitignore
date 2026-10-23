@@ -45,3 +45,7 @@ __pycache__/
 
 # Agent worktrees
 /.claude/
+
+# Custom art and Median XL's own files are committed under assets/ (Git LFS, docs/setup.md "What is in the repo"):
+# the art patterns above don't apply there. Blizzard's base game files are never committed (they come from the D2R install).
+!/assets/**

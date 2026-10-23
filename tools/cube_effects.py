@@ -1,6 +1,6 @@
 """Median cube output effects (bytes 6 pay gold / 7 set player flag / 9 set game flag) -> plugin/src/mxl_cube_effects.h.
 
-Reads extract/mxl/data/global/excel/cubemain.bin (4-byte count, 0x148-byte records; output slots at +0x4c, +0xa0,
+Reads assets/median/data/global/excel/cubemain.bin (4-byte count, 0x148-byte records; output slots at +0x4c, +0xa0,
 +0xf4, 0x54 bytes each; byte at slot +8, word at slot +6). D2R's cubemain.txt cannot carry these bytes.
 Also the portal outputs (byte 1, param = a Median level number): D2R's handler for that byte always opens the Cow Level, so
 the plugin carries the recipe -> level pairs (Portals). Row numbers equal the migrated cubemain rows. Usage: py -3 tools/cube_effects.py [path to cubemain.bin]
@@ -11,7 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT = ROOT / "extract" / "mxl" / "data" / "global" / "excel" / "cubemain.bin"
+DEFAULT = ROOT / "assets" / "median" / "data" / "global" / "excel" / "cubemain.bin"
 KINDS = {6, 7, 8, 9, 10}
 
 

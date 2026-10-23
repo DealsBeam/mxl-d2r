@@ -10,7 +10,7 @@ animations (its new monster codes and modes, about 2,500) are added. Where both 
 the speed/events differ (Median's attack-speed balance, about 245 records); when the frame count differs, D2R's record
 stays, so it keeps matching D2R's COF and HD animation. eanimdata.d2 (D2R's own extra table) is left alone.
 
-Input:  extract/d2r/93847/data/global/animdata.d2, extract/mxl/data/global/animdata.d2
+Input:  extract/d2r/93847/data/global/animdata.d2, assets/median/data/global/animdata.d2
 Output: work/mod/data/global/animdata.d2, work/mod/animdata_report.md
 Usage: python tools/animdata_merge.py
 """
@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 D2R = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "animdata.d2"
-MXL = ROOT / "extract" / "mxl" / "data" / "global" / "animdata.d2"
+MXL = ROOT / "assets" / "median" / "data" / "global" / "animdata.d2"
 OUT = ROOT / "work" / "mod" / "data" / "global" / "animdata.d2"
 REPORT = ROOT / "work" / "mod" / "animdata_report.md"
 RECORD = 160

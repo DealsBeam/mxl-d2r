@@ -1,7 +1,7 @@
 # D2Quests.cpp and D2Requirements.cpp (research lane, 2026-10-20)
 
 Source: `D2Sigma.dll` (1.10, base 0x10000000, Ghidra read-only copy) and the 1.13 `D2Game.dll` it calls into (base 0x6fc20000).
-Addresses below are D2Sigma RVAs-as-VAs (0x1009xxxx) unless marked "D2Game +0x...". Data from `extract/mxl`, `work/named`, `work/sigma`.
+Addresses below are D2Sigma RVAs-as-VAs (0x1009xxxx) unless marked "D2Game +0x...". Data from `assets/median`, `work/named`, `work/sigma`.
 
 ## Short version
 

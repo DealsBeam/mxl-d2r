@@ -1,6 +1,6 @@
 """Resolve Median XL placeholder names and renumber Median's rows around D2R's.
 
-Input:  mxl_extracted/2_txt (tables decoded from Median's .bin files; key names were lost and written
+Input:  assets/median/2_txt (tables decoded from Median's .bin files; key names were lost and written
         as placeholders such as pr116, is467, st194, ms12, ml98, sd5, mi0, cm0, ol3, lv9, se0, su0, ev2).
 Output: work/named/<table>.txt   same tables (1.13c columns), placeholders replaced by names, IDs renumbered
         work/named/idmap.json    per entity: Median row -> {id, name, source}
@@ -27,7 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SUGMA = ROOT.parent
-DEFAULT_MXL = SUGMA / "mxl_extracted"
+DEFAULT_MXL = ROOT / "assets" / "median"
 DEFAULT_VANILLA = SUGMA / "D2R Modding Tools" / "D2Compare_102" / "TXT" / "113c"
 DEFAULT_D2R = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "excel"
 

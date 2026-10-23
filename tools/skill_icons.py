@@ -36,7 +36,7 @@ from txt_migrate import read_tsv, write_tsv, is_record  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "work" / "mod" / "data"
-MXL = ROOT / "extract" / "mxl" / "data" / "global"
+MXL = ROOT / "assets" / "median" / "data" / "global"
 SHEETS = MXL / "themes" / "classic_sigma" / "game" / "skills"
 PALETTE = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "palette" / "units" / "pal.dat"
 GAME = r"C:\Program Files (x86)\Diablo II Resurrected"

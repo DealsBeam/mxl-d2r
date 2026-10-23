@@ -40,7 +40,7 @@ from txt_migrate import read_tsv  # noqa: E402
 from ui_layouts import CLASSIC_TABS, TABS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-MXL = ROOT / "extract" / "mxl" / "data" / "global"
+MXL = ROOT / "assets" / "median" / "data" / "global"
 GAME_ART = MXL / "themes" / "classic_sigma" / "game"
 D2R_TREES = ROOT / "extract" / "d2r" / "93847" / "data" / "hd" / "global" / "ui" / "spells" / "skill_trees"
 MOD = ROOT / "work" / "mod" / "data"

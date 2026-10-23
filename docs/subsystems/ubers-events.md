@@ -1,6 +1,6 @@
 # Ubers, endgame areas, goblins and events (research lane, 2026-10-21)
 
-Source: `D2Sigma.dll` (1.10, base 0x10000000, Ghidra read-only copy), tables from `extract/mxl`, `work/named`, `work/sigma`.
+Source: `D2Sigma.dll` (1.10, base 0x10000000, Ghidra read-only copy), tables from `assets/median`, `work/named`, `work/sigma`.
 Addresses are D2Sigma RVAs-as-VAs (0x1005xxxx) unless marked otherwise; **D2R addresses: "to find"** throughout.
 Median level numbers are the `levels.bin` row numbers (what Median's formulas use); from 137 up the D2R id is the
 Median number + 1 (`LevelIds` in `plugin/src/mxl_items.h`; 137 is skipped). Lists below use Median numbers.

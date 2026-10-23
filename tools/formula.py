@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TXT = ROOT.parent / "mxl_extracted" / "2_txt"
+TXT = ROOT / "assets" / "median" / "2_txt"
 
 BINOPS = {0x0A: "<", 0x0B: ">", 0x0C: "<=", 0x0D: ">=", 0x0E: "==", 0x0F: "!=",
           0x10: "+", 0x11: "-", 0x12: "*", 0x13: "/", 0x14: "^"}
@@ -124,7 +124,7 @@ def decode(code: bytes, ctx: str, quirks: list | None = None) -> Node:
 
 
 def entries(name: str) -> list[tuple[int, str, bytes]]:
-    """(index, first decoder's text, bytecode) from mxl_extracted/2_txt/<name>.txt."""
+    """(index, first decoder's text, bytecode) from assets/median/2_txt/<name>.txt."""
     lines = (TXT / f"{name}.txt").read_text("utf-8").splitlines()
     out = []
     for k in range(0, len(lines) - 1, 2):
@@ -361,7 +361,7 @@ def cmd_check() -> int:
 # concatenated formula buffer; the column -> record offset map is found by voting (see find_fields).
 FORMULA_TABLES = {"skills": ("skillscode", "skills"), "skilldesc": ("skilldesccode", "skills"),
                   "missiles": ("misscode", "missiles"), "misc": ("itemscode", "items")}
-BINS = ROOT / "extract" / "mxl" / "data" / "global" / "excel"
+BINS = ROOT / "assets" / "median" / "data" / "global" / "excel"
 NAMED = ROOT / "work" / "named"
 OUT = ROOT / "work" / "formulas"
 

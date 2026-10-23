@@ -1,6 +1,6 @@
 """Convert Median XL's string tables (.tbl) into D2R string JSON files.
 
-Input:  extract/mxl/data/local/lng/eng/{string,expansionstring,patchstring}.tbl (tools/mpq_extract.py)
+Input:  assets/median/data/local/lng/eng/{string,expansionstring,patchstring}.tbl (tools/mpq_extract.py)
         extract/d2r/<build>/data/local/lng/{strings,strings-legacy}/*.json (tools/casc_extract.py)
 Output: work/mod/data/local/lng/strings/medianxl/overrides.json (Median's text for D2R's own keys, records
         {"Key": "d2r:<key>", 13 languages}, no id, one per key) and strings/medianxl/median.json (Median-only keys,
@@ -38,7 +38,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TBL = ROOT / "extract" / "mxl" / "data" / "local" / "lng" / "eng"
+TBL = ROOT / "assets" / "median" / "data" / "local" / "lng" / "eng"
 D2R_LNG = ROOT / "extract" / "d2r" / "93847" / "data" / "local" / "lng"
 OUT = ROOT / "work" / "mod"
 TABLES = (("string", 0), ("patchstring", 10000), ("expansionstring", 20000))
@@ -129,7 +129,7 @@ def main() -> int:
     shadowed = sum(1 for sid, (key, _t) in by_id.items() if not idkeys[sid].startswith("mxl_") and winner[key] != sid)
 
     # sanity: the .tbl parse must agree with the first extraction (key<TAB>text, newlines written as \n)
-    old_dir = ROOT.parent / "mxl_extracted" / "2_txt" / "strings"
+    old_dir = ROOT / "assets" / "median" / "2_txt" / "strings"
     agree = 0
     for name, base in TABLES:
         if not (old_dir / f"{name}.txt").exists():
