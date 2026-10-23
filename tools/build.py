@@ -27,6 +27,7 @@
                      docs/hd-effects.md; run it by hand)
   item_hd.py         HD inventory pictures for Median's items/uniques/sets -> hd/items/*.json; also converts Median-owned item art via item_art.py (bug #18)
   skill_icons.py     Median's skill icons as D2R icon sheets (classic + HD) and skilldesc IconCel
+  state_icons.py     D2Sigma's buff / debuff icon bar -> plugin/src/mxl_state_icons.h (+ the git-ignored mxl_state_icon_art.h)
   ui_panels.py       Median panel art as HD sprites and classic DC6 panels
   skill_tree_art.py  Median skill tree look: tab titles, stone, arrows per class and tab (HD + classic)
   ui_layouts.py      UI layout overrides (8-tab skill tree, 15x10 inventory and cube)
@@ -41,7 +42,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STEPS = [["mxl_names.py"], ["formula.py", "convert"], ["sigma_tables.py", "decode"], ["tbl2json.py"],
-         ["txt_migrate.py"], ["art_fix.py"], ["waypoints_data.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["unique_limits_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["art_provenance.py"], ["hd_monsters.py"], ["wereowl_models.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["effects_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
+         ["txt_migrate.py"], ["art_fix.py"], ["waypoints_data.py"], ["monster_ai_data.py"], ["cube_tables.py"], ["sigma_data.py"], ["items_data.py"], ["unique_limits_data.py"], ["npc_actions_data.py"], ["npc_services_data.py"], ["gfx_placeholders.py"], ["art_provenance.py"], ["hd_monsters.py"], ["wereowl_models.py"], ["animdata_merge.py"], ["hd_skill_anims.py"], ["missile_hd.py"], ["effects_hd.py"], ["item_hd.py"], ["skill_icons.py"], ["state_icons.py"], ["ui_panels.py"], ["skill_tree_art.py"], ["ui_layouts.py"], ["terror_zones.py"],
          ["validate.py"]]
 
 

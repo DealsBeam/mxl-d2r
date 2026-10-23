@@ -10,7 +10,6 @@ build). Every command runs from the repo root.
 | Diablo II: Resurrected 3.3, build 93847 | `C:\Program Files (x86)\Diablo II Resurrected` | read through CascLib; game must be installed (not running) |
 | Median XL (classic) 2.14.4 | `C:\Games\median-xl` | classic install with the `medianxl-*.mpq` files |
 | `..\mxl_extracted` | next to the repo (`C:\Users\<you>\mxl_extracted`) | the first extraction (`2_txt`, `1_bin_from_mpq`, Ghidra output); NOT in git. On the game PC it lives in `Desktop\sugma\mxl_extracted`, so a junction points to it: `mklink /J %USERPROFILE%\mxl_extracted %USERPROFILE%\Desktop\sugma\mxl_extracted` |
-| `..\D2R Modding Tools\D2Compare_102\TXT\113c` | next to the repo | vanilla 1.13c tables read by `mxl_names.py`; rebuilt here from the classic MPQs (below) |
 | Python 3.12 | `py -3` | `python` is the Store stub |
 | CMake | `C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin` | not on PATH; add it for the build shells |
 | MSVC | Visual Studio 18 Community, "Desktop development with C++" | |
@@ -28,11 +27,13 @@ build). Every command runs from the repo root.
    ```
    -> `extract/d2r/93847/` (35,124 files). The default sets alone are not enough: `gfx_placeholders.py` (art file lists),
    `missile_hd.py`, `item_hd.py`, `skill_icons.py` (palette), `ui_panels.py` read `legacy-*` and `hd-ui`.
-6. Vanilla 1.13c tables (once): extract the 92 `data\global\excel\*.txt` listed below from `patch_d2.mpq`, then
-   `d2exp.mpq`, then `d2data.mpq` (first hit wins) into `..\D2R Modding Tools\D2Compare_102\TXT\113c\`. The
-   file names are the `*.txt` of a patch_d2 extraction (arena, armor, ... , weapons); `tools/native.py`
-   (`open_mpq`, `extract`) does it. Without this folder `mxl_names.py` still runs but resolves far fewer names
-   (3,769 validate errors).
+6. (no step: the vanilla 1.13c view comes from the D2R extraction of step 5.) `mxl_names.py` and `func_slots.py` need
+   the tables of Median's vanilla rows only as a row count, row order, key names and a few function slots; D2R's own tables
+   hold the 1.13c rows as their first rows. `tools/vanilla113.py` cuts the 33 tables the build uses to their 1.13c row counts
+   and puts back the few cells D2R changed (`py -3 tools/vanilla113.py` lists them). No classic Diablo II files or
+   `..\D2R Modding Tools` folder are read. Against the build that read the classic tables `work/mod` is byte-identical
+   except 214 comment cells that carry D2R's wording instead of 1.13c's (misc.txt `name`, 63 rows; cubemain.txt
+   `description`, 151 rows; both columns are typed "comment" in D2R's data guide) and the lines of validate_report.md that quote them.
 7. Restore the extraction Median shipped before its hotfix. The installed `medianxl-YmludGJsdHh0.mpq` (bintbltxt,
    dated 2026-10-03) holds `skills.bin`, `skillscode.bin` and `states.bin` that differ from the 2026-10-02
    extraction behind `..\mxl_extracted\2_txt`; `formula.py` then finds no formula columns in skills. Copy those three

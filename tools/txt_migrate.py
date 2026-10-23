@@ -1027,6 +1027,61 @@ class Migrator:
         self.report.append(f"\nhelp tooltips: {len(self.help_keys)} item help texts (D2Sigma spells 13/21) shown in "
                            f"tooltips ({n} strings)")
 
+    def orb_tooltips(self) -> None:
+        """Mystic orb tooltips (audit T12): every orb item had the same spelldescstr ("Right-Click to Apply"), D2Sigma's
+        tooltip builder (0x100793f0) appends the orb's limit, required level, properties and target type. tools/orb_tips.py
+        renders that text per orb and language into one string `mxlorb_<orb row>`; the orb's misc rows (both banks) point
+        their spelldescstr at it (the old description stays the first lines)."""
+        import orb_tips
+        orb_rows: dict[str, int] = {}  # misc code -> mysticorbs row (D2Sigma: calc1 - 1)
+        for code, spell, calc1 in self.sigma_items:
+            if spell == 20 and calc1.lstrip("-").isdigit():
+                orb_rows[code.strip()] = int(calc1) - 1
+        orbs = orb_tips.load_orbs(ROOT / "work" / "sigma" / "mysticorbs.txt")
+        mh, mrows = read_tsv(NAMED / "properties.txt")
+        props = {i: [(r[mh.index(f"func{j}")], r[mh.index(f"stat{j}")]) for j in range(1, 8) if r[mh.index(f"func{j}")]]
+                 for i, r in enumerate(mrows)}
+        ih, irows = read_tsv(OUT / "data" / "global" / "excel" / "base" / "itemstatcost.txt")
+        stats = {r[0]: {c: r[ih.index(c)] for c in ("descfunc", "descval", "descstrpos", "descstrneg", "dgrp", "dgrpfunc",
+                                                    "dgrpval", "dgrpstrpos", "dgrpstrneg")} for r in irows if is_record(r)}
+        sh, srows = read_tsv(NAMED / "skills.txt")
+        dh, drows = read_tsv(NAMED / "skilldesc.txt")
+        name_key = {r[0]: r[dh.index("str name")] for r in drows}
+        base_keys = {}  # orb row -> the misc spelldescstr it had
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "misc.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            cc, sd = h.index("code"), h.index("spelldescstr")
+            for r in rows:
+                if is_record(r) and r[cc].strip() in orb_rows:
+                    row = orb_rows[r[cc].strip()]
+                    base_keys.setdefault(row, strings_ns.bare(r[sd]))
+                    r[sd] = f"{orb_tips.KEY_PREFIX}{row}"
+            write_tsv(p, h, rows)
+        records: dict[str, dict[str, str]] = {}
+        skipped: Counter = Counter()
+        for lang in orb_tips.languages():
+            texts = strings_ns.effective_texts(lang)
+
+            def skill_name(par: int) -> str:
+                row = srows[par] if 0 <= par < len(srows) else None
+                key = name_key.get(row[sh.index("skilldesc")], "") if row else ""
+                return texts.get(strings_ns.bare(key), "") if key else ""
+
+            rend = orb_tips.Renderer(lang, texts, stats, skill_name)
+            for row, orb in enumerate(orbs):
+                if row in base_keys.keys():
+                    records.setdefault(f"{orb_tips.KEY_PREFIX}{row}", {})[lang] = orb_tips.orb_text(
+                        orb, texts.get(base_keys[row], ""), rend, props)
+            skipped.update(rend.skipped if lang == "enUS" else [])
+        orb_tips.write_strings(records)
+        self.report.append(f"\norb tooltips: {len(records)} orbs ({len(orbs)} in mysticorbs) get their own description "
+                           f"`{orb_tips.KEY_PREFIX}<row>` (limit, required level, properties, target type)" +
+                           (f"; property lines not rendered: {', '.join(f'{k} x{v}' for k, v in sorted(skipped.items()))}"
+                            if skipped else ""))
+
     def row_ids(self, table: str, key: str | None = None) -> dict[str, int]:
         """Output row number of each key (column 0, or `key`) in the base bank."""
         h, rows = read_tsv(OUT / "data" / "global" / "excel" / "base" / f"{table}.txt")
@@ -2317,6 +2372,7 @@ def main() -> int:
     m.automap_tables()
     m.extra_calc_codes()
     m.formula_proxies()
+    m.orb_tooltips()
     m.namespace_cells()
     if m.dangling:
         m.report += ["", "## References emptied in rows kept from D2R (target only existed in D2R's replaced tables)", ""]

@@ -329,7 +329,7 @@ caster comes from a second hook, on the skill use function `0x43acb0` (entry `48
 (unit type 0) counts. The Sigma formulas therefore also reach the server charge now (before, only the client charge site
 matched). The harness verb `manacharge` shows the last decision (calls, room, town test, cost, charge, site).
 
-## Item rules (`item_rules.cpp`, `item_gen.cpp`, audit IT1, IT2, IT3; off words `durability`, `quantity`, `autoid`)
+## Item rules (`item_rules.cpp`, `item_gen.cpp`, audit IT1, IT2, IT3; off words `durability`, `durabilitytip`, `repairui`, `quantity`, `autoid`)
 
 Median keeps the durability and quantity columns and removes the behaviour from D2Game.dll with binary patches (D2Sigma's
 patch table: the call to the wear dispatcher at D2Game+0xdee28 is NOPed, the `dec ebp` of the quantity use at D2Game+0xa16be
@@ -338,8 +338,19 @@ is NOPed). D2R's counterparts, hooked with whole-instruction entries (recorded i
 | Rule | D2R function | Replacement |
 |---|---|---|
 | IT1 durability | `0x441b10` wear dispatcher (game, unit, item), a 4-10% proc per hit; `0x5590c0` skill-use wear / stack chance | no-ops (the dispatcher is the only writer of stat 0x48 on a hit; stat 0x49 stays) |
+| IT1 durability in the UI, tooltip (`durabilitytip`) | `0x2c1640` the `Durability: x of y` line of the item description (item, text buffer; no result; called by the description builders `0x2bd480` and `0x2be560`) | no-op (13-byte entry `48 89 5c 24 20 56 48 81 ec 40 04 00 00`). Median has no such line: its own description code (D2ItemDesc.cpp) never loads `ItemStats1d` |
+| IT1 repair UI (`repairui`) | vendor panel set-up `0x2411e0`: for the NPC classes 0x9a Charsi, 0xb2, 0xfd, 0x101, 0x1ff Larzuk it writes mode 1 into the panel (`+0x168`, `mov [rbx+0x168],1` at `0x2412de`; 0 trade, 1 repair, 2 gambler), which turns the repair buttons and the repair background on. The NPC menu records (`0x2a48830`) have line id 0xd06 `trade/repair` for Charsi, Larzuk and record 257 | the immediate at `0x2412e4` goes 1 -> 0 (`PatchBytes`, the 10 bytes are checked first), so the panel is the plain trade panel; every 0xd06 in the records becomes 0xd44 `trade` (same click handler `0x112f30`; run at install and before each menu build by npc_actions.cpp's builder hook, through `ItemRulesRetitleMenu`). Median's merchant panel has no repair widgets and its NPC menu never loads 0xd06 |
 | IT2 quantity | `0x439130` quantity use (game, unit, item, flag), callers `0x439320` from `0x432f90`, `0x4333f0`, `0x43acb0`, `0x55906e` | returns the stack's quantity and leaves it alone |
 | IT3 drops identified | generator `0x442d60` `(game, &item, genRecord)`, the hook that also rolls ethereal (`item_gen.cpp`; off word `autoid`) | after the original: for quality 4 (magic), 5 (set), 6 (rare), 7 (unique) `SetItemFlag 0x36d8f0 (item, 0x10, 1)`; low, normal, superior and crafted items stay as generated |
+
+What the player sees of durability (lane `no-durability`; why the audit did not list it: [sigma-patch-audit.md](sigma-patch-audit.md)
+"Limits of this audit"): Median keeps the stats (items carry durability 0x48 and maximum 0x49, ethereal items 75% of it; the
+stats have no description, stat 152 has no description function) and never shows or sells any of it, so the port takes out what D2R
+draws around the stats: the tooltip line, the repair mode of the vendor panel and the `trade/repair` menu line. The ethereal
+text is data: Median's string 22745 reads `Ethereal`, D2R's key `strethereal` read `Ethereal (Cannot be Repaired)`; `tools/tbl2json.py`
+(`ID_PAIRS`) overrides `strethereal` and, built on it, `strItemModEtherealSocketed` (`Ethereal, Socketed (%i)`). The harness verb
+`itemdesc <item id>` calls D2R's own description builder `0x2be560` (out std::string, item, flags, flag, text, options) on the
+client's copy of the item and prints its lines; `game_checks nodurabilityui` reads them.
 
 The get-hit path (audit item 12, D2Sigma NOPs the call `6fcfeba0` in SUnitDmg `6fcfed30`, D2Game+0xdee28): D2R's SUnitDmg
 `0x44b2b0` calls the wear step `0x4526c0` (game, attacker, defender) at `0x44b44b`, behind a test of the hit's flags. That step
@@ -948,6 +959,26 @@ dropped). The item's use handler (`item_spells.cpp`) accepts the right click for
 `I` (one byte: the panel index; `client_messages_logic.h`); the client handler queues `openPanel` on the UI thread
 (`ThreadService`). `mxl` console: "help panels ... (asked, opened, failed)". Harness verb `infopanel [close <n>]` (client side).
 
+## Buff icons (`buff_icons.cpp`, pure part `buff_icons_logic.h`, generated `mxl_state_icons.h` / `mxl_state_icon_art.h`, off word `bufficons`)
+
+Median's buff / debuff bar (D2Sigma `ui/BottomPanel.cpp`; research and evidence in `docs/subsystems/buff-icons.md`). The table
+`stateicons` (state, side, tint, frame, tooltip) is turned by `tools/state_icons.py` (a `tools/build.py` step) into
+`mxl_state_icons.h` (committed, 234 rows with migrated state ids and tooltip keys, in D2Sigma's walking order) and the committed
+`mxl_state_icon_art.h` (193 frames of 28 x 28 palette indices from `state-icons.dc6`). At install the plugin registers one
+OverlayService callback (`Phase::AfterGameUi`, client side) and turns every frame into filled rectangles (`BuildRects`: the row's
+tint applied, same-colour runs merged). Each overlay frame: the client's local player unit (`0x2a23704` slot, `HasState` `0x3351b0`)
+is asked for every row's state; `Place` walks the table once per group (left, right) and gives active rows the next slot (10 per
+row, rows grow upward); `SlotRect` puts slot n at the HUD (680 units from the centre, 176 units above the bottom, a unit is
+height / 1800; icon 28 * height / 800 px); the rectangles are drawn nearest-neighbour scaled and snapped to whole pixels; under
+each icon a remaining-time text (`FormatRemaining`: `45s`, `5:07`, `1:02:03`); the hovered icon (cursor read-only through
+`GetCursorPos`, or the harness override) gets a tooltip box with the row's string (`TooltipRect`, kept on screen).
+Timers: `BuffIconsFrame(game)` (game thread, every 5th frame from `goblins.cpp` `FrameHook`) reads the end frame of each state from the
+server unit's state list (`0x2f5940`, float at list +0x24; game frame `game+0x170`, 25 per second), so only single player and the
+host of a game show timers. `mxl` line: `buff icons on: 234 state icons, 193 frames as N rectangles, ...`. Harness verb
+`bufficons [hover x y | hover state n | hover off | probe [off] | cstate n 0|1]` (client side).
+Not ported: the hiding conditions (UI mode 1-3, cutscene), tint as a real palette shift (the byte is used as a text colour times
+brightness). Unit tests: `plugin/tests/buff_icons_test.cpp` (table, layout, `Place`, timers, tooltip box, tint, `BuildRects`).
+
 ## Quest reward sounds (`client_messages.cpp`)
 
 The unit messages 0x5f-0x61 (`SendRewardMessage`, server `0x491960`) travel in D2R's unit packet 0x2c; the client hook of its
@@ -973,8 +1004,13 @@ the `mxl` line says why).
   `mxl_transmute` K, in the Controls menu, rebindable; none on D2R's own keys: R is its run toggle, C the Character screen, V another action). X flips the switch that gates the auto-activation; L queues the reveal on
   the UI thread; K queues the cube panel's Transmute `0x2cd720` on the UI thread when a UiMessageListener has seen the Horadric
   Cube panel open. Counters and the last UI messages are in the `mxl` command (`travel` lines) and the harness verb `travel`.
-* **Stash pages** are not code: `tools/install_mod.py` writes `d2rcore.stash.add_shared_tabs = 7` into the mod's `d2rloader.toml`
-  (3 normal tabs + 7 = Median's 10 pages), only when the key is not set by hand.
+* **Stash pages** (`stash_pages.cpp`, generated `mxl_stash_page.h`, off word `stashpages`; design in `docs/stash-pages.md`): the shared
+  tabs are not code: `tools/install_mod.py` writes `d2rcore.stash.add_shared_tabs = 7` into the mod's `d2rloader.toml` (3 normal tabs +
+  7 = Median's 10 pages), only when the key is not set by hand. The personal stash has 2 pages: the stock page and the one custom player
+  page of D2RLoader (logical id `stash2`, item page 6, 14 x 14), shown by the plugin panel `mxl-core/StashPage2` (GameplayLeftSlot)
+  over the stock panel `BankExpansionLayout`; both carry a "1 / 2" strip whose arrows send the stock `PanelManager` TogglePanel /
+  ClosePanel messages. When the part is off or the page is taken by another plugin the strip is hidden (`StashPagesOff`). `mxl`
+  console: "stash pages ...". Harness verb `stashpage` (client side and game thread jobs).
 
 ## Diagnosis switch and state trace
 

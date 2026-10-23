@@ -17,6 +17,7 @@
 #include "calc_codes.h"
 #include "combat.h"
 #include "info_panels.h"
+#include "buff_icons.h"
 #include "stat_columns.h"
 #include "item_events.h"
 #include "cooldowns.h"
@@ -35,6 +36,7 @@
 #include "skill_restrict.h"
 #include "craft_flags.h"
 #include "client_messages.h"
+#include "stash_pages.h"
 #include "strings.h"
 #include "game_end.h"
 #include "map_memory.h"
@@ -120,6 +122,8 @@ char g_reqGatesReport[256] = "off: not the expected game image";
 char g_combatReport[256] = "off: not the expected game image";
 char g_statColumnsReport[256] = "off: not the expected game image";
 char g_infoPanelsReport[256] = "off: not the expected game image";
+char g_stashPagesReport[256] = "off: not the expected game image";
+char g_buffIconsReport[256] = "off: not the expected game image";
 char g_gambleReport[192] = "off: not the expected game image";
 char g_uniqueLimitsReport[192] = "off: not the expected game image";
 char g_engineGapsReport[256] = "off: not the expected game image";
@@ -156,7 +160,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels gamble hitfloor recast slowfloor uniquelimits
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -354,6 +358,10 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		              counts.hellforge, counts.countess, counts.prisonItems);
 		Say(command, line);
 	}
+	std::snprintf(line, sizeof(line), "stash pages %s", g_stashPagesReport);
+	Say(command, line);
+	StashPagesStatus(line, sizeof(line));
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "waypoints %s", g_waypointsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "collide types %s", g_collideReport);
@@ -393,6 +401,13 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		int asked = 0, opened = 0, failed = 0;
 		InfoPanelCounts(&asked, &opened, &failed);
 		std::snprintf(line, sizeof(line), "help panels %s (asked %d, opened %d, failed %d)", g_infoPanelsReport, asked, opened, failed);
+		Say(command, line);
+	}
+	{
+		char counters[320];
+		BuffIconShown none[1];
+		BuffIconsStatus(counters, sizeof(counters), none, 0);
+		std::snprintf(line, sizeof(line), "buff icons %s (%s)", g_buffIconsReport, counters);
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "item events %s", g_itemEventsReport);
@@ -547,8 +562,8 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		std::snprintf(line, sizeof(line), "mxl-core: trophy timer %s", g_trophyReport);
 		context->LogInfo(line);
 		{
-			const ItemRulesParts parts{!Off("durability"), !Off("quantity")};
-			if (!parts.durability && !parts.quantity) {
+			const ItemRulesParts parts{!Off("durability"), !Off("quantity"), !Off("durabilitytip"), !Off("repairui")};
+			if (!parts.durability && !parts.quantity && !parts.tooltip && !parts.repairUi) {
 				std::snprintf(g_itemRulesReport, sizeof(g_itemRulesReport), "%s", OffNote);
 			} else {
 				InstallItemRules(context, parts, g_itemRulesReport, sizeof(g_itemRulesReport));
@@ -880,6 +895,25 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallInfoPanels(context, g_infoPanelsReport, sizeof(g_infoPanelsReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: help panels %s", g_infoPanelsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("stashpages")) {
+				std::snprintf(g_stashPagesReport, sizeof(g_stashPagesReport), "%s", OffNote);
+				StashPagesOff(context);
+			} else {
+				InstallStashPages(context, g_stashPagesReport, sizeof(g_stashPagesReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: stash pages %s", g_stashPagesReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("bufficons")) {
+				std::snprintf(g_buffIconsReport, sizeof(g_buffIconsReport), "%s", OffNote);
+			} else {
+				InstallBuffIcons(context, g_buffIconsReport, sizeof(g_buffIconsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: buff icons %s", g_buffIconsReport);
 			context->LogInfo(line);
 		}
 		{
