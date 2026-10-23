@@ -14,7 +14,7 @@ craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resist
 classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
-heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling nodurability autoid townmana mercrevive questxp
+heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons.
 """
 import ctypes
@@ -6421,6 +6421,127 @@ def check_nodurability():
     add(nm, "PASS" if good else "FAIL", "; ".join(notes), [], log)
 
 
+
+REPAIR_STRIP = (110, 642, 572, 706)  # vendor panel (1600 x 900 client): between the item grid and the panel's lower edge, where the repair buttons sit
+
+
+def _panel_diff(a, b, box=REPAIR_STRIP):
+    """Mean absolute pixel difference (0-255) of two client grabs inside box."""
+    from PIL import ImageChops, ImageStat
+    d = ImageChops.difference(a.convert("RGB").crop(box), b.convert("RGB").crop(box))
+    return sum(ImageStat.Stat(d).mean) / 3.0
+
+
+def _desc_lines(item_id, eth=False):
+    """`itemdesc`: the lines of D2R's own item description of the item (`eth`: as an ethereal item), colour codes stripped (None
+    when the verb fails)."""
+    ok, lines = H("itemdesc %d%s" % (item_id, " eth" if eth else ""))
+    if not ok:
+        return None
+    return [re.sub(r"[\ue000-\uf8ff].", "", re.sub(r"^itemdesc id=\d+ line \d+: ", "", l)) for l in lines if re.match(r"itemdesc id=\d+ line \d+: ", l)]
+
+
+def check_nodurabilityui():
+    """Audit IT1 (what Median shows of durability: nothing). Items keep the durability stats Median has (stat 0x48 / 0x49, ethereal
+    75%), but D2R's item description has no `Durability: x of y` line (plugin part durabilitytip), an ethereal item reads
+    `Ethereal` (Median's text, not `Ethereal (Cannot be Repaired)`), Charsi's menu line is `trade` (0xd44) not `trade/repair`
+    (0xd06) and her panel is the plain trade panel, not the repair panel (plugin part repairui)."""
+    nm = "No durability in the UI: no tooltip line, ethereal text, no repair line or repair panel (audit IT1; plugin parts durabilitytip + repairui)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    log, notes, bad, shots = [], [], [], []
+    H("packclear")
+    # 1. descriptions of an armour, a weapon, an ethereal armour, a magic armour
+    made, cells = {}, {}
+    for key, cmd in (("armour", "item fld q=2 inv"), ("weapon", "item bsd q=2 inv"), ("magic armour", "item fld q=4 inv"), ("ethereal armour", "item fld q=2 inv")):
+        ok, l = H(cmd)
+        log += l
+        iid = _item_id(l)
+        if not ok or iid is None:
+            bad.append("%s: could not be made (%s)" % (key, " | ".join(l[-2:])))
+            continue
+        made[key] = iid
+        m = re.search(r"item id=\d+ .* x=(\d+) y=(\d+)", " ".join(l[:1]))
+        if m:
+            cells[key] = (int(m.group(1)), int(m.group(2)))
+    descs = {}
+    for key, iid in made.items():
+        fl = _iflags(iid)
+        d = _desc_lines(iid, eth=(key == "ethereal armour"))
+        log.append("%s id %d: stats %s; description %s" % (key, iid, fl and {k: fl[k] for k in ("durability", "maxdurability")}, d))
+        if d is None or not d:
+            bad.append("%s: no description text (itemdesc failed)" % key)
+            continue
+        descs[key] = d
+        if not fl or fl["maxdurability"] <= 0 or fl["durability"] <= 0:
+            bad.append("%s: Median keeps the durability stats, this item has %s" % (key, fl and (fl["durability"], fl["maxdurability"])))
+        hit = [x for x in d if re.search(r"durability|repair|indestructible", x, re.I)]
+        if hit:
+            bad.append("%s: the description still mentions durability/repair: %s" % (key, hit))
+    eth = descs.get("ethereal armour")
+    if eth is not None:
+        if not any(x.strip().lower().startswith("ethereal") for x in eth):
+            bad.append("ethereal armour: no `Ethereal` line in %s" % eth)
+        if any("cannot be repaired" in x.lower() for x in eth):
+            bad.append("ethereal armour still says Cannot be Repaired: %s" % eth)
+    notes.append("descriptions (%s): %s" % (", ".join(sorted(descs)), "; ".join("%s: %d lines" % (k, len(v)) for k, v in sorted(descs.items()))))
+    # the real tooltip on screen (for the human): hover the armour and the weapon in the inventory with the plugin's virtual cursor
+    g.key("i")
+    time.sleep(1.5)
+    for key in ("armour", "weapon"):
+        if key not in cells:
+            continue
+        fx, fy = (1055 + (cells[key][0] + 0.5) * 27.6) / 1600.0, (381 + (cells[key][1] + 1.0) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
+        g.click(fx, fy, move_only=True)
+        time.sleep(1.0)
+        g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
+        time.sleep(2.0)
+        shots.append(sh("nodur_tooltip_%s" % key))
+    g.key("esc")
+    time.sleep(0.5)
+    # 2. Charsi: the menu line and the panel
+    panels = {}
+    for cls, nm_ in ((154, "charsi"), (147, "gheed")):
+        H("packclear")
+        menu = npc_menu_near(cls)
+        if menu is None:
+            bad.append("%s: no menu" % nm_)
+            continue
+        log += menu
+        lines = [l for l in menu if re.match(r"\s*line \d+ ", l)]
+        ids = [int(m.group(1), 16) for l in lines for m in [re.search(r"string=0x([0-9a-f]+)", l)] if m]
+        notes.append("%s menu string ids %s" % (nm_, ", ".join("0x%x" % i for i in ids)))
+        if 0xd06 in ids:
+            bad.append("%s: the menu still has the trade/repair line (0xd06): %s" % (nm_, ids))
+        if cls == 154 and 0xd44 not in ids:
+            bad.append("charsi: the menu has no plain trade line (0xd44): %s" % ids)
+        shots.append(sh("nodur_%s_menu" % nm_))
+        trade = ids.index(0xd44) if 0xd44 in ids else (ids.index(0xd06) if 0xd06 in ids else 1)
+        H("menu %d" % trade)
+        for _ in range(6):
+            time.sleep(2)
+            if trade_panel_open():
+                break
+        else:
+            bad.append("%s: the trade panel did not open" % nm_)
+        time.sleep(1.5)
+        panels[nm_] = g.grab_client(g.need_window())
+        shots.append(sh("nodur_%s_panel" % nm_))
+        g.click(*TRADE_CLOSE)
+        time.sleep(1.0)
+        close_menu()
+    if "charsi" in panels and "gheed" in panels:
+        diff = _panel_diff(panels["charsi"], panels["gheed"])
+        notes.append("panel strip below the grid, Charsi vs Gheed: mean pixel difference %.2f (repair panel mode: far above 0, plain trade panel: ~0)" % diff)
+        log.append("repair strip diff charsi/gheed: %.3f" % diff)
+        if diff > 2.5:
+            bad.append("Charsi's panel differs from the plain trade panel below the grid (diff %.2f): the repair mode is still on" % diff)
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(notes) + ("; PROBLEMS: " + "; ".join(bad) if bad else ""), shots, log)
+
+
 def _quest_bit(q, bit):
     ok, lines = H("quest %d %d get" % (q, bit))
     return ok and any(re.search(r"= 1\b", l) for l in lines if l.startswith("quest"))
@@ -7759,7 +7880,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("trophytimer", check_trophytimer),
           ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages),
           ("skillscaling", check_skillscaling),
-          ("nodurability", check_nodurability), ("autoid", check_autoid), ("townmana", check_townmana),
+          ("nodurability", check_nodurability), ("nodurabilityui", check_nodurabilityui), ("autoid", check_autoid), ("townmana", check_townmana),
           ("potionamounts", check_potionamounts), ("manarules", check_manarules),
           ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards),
           ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash),
