@@ -60,6 +60,8 @@
 #include "skill_tree.h"
 #include "state_trace.h"
 #include "testharness.h"
+#include "item_text.h"
+#include "tooltip_probe.h"
 #include "travel.h"
 #include "waypoints.h"
 #include "collide_types.h"
@@ -122,6 +124,8 @@ char g_reqGatesReport[256] = "off: not the expected game image";
 char g_combatReport[256] = "off: not the expected game image";
 char g_statColumnsReport[256] = "off: not the expected game image";
 char g_infoPanelsReport[256] = "off: not the expected game image";
+char g_itemTextReport[256] = "off: not the expected game image";
+char g_tooltipProbeReport[256] = "off: test harness only";
 char g_stashPagesReport[256] = "off: not the expected game image";
 char g_buffIconsReport[256] = "off: not the expected game image";
 char g_gambleReport[192] = "off: not the expected game image";
@@ -396,6 +400,10 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "engine gaps %s", g_engineGapsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "stat columns %s", g_statColumnsReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "item text %s (%u lines written)", g_itemTextReport, ItemTextLinesWritten());
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "tooltip probe %s", g_tooltipProbeReport);
 	Say(command, line);
 	{
 		int asked = 0, opened = 0, failed = 0;
@@ -963,8 +971,28 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	}
 	{
 		char report[192];  // off unless mxl-testharness.txt exists next to the DLL (unattended test input, testharness.cpp)
-		if (InstallTestHarness(context, report, sizeof(report))) {
+		const bool harness = InstallTestHarness(context, report, sizeof(report));
+		if (harness) {
 			std::snprintf(line, sizeof(line), "mxl-core: test harness %s", report);
+			context->LogInfo(line);
+		}
+		// Median's item property lines (descfunc 32-38, class lock): the formatter of D2R is hooked for them, and for the
+		// harness readback, which needs the hook even when the lines are left out by mxl-core-off.txt
+		const bool linesOff = Off("itemtext");
+		if (linesOff && !harness) {
+			std::snprintf(g_itemTextReport, sizeof(g_itemTextReport), "%s", "off: left out by mxl-core-off.txt");
+		} else {
+			InstallItemText(context, !linesOff, g_itemTextReport, sizeof(g_itemTextReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: item text %s", g_itemTextReport);
+		context->LogInfo(line);
+		if (harness) {
+			if (Off("tooltipprobe")) {  // the item text readback of the harness (h tip, h tiplog): hooks 0x2dc4b0 and watches 0x2d6520
+				std::snprintf(g_tooltipProbeReport, sizeof(g_tooltipProbeReport), "%s", "off: left out by mxl-core-off.txt");
+			} else {
+				InstallTooltipProbe(context, g_tooltipProbeReport, sizeof(g_tooltipProbeReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: tooltip probe %s", g_tooltipProbeReport);
 			context->LogInfo(line);
 		}
 	}

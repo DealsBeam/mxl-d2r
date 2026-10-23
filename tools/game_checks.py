@@ -11,7 +11,7 @@ Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screens
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
 Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
-classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
+classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltiptext gameend trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
@@ -2874,33 +2874,123 @@ def check_summoner():
     add(n1, "PASS" if ok_all else "FAIL", "; ".join(notes), [sh("summoner")], notes)
 
 
-def check_tooltip():
-    name = "Item tooltip text after the descfunc change (65 stats): screenshots of hovered items"
+TIP_PINS = {  # results key (stat; GROUP + stat for a group line) -> the exact text of the line (docs/item-tooltips.md)
+    16: "+12% Enhanced Defense", 36: "Physical Resist 12%", 74: "+1 Life Regenerated per Second",
+    112: "Hit Causes Monster to Flee 9%", 289: "Orb Effects Applied to this Item are Doubled", 404: "", 406: "", 407: "", 414: "",
+    456: "Activation Frequency +12", 492: "(Paladin Only)", 534: "+1 Life Regenerated per Second (Based on Character Level)",
+    10000 + 0: "+12 to all Attributes",
+}
+# named items: (label, `item` command, regexes that must each match one line)
+TIP_ITEMS = [
+    ("unique 43 (cooldown, innate damage, all attributes)", "item |wc q=7 uniq=43 ground",
+     [r"^\+\d+ to all Attributes$", r"^\d+% Innate Elemental Damage$", r"^.+ Cooldown Reduced by [0-9.]+$"]),
+    ("unique 141 (honorific, all skills)", "item amu q=7 uniq=141 ground",
+     [r"^Orb Effects Applied to this Item are Doubled$", r"^\+\d+ to All Skills$"]),
+    ("unique 128 (reanimate, activation frequency)", "item amu q=7 uniq=128 ground",
+     [r"^\d+% Reanimate as: \S", r"^Activation Frequency \+\d+$"]),
+    ("unique 72 (life regeneration by level)", "item wd02 q=7 uniq=72 ground",
+     [r"^\+\d+ Life Regenerated per Second \(Based on Character Level\)$", r"^Physical Resist \d+%$"]),
+    ("unique 1557 (innate damage)", "item 60@ q=7 uniq=1557 ground",
+     [r"^Innate \w+ Damage: \d+ \(\d+\.\d% of \w+\)$", r"^\+\d+ to Assassin Skill Levels$"]),
+]
+# rares / magic items of several bases: no fixed text, only the invariants
+TIP_BASES = ["rin", "amu", "jew", "cm1", "cm2", "cm3"]
+
+
+def _tip_lines(item_id):
+    ok, out = H("tip %d" % item_id, 20)
+    return ok, [m.group(1) for l in out for m in [re.match(r"tip line \d+: \[(.*)\]$", l)] if m]
+
+
+def _tip_item(cmd):
+    """Creates an item with the `item` verb and reads its tooltip: (item id or None, lines)."""
+    ok, out = H(cmd, 20)
+    m = re.search(r"item id=(\d+)", " ".join(out)) if ok else None
+    if not m:
+        return None, [], " ".join(out)[:80]
+    ok, lines = _tip_lines(int(m.group(1)))
+    return int(m.group(1)), lines, "" if ok else "tip failed"
+
+
+def check_tooltiptext():
+    name = "Item tooltip text: every property line of the stat table and named items, read from the game (docs/item-tooltips.md)"
     if not need_game():
         return add(name, "BLOCKED", "not in a game")
+    tools = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, tools)
+    import tooltip_audit as ta
     goto(1)
     close_menu()
-    pos = []
-    # stats whose Median text became D2R printf text (descfunc 19): strength 0, dexterity 2, vitality 3, energy 1, life 7 / mana 9
-    # (8.8 fixed point), attack rating 19, resists 39 / 41, increased attack speed 93
-    for stats in ("0=30 2=20 3=15", "1=12 7=2560 9=1536", "19=120 39=15 41=20 93=10"):
-        ok, lines = H("item rin q=4 %s inv" % stats)
-        m = re.search(r"item id=(\d+) .* x=(\d+) y=(\d+)", " ".join(lines[:1])) if ok else None
+    bad, notes = [], []
+
+    # 1. the formatter for every stat with a property line, and every group line, at a fixed sample
+    answers = []
+    for cmd in ta.commands():
+        ok, out = H(cmd, 20)
+        answers += out
+    results = ta.parse_results(answers)
+    audit = os.path.join(tools, "..", "work", "tooltip_audit")
+    os.makedirs(audit, exist_ok=True)
+    with open(os.path.join(audit, "results.txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(l for l in answers if l.startswith("tipfmt stat=")) + "\n")
+    probs = ta.problems(results)
+    if not any(a.startswith("tipfmt stat=") for a in answers):
+        return add(name, "BLOCKED", "no tipfmt answer (mxl-core-off.txt word `tooltipprobe` or `itemtext`, or an old plugin)")
+    bad += probs[:8]
+    for key, want in TIP_PINS.items():
+        got = results.get(key)
+        text = ta.norm(got[3]) if got else None
+        if text != want:
+            bad.append("%s: want [%s] got [%s]" % (key, want, text))
+    judged = ta.judge(results)
+    notes.append("%d lines: %s" % (len(judged), ", ".join("%d %s" % (sum(1 for j in judged if j["verdict"] == v), v)
+                                                         for v in sorted({j["verdict"] for j in judged}))))
+
+    # 2. real items: the game's own item text builder (0x2dc4b0) needs one hover to give the harness its arguments
+    ok, lines = H("tip", 20)
+    if not ok or not any(l.startswith("tip build") for l in lines):
+        ok, out = H("item rin q=4 inv", 20)
+        m = re.search(r"item id=\d+ .* x=(\d+) y=(\d+)", " ".join(out)) if ok else None
         if m:
-            pos.append((int(m.group(2)), int(m.group(3)), stats))
-    g.key("i")
-    time.sleep(1.2)
-    shots = [sh("inventory")]
-    for i, (x, y, stats) in enumerate(pos):
-        fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
-        g.click(fx, fy, move_only=True)
-        time.sleep(1.0)
-        g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
-        time.sleep(2.0)
-        shots.append(sh("tooltip%d" % i))
-    g.key("esc")
-    add(name, "REVIEW", "rare rings with %s hovered in the inventory (read the screenshots by hand): %s" % (
-        " / ".join(p[2] for p in pos), ", ".join(shots)), shots)
+            x, y = int(m.group(1)), int(m.group(2))
+            fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
+            g.key("i")
+            time.sleep(1.2)
+            g.click(fx, fy, move_only=True)
+            time.sleep(1.0)
+            g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
+            time.sleep(2.0)
+            g.key("esc")
+            ok, lines = H("tip", 20)
+    if not ok or not any(l.startswith("tip build") for l in lines):
+        add(name, "FAIL" if bad else "PASS", "; ".join(bad[:6]) if bad else "; ".join(notes) + "; real items not read: no hover reached the item text builder (background mouse)")
+        return
+    seen = 0
+    for label, cmd, wants in TIP_ITEMS:
+        iid, text, err = _tip_item(cmd)
+        if iid is None or not text:
+            bad.append("%s: no tooltip (%s)" % (label, err))
+            continue
+        seen += len(text)
+        for line in text:
+            why = ta.leaks(ta.norm(line))
+            if why:
+                bad.append("%s: [%s] %s" % (label, ta.norm(line), why))
+        for w in wants:
+            if not any(re.search(w, ta.norm(l)) for l in text):
+                bad.append("%s: no line matches %s in %s" % (label, w, [ta.norm(l) for l in text]))
+    for code in TIP_BASES:
+        for q in (4, 6):
+            iid, text, err = _tip_item("item %s q=%d ground" % (code, q))
+            if iid is None:
+                continue  # a base that does not exist in this build
+            seen += len(text)
+            for line in text:
+                why = ta.leaks(ta.norm(line))
+                if why:
+                    bad.append("%s q=%d: [%s] %s" % (code, q, ta.norm(line), why))
+    notes.append("%d lines of %d named items and %d bases" % (seen, len(TIP_ITEMS), len(TIP_BASES)))
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad[:6]) if bad else "; ".join(notes), log=bad)
 
 
 def check_gameend():
@@ -8249,7 +8339,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
-          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltip", check_tooltip), ("gameend", check_gameend),
+          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltiptext", check_tooltiptext), ("gameend", check_gameend),
           ("trophy", check_trophy), ("statcols", check_statcols),
           # the old "fix to test" rows of docs/bugs.md
           ("skilltree", check_skilltree), ("keybinds", check_keybinds), ("npcstrings", check_npcstrings), ("automap", check_automap),
