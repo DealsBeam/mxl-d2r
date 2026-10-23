@@ -1005,7 +1005,7 @@ Median patches game5-022, game2-014, game4-020, game4-029 (docs/sigma-patch-audi
 | Missile hit 20 `(game, missile)` | `0x45ec20` (slot `0x23910d0`) | `3b c6 8b d8 0f 4c de` at `0x45edce` -> `31 db 85 c0 0f 4f d8` | two calc results floored at 1 (`0x45ed93` first, ebp; `0x45edce` second, ebx); Median changes the second (1.13c `0x6fc5de78`) |
 | srvdofunc 47 `0x56f750` (table `0x238ea00` slot 47 at `0x238eb78`) | guard at `0x56f859` | `e8 52 59 dc ff 85 c0 0f 85 b9 02 00 00` -> 13 x `90` | `0x3351b0(unit, state)` tests the state on the caster, the jump (`0x56fb1f`) leaves the function |
 | Slow / damage floor `(game, unit)` | `0x449f40` (hook) | entry `48 89 5c 24 08 57 48 83 ec 20` | unit type 1: monstats byte at record `+0x1ba + difficulty` (via `0x976e0`), else -0x32; difficulty is the byte at game `+0x104`. Callers `0x4509fa`, `0x451644`, `0x5619d8`, `0x561bde` (aura callback `0x5616f0`, aura apply `0x563d90`). The hook returns -12 / -25 / -50 for a player (unit type 0) on Normal / Nightmare / Hell |
-| Required level `0x376de0` | - | `ff 25` thunk into D2RCore.dll (`[0x143e2a3c0]`) | not patchable from the exe (common1-013 stays open) |
+| Required level `0x376de0` | - | `ff 25` thunk into D2RCore.dll (`[0x143e2a3c0]`) | patched in D2RCore.dll itself: the two `add 6` sites `+0x3d49ee` (with a player) and `+0x3d49e2` (without), 3-byte nops after a time stamp and byte check (`required_level.cpp`, off word `reqlevel`; common1-013 done) |
 
 ## 21. Monster level, players scaling, Normal drops, leash, Baal throne delay (lane pa2-monsters, 2026-10-23; plugin/src/monster_rules.cpp)
 
