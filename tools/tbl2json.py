@@ -47,6 +47,7 @@ NAMESPACE = "medianxl"  # install_mod.py writes the same name to d2rloader/metad
 NAMESPACE_FILE = "median.json"
 OVERRIDE_FILE = "overrides.json"  # `d2r:<key>` records: Median's text for D2R's own keys
 D2R_PREFIX = "d2r:"
+ALIAS_SUFFIX = "_mxl"  # Median's text for a key whose D2R text was kept (placeholders differ)
 NATIVE_EXCEPTIONS: set[str] = set()  # see load_exceptions()
 EXCEPTIONS_FILE = ROOT / "tools" / "strings_native.json"
 LANGS = ["enUS", "zhTW", "deDE", "esES", "frFR", "itIT", "koKR", "plPL", "esMX", "jaJP", "ptBR", "ruRU", "zhCN"]
@@ -188,6 +189,12 @@ def main() -> int:
             same += 1
             continue
         overrides.append({"Key": f"{D2R_PREFIX}{k}", **{lang: t for lang in langs}})
+    # A kept key cannot carry Median's text (the game formats the key itself with D2R's placeholders). The item property
+    # lines still need Median's wording, so each kept key also gets a Median-only alias `<key>_mxl` (txt_migrate points the
+    # itemstatcost string cells at it).
+    for k, (_d, m) in sorted(kept.items()):
+        texts[k + ALIAS_SUFFIX] = m
+        group2.append(k + ALIAS_SUFFIX)
     group1 = len({k for k in texts if k in d2r_keys})
     report.insert(2, f"- Groups: {group1} group 1 (D2R keys), {len(group2)} group 2 (`{NAMESPACE}:` namespace)")
     base = OUT / "data" / "local" / "lng"

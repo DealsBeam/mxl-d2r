@@ -16,6 +16,7 @@ int RunHirelingsTests();  // hirelings_test.cpp
 int RunCombatTests();  // combat_test.cpp
 int RunStatColumnsTests();  // stat_columns_test.cpp
 int RunInfoPanelsTests();   // info_panels_test.cpp
+int RunItemTextTests();     // item_text_test.cpp
 int RunSkillDamageTests();  // skill_damage_test.cpp
 int RunItemsExtTests();  // items_ext_test.cpp
 int RunItemGenTests();  // item_gen_test.cpp
@@ -144,6 +145,7 @@ int main() {
 	failures += RunCombatTests();
 	failures += RunStatColumnsTests();
 	failures += RunInfoPanelsTests();
+	failures += RunItemTextTests();
 	failures += RunSkillDamageTests();
 	failures += RunItemsExtTests();
 	failures += RunItemGenTests();

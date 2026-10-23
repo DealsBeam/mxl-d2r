@@ -1015,6 +1015,19 @@ Median patches (docs/sigma-patch-audit.md items 17-19). Every patched byte is ch
 
 Harness verbs: `players <n>` (sets D2R's players setting: `0xe19e0()` then `0xd2f020(setting, n)`; it is not persistent and only the next spawned monsters see it), `tctrace [reset]`, `leash [d]` (moves the mercenary `d` sub-tiles from the player with the unit move `0x491ca0`, prints both positions, `0x596720` and the mercenary's mode). Moving the player instead pulls the mercenary along at once, which hid the thresholds.
 
+## 22. Item property text (lane tooltip-verify, 2026-10-23; plugin/src/item_text.cpp, tooltip_probe.cpp; docs/item-tooltips.md)
+
+| What | RVA | Signature / meaning | Notes |
+|---|---|---|---|
+| Property formatter | `0x2d6520` (hooked, `item_text.cpp`) | `(viewer, record, value, layer, flag, char out[256], mode) -> al` | record (itemstatcost, D2R layout): id `+0`, descfunc `+0x32`, descval `+0x33`, descstrpos `+0x34`, negative text `+0x36`, str2 `+0x38`; with `flag != 0` it formats the group line from `+0x3c` (descfunc), `+0x3d` (descval), `+0x3e` / `+0x40` (strings). The caller `0x2d97e0` applies ValShift first. `viewer` is the ITEM unit (type 4) when the item text is built. |
+| Item text builder | `0x2dc4b0` (observed by `tooltip_probe.cpp`) | builds all lines of one item's tooltip | the hovered item is rebuilt every frame (harness `tiplog reset` right before `tip`); the probe keeps its arguments from the last hover. |
+| Data flag of a unit | `0x34a0e0` | `(unit) -> *(u8*)(unit + 0x1bd)` | client / server table selector, **not** the class. Pass it as the first argument of the table lookups below. |
+| Skill name string id | `0x28bcf0` | `(data flag, skill id, 0) -> u16` | calls `FUN_140088850` (the skills table manager) and returns `*(u16*)(row + 8 + idx * 2)`, `0x1506` when there is none. A class value instead of the data flag crashes (null manager, RIP `D2R+0x88871`). |
+| String by id | `0x3e2b730` | `(id) -> const char*` | D2RCore thunk target; the text of a string id. |
+| GetStat | `0x2f5020` | `(unit, stat, layer) -> int` | |
+| Local slot / slot unit | `0x8b2d0`, `0x9a480` | `() -> slot`; `(slot) -> player unit` | the entry bytes are checked before the hook is installed (as in `skill_tree.cpp`). |
+| Client unit lookup | `0x9a5d0` | `(id, type) -> unit` | type 4 = item. |
+
 ## Unknown / next steps
 
 Solved in lane d2r-addresses-2 (sections 4, 5, 7-11): warp destination and the lockout refusal point, game frame, spawn, TC executor,

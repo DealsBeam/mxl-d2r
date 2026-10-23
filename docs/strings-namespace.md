@@ -90,6 +90,16 @@ key in it. (The text below is the history of the exceptions that existed before 
 - **Plugin:** none from the plugin. The plugin does not need a loader-assigned number: it gives D2R ids of its own (below), so every
 Median-only string can stay namespaced. (`tools/strings_native.json` stays empty on the plugin's account.)
 
+## `_mxl` alias keys (lane tooltip-verify)
+
+`tbl2json.py` keeps D2R's text for 296 keys whose placeholders differ from Median's (D2R's own code formats them with its
+`%0` / `%d` style). Median's stats that show their text through Median's own printf style (`+%d%% Enhanced Defense`) used to
+name those keys and showed leaked placeholders. For every such key tbl2json now also writes `<key>_mxl` (suffix
+`ALIAS_SUFFIX`): Median-only, group 2 like the other Median strings, Median's text; the original key stays D2R's. `itemstatcost`
+(`txt_migrate.median_stat_wording`) names the alias in descstrpos / descstrneg / descstr2 and the group line columns of the stats
+that are drawn with Median's wording; stats drawn by D2R's own code (descfunc 22 / 23 / 24) keep the original key. See
+[item-tooltips.md](item-tooltips.md).
+
 ## strings-legacy/ (decision of lane ns-fix-overrides)
 
 - The `d2r:` overrides are **not** written to `strings-legacy/`. Only `strings/medianxl/overrides.json` has them. The
