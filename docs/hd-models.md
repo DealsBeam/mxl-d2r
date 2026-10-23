@@ -397,6 +397,66 @@ skeleton / animations), and add its model path and textures to the two indexes: 
 path: vanilla model path to copy}, {new texture path: vanilla texture path to copy})` extends a copy already in `work/mod`, so
 several build steps can add their own. Choose a template model with the same number of LODs (5) and a similar size.
 
+## 3d. Wereowl mesh: bakes, retopology, fit to the bear (lane wereowl-mesh, 2026-10-23)
+
+Goal: the in-game Druid Wereowl (rigged to the vanilla werebear skeleton at `data/hd/character/mxl/wereowl/`) as close as possible to
+the static generated model. Steps in order, each checked in game on slot 3 (`tools/sprite3d/morph_shots.py`, background input; sheets
+in the PR description). The build inputs and the exact commands are in `assets/hd/wereowl/README.md`; tools in `tools/sprite3d/`
+(`owl_hi`, `owl_retopo`, `owl_bake`, `owl_maps`, `owl_lods`, `owl_pose`, `bl_common`, `render_npz`).
+
+### Vanilla werebear budget and texture conventions (measured)
+- Triangles per LOD, every mesh of the unit counted (body, trinkets, teeth, tongue, eyes, fur shell), the duplicate proxy meshes not:
+  **38,968 / 17,383 / 10,050 / 5,414** (ratios 1 / 0.446 / 0.258 / 0.139; the bear has four LODs, the build reuses LOD 3 as LOD 4; the
+  Wereowl's LOD 4 is 0.075). The Wereowl has 38,124 / 17,002 / 9,836 / 5,298 / 2,858.
+- Textures: `werebear_alb` 1024 BC3 (format 62); `werebear_nrm` 1024 format 61 with R = 255, G = y (mean 126), B = 0, A = x (DXT5nm);
+  `werebear_orm` 512 format 61 with R = occlusion (mean ~220), G = roughness (mean ~170), B = 0, A = 255. The Wereowl ships all three
+  at 1024 (the bake is 2048), with a full mip chain (`log2 + 1` levels) and descriptors of 1024 / 11 levels in `texture_desc_cache.json`.
+- Normal map convention. The vanilla bear's vertex tangents equal `d2r_mesh.tangents` (direction dot 0.99, handedness 99.6% equal),
+  so the engine's bitangent runs along the stored dP/dv (v down the image) and the map convention is **DirectX-like (green toward the
+  bottom of the image)**: `wereowl_models.pack_normal` flips the OpenGL bake's y (`MXL_NRM_GREEN=dx`, the default; `gl` for a test). This
+  is derived, not seen: an in-game A/B (dx against gl) was not decisive at the game's camera scale.
+- Writing: BC3 linear path (format 61) for normal and ORM, BC3 sRGB (62) for albedo.
+
+### Step 1: normal map and AO baked from the high-poly
+`hy_mv_4view.glb` (399k vertices / 799k triangles, 40 loose bodies, not watertight) bakes badly directly: rays hit the inside of
+feathers (black AO patches, saturated wrong normals). `owl_hi.py` voxel-remeshes it (0.012 of a 6.6 tall figure) into one closed surface
+(3.3M triangles), and `owl_bake.py` (Cycles, GPU/HIP when present, a bake takes seconds) casts from the game mesh pushed 0.04 out along
+its vertex normals (the game's own, set as custom split normals, so the map is relative to the shading the engine draws), 0.12 deep:
+no artefacts; larger cages (0.12 / 0.35) hit neighbouring feathers. AO is the high-poly's own occlusion (distance 0.3, local only),
+pulled 40% toward open (`owl_maps.py --ao-strength 0.6`) because the raw bake averages 170 against the bear's 220.
+Result in game: lit, textured, no tearing; the effect is modest at the game's camera distance (the occlusion darkens the glossy
+chrome look of the old flat-map build, the silhouette is unchanged).
+
+### Step 2: retopology, new UVs, albedo re-projection
+`owl_retopo.py`: collapse the high-poly to a 300k proxy, QuadriFlow to the bear's LOD 0 triangle count (the face count is erratic; the
+script retries and keeps the closest at or under budget: 38,124 triangles / 18,981 vertices before UV splits), shrinkwrap back onto the
+high-poly. UVs: xatlas gave about 900 charts and 46% fill on this furry surface and was dropped; `project_texture.py`'s camera
+charts (197) are used, and the albedo is projected again from the 16 sprite directions onto them (`albedo_clean.py`, median luma 100).
+LODs 1-4: `owl_lods.py`, pymeshlab quadric collapse with UVs (seams collapse like edges; vertices are split per position / UV again).
+Result in game: the even quad mesh gives a more feathery silhouette; the big visual change comes in step 3.
+
+### Step 3: fit to the bear skeleton, weights
+The old fit (`rig_fit.py` / `owl_refit.py`) scaled the whole owl onto the bear and left the arms under the head ruff. `owl_pose.py` keeps
+the mesh in its own pose for the Blender bone-heat weights (`owl_weights.py` with the bear skeleton's bone names / hierarchy and the OWL's
+joint positions, read off the front and side views: shoulders at x +-1.3, elbows +-2.9, wrists +-4.0, hips y 2.2, knees 1.3), then
+carries every bone segment to the bear's: `v' = sum_j w_j (B_j + R_j S_j (v - P_j))` with R_j turning the owl segment into the bear's and
+S_j stretching along it by |BC| / |PQ| (clipped 0.5-2.3) and across it by `stretch ** 0.6` (legs fixed 0.85-0.9: bear legs stand 1.3 apart).
+The head takes the neck's turn and a 1.15 scale. Weights stay: max 4 influences, normalised, smoothed (`owl_weights.py`).
+The owl's joints then sit on the bear's, so the animations bend the owl where it has joints: arms leave the shoulders, the knees and
+elbows bend where the clips bend them. Fitted height 10.6 against the bear's ~8.5 (the ruff). Result in game (idle, walk, run, attack, cast,
+get hit; eight walk directions with `MXL_MORPH_DIRS=1`): clearly bear-like movement and proportions, no tearing, no black faces,
+0 assertions. Remaining difference: the owl's head ruff and chest are larger than the bear's, the thin bear arms look slimmer than the
+sculpt's heavy arms, the albedo of the back is the least certain (seen only in the sprite directions).
+
+### Corrupted Wereowl
+It reads the same `mesh_lods.npz` / maps (rigged to goatman1 by `rig_fit.py`). `cheat mspawn 1985` spawns, approaches, attacks, is hit and
+dies with no crash on the new files; the monster's green aura hides its body in the fixed camera crops both with the old and the new
+assets (an unchanged-main run looks the same), so the mesh itself was not judged visually.
+
+### Not done (step 4 and beyond)
+Real-ESRGAN 2x on the albedo and a fur normal overlay were not tried. A custom skeleton (owl-like head, shorter legs, wing-ish arms)
+is what would remove the remaining proportion differences; the weights and the fit script are the starting point for it.
+
 ## 4. Pipeline sketch: artist's Blender rig -> D2R unit
 
 ### 4.1 Steps
