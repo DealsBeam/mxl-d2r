@@ -14,7 +14,7 @@ craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resist
 classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltip gameend trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
-heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling nodurability autoid townmana mercrevive questxp
+heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash.
 """
 import ctypes
@@ -6027,6 +6027,86 @@ def check_stashpages():
         % (" ".join(res), ("; wrong: " + "; ".join(wrong)) if wrong else ""), [], log)
 
 
+def _stashpage_job(cmd, want):
+    """A queued stashpage job (put / list / move / drop) and its answer: the `stashpage result` line once it is not pending."""
+    ok, lines = H("stashpage " + cmd)
+    if not ok:
+        return False, "refused: %s" % (lines[:2],)
+    out = ""
+    for _ in range(20):
+        time.sleep(0.4)
+        ok2, l2 = H("stashpage result")
+        out = next((l for l in l2 if l.startswith("stashpage result")), "")
+        if " -1 pending" not in out and " -2 " not in out:
+            break
+    return want in out, out
+
+
+def check_stashpage2():
+    name = "Stash pages: personal page 2 (item page 6): panel, arrows, items on it, moves between the pages"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    txt = mxl_text()
+    bad, res, log, shots = [], [], [], []
+    if "stash pages on:" not in txt:
+        return add(name, "FAIL", "`mxl` does not say `stash pages on`: %s" % next((l for l in txt.splitlines() if "stash pages" in l), "-"))
+    # two test items on page 2 (codes the test character never carries)
+    for cmd, label in (("put r05 1 1", "item 1"), ("put r06 5 5", "item 2")):
+        ok, out = _stashpage_job(cmd, "container=9")  # 9 = the custom page
+        log.append(out)
+        if not ok:
+            bad.append("%s not created on page 2 (%s)" % (label, out[:80]))
+    ok, out = _stashpage_job("list", "p2:r05@1,1")
+    log.append(out)
+    res.append("page 2 holds both items: %s" % ("yes" if ok and "p2:r06@5,5" in out else "NO"))
+    if not (ok and "p2:r06@5,5" in out):
+        bad.append("page 2 list: %s" % out[:100])
+    ids = {m.group(1): m.group(2) for m in re.finditer(r"p\d:(r0\d)@\d+,\d+#(\d+)", out)}
+    # the stock stash with its strip, the arrow to page 2 and back (D2R's own messages; background clicks on the strip)
+    H("stashpage uia PanelManager OpenPanel BankExpansionLayout")
+    time.sleep(2)
+    ok, lines = H("stashpage widget BankExpansionLayout MxlPersonalNavigation")
+    log += lines
+    strip = next((l for l in lines if "rect result 0" in l), "")
+    res.append("stock stash has the 1 / 2 strip: %s" % ("yes" if strip else "NO"))
+    if not strip:
+        bad.append("MxlPersonalNavigation missing in the stock stash (%s)" % (lines[:1],))
+    shots.append(sh("stashpage_p1"))
+    g.click(0.2506, 0.6756)  # the right arrow of the stock strip
+    time.sleep(1.8)
+    st = next((l for l in H("stashpage state")[1] if l.startswith("stashpage state=")), "")
+    opened = st.startswith("stashpage state=2")
+    res.append("right arrow opens the page 2 panel: %s" % ("yes" if opened else "NO (%s)" % st[:40]))
+    if not opened:
+        bad.append("page 2 panel did not open")
+    shots.append(sh("stashpage_p2"))
+    g.click(0.1725, 0.6756)  # the left arrow of the page 2 strip: back to the stock stash
+    time.sleep(1.8)
+    st = next((l for l in H("stashpage state")[1] if l.startswith("stashpage state=")), "")
+    closed = st.startswith("stashpage state=1")
+    res.append("arrow on page 2 returns to the stock stash: %s" % ("yes" if closed else "NO (%s)" % st[:40]))
+    if not closed:
+        bad.append("the page 2 panel stayed open")
+    # moves between the pages through ItemService (atomic), then back
+    if "r05" in ids:
+        ok1, o1 = _stashpage_job("move %s 1 2 2" % ids["r05"], "move rc=0 committed=1")
+        ok2, l1 = _stashpage_job("list", "p1:r05@2,2")
+        ok3, o3 = _stashpage_job("move %s 2" % ids["r05"], "move rc=0 committed=1")
+        ok4, l2 = _stashpage_job("list", "p2:r05@")
+        log += [o1, l1, o3, l2]
+        res.append("item moved page 2 -> 1 -> 2: %s" % ("yes" if ok1 and ok2 and ok3 and ok4 else "NO"))
+        if not (ok1 and ok2 and ok3 and ok4):
+            bad.append("move between the pages failed (%s / %s / %s / %s)" % (o1[:50], l1[:60], o3[:50], l2[:60]))
+    # clean-up: the test character keeps nothing on its pages
+    H("stashpage uia PanelManager ClosePanel BankExpansionLayout")
+    for code in ("r05", "r06"):
+        ok, out = _stashpage_job("drop " + code, "1 destroyed")
+        log.append(out)
+        if not ok:
+            bad.append("clean-up of %s failed (%s)" % (code, out[:60]))
+    add(name, "PASS" if not bad else "FAIL", "; ".join(res) + ("; failed: %s" % "; ".join(bad) if bad else ""), shots, log)
+
+
 
 def _sd_steps(st, lvl):
     """Per-level bonus: the five steps cover the levels 2-8, 9-16, 17-22, 23-28 and 29+."""
@@ -7625,7 +7705,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
           ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("restrictitems", check_restrictitems), ("heat", check_heat),
           ("trophytimer", check_trophytimer),
-          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages),
+          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages), ("stashpage2", check_stashpage2),
           ("skillscaling", check_skillscaling),
           ("nodurability", check_nodurability), ("autoid", check_autoid), ("townmana", check_townmana),
           ("potionamounts", check_potionamounts), ("manarules", check_manarules),
