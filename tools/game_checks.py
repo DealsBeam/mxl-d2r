@@ -15,7 +15,7 @@ classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner 
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
-questrewards gamble enginegaps monlevel normaltc leash bufficons.
+questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -7863,6 +7863,252 @@ def check_leash():
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]), [sh("leash")], log)
 
 
+
+def _unique_limit_rows():
+    """Rows of plugin/src/mxl_unique_limits.h (the committed data the plugin was built from): (row, group, count, dup)."""
+    txt = open(os.path.join(REPO, "plugin", "src", "mxl_unique_limits.h"), encoding="utf-8").read()
+    return [tuple(int(v) for v in m) for m in re.findall(r"\{(\d+), (-?\d+), (\d+), (\d+)\},", txt)]
+
+
+def _ul_counts():
+    """(checked, limited, refused, chat lines sent) from the `mxl` command, None without the `unique limits on` line."""
+    txt = mxl_text()
+    m = re.search(r"unique limits on.*moves into the backpack (\d+) \(limited (\d+), refused (\d+)\)", txt)
+    s = re.search(r"client messages .*\(sent (\d+), failed (\d+)\)", txt)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3)), int(s.group(1)) if s else -1
+
+
+def _le(*vals):
+    return " ".join("%02x" % b for v in vals for b in struct.pack("<I", v & 0xffffffff))
+
+
+def check_uniquelimits():
+    """Median's unique carry limits (uniqueitems2: LimitGroup / LimitCount / PickDuplicates; audit I6). The rule (D2Sigma D2Units
+    0x100bd0b0): a limited unique does not enter the backpack when LimitCount uniques of its group (group 0: copies of it) are
+    there, or, in a group, when a copy of that very unique is. Paths: the container packets (0x19 pick from the cube, 0x18 put into
+    the backpack: D2R's item move 0x471e90) and the ground pickup (packet 0x16 with the to-inventory flag: 0x471950)."""
+    nm = "Unique carry limits (audit I6): group limit, no duplicates, single copy, cube -> backpack and ground pickup"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    bad, rows, log = [], [], []
+    s0 = _ul_counts()
+    if s0 is None:
+        return add(nm, "FAIL", "the `mxl` command has no `unique limits on` line: %s" % next((l for l in mxl_text().splitlines() if "unique limits" in l), "-"))
+    limits = _unique_limit_rows()
+    t = _tsv(os.path.join(BUILT_EXCEL, "uniqueitems.txt"))
+    col = t[0].index("code")
+    code_of = lambda row: t[row + 1][col]
+    # four members of group 1 (count 3, no duplicates) on four different base items: `remove <code>` then takes out exactly one.
+    # 1 x 1 bases only: `item <code> cube` finds no spot for a taller item in the cube
+    m = _tsv(os.path.join(BUILT_EXCEL, "misc.txt"))
+    mc, mw, mh = m[0].index("code"), m[0].index("invwidth"), m[0].index("invheight")
+    small = {r[mc] for r in m[1:] if len(r) > mh and r[mw] == "1" and r[mh] == "1"}
+    limits = [r for r in limits if code_of(r[0]) in small]
+    g1, seen = [], set()
+    for r in limits:
+        if r[1] == 1 and code_of(r[0]) not in seen:
+            seen.add(code_of(r[0]))
+            g1.append(r)
+    solo = [r for r in limits if r[1] == 0 and r[2] == 1 and code_of(r[0]) not in seen]
+    if len(g1) < 4 or len(solo) < 2 or g1[0][2] != 3 or g1[0][3] != 0:
+        return add(nm, "FAIL", "the data has no group of count 3 with 4 members on different items / two single copies: %s" % limits[:6])
+    A, B, C, D = (r[0] for r in g1[:4])
+    S1, S2 = (r[0] for r in solo[:2])
+    codes = sorted({code_of(r) for r in (A, B, C, D, S1, S2)})
+
+    def reset():
+        H("packclear")
+        H("cubeclear")
+        drop_cursor_item(log)  # a held item is not found by `remove`: drop it (packet 0x17)
+        for c in codes:
+            H("remove %s 9" % c)
+        ensure_cube()
+
+    def make(row, where):
+        ok, lines = H("item %s %s uniq=%d" % (code_of(row), where, row))
+        d = next((kv(l) for l in lines if l.startswith("item ")), {})
+        if not ok or "id" not in d or d.get("unique") != str(row) or d.get("quality") != "7":
+            bad.append("could not make unique %d (%s) in %s: %s" % (row, code_of(row), where, lines[:2]))
+            return None
+        return {"id": int(d["id"]), "x": int(d.get("x", "0")), "y": int(d.get("y", "0")), "row": row}
+
+    def pack_count(row):
+        return len([i for i in items(hstate(), code_of(row), 0) if i.get("unique") == row and i.get("quality") == 7])
+
+    def cursor_id():
+        ok, cur = H("cursor")
+        m = re.search(r"cursor id=(\d+)", " ".join(cur))
+        return int(m.group(1)) if m else None
+
+    def near_ground(row):
+        """A ground copy within 4 subtiles of the player (the pickup packet 0x16 only reaches that far; `item ... ground` drops
+        up to 6 away): ground drops that landed too far are taken away again and the drop is repeated."""
+        for _ in range(10):
+            g = make(row, "ground")
+            if not g:
+                return None
+            ok, st = H("state")
+            m = re.search(r"player id=\d+ .*? x=(\d+) y=(\d+)", st[0] if st else "")
+            ok, fl = H("iflags %d" % g["id"])
+            f = next((kv(l) for l in fl if l.startswith("iflags")), {})
+            if not m or ((int(f.get("x", "0")) - int(m.group(1))) ** 2 + (int(f.get("y", "0")) - int(m.group(2))) ** 2) <= 9:
+                return g
+            H("remove %s 1" % code_of(row))
+        bad.append("no ground drop of unique %d landed within 4 subtiles of the player" % row)
+        return None
+
+    def cube_to_pack(it, cells=((12, 7), (13, 8), (10, 8), (3, 9))):
+        """Pick the cube item up (packet 0x19), put it into the backpack (0x18: the move D2R's 0x471e90 checks). Returns
+        (landed in the backpack, the id the cursor holds afterwards); a cell without room is skipped, a refusal by the rule
+        (the plugin's counter went up) ends the tries."""
+        H("pkt 19 " + _le(it["id"], it["x"], it["y"], 3))
+        time.sleep(0.4)
+        if cursor_id() != it["id"]:
+            bad.append("the cube item %d did not reach the cursor (cursor holds %s)" % (it["id"], cursor_id()))
+            return False, cursor_id()
+        for (x, y) in cells:
+            before = _ul_counts()
+            H("pkt 18 " + _le(it["id"], x, y, 0))
+            time.sleep(0.4)
+            now = _ul_counts()
+            if cursor_id() != it["id"]:
+                return True, None
+            if now and before and now[2] > before[2]:
+                return False, it["id"]
+        return False, cursor_id()
+
+    reset()
+    # 1. group 1 (count 3, no duplicates): three members carried, the fourth from the cube is refused
+    for r in (A, B, C):
+        make(r, "inv")
+    d4 = make(D, "cube")
+    if d4:
+        before = _ul_counts()
+        landed, held = cube_to_pack(d4)
+        after = _ul_counts()
+        rows.append("group full (A, B, C carried): fourth member %s, refused %d -> %d, limited %d -> %d" % ("LANDED" if landed else "refused", before[2], after[2], before[1], after[1]))
+        if landed or held != d4["id"] or after[2] < before[2] + 1 or pack_count(D) != 0:
+            bad.append("full group: the fourth member should be refused and stay on the cursor (landed %s, cursor %s, refused %d -> %d, in pack %d)" % (landed, held, before[2], after[2], pack_count(D)))
+        # 2. positive control: free a place (remove A), the same item now lands
+        H("remove %s 1" % code_of(A))
+        if pack_count(A) == 0 and held == d4["id"]:
+            before = _ul_counts()
+            H("pkt 18 " + _le(d4["id"], 12, 7, 0))
+            time.sleep(0.4)
+            after = _ul_counts()
+            rows.append("after one is removed: fourth member in the backpack %d, refused %d -> %d" % (pack_count(D), before[2], after[2]))
+            if pack_count(D) != 1 or after[2] != before[2]:
+                bad.append("one place free: the member should land (in pack %d, refused %d -> %d, cursor %s)" % (pack_count(D), before[2], after[2], cursor_id()))
+        else:
+            bad.append("could not free a place for the positive control (A in pack %d, cursor %s)" % (pack_count(A), cursor_id()))
+    # 3. no duplicates: group at 2 of 3, a second copy of a carried member is refused although the group has room
+    reset()
+    make(B, "inv")
+    make(C, "inv")
+    dup = make(B, "cube")
+    if dup:
+        before = _ul_counts()
+        landed, held = cube_to_pack(dup)
+        after = _ul_counts()
+        rows.append("duplicate of a carried member (group 2 of 3): %s, refused %d -> %d" % ("LANDED" if landed else "refused", before[2], after[2]))
+        if landed or after[2] < before[2] + 1:
+            bad.append("a second copy of the same unique in a group should be refused (landed %s, refused %d -> %d)" % (landed, before[2], after[2]))
+    # 4. a single-copy unique (limit 1, group 0): a second copy lying on the ground is refused, a different single-copy unique is not
+    #    (these two bases cannot be placed in the cube by the harness, so the ground path stands in for the cube here)
+    def ground_pickup(row):
+        g = near_ground(row)
+        if not g:
+            return None
+        ok, fl = H("iflags %d" % g["id"])
+        f = next((kv(l) for l in fl if l.startswith("iflags")), {})
+        before = _ul_counts()
+        H("pkt 16 " + _le(g["id"], int(f.get("x", "0")), int(f.get("y", "0")), 1))
+        time.sleep(0.5)
+        after = _ul_counts()
+        return before, after, pack_count(row)
+
+    reset()
+    make(S1, "inv")
+    res = ground_pickup(S1)
+    if res:
+        before, after, inpack = res
+        rows.append("second copy of a single-copy unique picked up from the ground: refused %d -> %d, in pack %d" % (before[2], after[2], inpack))
+        if after[2] < before[2] + 1 or inpack != 1:
+            bad.append("the second copy of a single-copy unique should be refused (refused %d -> %d, in pack %d)" % (before[2], after[2], inpack))
+    # a different single-copy unique is not counted: carry S1 and S2, lift S2 off the backpack (packet 0x19) and put it back (0x18)
+    reset()
+    make(S1, "inv")
+    # (D2R's own one-per-type rule for unique charms refuses a second one of a type at placement, so many pairs cannot be
+    # carried together at all: take the first single-copy unique that can be placed next to S1)
+    s2 = None
+    for cand in [r[0] for r in solo[1:]]:
+        s2 = make(cand, "inv")
+        if s2:
+            S2 = cand
+            break
+        bad.pop()
+    if not s2:
+        rows.append("no second single-copy unique could be carried next to the first (D2R's one-per-type rule): positive control skipped")
+    if s2:
+        H("pkt 19 " + _le(s2["id"], s2["x"], s2["y"], 0))
+        time.sleep(0.4)
+        lifted = cursor_id() == s2["id"]
+        before = _ul_counts()
+        H("pkt 18 " + _le(s2["id"], s2["x"], s2["y"], 0))
+        time.sleep(0.4)
+        after = _ul_counts()
+        rows.append("a different single-copy unique lifted off the backpack and put back: lifted %s, refused %d -> %d, in pack %d, cursor %s" % (lifted, before[2], after[2], pack_count(S2), cursor_id()))
+        if not lifted or after[2] != before[2] or pack_count(S2) != 1 or cursor_id() is not None:
+            bad.append("another single-copy unique must not count (lifted %s, refused %d -> %d, in pack %d, cursor %s)" % (lifted, before[2], after[2], pack_count(S2), cursor_id()))
+    # 5. ground pickup into the inventory (packet 0x16, to-inventory flag 1): refused over the limit; to the cursor (flag 0) is allowed
+    reset()
+    for r in (A, B, C):
+        make(r, "inv")
+    gnd = near_ground(D)
+    if gnd:
+        def iflags():
+            ok, fl = H("iflags %d" % gnd["id"])
+            return next((kv(l) for l in fl if l.startswith("iflags")), {})
+        f = iflags()
+        gx, gy = int(f.get("x", "0")), int(f.get("y", "0"))
+        before = _ul_counts()
+        H("pkt 16 " + _le(gnd["id"], gx, gy, 1))
+        time.sleep(0.5)
+        after = _ul_counts()
+        f2 = iflags()
+        rows.append("ground pickup to the inventory over the limit: checked %d -> %d, refused %d -> %d, item mode %s (3 = still on the ground), in pack %d" % (before[0], after[0], before[2], after[2], f2.get("mode"), pack_count(D)))
+        if after[2] < before[2] + 1 or pack_count(D) != 0 or f2.get("mode") not in ("3", "5"):
+            bad.append("the pickup to the inventory should be refused and leave the item on the ground (refused %d -> %d, mode %s, in pack %d)" % (before[2], after[2], f2.get("mode"), pack_count(D)))
+        H("pkt 16 " + _le(gnd["id"], gx, gy, 0))
+        time.sleep(0.5)
+        rows.append("ground pickup to the cursor: cursor holds %s (item %d)" % (cursor_id(), gnd["id"]))
+        if cursor_id() != gnd["id"]:
+            bad.append("a pickup to the cursor is not limited; the cursor holds %s" % cursor_id())
+        else:
+            before = _ul_counts()
+            H("pkt 18 " + _le(gnd["id"], 12, 7, 0))
+            time.sleep(0.4)
+            after = _ul_counts()
+            rows.append("cursor -> backpack over the limit: refused %d -> %d, cursor %s" % (before[2], after[2], cursor_id()))
+            if after[2] < before[2] + 1 or cursor_id() != gnd["id"]:
+                bad.append("the drop from the cursor into a full group should be refused (refused %d -> %d, cursor %s)" % (before[2], after[2], cursor_id()))
+    # 6. wearing: all 334 limited uniques are misc items without a body location (nothing to equip), so the rule has no wear half
+    # 7. the messages: one chat line per refusal (client messages sent)
+    end = _ul_counts()
+    reset()
+    if end and s0:
+        refusals = end[2] - s0[2]
+        sent = end[3] - s0[3] if end[3] >= 0 and s0[3] >= 0 else None
+        rows.append("refusals this run %d, chat lines sent %s" % (refusals, sent))
+        if sent is not None and sent < refusals:
+            bad.append("%d refusals but only %d chat lines sent" % (refusals, sent))
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows) if bad else "; ".join(rows), [], log)
+
 BUFF_TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "plugin", "src", "mxl_state_icons.h")
 
 
@@ -8031,7 +8277,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("potionamounts", check_potionamounts), ("manarules", check_manarules),
           ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards),
           ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash),
-          ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons)]
+          ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons), ("uniquelimits", check_uniquelimits)]
 
 
 def write_report(extra=""):

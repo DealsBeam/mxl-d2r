@@ -22,7 +22,7 @@ int main() {
 	Check(t.n == 4 && std::strcmp(t.tok[0], "quest") == 0 && std::strcmp(t.tok[3], "set") == 0, "split on blanks");
 	Split("", &t);
 	Check(t.n == 0, "empty line");
-	Split("a b c d e f g h i j k l m n o p q r s", &t);
+	Split("a b c d e f g h i j k l m n o p q r s t u v w x y z", &t);
 	Check(t.n == MaxTokens, "token limit");
 
 	long long v = 0;

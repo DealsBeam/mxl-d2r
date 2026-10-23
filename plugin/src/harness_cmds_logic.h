@@ -9,7 +9,7 @@
 
 namespace hcmd {
 
-constexpr int MaxTokens = 16;
+constexpr int MaxTokens = 24;  // a 17-byte server packet through `pkt` is 18 tokens
 constexpr size_t MaxLine = 512;
 
 struct Tokens {
