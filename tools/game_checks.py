@@ -563,6 +563,13 @@ def clean_start_state(label, report_dead=False):
             notes.append("the inventory panel was open (closed with `i`; it covers the right half of the client)")
     except Exception as e:  # no window grab: the check that needs the screen will say so
         g.log("start state before %s: panel test failed: %r" % (label, e))
+    try:  # what the character wears: a check that leaves an item on shows up as the row of the next one (it changes mana, masteries, resistances)
+        worn = sorted("%s@%s" % (it.get("code"), it.get("body")) for it in hstate()["items"] if it.get("page") == 255 and it.get("body"))
+        if STATE.get("worn") is not None and worn != STATE["worn"]:
+            notes.append("worn items changed since the check before: %s -> %s" % (STATE["worn"], worn))
+        STATE["worn"] = worn
+    except Exception as e:
+        g.log("start state before %s: worn test failed: %r" % (label, e))
     if notes:
         g.log("start state before %s: %s" % (label, "; ".join(notes)))
     return notes
