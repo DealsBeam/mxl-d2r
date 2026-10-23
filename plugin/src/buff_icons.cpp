@@ -9,7 +9,7 @@
 //
 // How it is drawn: D2R has no buff bar of its own, and the SDK's OverlayService draws lines, rectangles and text only (no
 // sprites; WidgetService / PanelService cannot place or switch a frame at run time). So the frame art (Median's own, decoded
-// at build time into the git-ignored mxl_state_icon_art.h) is turned into filled rectangles once at install (same-colour
+// at build time into the committed mxl_state_icon_art.h) is turned into filled rectangles once at install (same-colour
 // runs merged), upscaled nearest-neighbour to the screen's icon size every frame.
 //
 // States are read from the client's copy of the local player (the same bits D2Sigma reads). The remaining time comes from the

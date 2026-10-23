@@ -952,7 +952,7 @@ dropped). The item's use handler (`item_spells.cpp`) accepts the right click for
 
 Median's buff / debuff bar (D2Sigma `ui/BottomPanel.cpp`; research and evidence in `docs/subsystems/buff-icons.md`). The table
 `stateicons` (state, side, tint, frame, tooltip) is turned by `tools/state_icons.py` (a `tools/build.py` step) into
-`mxl_state_icons.h` (committed, 234 rows with migrated state ids and tooltip keys, in D2Sigma's walking order) and the git-ignored
+`mxl_state_icons.h` (committed, 234 rows with migrated state ids and tooltip keys, in D2Sigma's walking order) and the committed
 `mxl_state_icon_art.h` (193 frames of 28 x 28 palette indices from `state-icons.dc6`). At install the plugin registers one
 OverlayService callback (`Phase::AfterGameUi`, client side) and turns every frame into filled rectangles (`BuildRects`: the row's
 tint applied, same-colour runs merged). Each overlay frame: the client's local player unit (`0x2a23704` slot, `HasState` `0x3351b0`)
