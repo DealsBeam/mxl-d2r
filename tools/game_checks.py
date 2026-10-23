@@ -331,7 +331,11 @@ def switch_character(name, cls, class_id):
     g.key("esc")
     time.sleep(1.5)
     g.click(*g.UI["save_exit"])
-    time.sleep(9)
+    time.sleep(6)
+    for _ in range(12):  # the save of a character with a long session behind it takes longer than 9 s
+        if not g.in_game():
+            break
+        time.sleep(3)
     if g.in_game():
         return False
     STATE["in_game"] = False
@@ -8375,6 +8379,8 @@ def check_meleenotarget():
     H("packclear")
     H("unequip rhand")
     H("unequip lhand")  # no weapon: the skills need none to be usable, a bow in the hand would make them unusable
+    for loc in (1, 2, 3, 6, 7, 8, 9, 10, 11, 12):  # nor a worn item of an earlier check (its mana drain / cost modifiers made the plain click pay in the full group)
+        H("unequip %d" % loc)
     rows, bad, log = [], [], []
     for skill in (521, 548, 722):
         H("setskill %d 5" % skill)
@@ -11346,7 +11352,7 @@ def check_strdex():
     H("unequip lring")
     a3 = val(39)
     rows.append("armor first: fire resist %s (inactive), with the strength ring (str %s) %s, ring off %s" % (a1, s2, a2, a3))
-    if not (a1 == r0 and a2 == r0 + 77 and a3 == r0):
+    if not (a1 == r0 and a2 is not None and a2 >= r0 + 77 and a3 == r0):  # >=: the ring is a rare with random affixes, it may carry resistance itself
         bad.append("armor first: the stats of the armor did not follow the strength (%s, %s, %s from %s)" % (a1, a2, a3, r0))
     H("unequip body")
     log += H("equip rin 0=600 lring")[1]
@@ -11355,7 +11361,7 @@ def check_strdex():
     H("unequip lring")
     b2 = val(39)
     rows.append("ring first: fire resist %s (active), ring off %s" % (b1, b2))
-    if not (b1 == r0 + 77 and b2 == r0):
+    if not (b1 is not None and b1 >= r0 + 77 and b2 == r0):
         bad.append("ring first: the armor kept its stats after the ring came off (%s, %s from %s)" % (b1, b2, r0))
     H("unequip body")
     if level0:
