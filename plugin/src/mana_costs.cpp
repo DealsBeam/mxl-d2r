@@ -289,7 +289,7 @@ auto SigmaSkillCost(Unit* unit, int64_t* entry) noexcept -> int32_t {
 	return SigmaCost(g_dataFlagByte(unit), At<int16_t>(skill, 0), AffordLevel(unit, entry), unit, false);
 }
 
-auto InstallSkillAfford(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+void ResolveAffordFunctions(const D2RL::PluginContext* context) noexcept {
 	g_exeBase = context->exeBase;
 	g_getStat = reinterpret_cast<GetStatFn>(g_exeBase + GetStatRva);
 	g_levelBonus = reinterpret_cast<BonusFn>(g_exeBase + SkillLevelBonusRva);
@@ -297,6 +297,10 @@ auto InstallSkillAfford(const D2RL::PluginContext* context, char* report, size_t
 	g_maxLevel = reinterpret_cast<MaxLevelFn>(g_exeBase + MaxSkillLevelRva);
 	g_hasState = reinterpret_cast<HasStateFn>(g_exeBase + HasStateRva);
 	g_special = reinterpret_cast<SpecialFn>(g_exeBase + SpecialUnitRva);
+}
+
+auto InstallSkillAfford(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+	ResolveAffordFunctions(context);
 	const bool ok = context->InstallInlineHook(AffordRva, AffordEntry, sizeof(AffordEntry), SkillAfford,
 	                                           reinterpret_cast<void**>(&g_affordOriginal));
 	std::snprintf(report, reportSize, ok ? "on: affordability from the calc7/calc8 formulas and stat 228 (0x340900)"

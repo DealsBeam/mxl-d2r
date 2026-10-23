@@ -812,3 +812,20 @@ Final runs on the fixed build (`py -3 tools/game_checks.py all <group> --slot N`
 list entries in one of three full runs; it passes alone and in the other two runs, and in the rerun of `classlock casts medianai_ctl` on a fresh game: 3 of 3
 PASS, with no `nDesc` / `false` assert at the cast); slot 2 **48 PASS**, 1 REVIEW (mystic orb tooltips), 1 PARTIAL (map reveal: the level was already drawn
 whole). The first full runs of the day (before the fixes) were slot 1 with the cursor item and slot 2 with `uniquelimits` FAIL.
+
+## Lane p4-engine-a: engine rules (plugin 0.57.0)
+
+New checks (`tools/game_checks.py`, in `group1.txt` / `group2.txt`): `teleportgold`, `skillafford`, `hcdeath`, `meleenotarget`, `reqlevel`, `cubedrop`;
+`enginegaps` now also casts Howl of the Spirits twice (recast guard). Harness verbs: `afford <id>`, `hc [on|off]`, `tpgold`, `modewatch start|stop|read`,
+`peek`; `req player` prints level / str / dex; `gaps` prints `reqlevel_sites=`.
+
+Control runs: `MXL_CONTROL="teleportgold afford reqlevel recast"` makes `game_ctl.harness_switch` write those words into `mxl-core-off.txt` for the launch;
+the checks read the same variable and expect the old behaviour for their own word (`hcdeath` is controlled in a run of its own, because the control leaves a
+Hardcore character dead and its saves are restored afterwards). Do not run `hcdeath` with `hc on` followed by Save and Exit and Play: the character is then a
+dead Hardcore one that cannot join a game.
+
+When saves are touched from a shell, always pass `--slot N` / `MXL_SLOT=N`: without it the default is slot 1's save folder.
+
+Runs of the lane on plugin 0.57.0 (slot 2): `mxl-d2r-runs/checks-20261023-211144-s2` (normal: mxl, enginegaps, teleportgold, skillafford, meleenotarget, reqlevel, cubedrop: 7 PASS),
+`checks-20261023-211416-s2` (control `teleportgold afford reqlevel recast`: 4 PASS with the old behaviour), `checks-20261023-210132-s2` (hcdeath) and
+`checks-20261023-210509-s2` (control `hcdeath`). The two hcdeath runs are from the build before the last `afford`-verb fix (the Hardcore code is unchanged by it).

@@ -35,6 +35,8 @@ struct AffordLog {
 	unsigned calls = 0;
 	unsigned changed = 0;
 };
+// Resolves the engine functions SigmaSkillCost needs (InstallSkillAfford does it too; the harness `afford` verb also works with the hook off).
+void ResolveAffordFunctions(const D2RL::PluginContext* context) noexcept;
 auto InstallSkillAfford(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;
 auto SkillAffordLog() noexcept -> AffordLog;
 auto SigmaSkillCost(d2r::Unit* unit, int64_t* entry) noexcept -> int32_t;

@@ -592,6 +592,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		std::snprintf(line, sizeof(line), "mxl-core: teleport gold %s", g_teleportGoldReport);
 		context->LogInfo(line);
 		if (Off("afford")) {
+			ResolveAffordFunctions(context);
 			std::snprintf(g_skillAffordReport, sizeof(g_skillAffordReport), "%s", OffNote);
 		} else {
 			InstallSkillAfford(context, g_skillAffordReport, sizeof(g_skillAffordReport));

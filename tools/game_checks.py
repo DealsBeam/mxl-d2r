@@ -7551,10 +7551,15 @@ def check_engine_gaps():
         rows.append("Howl of the Spirits (1404) cast three times a second apart: state on / expiry frame %s" % expiry)
         log.append(rows[-1])
         grew = expiry[1][1] > expiry[0][1] and expiry[2][1] > expiry[1][1]
-        if not all(e[0] for e in expiry):
+        if not expiry[0][0]:
+            bad.append("the state is not on after the first cast: %s" % expiry)
+        elif ctl:
+            # with the guard in place D2R does not extend the running state: the second cast leaves the expiry as it was, or (as
+            # observed) takes the state off, and the third cast starts it again
+            if expiry[1][0] and expiry[1][1] != expiry[0][1]:
+                bad.append("control: a second cast changed the expiry although the guard is in place: %s" % expiry)
+        elif not all(e[0] for e in expiry):
             bad.append("the state is not on after a cast: %s" % expiry)
-        elif ctl and expiry[1][1] != expiry[0][1]:
-            bad.append("control: a second cast changed the expiry although the guard is in place: %s" % expiry)
         elif not ctl and not grew:
             bad.append("the expiry did not move with the second and third cast (recast guard still in): %s" % expiry)
     except Exception as e:  # noqa: BLE001 - the byte checks above stand on their own
