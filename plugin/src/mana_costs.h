@@ -23,3 +23,18 @@ struct ManaChargeLog {
 	int otherSkill = 0;
 };
 auto LastManaCharge() noexcept -> ManaChargeLog;
+
+// Skill affordability (audit common2-016 (a)): the usability test's afford step with D2Sigma's cost (the 17 formula-cost
+// skills, stat 228). `SkillAffordLog`: tests answered by the hook (player, record with a formula or a mana cost %) and
+// how many of them differ from D2R's own answer. `SigmaSkillCost` (harness `afford`): the cost the hook compares with the
+// mana stat, in 1/256 points, for the unit's skill entry; -1 when it cannot be computed.
+namespace d2r {
+struct Unit;
+}
+struct AffordLog {
+	unsigned calls = 0;
+	unsigned changed = 0;
+};
+auto InstallSkillAfford(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;
+auto SkillAffordLog() noexcept -> AffordLog;
+auto SigmaSkillCost(d2r::Unit* unit, int64_t* entry) noexcept -> int32_t;

@@ -673,16 +673,25 @@ def harness_switch(on: bool) -> None:
     is a list of words: `volserial` (every slot except slot 1: D2RLoader derives the key of the Battle.net session
     cookie from the volume serial of the drive it runs from and dies on another drive, see docs/testing.md),
     `tag=s2` (window title "Diablo II: Resurrected [s2]", so other tools never pick this window), `nocookie` (hide
-    the cookie instead) and `diag` (env MXL_HARNESS_WORDS sets the words by hand, e.g. "volserial tag=s2 diag")."""
-    p = os.path.join(GAME_DIR, "mods", "MedianXL", "d2rloader", "plugins", "mxl-testharness.txt")
+    the cookie instead) and `diag` (env MXL_HARNESS_WORDS sets the words by hand, e.g. "volserial tag=s2 diag").
+    Env MXL_CONTROL ("afford hcdeath") also writes those words to mxl-core-off.txt: a control run with those parts left out."""
+    folder = os.path.join(GAME_DIR, "mods", "MedianXL", "d2rloader", "plugins")
+    p = os.path.join(folder, "mxl-testharness.txt")
+    off = os.path.join(folder, "mxl-core-off.txt")
     try:
         if on:
             words = os.environ.get("MXL_HARNESS_WORDS")  # explicit override, e.g. "diag" for investigations
             if words is None:
                 words = "" if SLOT == 1 else f"volserial tag=s{SLOT}"
             open(p, "w").write(words)
-        elif os.path.exists(p):
-            os.remove(p)
+            # control runs: MXL_CONTROL="afford hcdeath" writes mxl-core-off.txt for this launch (removed again with the harness)
+            control = os.environ.get("MXL_CONTROL")
+            if control:
+                open(off, "w").write(control)
+        else:
+            for q in (p, off) if os.environ.get("MXL_CONTROL") else (p,):  # a hand-made off file stays
+                if os.path.exists(q):
+                    os.remove(q)
     except OSError as e:
         log(f"harness switch {'on' if on else 'off'} failed: {e}")
 

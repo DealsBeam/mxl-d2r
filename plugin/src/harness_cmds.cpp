@@ -16,6 +16,9 @@
 #include "d2r.h"
 #include "dungeon_lockout.h"
 #include "engine_gaps.h"
+#include "hardcore_death.h"
+#include "required_level.h"
+#include "teleport.h"
 #include "engine_gaps_logic.h"
 #include "gamble_logic.h"
 #include "goblins.h"
@@ -54,11 +57,13 @@
 #define NOMINMAX
 #include <windows.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 namespace {
 
@@ -2905,6 +2910,194 @@ auto CmdManaCharge(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
+// `hc [on|off]`: the player's Hardcore marks (info flag 4 at +0xe of 0x48fde0's struct, dead flag 8, client record +0x5658 bit
+// 0x800); `on` / `off` sets or clears the two Hardcore ones so a Softcore test character can die as a Hardcore one
+// (hardcore_death.cpp). `converted` counts the deaths the hook made Softcore.
+auto CmdHardcore(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	uint8_t* info = Fn<uint8_t* (*)(Unit*)>(0x48fde0)(c->player);
+	if (info == nullptr) {
+		return Fail(c, "hc: the player has no info struct");
+	}
+	uint8_t* client = nullptr;
+	int guard = 0;
+	for (auto* cl = d2r::At<uint8_t*>(c->game, GameClients); cl != nullptr && guard < 64; cl = d2r::At<uint8_t*>(cl, ClientNext), ++guard) {
+		if (d2r::At<int32_t>(cl, ClientState) == 4 && Fn<ClientUnitFn>(RvaClientUnit)(cl, 0) == c->player) {
+			client = cl;
+		}
+	}
+	if (client == nullptr) {
+		return Fail(c, "hc: no client record for the player");
+	}
+	if (t.n >= 2) {
+		const bool on = hcmd::LowerEq(t.tok[1], "on");
+		if (!on && !hcmd::LowerEq(t.tok[1], "off")) {
+			return Fail(c, "usage: hc [on|off]");
+		}
+		uint16_t& flags = *reinterpret_cast<uint16_t*>(info + 0xe);
+		uint32_t& cflags = *reinterpret_cast<uint32_t*>(client + 0x5658);
+		flags = static_cast<uint16_t>(on ? (flags | 4) : (flags & ~4));
+		cflags = on ? (cflags | 0x800) : (cflags & ~0x800u);
+	}
+	unsigned deaths = 0, converted = 0;
+	HardcoreDeathStats(&deaths, &converted);
+	Out("hc info=0x%x hardcore=%d dead=%d client=0x%x hardcore=%d mode=%d life=%d deaths=%u converted=%u", d2r::At<uint16_t>(info, 0xe),
+	    (d2r::At<uint16_t>(info, 0xe) & 4) != 0 ? 1 : 0, (d2r::At<uint16_t>(info, 0xe) & 8) != 0 ? 1 : 0, d2r::At<uint32_t>(client, 0x5658),
+	    (d2r::At<uint32_t>(client, 0x5658) & 0x800) != 0 ? 1 : 0, ModeOf(c->player), Stat(c->player, StatLife) >> 8, deaths, converted);
+	return true;
+}
+
+// `tpgold`: the teleport gold pickup's counters (teleport.cpp): teleports that looked around, gold piles in reach, piles taken.
+auto CmdTeleportGold(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	unsigned teleports = 0, seen = 0, piles = 0;
+	TeleportGoldStats(&teleports, &seen, &piles);
+	Out("tpgold teleports=%u seen=%u taken=%u gold=%d", teleports, seen, piles, Stat(c->player, StatGold));
+	return true;
+}
+
+// `modewatch start|stop|read`: a thread samples the player's unit mode every 2 ms and counts the entries into the attack / cast /
+// throw / kick / skill modes (7..14) and into walk / run (2, 3, 6): what a Shift click with a skill did, however short the swing.
+std::atomic<bool> g_modeRun{false};
+std::atomic<uint32_t> g_modeAttack{0}, g_modeMove{0}, g_modeSamples{0};
+std::atomic<int32_t> g_modeLast{-1};
+std::atomic<int32_t> g_modeMana0{0}, g_modeManaMin{0};
+
+auto ReadUnitMode(Unit* u) noexcept -> int32_t {
+	__try {
+		return d2r::At<int32_t>(u, UnitMode);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return -1;
+	}
+}
+
+auto ReadManaSafe(Unit* u) noexcept -> int32_t {
+	__try {
+		return Stat(u, 8);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return INT32_MAX;
+	}
+}
+
+auto CmdModeWatch(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: modewatch start|stop|read");
+	}
+	if (hcmd::LowerEq(t.tok[1], "start")) {
+		if (g_modeRun.load()) {
+			return Fail(c, "modewatch: already running");
+		}
+		g_modeAttack = 0;
+		g_modeMove = 0;
+		g_modeSamples = 0;
+		g_modeLast = -1;
+		g_modeMana0 = Stat(c->player, 8);
+		g_modeManaMin = g_modeMana0.load();
+		g_modeRun = true;
+		Unit* player = c->player;
+		std::thread([player]() {
+			int32_t last = ReadUnitMode(player);
+			while (g_modeRun.load()) {
+				const int32_t now = ReadUnitMode(player);
+				const int32_t mana = ReadManaSafe(player);
+				if (mana < g_modeManaMin.load()) {
+					g_modeManaMin = mana;
+				}
+				if (now != last && now >= 0) {
+					if (now >= 7 && now <= 14) {
+						g_modeAttack.fetch_add(1);
+					} else if (now == 2 || now == 3 || now == 6) {
+						g_modeMove.fetch_add(1);
+					}
+					g_modeLast = now;
+				}
+				last = now;
+				g_modeSamples.fetch_add(1);
+				Sleep(2);
+			}
+		}).detach();
+		Out("modewatch started");
+		return true;
+	}
+	if (hcmd::LowerEq(t.tok[1], "stop")) {
+		g_modeRun = false;
+	}
+	Out("modewatch running=%d attack=%u move=%u samples=%u last=%d mana=%d min=%d", g_modeRun.load() ? 1 : 0, g_modeAttack.load(), g_modeMove.load(),
+	    g_modeSamples.load(), g_modeLast.load(), g_modeMana0.load(), g_modeManaMin.load());
+	return true;
+}
+
+// `peek exe+<rva>|<address> [n]`: n bytes (default 32, at most 256) of the live process as hex, and the module the address is in
+// (name, base, offset): reads D2RCore.dll's functions behind the executable's `jmp [rip+x]` thunks.
+auto CmdPeek(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: peek exe+<hex rva>|<hex address> [bytes] [deref]");
+	}
+	const char* arg = t.tok[1];
+	uint64_t address = 0;
+	if (std::strncmp(arg, "exe+", 4) == 0) {
+		address = g_base + std::strtoull(arg + 4, nullptr, 16);
+	} else {
+		address = std::strtoull(arg, nullptr, 16);
+	}
+	long long n = 32;
+	if (t.n > 2 && (!hcmd::ParseInt(t.tok[2], &n) || n < 1 || n > 256)) {
+		return Fail(c, "peek: bytes 1..256");
+	}
+	if (t.n > 3 && hcmd::LowerEq(t.tok[3], "deref")) {
+		uint64_t pointer = 0;
+		__try {
+			pointer = *reinterpret_cast<const uint64_t*>(address);
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			return Fail(c, "peek: unreadable %llx", static_cast<unsigned long long>(address));
+		}
+		address = pointer;
+	}
+	HMODULE module = nullptr;
+	char name[MAX_PATH] = "?";
+	if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	                       reinterpret_cast<LPCSTR>(address), &module)) {
+		GetModuleFileNameA(module, name, sizeof(name));
+	}
+	char hex[600] = "";
+	size_t len = 0;
+	__try {
+		for (long long i = 0; i < n; ++i) {
+			len += static_cast<size_t>(std::snprintf(hex + len, sizeof(hex) - len, "%02x", *reinterpret_cast<const uint8_t*>(address + i)));
+		}
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return Fail(c, "peek: unreadable at +%lld", static_cast<long long>(len / 2));
+	}
+	Out("peek address=%llx module=%s base=%llx offset=%llx bytes=%s", static_cast<unsigned long long>(address), name,
+	    static_cast<unsigned long long>(reinterpret_cast<uint64_t>(module)), static_cast<unsigned long long>(address - reinterpret_cast<uint64_t>(module)), hex);
+	return true;
+}
+
+// `afford <skill id>`: the usability test's afford step (0x340900, hooked by mana_costs.cpp InstallSkillAfford) for one of the
+// player's skills, with the cost the hook compares (D2Sigma's, 1/256 points) and the mana now: `afford=1` when the mana
+// covers it. D2R's own columns give `cols`, the cost D2R's test would use. `hook` counts the tests the hook answered / changed.
+auto CmdAfford(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long id = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &id) || id < 0 || id > 0xffff) {
+		return Fail(c, "usage: afford <skill id>");
+	}
+	uint8_t* sk = Fn<SkillByIdFn>(RvaSkillById)(c->player, static_cast<int32_t>(id), -1);
+	if (sk == nullptr) {
+		return Fail(c, "afford: the player has no skill %lld (setskill %lld 1 first)", id, id);
+	}
+	auto* entry = reinterpret_cast<int64_t*>(sk);
+	const uint8_t* rec = d2r::At<const uint8_t*>(sk, 0);
+	const int32_t cost = SigmaSkillCost(c->player, entry);
+	const int32_t level = rec != nullptr ? d2r::At<int32_t>(sk, 0x40) : -1;
+	const int32_t cols = rec != nullptr ? ((level > 0 ? level - 1 : 0) * d2r::At<int16_t>(rec, 0x22c) + d2r::At<int16_t>(rec, 0x22a))
+	                                          << (d2r::At<uint8_t>(rec, 0x228) & 31)
+	                                    : -1;
+	const uint64_t verdict = Fn<uint64_t (*)(Unit*, int64_t*)>(0x340900)(c->player, entry);
+	const AffordLog l = SkillAffordLog();
+	Out("afford skill %lld level %d: afford=%llu cost=%d cols=%d mana=%d life=%d calc7=%d calc8=%d hook=%u/%u", id, level, static_cast<unsigned long long>(verdict),
+	    cost, cols, Stat(c->player, StatMana), Stat(c->player, 6), rec != nullptr ? d2r::At<int32_t>(rec, 0x1a8) : -2,
+	    rec != nullptr ? d2r::At<int32_t>(rec, 0x1ac) : -2, l.calls, l.changed);
+	return true;
+}
+
 // `cursor`: the item on the player's cursor (inventory +0x40, the one 0x4249f0 reports as "busy": no skill can be used while
 // it is held): id and code, or "empty". Drop it with the client packet 0x17 + id (u32).
 auto CmdCursor(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
@@ -3156,8 +3349,9 @@ auto CmdReq(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 				}
 			}
 		}
-		Out("req id=%u code=%s usable=%d lock=%d weapon=%d shield=%d types=%s", IdOf(it), code, static_cast<int>(r & 0xff), Stat(it, StatClassLock),
-		    Fn<IsItemTypeFn>(RvaIsItemType)(it, 0x2d) != 0, Fn<IsItemTypeFn>(RvaIsItemType)(it, 2) != 0, len > 0 ? types : "-");
+		Out("req id=%u code=%s usable=%d level=%u str=%u dex=%u lock=%d weapon=%d shield=%d types=%s", IdOf(it), code, static_cast<int>(r & 0xff), level,
+		    str, dex, Stat(it, StatClassLock), Fn<IsItemTypeFn>(RvaIsItemType)(it, 0x2d) != 0, Fn<IsItemTypeFn>(RvaIsItemType)(it, 2) != 0,
+		    len > 0 ? types : "-");
 		++n;
 	});
 	*classField = savedClass;
@@ -3573,8 +3767,9 @@ auto CmdGaps(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	const bool recastOn =
 	    gaps::SameBytes(reinterpret_cast<const uint8_t*>(g_base + gaps::RecastGuardRva), gaps::RecastGuardPatched, sizeof(gaps::RecastGuardPatched));
 	const int difficulty = static_cast<int>(d2r::At<uint8_t>(c->game, GameDifficulty));
-	Out("gaps hit20=%s hit20_patched=%d recast=%s recast_patched=%d slowfloor=%d expected_slowfloor=%d difficulty=%d", hit, hitOn ? 1 : 0, recast,
-	    recastOn ? 1 : 0, EngineGapsSlowFloor(c->game, c->player), gaps::PlayerSlowFloor(difficulty), difficulty);
+	Out("gaps hit20=%s hit20_patched=%d recast=%s recast_patched=%d slowfloor=%d expected_slowfloor=%d difficulty=%d reqlevel_sites=%d", hit,
+	    hitOn ? 1 : 0, recast, recastOn ? 1 : 0, EngineGapsSlowFloor(c->game, c->player), gaps::PlayerSlowFloor(difficulty), difficulty,
+	    RequiredLevelPatchedSites());
 	return true;
 }
 
@@ -3603,7 +3798,7 @@ auto CmdHelp(Ctx*, const hcmd::Tokens&) noexcept -> bool {
 	Out("player actions: move <x> <y> [walk] [packet] | moveto <unit id>|nearest [class] | skill [left|right <id>] | setskill <id> <level> | "
 	    "skills | cast <id> [x y|unit <id>|nearest [class]|self] | mapcells (client) | reveal (client) | wpobj | travel (client) | stashprobe <tab>|result (client) | stashpage state|open|close|toggle|msgs|uia|widget|vis|put|fill|drop|list|move|result (client) | equip <code> [stat=value..] <bodyloc> | unequip <bodyloc> | missiles [reset]");
 	Out("backlog verbs: skilltab [n] (client) | strids <id>.. (client) | hover (client) | automap [type] (client) | shop [npc class] | gamble | gaps | levelact <id>..");
-	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | "
+	Out("verify verbs: hit <player|merc|mon:id> phys|fire|ltng|magic|cold <amount> [attacker] [stagger] | avoid <ref> melee|missile|evade [n] | wear <attacker ref> <defender ref> [n] | iflags <item id> [unid] | cursor | manamin [reset] | manacharge | afford <skill> | hc [on|off] | tpgold | "
 	    "itemroll <code> <n> [q=] [ilvl=] | colour <item id|code> | req <ref> [as <class>] | cstat <stat> [layer] (client) | panelrow <stat> | mapmem (client) | stat merc|mon:<id> <stat>");
 	Out("backlog verbs: stat <ref> <stat> scan [max layer] | cubeslots <first> <count> | cubeout <recipe> [slot] (portal outputs) | state (portal dest=)");
 	return true;
@@ -4319,7 +4514,7 @@ const Verb Verbs[] = {
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
-    {"stashpage", CmdStashPage, true},
+    {"stashpage", CmdStashPage, true}, {"afford", CmdAfford, false}, {"hc", CmdHardcore, false}, {"tpgold", CmdTeleportGold, false}, {"modewatch", CmdModeWatch, false}, {"peek", CmdPeek, false},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

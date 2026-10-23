@@ -12,6 +12,9 @@
 // D2RLoader's InputService and ThreadService.
 auto InstallTravel(const D2RL::PluginContext* context, bool wpauto, bool mapreveal, bool hotkeys, char* report, size_t reportSize) noexcept -> bool;
 
+// The X hotkey's state, Median's no-pickup flag inverted (true = auto pickup on, the default): the teleport gold pickup (teleport.cpp) asks it.
+auto TravelAutoPickupOn() noexcept -> bool;
+
 // Game thread, after the server frame (every frame; the scan runs every fifth).
 void TravelGameFrame(void* game, uint32_t frame) noexcept;
 
