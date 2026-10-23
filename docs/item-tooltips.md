@@ -56,9 +56,11 @@ strings, 6 had no line where Median has one, 3 showed Chronicle placeholder text
   unresolved). The damage number in front of "of" is read with the local player's attributes (the item unit is not a player).
 - **Descfunc 33 (cooldown, stat 309)** divides the stored value by 25 (frames per second); the divisor was not confirmed against
   Median.
-- **Skills without a name.** Skills 2001, 2004 and 669 (and 2073 / 2076 / 741 when used as `item_skill` layers) have no `skilldesc`
-  row, so D2R's formatter prints its placeholder name where Median prints a blank. A data gap of the skill table, listed in
-  [unported.md](unported.md).
+- **Skills without a name.** Skills 2001, 2004, 669, 2073, 2076 and 741 (`skills_1929`, `skills_1932`, `skills_597`, `skills_2001`,
+  `skills_2004`, `skills_669`) have no `skilldesc` row in Median; the item formatter asserts when a property names one
+  (`nDesc >= 0 && nDesc < skillDescTbl.size()`, seen in the 2026-10-23 suite by `tooltiptext`). `txt_migrate.py`
+  (`blank_skilldesc`) gives them a `blank` row (no name, the shape of Median's 29 rows with an empty `str name`), so the
+  tooltip prints a blank name like Median. Lane suite-regressions.
 - **Not spawned in game.** Set items cannot be created by the harness `item` verb, and no runeword was socketed; their property
   lines go through the same formatter and stat records, which the table covers for every stat, but no real set item or runeword was
   read. Charms (`cm1`-`cm3`) spawn without properties through the `item` verb; the charm stats were read through the table only.

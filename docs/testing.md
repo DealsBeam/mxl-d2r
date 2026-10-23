@@ -764,3 +764,50 @@ Success, is not in the picture either. The check therefore asserts counters only
 the console, `mxl` should say `buff icons on`; cast a self buff or run `h setstate player 32 1`; the icon bar sits just above the belt next to the orbs
 (left group beside the health orb, curses on the right), a countdown under each icon, a tooltip box when the cursor is on an icon. Tell me: the
 placement at your resolution, whether the art and tints look like Median's, and the frame rate in a fight with many states.
+
+### Release suite on main (eccc3ad): slot 1 cluster, uniquelimits, engine asserts (lane suite-regressions, 2026-10-23, slots 1 and 2, background mode)
+
+**The slot 1 cluster was the character, not the code.** The 13:45 run had Akara / Cain / Tyrael menus not opening, every harness cast doing nothing, zombie clicks
+not hurting, and Griswold's Heart missing, on slot 1 only; both slots had the same plugin and data (hashes equal, same `d2rloader.toml` and off words).
+`h state` showed `item id=62 code=143` in the player's state line: **an item held on the cursor** (a unique charm, left by an earlier `uniquelimits` run and
+saved in the character). The engine's busy test (`0x4249f0`, nonzero with an item on the cursor or a trade open) refuses every skill use and every NPC
+menu while the cursor is full, which is the whole cluster (the casts printed OK because the harness only calls the cast function). Dropping the item
+(client packet 0x17 + item id) cured all of it; the check list then passed on slot 1 (65 PASS of 67). The character was backed up first
+(`mxl-d2r-runs\save-backup-20261023-144201-s1`); no other character was touched.
+
+`game_checks` now refuses and repairs that state (`clean_start_state`): before the first check and again before every check it revives a dead
+character, ends the shapeshift states (140, 236, 278, 300), and drops an item held on the cursor (`release_held_item`, 3 tries, raises when the item stays);
+a character that **started** dead / shapeshifted / holding something gets a REVIEW row ("Start state before the first check"), one left in that
+state by the check before gets a REVIEW row naming that check, and a state that cannot be repaired gives BLOCKED rows instead of a wall of FAILs.
+
+**uniquelimits "second copy of a single-copy unique should be refused (refused 2 -> 2, in pack 1)" was the check.** The ground-pickup part dropped the
+first copy and then removed *its own carried copy* (`remove <code> 1` takes the first item of that code anywhere), so the second pickup found an empty
+pack and nothing was there to refuse. The check now leaves the carried copy alone (a far drop stays; `reset()` clears leftovers), and reads back `iflags` of
+the picked-up item (mode 3 or 5) and the pack count instead of the counter alone. The plugin rule was fine: the check passes on slot 2 after the change (`refused` moves on the second copy).
+
+**Engine asserts** (`d2rloader.log`; "Continuing because assertion dialogs are disabled"; found by time stamp against the `hcmd` lines of the run log,
+each one then reproduced alone with a probe where noted):
+
+| Assert | Trigger (check / action) | Cause | Status |
+|---|---|---|---|
+| `nDesc >= 0 && nDesc < skillDescTbl.size()`, then `false` | tooltips of an item whose property names skill 2001 / 2004 / 669 / 2073 / 2076 / 741 (`tooltiptext`); a cast of skill 36 (Fire Bolt) or 126 (Bash) by `casts` | those skills have no `skilldesc` row in Median; the client reads the row of a skill when it is cast or named | **fixed** for the 8 skills: `txt_migrate.py blank_skilldesc` gives them a `blank` row (no name, Median's own shape of `avoid`); the other 1049 skills with ItemEffect 1 and no skilldesc assert once per cast in the same way (not changed: a row each changes the skill menus' lists) |
+| `nMissile >= 0 && nMissile < NumMissileStats` (x2) | `kill` of class 2054 (unformed phantasm, the Summoner check), `monlevel` | Median's curse skills have `cltdofunc 30` but no `cltmissilea` / `cltmissilec` (67 of 75 curse rows; vanilla Amplify Damage has `curseamplifydamage` / `cursecast`), D2R's curse client function reads both | **open**: the cure is vanilla's curse missiles on those rows, which draws D2R's curse effect on top of Median's state overlay (owner's call) |
+| `nRadius > 0` | spawn of class 2791 (treasure goblin; `goblins`, `medianai`) | skill 2580 `treasure_goblin_skill` is a curse (srvdofunc 30) with `aurarangecalc` 10 and no client functions; not reproduced with 156, 971, 990, 1899 | open |
+| `nSkillCastId && nSkillCastId != 0xFFFFFFFF` | `medianai` / `medianai_ctl` (andariel_ai users 1693 Maghda, 1899) after a hit | the AI picks a skill slot that holds no skill; not every run | open |
+| `nDirectionIndex < nDirections`, `MONFLAG_ENABLED` | `medianai` spawning every andariel_ai user (class 990; class 971 after the not spawnable 333) | the check spawns disabled / odd monstats rows; not reproduced by a plain spawn | harness artifact |
+| `i != warpDefs.end()`, `BC_VERIFY: ptWarp`, `BC_ASSERT: 0` | `cheat goto 16` (Median's level 16 has no Vis / Warp rows, vanilla has Warp1 4 / Vis1 12), goto 191 / 250 / area 134 (`areacycle`, `automap`, `mapmem`) | Median-only levels entered by `goto` without their warp | open (not reached by a real walk) |
+| `nParamIndex < 8` | `enter` into a class 600 portal of a Median dungeon (`lockout`, `scrollportals`, area 251 / 253) | the portal's level parameter | open |
+| `wPrefix != 0 \|\| wSuffix != 0` | harness `item <code> q=4` / `q=6` (`tooltiptext`, `trophy`) | the harness builds magic / rare items without affixes | harness artifact |
+| `activeUnit` | start of `assetpaths` | not traced | open |
+| `BC_ASSERT: 0`, `ii < NUM_LEVEL_TYPES`, `sub.nCelNum`, `eLevelId > 0`, 2 x `statesTbl` | once per launch, on the way into the game | D2R reading Median's tables (states, level types) | open, constant |
+| `s_StatsPool.IsEmpty()`, `m_allocated == 0`, `m_freed == 0`, ... | when the game exits or restarts (keybinds, Save and Exit) | pool leak checks of the engine | exit-only, ignored |
+
+Other check fixes of this lane: the window capture puts a minimized game window back with SW_SHOWNOACTIVATE (the scrollportals run was BLOCKED once by
+a minimized window: "game window minimized or has no size"; focus is not taken), and `assetpaths` waits up to 10 s for the spawned Corrupted Wereowl
+(in two long suite sessions it was not in the unit list 2.5 s after the cheat and the check failed on "did not spawn"; alone it passes, and with the wait it passed in the final run).
+
+Final runs on the fixed build (`py -3 tools/game_checks.py all <group> --slot N`, `group1.txt` on slot 1, `group2.txt` on slot 2, in parallel; folders
+`mxl-d2r-runs\checks-20261023-171353-s1` / `-s2`): slot 1 **65 PASS**, 1 REVIEW (short aliases), 1 BLOCKED (`classlock`: `ensure_merc` was refused by the server for all 6
+list entries in one of three full runs; it passes alone and in the other two runs, and in the rerun of `classlock casts medianai_ctl` on a fresh game: 3 of 3
+PASS, with no `nDesc` / `false` assert at the cast); slot 2 **48 PASS**, 1 REVIEW (mystic orb tooltips), 1 PARTIAL (map reveal: the level was already drawn
+whole). The first full runs of the day (before the fixes) were slot 1 with the cursor item and slot 2 with `uniquelimits` FAIL.

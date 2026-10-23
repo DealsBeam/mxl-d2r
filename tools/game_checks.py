@@ -425,6 +425,65 @@ def revive_if_dead(timeout=20):
     return True
 
 
+# Shapeshift forms (states.txt `transform` 1 and Median's own): the bear, Treewarden, Wereowl and werewolf form states.
+SHAPE_STATES = (140, 236, 278, 300)
+
+
+def held_item():
+    """(unit id, code) of the item on the player's cursor, None when the cursor is empty."""
+    ok, lines = H("cursor")
+    m = re.search(r"cursor id=(\d+) code=(\S+)", " ".join(lines))
+    return (int(m.group(1)), m.group(2)) if m else None
+
+
+def release_held_item():
+    """An item held on the cursor makes the server unit busy (0x4249f0): skill casts are refused (`cast` code 1: no cast
+    animation, no mana, no missile), an NPC click opens no menu, left clicks drop the item instead of attacking. A character
+    saved while it holds an item (a check that aborted between a lift and a drop) comes back holding it; slot 1's
+    MxlBarb did for a whole suite (2026-10-23: cotr, a unique left by an earlier uniquelimits run). Drops it (client packet
+    0x17 + id, onto the ground at the player's feet). Returns the (id, code) dropped, None when the cursor was empty, and
+    raises when the item cannot be put down."""
+    held = held_item()
+    if held is None:
+        return None
+    for _ in range(3):
+        H("pkt 17 " + " ".join("%02x" % b for b in struct.pack("<I", held[0])))
+        time.sleep(1.0)
+        if held_item() is None:
+            return held
+    raise RuntimeError("the item %d (%s) on the cursor cannot be dropped" % held)
+
+
+def clear_shape_states():
+    """Takes the shapeshift form states off the player (a character left morphed by another lane's work: the form's
+    skills, models and NPC / cast rules are not those of the class). Returns the state ids that were on."""
+    on = []
+    for s in SHAPE_STATES:
+        ok, lines = H("hasstate %d" % s)
+        if re.search(r"hasstate \d+: 1\b", " ".join(lines)):
+            on.append(s)
+            H("setstate player %d 0" % s)
+    return on
+
+
+def clean_start_state(label, report_dead=False):
+    """The state a check needs the test character to be in: alive, in its own shape, nothing on the cursor. Repairs what it can and
+    returns the notes of what it repaired (an empty list when the character was clean); a state it cannot repair raises. Called before
+    the first check and before every check (the check that leaves a state behind shows up as the row of the next one)."""
+    notes = []
+    if revive_if_dead() and report_dead:  # a check that kills the character on purpose (deathcrash) is revived silently
+        notes.append("the character was dead (revived)")
+    forms = clear_shape_states()
+    if forms:
+        notes.append("shapeshift states %s were on (taken off)" % forms)
+    held = release_held_item()
+    if held:
+        notes.append("item %d (%s) was held on the cursor (dropped; it blocks skill casts and NPC menus)" % held)
+    if notes:
+        g.log("start state before %s: %s" % (label, "; ".join(notes)))
+    return notes
+
+
 def goto(area, timeout=40):
     """Move the character to an area: D2R's own `cheat goto` (debug mode) for the same act, the plugin's `level`
     (the NPC travel) across acts. Waits until `h state` says so."""
@@ -8048,7 +8107,8 @@ def check_uniquelimits():
             f = next((kv(l) for l in fl if l.startswith("iflags")), {})
             if not m or ((int(f.get("x", "0")) - int(m.group(1))) ** 2 + (int(f.get("y", "0")) - int(m.group(2))) ** 2) <= 9:
                 return g
-            H("remove %s 1" % code_of(row))
+            # (a far drop stays where it is: `remove <code> 1` takes the FIRST item of that code, which is the copy the check carries
+            # in the backpack, not the ground one; reset() clears the leftovers by code)
         bad.append("no ground drop of unique %d landed within 4 subtiles of the player" % row)
         return None
 
@@ -8120,16 +8180,21 @@ def check_uniquelimits():
         H("pkt 16 " + _le(g["id"], int(f.get("x", "0")), int(f.get("y", "0")), 1))
         time.sleep(0.5)
         after = _ul_counts()
-        return before, after, pack_count(row)
+        ok, fl2 = H("iflags %d" % g["id"])
+        f2 = next((kv(l) for l in fl2 if l.startswith("iflags")), {})
+        return before, after, pack_count(row), f2.get("mode")
 
     reset()
-    make(S1, "inv")
-    res = ground_pickup(S1)
+    carried1 = make(S1, "inv")
+    res = ground_pickup(S1) if carried1 else None
     if res:
-        before, after, inpack = res
-        rows.append("second copy of a single-copy unique picked up from the ground: refused %d -> %d, in pack %d" % (before[2], after[2], inpack))
-        if after[2] < before[2] + 1 or inpack != 1:
-            bad.append("the second copy of a single-copy unique should be refused (refused %d -> %d, in pack %d)" % (before[2], after[2], inpack))
+        before, after, inpack, gmode = res
+        rows.append("second copy of a single-copy unique picked up from the ground: refused %d -> %d, in pack %d, the ground copy's mode %s (3 = still on the ground)" % (
+            before[2], after[2], inpack, gmode))
+        # the carried copy must still be the only one in the pack and the ground copy must not have entered it
+        if after[2] < before[2] + 1 or inpack != 1 or gmode not in ("3", "5"):
+            bad.append("the second copy of a single-copy unique should be refused (refused %d -> %d, in pack %d, ground copy mode %s)" % (
+                before[2], after[2], inpack, gmode))
     # a different single-copy unique is not counted: carry S1 and S2, lift S2 off the backpack (packet 0x19) and put it back (0x18)
     reset()
     make(S1, "inv")
@@ -8372,6 +8437,11 @@ def check_assetpaths():
         cheat("mspawn %s" % uid)
         time.sleep(2.5)
         new = [m for m in hstate()["mons"] if m.get("id") not in known and not m.get("npc")]
+        for _ in range(8):  # in a long suite session the cheat's spawn can take longer (suite 2026-10-23: corrupted_wereowl at +2.5 s: none)
+            if new:
+                break
+            time.sleep(1.0)
+            new = [m for m in hstate()["mons"] if m.get("id") not in known and not m.get("npc")]
         for m in sorted(new, key=lambda m: m["id"])[1:]:  # the minions of a boss are in the picture: only the unit itself is judged
             H("kill %d" % m["id"])
         time.sleep(3.5)
@@ -8500,19 +8570,29 @@ def run_all(only=None):
         elif not enter_game():
             add("enter game", "BLOCKED", "the character did not enter the game")
         else:
+            try:
+                notes = clean_start_state("the first check", report_dead=True)
+                if notes:
+                    add("Test character start state (an earlier run saved it like this)", "REVIEW", "; ".join(notes))
+            except Exception as e:
+                add("Test character start state", "BLOCKED", "cannot be repaired: %r" % (e,))
+                only = ["-"]  # no check runs on a character that cannot be put in a clean state
             p0 = hstate()["player"]
             for name, fn in CHECKS:
                 if only and name not in only:
                     continue
                 try:
                     guard()
-                    revive_if_dead()
+                    notes = clean_start_state(name)
+                    if notes:
+                        add("Start state before %s (left by the check before)" % name, "REVIEW", "; ".join(notes))
                     fn()
                 except Exception as e:
                     add(name, "BLOCKED", "script error: %r" % (e,))
                     if WD.abort:
                         break
             try:  # the test character is saved on exit: put the numbers the checks changed back
+                release_held_item()  # nothing may stay on the cursor: the save would come back holding it (slot 1, 2026-10-23)
                 H("difficulty 0")
                 H("gold set %d %d" % (p0.get("gold", 0), p0.get("bank", 0)))
                 H("cubeclear")
