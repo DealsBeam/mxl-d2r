@@ -71,7 +71,7 @@ constexpr uint64_t QualityRva = 0x36cf60;        // (item) -> quality
 constexpr uint64_t HasDurabilityRva = 0x373540;  // (item)
 constexpr uint64_t CanSocketRva = 0x373610;      // (item): the base can have sockets (items record +0x147)
 constexpr uint64_t NoSocketBaseRva = 0x374660;   // (item): items record +0x142, nonzero keeps the item without sockets
-constexpr uint64_t ItemLevelRva = 0x3730d0;      // (item) -> item level (item data +0x40)
+constexpr uint64_t ItemLevelRva = 0x36ccf0;      // (item) -> item level (item data +0x38, at least 1; the setter 0x36dab0 writes it. 0x3730d0 reads +0x40, a field that holds 101 for every item)
 constexpr uint64_t NoEtherealBaseRva = 0x3744d0; // (item): items record +0x13a, nonzero keeps D2R's generator from making it ethereal
 constexpr uint64_t MaxSocketsRva = 0x36ead0;     // (item) -> byte: most sockets the item can hold (Sigma's import 0x101671c4)
 
@@ -114,7 +114,7 @@ using IsTypeFn = int32_t (*)(Unit* item, int32_t type);
 using SeedFn = void* (*)(Unit* unit);
 using RandFn = int32_t (*)(void* seed, int32_t n);
 using ItemFn = int32_t (*)(Unit* item);
-using ItemLevelFn = uint16_t (*)(Unit* item);
+using ItemLevelFn = int32_t (*)(Unit* item);
 
 RequirementFn g_originalRequirement = nullptr;
 GenerateFn g_originalGenerate = nullptr;

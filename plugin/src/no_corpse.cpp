@@ -16,6 +16,10 @@
 // runs after it and does what a click on the body does (the interact handler 0x4b2be0): the pickup 0x42b220 (out, game,
 // player, corpse) puts the body-location items back, then the corpse leaves the list (0x389730), the room (0x2ef4d0), the
 // clients (0x476fc0, packet 0x8e) and the game (0x348b00 clears its collision, 0x48faa0 frees it). docs/subsystems/death.md.
+//
+// Soulstealer (audit DC5): the penalty hook is the one place on the death path that knows the killer. When the killer is a monster
+// with Median's Soulstealer property (mxl_soulstealer.h) it heals 1/10 of its maximum life, the way D2R's own life-per-kill
+// handler 0x583a70 does it (max life 0x2f4d20, life stat 6 through 0x2f5020 / 0x2f7d10, then the unit event 0x349020 (unit, 0x97)).
 #include "no_corpse.h"
 
 #include "d2r.h"
@@ -55,6 +59,20 @@ nocorpse::Counters g_counts;
 nocorpse::DeathStamps g_stamps;
 SRWLOCK g_lock = SRWLOCK_INIT;
 bool g_installed = false;
+
+// --- Soulstealer heal (audit DC5) -------------------------------------------------------------------------------------
+constexpr uint64_t MaxLifeRva = 0x2f4d20;    // (unit) -> max life, 256 per point
+constexpr uint64_t GetStatRva = 0x2f5020;    // (unit, stat, layer)
+constexpr uint64_t SetStatRva = 0x2f7d10;    // (unit, stat, value, layer)
+constexpr uint64_t UnitEventRva = 0x349020;  // (unit, id, value): the unit's update notification
+constexpr int StatLife = 6, StatLifeEvent = 0x97;
+constexpr int UnitClassOffset = 0x04;        // what 0x349860 returns (its file and line arguments are assert text)
+using MaxLifeFn = int32_t (*)(void* unit);
+using GetStatFn = int32_t (*)(void* unit, int32_t stat, int32_t layer);
+using SetStatFn = void (*)(void* unit, int32_t stat, int32_t value, int32_t layer);
+using UnitEventFn = void (*)(void* unit, int32_t id, int32_t value);
+bool g_soulstealer = false;
+volatile long g_heals = 0, g_playerDeaths = 0, g_lastKillerType = -1, g_lastKillerClass = -1, g_lastKillerLife = -1, g_lastKillerMax = -1;
 
 // --- stored corpse pickup (docs/subsystems/death.md section 8) --------------------------------------------------------
 constexpr uint64_t EnterRva = 0x485350;
@@ -235,8 +253,39 @@ void CorpseHook(void* game, void* player, int, int, void*) {
 	}
 }
 
-uint64_t PenaltyHook(void* game, void* victim, void*) {
+// The player `victim` died to `killer` (null when nobody is credited): a Soulstealer monster heals 1/10 of its max life.
+void SoulstealerHeal(void* victim, void* killer) noexcept {
+	if (!g_soulstealer || victim == nullptr || d2r::At<int32_t>(victim, d2r::UnitType) != nocorpse::UnitTypePlayer) {
+		return;
+	}
+	InterlockedIncrement(&g_playerDeaths);
+	if (killer == nullptr) {
+		g_lastKillerType = -1;
+		g_lastKillerClass = -1;
+		return;
+	}
+	const int killerType = d2r::At<int32_t>(killer, d2r::UnitType);
+	g_lastKillerType = killerType;
+	g_lastKillerClass = d2r::At<int32_t>(killer, UnitClassOffset);
+	if (!nocorpse::SoulstealerHeals(killerType, d2r::At<int32_t>(killer, UnitClassOffset))) {
+		return;
+	}
+	const int32_t maxLife = Call<MaxLifeFn>(MaxLifeRva)(killer);
+	const int32_t life = Call<GetStatFn>(GetStatRva)(killer, StatLife, 0);
+	g_lastKillerLife = life;
+	g_lastKillerMax = maxLife;
+	const int32_t healed = nocorpse::SoulstealerLife(life, maxLife);
+	if (healed == life) {
+		return;
+	}
+	Call<SetStatFn>(SetStatRva)(killer, StatLife, healed, 0);
+	Call<UnitEventFn>(UnitEventRva)(killer, StatLifeEvent, 0);
+	InterlockedIncrement(&g_heals);
+}
+
+uint64_t PenaltyHook(void* game, void* victim, void* killer) {
 	++g_counts.penalties;
+	SoulstealerHeal(victim, killer);
 	if (game != nullptr && victim != nullptr) {
 		AcquireSRWLockExclusive(&g_lock);
 		g_stamps.Set(reinterpret_cast<uintptr_t>(game), IdOf(victim), FrameOf(game));  // the start of the death
@@ -301,6 +350,27 @@ auto InstallNoCorpse(const D2RL::PluginContext* context, char* report, size_t re
 		std::snprintf(report, reportSize, "off: hook failed (corpse %s, penalty %s)", corpse ? "ok" : "no", penalty ? "ok" : "no");
 	}
 	return g_installed;
+}
+
+auto InstallSoulstealer(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+	if (!g_installed) {
+		std::snprintf(report, reportSize, "off: needs the nocorpse hooks (the death penalty call 0x424ac0 is where the killer is known)");
+		return false;
+	}
+	g_exe = context->exeBase;
+	g_soulstealer = true;
+	nocorpse::FormatSoulstealerReport(report, reportSize, 0);
+	return true;
+}
+
+auto SoulstealerHeals(long* heals, long* deaths, long* lastType, long* lastClass, long* lastLife, long* lastMax) noexcept -> bool {
+	*lastLife = g_lastKillerLife;
+	*lastMax = g_lastKillerMax;
+	*heals = g_heals;
+	*deaths = g_playerDeaths;
+	*lastType = g_lastKillerType;
+	*lastClass = g_lastKillerClass;
+	return g_soulstealer;
 }
 
 auto InstallRespawnWait(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {

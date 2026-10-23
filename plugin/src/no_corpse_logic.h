@@ -2,6 +2,9 @@
 // equipment, loses no gold and no experience): no engine access, so mxl_tests can run them. docs/subsystems/death.md.
 #pragma once
 
+#include "mxl_soulstealer.h"
+
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 
@@ -171,6 +174,40 @@ struct PickupCounters {
 inline void FormatPickupReport(char* out, size_t outSize, long picked, long kept, long faults) noexcept {
 	std::snprintf(out, outSize, "on: stored corpses are picked up when a character enters a level (0x485350): picked %ld, kept %ld, faults %ld",
 	              picked, kept, faults);
+}
+
+// Soulstealer (audit DC5; Median patch notes sigma 1.1.0, 2.1.0, 2.8.0): a boss that carries the Soulstealer property heals 10% of its
+// maximum life when it kills a player. The killer of the death is the boss itself, not a minion or summon of it (a minion has no
+// property of its own), and one death heals once.
+inline constexpr int SoulstealerDivisor = 10;
+constexpr int UnitTypePlayer = 0, UnitTypeMonster = 1;
+
+inline auto IsSoulstealer(int32_t monsterClass) noexcept -> bool {
+	return std::binary_search(mxl_soulstealer::Monsters, mxl_soulstealer::Monsters + mxl_soulstealer::MonsterCount, monsterClass);
+}
+
+// Whether a player's death by `killerType` / `killerClass` heals the killer (killerType -1: no killer).
+inline auto SoulstealerHeals(int killerType, int32_t killerClass) noexcept -> bool {
+	return killerType == UnitTypeMonster && IsSoulstealer(killerClass);
+}
+
+// The killer's life after the heal; life and maxLife in the engine's units (256 per point), clamped to maxLife.
+inline auto SoulstealerLife(int32_t life, int32_t maxLife) noexcept -> int32_t {
+	if (maxLife <= 0 || life >= maxLife) {
+		return life;
+	}
+	const int64_t healed = static_cast<int64_t>(life) + maxLife / SoulstealerDivisor;
+	return static_cast<int32_t>(std::min<int64_t>(healed, maxLife));
+}
+
+// "on: 34 Soulstealer monsters heal 10% of max life when they kill a player (death penalty path 0x424ac0), N heals"
+// With player deaths seen: ", player deaths 2 (last killer: type 1 class 2907)"; killer type -1 = no killer credited.
+inline void FormatSoulstealerReport(char* out, size_t outSize, long heals, long deaths = 0, long lastType = -1, long lastClass = -1, long lastLife = -1, long lastMax = -1) noexcept {
+	const int n = std::snprintf(out, outSize, "on: %d Soulstealer monsters heal 1/%d of max life when they kill a player (0x424ac0 killer), heals %ld",
+	                            static_cast<int>(mxl_soulstealer::MonsterCount), SoulstealerDivisor, heals);
+	if (deaths > 0 && n > 0 && static_cast<size_t>(n) < outSize) {
+		std::snprintf(out + n, outSize - static_cast<size_t>(n), ", player deaths %ld (last killer: type %ld class %ld, life %ld of %ld)", deaths, lastType, lastClass, lastLife, lastMax);
+	}
 }
 
 }  // namespace nocorpse
