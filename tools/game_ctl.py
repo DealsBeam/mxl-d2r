@@ -223,6 +223,15 @@ def grab_printwindow(h):
     another monitor, needs no focus and never touches the desktop. Returns an RGB PIL image."""
     from PIL import Image
     gdi = ctypes.windll.gdi32
+    if user32.IsIconic(h):
+        # something else minimized the game window mid-run (suite 2026-10-23: scrollportals BLOCKED): put it back
+        # without activating it, so the user's focus stays where it is
+        user32.ShowWindow(h, 4)  # SW_SHOWNOACTIVATE
+        for _ in range(30):
+            if not user32.IsIconic(h):
+                break
+            time.sleep(0.1)
+        time.sleep(0.5)
     wr = wt.RECT()
     user32.GetWindowRect(h, ctypes.byref(wr))
     W, H = wr.right - wr.left, wr.bottom - wr.top
