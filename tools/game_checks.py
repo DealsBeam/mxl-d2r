@@ -15,7 +15,7 @@ classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner 
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
-questrewards gamble enginegaps monlevel normaltc leash.
+questrewards gamble enginegaps monlevel normaltc leash bufficons.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -7716,6 +7716,138 @@ def check_leash():
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows) if not bad else "; ".join(bad[:6]), [sh("leash")], log)
 
 
+BUFF_TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "plugin", "src", "mxl_state_icons.h")
+
+
+def _state_icon_rows():
+    """The generated table (tools/state_icons.py): [(state, side, tint, frame, tooltip key)] in drawing order."""
+    with open(BUFF_TABLE, encoding="utf-8") as f:
+        return [(int(a), int(b), int(c), int(d), e) for a, b, c, d, e in
+                re.findall(r'\{(\d+), (\d), (\d+), (\d+), "([^"]*)"\}', f.read())]
+
+
+def _buff_icons():
+    """`h bufficons` parsed: (counters dict, [icon dicts])."""
+    ok, lines = H("bufficons")
+    head = dict(kv(lines[0])) if lines and lines[0].startswith("bufficons ") else {}
+    icons = [{k: int(v) for k, v in kv(ln).items()} for ln in lines if ln.startswith("bufficons icon ")]
+    return head, icons
+
+
+def check_bufficons():
+    name = "Buff / debuff icon bar: Median's two icon groups, timers and hover tooltip (buff_icons.cpp, OverlayService rectangles; counters, not pixels)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    rows = _state_icon_rows()
+    side_of = {r[0]: r[1] for r in rows}
+    tip_of = {r[0]: r[4] for r in rows}
+    order = {}
+    for i, r in enumerate(rows):
+        order.setdefault(r[0], i)  # the first row of a state decides its place in the drawing order
+    left = [s for s in (32, 101, 26) if side_of.get(s) == 0]  # battle orders, holy shield, shout: no effect without stats
+    right = [s for s in (89, 19) if side_of.get(s) == 1]  # battle cry, weaken
+    if len(left) < 2 or not right:
+        return add(name, "BLOCKED", "the table has no rows for the test states (left %s, right %s)" % (left, right))
+    goto(1)
+    close_menu()
+    chosen = left + right
+    for s in chosen:  # a clean start: no test state on the player
+        H("setstate player %d 0" % s)
+        g.hcmd("bufficons cstate %d 0" % s, 5)
+    time.sleep(1.5)
+    base_head, base_icons = _buff_icons()
+    if base_head.get("on") != "1":
+        return add(name, "FAIL", "the part is off: %s" % base_head)
+    # Put the states on the server's player (a state list that ends in 10 minutes, the way D2R's self buffs do); then on the client's
+    # copy if D2R's own packets did not carry them (the bar reads the client's unit).
+    log = []
+    for s in chosen:
+        ok, out = H("setstate player %d 1" % s)
+        log += out
+    time.sleep(2.5)
+    head, icons = _buff_icons()
+    shown = {i["state"]: i for i in icons}
+    carried = [s for s in chosen if s in shown]  # states that reached the client through D2R's own packets
+    if len(carried) < len(chosen):
+        for s in chosen:
+            if s not in shown:
+                ok, out = g.hcmd("bufficons cstate %d 1" % s, 5)
+                log += out
+        time.sleep(2.5)
+        head, icons = _buff_icons()
+        shown = {i["state"]: i for i in icons}
+    problems = []
+    for s in chosen:
+        i = shown.get(s)
+        if i is None:
+            problems.append("state %d is not drawn" % s)
+        elif i["side"] != side_of[s]:
+            problems.append("state %d in group %d, expected %d" % (s, i["side"], side_of[s]))
+    # Order within a group: table order, slots 0..n-1 without gaps
+    for side in (0, 1):
+        grp = sorted((i for i in icons if i["side"] == side), key=lambda i: order.get(i["state"], 9999))
+        if [i["slot"] for i in grp] != list(range(len(grp))):
+            problems.append("group %d slots %s are not 0..%d in table order" % (side, [i["slot"] for i in grp], len(grp) - 1))
+    if int(head.get("failed", "1")) != 0:
+        problems.append("the overlay refused %s draw requests (first result %s)" % (head.get("failed"), head.get("firstFail")))
+    # Timers: set for 10 minutes by `setstate`, they must read about 600 s and count down
+    secs0 = {s: shown[s]["secs"] for s in chosen if s in shown}
+    time.sleep(5)
+    head2, icons2 = _buff_icons()
+    shown2 = {i["state"]: i for i in icons2}
+    for s in chosen:
+        if s in shown2 and s in secs0:
+            a, b = secs0[s], shown2[s]["secs"]
+            if not (a > 0 and b > 0 and 3 <= a - b <= 8):
+                problems.append("state %d timer %d -> %d after 5 s" % (s, a, b))
+            if a > 600 or a < 580:
+                problems.append("state %d timer %d, expected about 600" % (s, a))
+    # The screenshot for the human. It is not an assertion: PrintWindow of the background window does not capture the loader's
+    # overlay (the same finding as the dungeon lockout timer), so the on-screen proof is the counters above, not the pixels.
+    shots = [sh("bufficons_bar")]
+    now_shot = grab()
+    h, w, _ = now_shot.shape
+    # Does the PrintWindow capture show the overlay at all? A magenta test rectangle
+    H("bufficons probe on")
+    time.sleep(1.5)
+    probe_shot = grab()
+    shots.append(sh("bufficons_probe"))
+    H("bufficons probe off")
+    region = (slice(int(h * 0.3) + 4, int(h * 0.45) - 4), slice(int(w * 0.3) + 4, int(w * 0.7) - 4))
+    probe_seen = bool((abs(probe_shot[region] - now_shot[region]).sum(axis=2) > 200).mean() > 0.5)
+    # Hover: the tooltip of the first left state that has one
+    tip_state = next((s for s in left if tip_of.get(s)), None)
+    hover_note = "no test state has a tooltip"
+    if tip_state is not None:
+        H("bufficons hover state %d" % tip_state)
+        time.sleep(1.2)
+        head3, icons3 = _buff_icons()
+        hov = [i["state"] for i in icons3 if i["hover"]]
+        if hov != [tip_state]:
+            problems.append("hover on state %d: icons hovered %s" % (tip_state, hov))
+        if int(head3.get("tooltip", "-1")) != tip_state or int(head3.get("lines", "0")) < 1:
+            problems.append("hover on state %d drew no tooltip (%s lines %s)" % (tip_state, head3.get("tooltip"), head3.get("lines")))
+        hover_note = "hover %d (%s): tooltip %s, %s line(s)" % (tip_state, tip_of[tip_state], head3.get("tooltip"), head3.get("lines"))
+        shots.append(sh("bufficons_hover"))
+        H("bufficons hover off")
+    # Cleanup: the states go, the icons go
+    for s in chosen:
+        H("setstate player %d 0" % s)
+        g.hcmd("bufficons cstate %d 0" % s, 5)
+    time.sleep(2)
+    head4, icons4 = _buff_icons()
+    left_over = [i["state"] for i in icons4 if i["state"] in chosen]
+    if left_over:
+        problems.append("icons still drawn after clearing: %s" % left_over)
+    note = ("states %s (left) %s (right): %s; %s left / %s right icons; timers %s -> %s; %s; overlay refused %s requests; rectangles per frame %s. "
+            "The states reached the client %s. Probe rectangle seen in the PrintWindow capture: %s (informational; the loader's overlay is not part of that capture). Screenshots: bufficons_bar.png, bufficons_probe.png, bufficons_hover.png" % (
+                left, right, "drawn in the right group, in table order, with their timers" if not problems else "PROBLEMS: " + "; ".join(problems),
+                head2.get("left", "0"), head2.get("right", "0"), secs0, {s: shown2[s]["secs"] for s in shown2 if s in chosen},
+                hover_note, head.get("failed"), head2.get("rectsLast"),
+                "by D2R's own packets for %s, by `bufficons cstate` (the client's copy) for %s" % (carried, [s for s in chosen if s not in carried]), probe_seen))
+    add(name, "PASS" if not problems else "FAIL", note, shots, log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -7752,7 +7884,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("potionamounts", check_potionamounts), ("manarules", check_manarules),
           ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards),
           ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash),
-          ("gamble", check_gamble), ("enginegaps", check_engine_gaps)]
+          ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons)]
 
 
 def write_report(extra=""):

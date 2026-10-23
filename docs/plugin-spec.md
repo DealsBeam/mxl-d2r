@@ -959,6 +959,26 @@ dropped). The item's use handler (`item_spells.cpp`) accepts the right click for
 `I` (one byte: the panel index; `client_messages_logic.h`); the client handler queues `openPanel` on the UI thread
 (`ThreadService`). `mxl` console: "help panels ... (asked, opened, failed)". Harness verb `infopanel [close <n>]` (client side).
 
+## Buff icons (`buff_icons.cpp`, pure part `buff_icons_logic.h`, generated `mxl_state_icons.h` / `mxl_state_icon_art.h`, off word `bufficons`)
+
+Median's buff / debuff bar (D2Sigma `ui/BottomPanel.cpp`; research and evidence in `docs/subsystems/buff-icons.md`). The table
+`stateicons` (state, side, tint, frame, tooltip) is turned by `tools/state_icons.py` (a `tools/build.py` step) into
+`mxl_state_icons.h` (committed, 234 rows with migrated state ids and tooltip keys, in D2Sigma's walking order) and the committed
+`mxl_state_icon_art.h` (193 frames of 28 x 28 palette indices from `state-icons.dc6`). At install the plugin registers one
+OverlayService callback (`Phase::AfterGameUi`, client side) and turns every frame into filled rectangles (`BuildRects`: the row's
+tint applied, same-colour runs merged). Each overlay frame: the client's local player unit (`0x2a23704` slot, `HasState` `0x3351b0`)
+is asked for every row's state; `Place` walks the table once per group (left, right) and gives active rows the next slot (10 per
+row, rows grow upward); `SlotRect` puts slot n at the HUD (680 units from the centre, 176 units above the bottom, a unit is
+height / 1800; icon 28 * height / 800 px); the rectangles are drawn nearest-neighbour scaled and snapped to whole pixels; under
+each icon a remaining-time text (`FormatRemaining`: `45s`, `5:07`, `1:02:03`); the hovered icon (cursor read-only through
+`GetCursorPos`, or the harness override) gets a tooltip box with the row's string (`TooltipRect`, kept on screen).
+Timers: `BuffIconsFrame(game)` (game thread, every 5th frame from `goblins.cpp` `FrameHook`) reads the end frame of each state from the
+server unit's state list (`0x2f5940`, float at list +0x24; game frame `game+0x170`, 25 per second), so only single player and the
+host of a game show timers. `mxl` line: `buff icons on: 234 state icons, 193 frames as N rectangles, ...`. Harness verb
+`bufficons [hover x y | hover state n | hover off | probe [off] | cstate n 0|1]` (client side).
+Not ported: the hiding conditions (UI mode 1-3, cutscene), tint as a real palette shift (the byte is used as a text colour times
+brightness). Unit tests: `plugin/tests/buff_icons_test.cpp` (table, layout, `Place`, timers, tooltip box, tint, `BuildRects`).
+
 ## Quest reward sounds (`client_messages.cpp`)
 
 The unit messages 0x5f-0x61 (`SendRewardMessage`, server `0x491960`) travel in D2R's unit packet 0x2c; the client hook of its

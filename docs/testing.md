@@ -359,6 +359,7 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `panelrow <stat>` | the Advanced Stats panel's row functions (`0x14eb1b0` value, `0x14eb250` text, hooked by `stat_columns.cpp`) on a stand-in panel of the player unit for a D2R stat id: prints `panelrow <stat> value=<displayed value> text=[...]` (colour codes removed) and `panelrow weapon strbonus=N dexbonus=N` (or `none`) |
 | `cstat <stat> [layer] [set <value>]` | (client side, UI thread) the stat of the client's copy of the player: what the screen shows, to compare with `stat player` after an update packet; `set` writes the client's copy only (a stat set on the server's unit does not reach it) |
 | `statorder [open\|adv\|close]` | (client side) `statorder` prints the list the Advanced Stats panel built (`ordered`, rebuild count, rows: `[Label]` / stat id); `open` / `close` the character sheet, `adv` presses its Advanced Stats button (WidgetService panel messages) |
+| `bufficons [hover <x> <y> \| hover state <n> \| hover off \| probe [off] \| cstate <state> <0\|1>]` | (client side) counters of the buff icon bar (`on`, frames, icons per group, refused draw requests, rectangles per frame, tooltip state and lines) and one line per drawn icon (`state side slot row secs hover x y size`); `hover` overrides the cursor, `probe` draws a magenta test rectangle, `cstate` sets a state bit on the client's copy of the player |
 | `infopanel [close <n>]` | (client side) the presentation state of Median's help panels (2 = open) and how many opens the plugin message `I` asked for / the UI thread did / failed |
 | `rewardsnd`, `rewardmsg`, `goblinsay` | the quest reward sound the client hook last played (0x5f-0x61); a reward unit message to the player; the goblin "<name> appears!" line for a monster class |
 | `sysmsg <type> <colour> <text...>` | one chat packet 0x26 to the player (docs/d2r-addresses.md section 13): type 4 = message-log line, 5 = overhead bubble; colour byte 0-11 |
@@ -727,3 +728,19 @@ that touch what it changes. Control run: `mxl-core-off.txt` with `durabilitytip 
 Screenshots (run folder `checks-20261023-093545-s2`): `nodur_tooltip_armour.png` and `nodur_tooltip_weapon.png` (the inventory
 tooltip of a Field Plate: Defense, Required Strength, Socketed, no Durability line), `nodur_charsi_menu.png` and `nodur_charsi_panel.png`
 (the plain trade panel, no Repair buttons), `nodur_gheed_menu.png` / `nodur_gheed_panel.png` for comparison.
+
+### Buff / debuff icon bar (lane buff-icons, 2026-10-23, slot 3, background mode, plugin 0.55.0 + the lane's part)
+
+`MXL_RUN=lane-bufficons py -3 tools/game_checks.py all bufficons --slot 3` (evidence `checks-20261023-093022-s3`, 0 new crash files, 0 cursor changes, foreground changed 0 times).
+
+| Check | Result |
+|---|---|
+| `bufficons` | **PASS** (counters): states 32, 101, 26 in the left group and 89, 19 in the right group, slots 0..n-1 in table order; first icon at x = 460, y = 780, 32 px (1600 x 900); timers {32: 597, 101: 598, 26: 598, 89: 598, 19: 598} s -> {592, 592, 592, 593, 593} after 5 s; hover on state 32 (`medianxl:SkillnameMaenadFrenzy`): 1 tooltip line; 0 refused overlay requests, 2702 rectangles per frame; the icons go when the states are cleared; all five states reached the client through D2R's own packets (no `cstate` needed) |
+
+**Not seen on screen.** The loader's overlay is not part of the PrintWindow capture of a background window (the dungeon lockout timer had the
+same result), so the screenshots `bufficons_bar.png`, `bufficons_probe.png` and `bufficons_hover.png` in the run folder
+(`%USERPROFILE%\mxl-d2r-runs\checks-20261023-093022-s3\`) show the HUD without the bar; the magenta probe rectangle, whose overlay calls all return
+Success, is not in the picture either. The check therefore asserts counters only. **By hand** (normal window, foreground): enter a game, press `~` for
+the console, `mxl` should say `buff icons on`; cast a self buff or run `h setstate player 32 1`; the icon bar sits just above the belt next to the orbs
+(left group beside the health orb, curses on the right), a countdown under each icon, a tooltip box when the cursor is on an icon. Tell me: the
+placement at your resolution, whether the art and tints look like Median's, and the frame rate in a fight with many states.
