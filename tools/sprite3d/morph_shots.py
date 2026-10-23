@@ -3,6 +3,8 @@
 
   py -3 tools/sprite3d/morph_shots.py [--slot N] [--skill 1364] [--area 2] [--keep] [--no-start] [--tag wereowl]
 
+`MXL_MORPH_DIRS=1` adds eight short walks (phases dir0..dir7, two frames each) in the eight facings.
+
 The slot's lock must be held by the caller (game_slots.py lock N <owner>, then MXL_RUN=<owner>); this script never takes or
 removes a lock. The test character is whoever the slot's first card is (MxlBarb): the harness `class 5` makes it a Druid for
 the skill checks, `setskill <skill> 1` gives it the morph skill (D2R skill id of Median's wereowl_form = 1364, werewolf_form
@@ -45,8 +47,15 @@ def run(skill, tag, area, form_state):
     gc.goto(area)
     gc.H("class 5")  # Druid skills on the test character
     god()
-    for cmd in ("stat player 0 set 400", "stat player 2 set 400", "unequip rhand", "equip 143 rhand"):  # the form needs a knife (skills.txt itypea1 knif; Median code 143 is a knife)
+    for cmd in ("stat player 0 set 400", "stat player 2 set 400"):
         gc.H(cmd)
+    # the form needs a knife (skills.txt itypea1 knif; Median code 143 is a knife). A character that already holds one keeps it
+    # (the equip is refused: occupied); otherwise both hands are emptied (a shield or off-hand weapon blocks the place too)
+    # and the knife equipped.
+    if not gc.H("equip 143 rhand")[0]:
+        gc.H("unequip lhand")
+        gc.H("unequip rhand")
+        g.log("knife: %s" % gc.H("equip 143 rhand")[0])
     for sk in (skill, 1367, 1366):
         gc.H("setskill %d 1" % sk)
     g.log("usable %s: %s" % (skill, gc.skill_usable(skill)))
@@ -72,6 +81,13 @@ def run(skill, tag, area, form_state):
         gc.H("move %d %d" % (x - 9, y - 4))
         burst(tag, "run", 8, 0.2, rows)
         time.sleep(1.5)
+        if os.environ.get("MXL_MORPH_DIRS"):  # the form walking in eight directions (a sheet of every facing)
+            for k, (dx, dy) in enumerate(((6, 6), (8, 0), (6, -6), (0, -8), (-6, -6), (-8, 0), (-6, 6), (0, 8))):
+                p, x, y = ppos()
+                gc.H("move %d %d walk" % (x + dx, y + dy))
+                time.sleep(0.9)
+                burst(tag, "dir%d" % k, 2, 0.2, rows)
+            time.sleep(1.5)
     # attack: a target next to the player (Skeleton-class fodder), the form's attack skill then the plain attack
     gc.H("spawn 3 1")
     time.sleep(1.5)

@@ -17,14 +17,14 @@ Median XL tables fit the 32,768-row limits (largest: cubemain 7,500, missiles 5,
 - [x] `tools/mpq_extract.py`: all 56 Median MPQs -> `extract/mxl/` (8,528 files, 832 MB, manifest.json)
 - [x] `tools/casc_extract.py`: D2R 93847 baseline -> `extract/d2r/93847/` (1,072 files). See [d2r-baseline.md](d2r-baseline.md)
 - [x] `tools/mxl_names.py`: placeholder names resolved, Median rows renumbered after D2R's -> `work/named/`. See [id-mapping.md](id-mapping.md)
-- [~] Sigma table schemas: tooling + structure for all 37 tables; 32 named or partly named, 27 complete (2026-10-21). See [sigma-tables.md](sigma-tables.md)
+- [x] Sigma table schemas: all 428 columns named across 37/37 complete tables; no non-zero byte uncovered (2026-10-23). See [sigma-tables.md](sigma-tables.md)
 - [x] `tools/formula.py`: all 17,116 formulas decoded from bytecode, 11,329 table cells rewritten with D2R names. See [formulas.md](formulas.md)
 - [x] `tools/txt_migrate.py`: all tables in D2R layout, merged with D2R's rows, both banks -> `work/mod/`. See [txt-migrate.md](txt-migrate.md)
 - [x] `tools/tbl2json.py`: 21,268 strings -> D2R JSON (hybrid: native overrides plus the `medianxl` namespace, both string folders). See [strings.md](strings.md)
 
 - [x] `tools/validate.py` + `tools/build.py`: D2R-schema validation; 2 errors left (Median's own broken formulas). See [validation.md](validation.md)
 
-Remaining: the Sigma fields no code reaches (armor2/weapons2, missiles2, itemtypesext, propertiesext, parts of statscreen/misc2; named with Phase 3 triage when a reader turns up). skills2 is named and its formula fields are linked to skills2code.
+The former Sigma schema remainder (armor2/weapons2/misc2, missiles2, itemtypesext, propertiesext, statscreen) is named; the reader and source evidence is in [sigma-tables.md](sigma-tables.md). Fields whose behavior is not yet ported are tracked in [unported.md](unported.md). skills2 formula fields are linked to skills2code.
 Next: Phase 2 (install into D2R, `d2rl compile`, first boot).
 
 ## Phase 2: Data port
