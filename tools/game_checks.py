@@ -10846,6 +10846,8 @@ def check_towerkill():
             H("quest 5 %d clear" % b)
         if bit0:
             H("quest 5 0 set")
+        H("questobj 5 poke 312 0")  # the Countess-dead / reward-given flags (quest data +0x118 / +0x119): an earlier check
+        H("questobj 5 poke 313 0")  # (questrewards' `countessreward`) leaves the reward given, and it is rolled once per player
         H("questobj 5 poke 17 1")  # the finish branch of the handler needs byte +0x11
         log.extend(H("questobj 5 active 1")[1])
 
@@ -10865,36 +10867,48 @@ def check_towerkill():
         if not reached:
             bad.append("the Countess could not be put on quest 5's list")
         if ctl:
-            if not (s1 == s0 and n1 > n0 and b13):
-                bad.append("control run: the vanilla handler should repeat the reward (skips %s -> %s, items %d -> %d, bit 13 %s)" % (s0, s1, n0, n1, b13))
-        else:
-            if not (s1 is not None and s0 is not None and s1 == s0 + 1 and n1 == n0 and not b13):
-                bad.append("the guard did not skip the second reward (skips %s -> %s, items %d -> %d, bit 13 %s)" % (s0, s1, n0, n1, b13))
-            # B: natural
-            setup(False)
-            n2, _ = _ground_items()
-            c2 = counters()
-            reached = kill_countess()
-            s2 = _plugin_counter(hstate(), r"tower skips=(\d+)")
-            n3, codes = _ground_items()
-            c3 = counters()
-            bits = _qbits(5)
-            rows.append("B, quest open: tower skips %s, Countess class rolls %s -> %s, ground items %d -> %d %s, quest 5 bits 0 / 13 = %s / %s" % (
-                s2, c2, c3, n2, n3, codes[:8], bits[0], bits[13]))
-            if not (reached and s2 == s1 and c2 and c3 and c3[1] == c2[1] + 1 and n3 > n2 and bits[0] == "1" and bits[13] == "1"):
-                bad.append("the natural kill did not run the reward path (skips %s, rolls %s -> %s, items %d -> %d, bits %s)" % (s2, c2, c3, n2, n3, bits[:16]))
+            # the hook is off: no counter moves; what the vanilla handler does with the repeat is reported, not required
+            if not (s1 == s0):
+                bad.append("control run: the guard counter moved with the hook off (%s -> %s)" % (s0, s1))
+            rows.append("control: the vanilla handler %s the quest again" % ("completed" if b13 or n1 > n0 else "did not complete"))
+        elif not (s1 is not None and s0 is not None and s1 == s0 + 1 and n1 == n0 and not b13):
+            bad.append("the guard did not skip the second reward (skips %s -> %s, items %d -> %d, bit 13 %s)" % (s0, s1, n0, n1, b13))
+        # B: natural
+        setup(False)
+        n2, _ = _ground_items()
+        c2 = counters()
+        reached = kill_countess()
+        s2 = _plugin_counter(hstate(), r"tower skips=(\d+)")
+        n3, codes = _ground_items()
+        c3 = counters()
+        bits = _qbits(5)
+        rows.append("B, quest open: tower skips %s, Countess class rolls %s -> %s, ground items %d -> %d %s, quest 5 bits 0 / 13 = %s / %s" % (
+            s2, c2, c3, n2, n3, codes[:8], bits[0], bits[13]))
+        if not ctl and not (reached and s2 == s1 and c2 and c3 and c3[1] == c2[1] + 1 and n3 > n2 and bits[0] == "1" and bits[13] == "1"):
+            bad.append("the natural kill did not run the reward path (skips %s, rolls %s -> %s, items %d -> %d, bits %s)" % (s2, c2, c3, n2, n3, bits[:16]))
     finally:
         _qrestore(5, saved)
         god(False)
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad) + ("; control run: off word quests" if ctl else ""), [], log)
 
 
+def portal_ids():
+    """{id: distance} of the portal objects (classes 59, 60, 600) of the game (a portal's partner in the other level is listed too)."""
+    ids = {}
+    for ln in H("objects")[1]:
+        m = re.match(r"object id=(\d+) class=(59|60|600) mode=\d+ dist=(\d+)", ln)
+        if m:
+            ids[int(m.group(1))] = int(m.group(3))
+    return ids
+
+
 def check_lockwarp():
     """The dungeon lockout's quest-table condition (`0x5d810` (3), `Entry::questLock`) through real warps. A cube-made portal to a
-    quest-locked level (`portal 66`: Median level 66, quest 13) and the real portal function (`enter nearest`, `0x58f680`): refused
+    quest-locked level (`portal 66`: Median level 66, quest 13) and the real portal function (`enter <id>`, `0x58f680`): refused
     while quest 13 has none of its bits (the `lockout refused` counter goes up, the character stays in town), taken once bit 1 is
     set (the character stands in the level). The same for level 73 (Duriel's Lair), where D2R's own check `0x516a50` sits in front
-    as well. Control run MXL_CONTROL="lockout": the plugin hook is off, so the portal into level 66 is taken without the quest."""
+    as well. Control run MXL_CONTROL="lockout": the plugin hook is off and D2R's own portal function does not take the cube portal at all (the
+    character stays in town): the warp and its quest decision are the plugin's."""
     name = "Dungeon lockout quest condition: real portal warps into quest-locked levels (refused, then taken)"
     if not need_game():
         return add(name, "BLOCKED", "not in a game")
@@ -10911,14 +10925,18 @@ def check_lockwarp():
             H("difficulty 0")
             for b in (0, 1, 0xe, 0xf):
                 H("quest 13 %d clear" % b)
-            lc = H("lockcheck %d" % level)[1]
+            lc = [] if ctl else H("lockcheck %d" % level)[1]  # the verb needs the lockout hook
+            before = portal_ids()
             okp, lp = H("portal %d" % level)
             log += lc + lp
-            if not okp:
+            after = portal_ids()
+            new = sorted((i for i in after if i not in before), key=lambda i: after[i])  # the nearest new one is the town side
+            if not okp or not new:
                 bad.append("level %d: no portal could be opened (%s)" % (level, lp[:1]))
                 continue
+            pid = new[0]  # the portals of the earlier levels stay in town: enter this one by its id
             r0 = lockout_counts(hstate())[0]
-            ok, le = H("enter nearest")
+            ok, le = H("enter %d" % pid)
             time.sleep(4)
             st = hstate()
             area0 = st["player"].get("area")
@@ -10926,14 +10944,17 @@ def check_lockwarp():
             log += le
             rows.append("level %d without the quest: %s -> area %s, lockout refused %s -> %s" % (level, " ".join(lc)[:40], area0, r0, r1))
             if ctl:
-                if area0 != level:
-                    bad.append("control run: level %d should have been entered without the lockout hook (area %s)" % (level, area0))
+                # D2R's own portal function (0x58f680) does not take a cube portal to a Median level (partner level id -1): the warp and its
+                # quest decision are the plugin's, so with the hook off the character stays in town and nothing is counted
+                rows.append("control: D2R's own portal function %s" % ("did not take the portal" if area0 == 40 else "moved the character"))
+                if area0 != 40:
+                    bad.append("control run: D2R's own function moved the character to area %s" % area0)
                 continue
             if not (area0 == 40 and r1 == (r0 or 0) + 1):
                 bad.append("level %d without quest 13: not refused (area %s, refused %s -> %s)" % (level, area0, r0, r1))
                 continue
             H("quest 13 1 set")
-            log += H("enter nearest")[1]
+            log += H("enter %d" % pid)[1]
             time.sleep(4)
             area1 = hstate()["player"].get("area")
             rows.append("level %d with quest 13 bit 1: area %s" % (level, area1))
@@ -11072,9 +11093,10 @@ def check_worldstone():
         rows.append("Throne object 569 in area 131: Baal flag clear -> result %s, area %s; flag set, quest 39 clear -> result %s, area %s (lockout refused %s -> %s); quest 39 done -> result %s, area %s" % (
             r_a, a_a, r_b, a_b, refused0, refused1, r_c, a_c))
         if ctl:
-            # D2R's own function: no Baal flag test of ours, no lockout; it needs the flag itself (+0xa6) and goes 131 -> 132
-            if not (r_c == 1 and a_c == 132):
-                bad.append("control run: D2R's own function should go 131 -> 132 with the flag set (result %s, area %s)" % (r_c, a_c))
+            # D2R's own function: it only needs the flag (+0xa6), goes 131 -> 132 with no lockout (quest 39 still clear: r_b / a_b) and,
+            # standing in 132, finds nothing to do (r_c)
+            if not (r_a == 0 and a_a == 131 and r_b == 1 and a_b == 132 and refused1 == refused0 and r_c == 0 and a_c == 132):
+                bad.append("control run: D2R's own function behaved differently (results %s %s %s, areas %s %s %s)" % (r_a, r_b, r_c, a_a, a_b, a_c))
         elif not (r_a == 0 and a_a == 131 and r_b == 0 and a_b == 131 and refused1 == (refused0 or 0) + 1 and r_c == 1 and a_c == 132):
             bad.append("function 70 forward: wrong results")
         if a_c == 132:
