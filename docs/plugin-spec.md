@@ -959,6 +959,26 @@ dropped). The item's use handler (`item_spells.cpp`) accepts the right click for
 `I` (one byte: the panel index; `client_messages_logic.h`); the client handler queues `openPanel` on the UI thread
 (`ThreadService`). `mxl` console: "help panels ... (asked, opened, failed)". Harness verb `infopanel [close <n>]` (client side).
 
+## Item property text (`item_text.cpp`, `item_text_logic.h`, `tooltip_probe.cpp`; off words `itemtext`, `tooltipprobe`; docs/item-tooltips.md)
+
+D2R's property formatter `0x2d6520` ([d2r-addresses.md](d2r-addresses.md) section 22) only knows D2R's descfuncs. The hook
+writes Median's line for the stats whose Median descfunc D2R lacks and otherwise calls the original:
+
+| Stat / descfunc | Line |
+|---|---|
+| any stat, descfunc 5 with a text that has no `%` (Median's wording) | `text N%` / `N% text` by descval; N = value * 100 / 128 |
+| 492 (class lock) | the `strXOnly` text of class value - 1, e.g. `(Paladin Only)`; value 8 prints nothing |
+| 32 (534, 74) | value / 10, at least 1, `+n`; descval 1 number first, 2 text first |
+| 33 (309) | `<skill> Cooldown Reduced by %.1g` seconds, frames / 25 (25 fps is an assumption, unported.md) |
+| 35 (444) | `Innate <Element> Damage: N (P% of <Attribute>)`; P = value + value * stat 513 / 100; element = layer low byte, attribute = the second byte |
+| 36 (289 at value 2), 37 (478), 38 (456) | the Median wording ("Orb Effects Applied to this Item are Doubled", "<skill> Maximum Skill Level Increased by N", "Activation Frequency +N") |
+| 31, 34 | nothing (no strings) |
+
+Descfuncs 22 / 23 / 24 (reanimate, charged skill) keep D2R's own text and placeholders. The data side (`tools/txt_migrate.py`
+`median_stat_wording`) gives the text of 296 kept strings that carry other placeholders under a `<key>_mxl` alias key
+(`tools/tbl2json.py`, [strings-namespace.md](strings-namespace.md)). `tooltip_probe.cpp` is harness-only: a ring of the last 512
+formatter calls (`tiplog [n|reset]`), the formatter called with chosen arguments (`tipfmt <stat> <value> [layer [mode [flag]]]`) and
+the lines of an item (`tip [id|code]`, needs one hover to learn the builder's arguments). `mxl` console: "item text ...", "tooltip probe ...".
 ## Buff icons (`buff_icons.cpp`, pure part `buff_icons_logic.h`, generated `mxl_state_icons.h` / `mxl_state_icon_art.h`, off word `bufficons`)
 
 Median's buff / debuff bar (D2Sigma `ui/BottomPanel.cpp`; research and evidence in `docs/subsystems/buff-icons.md`). The table

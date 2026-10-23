@@ -47,6 +47,7 @@ NAMESPACE = "medianxl"  # install_mod.py writes the same name to d2rloader/metad
 NAMESPACE_FILE = "median.json"
 OVERRIDE_FILE = "overrides.json"  # `d2r:<key>` records: Median's text for D2R's own keys
 D2R_PREFIX = "d2r:"
+ALIAS_SUFFIX = "_mxl"  # Median's text for a key whose D2R text was kept (placeholders differ)
 # D2R keys whose Median text sits under a Median-only key ("x"): D2R keeps 1.13c's IDs, so the ID names the key.
 # (Median ID, D2R key, text from Median's text). Ethereal: Median says "Ethereal" (nothing is repaired in Median, the
 # durability tooltip is gone: docs/median-rules-audit.md IT1); D2R's `strethereal` reads "Ethereal (Cannot be Repaired)"
@@ -193,6 +194,12 @@ def main() -> int:
             same += 1
             continue
         overrides.append({"Key": f"{D2R_PREFIX}{k}", **{lang: t for lang in langs}})
+    # A kept key cannot carry Median's text (the game formats the key itself with D2R's placeholders). The item property
+    # lines still need Median's wording, so each kept key also gets a Median-only alias `<key>_mxl` (txt_migrate points the
+    # itemstatcost string cells at it).
+    for k, (_d, m) in sorted(kept.items()):
+        texts[k + ALIAS_SUFFIX] = m
+        group2.append(k + ALIAS_SUFFIX)
     for sid, d2r_key, fmt in ID_PAIRS:
         t = fmt.format(by_id[sid][1])
         recs = loaded.get(d2r_key)

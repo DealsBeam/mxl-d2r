@@ -43,6 +43,7 @@
 #include "strings.h"
 #include "strings_probe.h"
 #include "testharness.h"
+#include "tooltip_probe.h"
 #include "travel.h"
 #include "travel_logic.h"
 #include "waypoints.h"
@@ -3268,11 +3269,16 @@ auto CmdSkillTab(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
-// The text without D2R's colour codes (0xff or UTF-8 c3 bf, then 'c' and a digit) and control characters.
+// The text without D2R's colour codes (0xff or UTF-8 c3 bf, then 'c' and a digit; the loaded strings carry the code as the
+// private use character U+E07E, UTF-8 ee 81 be, and one more character for the colour) and control characters.
 void PlainText(const char* raw, char* out, size_t outSize) noexcept {
 	size_t n = 0;
 	for (size_t i = 0; raw[i] != '\0' && n + 1 < outSize; ++i) {
 		const unsigned char ch = static_cast<unsigned char>(raw[i]);
+		if (ch == 0xee && static_cast<unsigned char>(raw[i + 1]) == 0x81 && static_cast<unsigned char>(raw[i + 2]) == 0xbe && raw[i + 3] != '\0') {
+			i += 3;
+			continue;
+		}
 		const size_t lead = ch == 0xff ? 1 : (ch == 0xc3 && static_cast<unsigned char>(raw[i + 1]) == 0xbf ? 2 : 0);
 		if (lead != 0 && raw[i + lead] == 'c' && raw[i + lead + 1] != '\0') {
 			i += lead + 1;
@@ -3281,6 +3287,127 @@ void PlainText(const char* raw, char* out, size_t outSize) noexcept {
 		out[n++] = ch < 0x20 ? ' ' : static_cast<char>(ch);
 	}
 	out[n] = '\0';
+}
+
+Unit* ClientItemById(uint32_t id) noexcept {
+	Unit* player = g_playerId != 0 ? Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(g_playerId), 0) : nullptr;
+	Unit* found = nullptr;
+	if (player != nullptr) {
+		EachItemOf(player, [&](Unit* it) {
+			if (found == nullptr && IdOf(it) == id) {
+				found = it;
+			}
+		});
+	}
+	// an item on the ground is a client unit of its own (type 4)
+	return found != nullptr ? found : Fn<ClientFindFn>(RvaClientFind)(id, 4);
+}
+
+// Client side (UI thread): `tip <item id|code>` the property text D2R builds for an item of the client's player (docs/item-tooltips.md):
+// the item text function 0x2dc4b0 with the arguments of the last build the game made itself (hover an item once), one `tip line`
+// per property line. `tip` alone prints that last real build. `tiplog [n|reset]` the property line formatter's calls (stat, value,
+// layer, mode, answer), `tipfmt <stat> <value> [layer [mode [flag]]]` one formatter call on the client's player.
+auto CmdTip(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (g_playerId == 0) {
+		return Fail(c, "tip: no player seen yet");
+	}
+	char text[1024];
+	if (t.n < 2) {
+		tip::Build b;
+		if (!TipLastBuild(&b)) {
+			return Fail(c, "tip: the game has not built an item text yet (hover an item in the inventory)");
+		}
+		Out("tip build #%u item=%llx p4=%llx p5=%llx p6=%llx p7=%llx p8=%llx p9=%llx p10=%llx optional=%llx/%d", b.seq,
+		    static_cast<unsigned long long>(b.arg[0]), static_cast<unsigned long long>(b.arg[3]), static_cast<unsigned long long>(b.arg[4]),
+		    static_cast<unsigned long long>(b.arg[5]), static_cast<unsigned long long>(b.arg[6]), static_cast<unsigned long long>(b.arg[7]),
+		    static_cast<unsigned long long>(b.arg[8]), static_cast<unsigned long long>(b.arg[9]),
+		    static_cast<unsigned long long>(*reinterpret_cast<const uint64_t*>(b.optional)), static_cast<int>(b.optional[8]));
+		std::snprintf(text, sizeof(text), "%s", b.text);
+	} else {
+		Unit* item = nullptr;
+		long long id = 0;
+		if (hcmd::ParseInt(t.tok[1], &id)) {
+			item = ClientItemById(static_cast<uint32_t>(id));
+		} else {
+			const uint32_t code = hcmd::CodeToDword(t.tok[1]);
+			Unit* player = Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(g_playerId), 0);
+			if (player != nullptr) {
+				EachItemOf(player, [&](Unit* it) {
+					const uint8_t* rec = Fn<ItemRecordFn>(RvaItemRecord)(c->dataFlag, Fn<UnitClassFn>(RvaUnitClass)(it, "harness", 0));
+					if (item == nullptr && rec != nullptr && d2r::At<uint32_t>(rec, 0x80) == code) {
+						item = it;
+					}
+				});
+			}
+		}
+		if (item == nullptr) {
+			return Fail(c, "tip: no such item on the client");
+		}
+		if (!TipRender(item, text, sizeof(text))) {
+			return Fail(c, "tip: no build to take the arguments from yet (hover an item once)");
+		}
+		Out("tip item=%u", IdOf(item));
+	}
+	int lines = 0;
+	for (const char* p = text; *p != '\0';) {
+		const char* end = std::strchr(p, '\n');
+		const size_t len = end != nullptr ? static_cast<size_t>(end - p) : std::strlen(p);
+		char raw[512], one[512];
+		std::snprintf(raw, sizeof(raw), "%.*s", static_cast<int>(len < sizeof(raw) - 1 ? len : sizeof(raw) - 1), p);
+		PlainText(raw, one, sizeof(one));
+		Out("tip line %d: [%s]", ++lines, one);
+		p += len + (end != nullptr ? 1 : 0);
+	}
+	Out("tip lines %d", lines);
+	return true;
+}
+
+auto CmdTipLog(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long n = 40;
+	if (t.n >= 2 && hcmd::LowerEq(t.tok[1], "reset")) {
+		TipReset();
+		Out("tiplog reset");
+		return true;
+	}
+	if (t.n >= 2 && !hcmd::ParseInt(t.tok[1], &n)) {
+		return Fail(c, "usage: tiplog [n|reset]");
+	}
+	const uint32_t last = TipLineCount();
+	const uint32_t first = last > static_cast<uint32_t>(n) ? last - static_cast<uint32_t>(n) + 1 : 1;
+	for (uint32_t s = first; s <= last; ++s) {
+		tip::Line l;
+		if (!TipLineAt(s, &l)) {
+			continue;
+		}
+		char text[256];
+		PlainText(l.text, text, sizeof(text));
+		Out("tiplog #%u stat=%d value=%d layer=%u mode=%d flag=%d viewer=%d:%u ret=%d text=[%s]", l.seq, l.stat, l.value, l.layer, l.mode, l.flag,
+		    l.viewerType, l.viewerId, l.ret, text);
+	}
+	Out("tiplog lines %u", last);
+	return true;
+}
+
+auto CmdTipFmt(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long stat = 0, value = 0, layer = 0, mode = 4, flag = 0;
+	if (t.n < 3 || !hcmd::ParseInt(t.tok[1], &stat) || !hcmd::ParseInt(t.tok[2], &value) || (t.n > 3 && !hcmd::ParseInt(t.tok[3], &layer)) ||
+	    (t.n > 4 && !hcmd::ParseInt(t.tok[4], &mode)) || (t.n > 5 && !hcmd::ParseInt(t.tok[5], &flag))) {
+		return Fail(c, "usage: tipfmt <stat> <value> [layer [mode [flag]]]  (flag 1 = the group line)");
+	}
+	Unit* player = g_playerId != 0 ? Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(g_playerId), 0) : nullptr;
+	if (player == nullptr) {
+		return Fail(c, "tipfmt: no client player unit");
+	}
+	char raw[256] = "";
+	const int ret = TipFormat(player, static_cast<int>(stat), static_cast<int>(value), static_cast<uint32_t>(layer), static_cast<int>(mode),
+	                          static_cast<int>(flag), raw);
+	if (ret < 0) {
+		return Fail(c, "tipfmt: stat %lld has no record, or the tooltip probe is off", stat);
+	}
+	char text[256];
+	PlainText(raw, text, sizeof(text));
+	Out("tipfmt stat=%lld value=%lld layer=%lld mode=%lld flag=%lld ret=%d text=[%s]", stat, value, layer, mode, flag, ret, text);
+	return true;
 }
 
 // Client side: `strids <id>...` the text the client's string table gives for string ids (bug #7: Median's keys must not answer with
@@ -4185,6 +4312,8 @@ const Verb Verbs[] = {
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
+    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
+    {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false}, {"tip", CmdTip, true}, {"tiplog", CmdTipLog, true}, {"tipfmt", CmdTipFmt, true},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"itemdesc", CmdItemDesc, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},

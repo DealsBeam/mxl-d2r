@@ -1023,6 +1023,18 @@ Median patches (docs/sigma-patch-audit.md items 17-19). Every patched byte is ch
 
 Harness verbs: `players <n>` (sets D2R's players setting: `0xe19e0()` then `0xd2f020(setting, n)`; it is not persistent and only the next spawned monsters see it), `tctrace [reset]`, `leash [d]` (moves the mercenary `d` sub-tiles from the player with the unit move `0x491ca0`, prints both positions, `0x596720` and the mercenary's mode). Moving the player instead pulls the mercenary along at once, which hid the thresholds.
 
+## 22. Item property text (lane tooltip-verify, 2026-10-23; plugin/src/item_text.cpp, tooltip_probe.cpp; docs/item-tooltips.md)
+
+| What | RVA | Signature / meaning | Notes |
+|---|---|---|---|
+| Property formatter | `0x2d6520` (hooked, `item_text.cpp`) | `(viewer, record, value, layer, flag, char out[256], mode) -> al` | record (itemstatcost, D2R layout): id `+0`, descfunc `+0x32`, descval `+0x33`, descstrpos `+0x34`, negative text `+0x36`, str2 `+0x38`; with `flag != 0` it formats the group line from `+0x3c` (descfunc), `+0x3d` (descval), `+0x3e` / `+0x40` (strings). The caller `0x2d97e0` applies ValShift first. `viewer` is the ITEM unit (type 4) when the item text is built. |
+| Item text builder | `0x2dc4b0` (observed by `tooltip_probe.cpp`) | builds all lines of one item's tooltip | the hovered item is rebuilt every frame (harness `tiplog reset` right before `tip`); the probe keeps its arguments from the last hover. |
+| Data flag of a unit | `0x34a0e0` | `(unit) -> *(u8*)(unit + 0x1bd)` | client / server table selector, **not** the class. Pass it as the first argument of the table lookups below. |
+| Skill name string id | `0x28bcf0` | `(data flag, skill id, 0) -> u16` | calls `FUN_140088850` (the skills table manager) and returns `*(u16*)(row + 8 + idx * 2)`, `0x1506` when there is none. A class value instead of the data flag crashes (null manager, RIP `D2R+0x88871`). |
+| String by id | `0x3e2b730` | `(id) -> const char*` | D2RCore thunk target; the text of a string id. |
+| GetStat | `0x2f5020` | `(unit, stat, layer) -> int` | |
+| Local slot / slot unit | `0x8b2d0`, `0x9a480` | `() -> slot`; `(slot) -> player unit` | the entry bytes are checked before the hook is installed (as in `skill_tree.cpp`). |
+| Client unit lookup | `0x9a5d0` | `(id, type) -> unit` | type 4 = item. |
 ## 22. Unique carry limits (lane unique-limits, 2026-10-23; plugin/src/unique_limits.cpp)
 
 D2Sigma's `uniqueitems2` (LimitGroup, LimitCount, PickDuplicates) is enforced by `D2Units` `0x100bd060` / `0x100bd0b0` (read from the 1.13c
@@ -1037,6 +1049,25 @@ items). Sigma runs it on the ground pickup into the inventory and on its quick-m
 | Pickup `bool (player, itemId, toInventory, distance, a5, a6)` | `0x471950` | entry `48 89 5c 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8d 6c 24 e9` (21 bytes, hooked) | ground item to the cursor (`toInventory` 0) or to the belt / backpack (1, the to-inventory flag of packet `0x16`); called by `0x4b9df0` (packet `0x16`) and six more. Looks the item up by id, checks the distance, then places it in the belt or the backpack (`0x4759e0`, `0x3865b0`; not read in detail) |
 | Unit data | `0x34a500(item)` | - | `+0` quality (7 = unique), `+0x34` unique index = the row of the migrated `uniqueitems.txt`; page byte `0x36cfe0` (0 backpack, 3 cube, 4 stash); unit mode at unit `+0xc` (0 stored, 1 equipped, 2 belt, 3 ground, 4 cursor); game at unit `+0xd8` (`0x48ff00`) |
 | Refusal text | - | - | Median string `12109` (`medianxl:12109`, "\xc3\xbfc1You can only carry one Relic"), sent as a system chat line (`SendClientMessage`). Sigma itself refuses with its own unit message `0x13`; 12109 is the only carry-limit text in Median's strings and is shown for every limit (the mapping of 0x13 to it was not proven) |
+
+## 23. Model and texture index: why new asset paths were invisible (lane new-asset-paths, 2026-10-23; tools/model_lod_desc.py)
+
+Read from the memory dump (`tools/d2r_find.py`, RVA = file offset); format and the in-game proof in [hd-models.md](hd-models.md) section 3c.
+The model asset cache is built once at startup from `data/hd/model_lod_desc.bin`; every model load goes through it.
+
+| What | RVA | Notes |
+|---|---|---|
+| Model asset cache init `(cache this)` | `0xf75c60` (called from `0xe21850` at `0xe218cd`) | opens `data/hd/model_lod_desc.bin` (string `0x1e17880`, open `0xa00c60`), reads it into `this+0x120`; a file whose first dword (count) is 0 calls `0xf75760`; no file: assert `Binary desc cache is missing! ALL model loads will be blocking!` (`model_asset_cache.cpp`, string `0x1e17800`) and an empty table (`count 0`, offsets -4 / -12 / -20) |
+| LOD resolver `(cache, name, lodHint, out)` | `0xf75fe0` | hashes the model name (FNV-1a 32 of the lower-cased path, `0x811c9dc5` / `0x1000193`, tail in `0x150140`), looks it up (`0xf75af0`), sets `out+0x178` = found; with an entry: LOD names `<name minus .model>` + `_lod` (string `0x1e17a78`) + `%d` (`0x1d070d4`), the entry's mask byte (`+0x1c`, bit k+1 = LOD k) says which exist; without one: `Failed to find LOD for model %s` (`0x1e17a80`, line 0xdd) and the plain name is used. The entry's bounds and stream records feed the later stages: an unlisted model loads but is never drawn |
+| Table lookup `(table, hash)` -> entry or end | `0xf75af0` | lower bound over array 1 (44-byte entries, key `u32` at `+0`, sorted); found when the key matches |
+| Model asset loader | `model_asset.cpp` (string `0x1e11d70`) | `:305` `MeshBindingCount >= 1` per `Model` (a file loaded by its plain name must bind a mesh in every `Model`), `:397` `isMeshFlipbook == GetModelInfo()->isMeshFlipbook` (fires when the stream offsets of the table are wrong: `d2rloader.log` shows `Invalid data detected!` and the game dies in the preload) |
+| Other strings of the same code | `dynamic_lod_system.cpp` `0x1e275f0` | LOD selection by distance; not needed for new paths |
+
+Why vanilla ignored new paths: the lookup key is the path's hash, not the file system, so a path that is not in the table is never
+resolved to its `_lodN` files. How the fix works: the mod folder's `data/hd/model_lod_desc.bin` replaces the game's and has the new
+paths added; the texture loader has the same kind of index (`data/hd/texture_desc_cache.json`, `filename` key, format / size / mips). No hook is
+involved. The D2RLoader ResourceService (plugin-side files at `data/.../d2rloader/<plugin-id>/...`) serves files at new paths too,
+but needs the same index entries.
 
 ## Unknown / next steps
 

@@ -683,7 +683,45 @@ class Migrator:
 
     CLASS_IDS = {"ama": 0, "sor": 1, "nec": 2, "pal": 3, "bar": 4, "dru": 5, "ass": 6}
 
+    # D2R's own substitution functions (reanimate, charged skill, skill on event ...) format a text with %0 / %1 / %d placeholders
+    # of D2R's own: Median's shorter text for the same key ("Reanimate as:") would leave out the monster and the value.
+    OWN_TEXT_FUNCS = {"22", "23", "24"}
+
+    def median_stat_wording(self) -> None:
+        """Median's wording for the stat lines. tbl2json keeps D2R's text for a key whose printf placeholders differ from
+        Median's (bug #12: ModStr2u 'Damage Reduced by %d' for Median's 'Physical Resist') and adds Median's text as the
+        Median-only key `<key>_mxl`; the description cells of itemstatcost (and its group line, the dgrp columns) name that
+        alias, so the line reads as in Median with Median's own descfunc (docs/item-tooltips.md). Rows of the functions that
+        format a D2R text of their own keep D2R's key (OWN_TEXT_FUNCS). Runs before advanced_stats / item_stat_lines, which
+        turn a text that still has placeholders into descfunc 19."""
+        group2 = strings_ns.load_group2()
+        moved = kept = 0
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "itemstatcost.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            sets = (("descfunc", ("descstrpos", "descstrneg", "descstr2")), ("dgrpfunc", ("dgrpstrpos", "dgrpstrneg", "dgrpstr2")))
+            moved = kept = 0
+            for r in rows:
+                if not is_record(r):
+                    continue
+                for fn_col, str_cols in sets:
+                    for c in (h.index(x) for x in str_cols):
+                        alias = r[c] + "_mxl"
+                        if not (r[c] and alias in group2):
+                            continue
+                        if r[h.index(fn_col)] in self.OWN_TEXT_FUNCS:
+                            kept += 1
+                            continue
+                        r[c] = alias
+                        moved += 1
+            write_tsv(p, h, rows)
+        self.report.append(f"\nstat wording (itemstatcost): {moved} description cells name Median's text (<key>_mxl), {kept} keep D2R's "
+                           "text for D2R's own substitution functions")
+
     def advanced_stats(self) -> None:
+
         """D2R's Advanced Stats panel lists every itemstatcost row whose advdisplay column is 2 (value not zero; the
         text is the stat's own description) in row order. Median's two extra stat pages (statscreen.bin pages 1 and 2,
         docs/subsystems/stat-screen.md) show about 95 stats: advdisplay is 2 for exactly those and empty for the rest
@@ -724,6 +762,76 @@ class Migrator:
         self.report.append(f"\nadvanced stats (itemstatcost.advdisplay): {len(found)} stats listed ({len(always & wanted)} always, "
                            f"the rest while not 0), Median's stat pages name {len(wanted)}; {fixed} get descfunc 19 for D2R's "
                            "printf text" + (f"; not in the table: {', '.join(missing)}" if missing else ""))
+
+    # A printf conversion in a stat text (docs/item-tooltips.md): the text formats the value itself, which only D2R's
+    # descfunc 19 (and 5, 10 and the skill-parameter functions) do. A space flag is not accepted: "25% of" is a sentence.
+    PRINTF = re.compile(r"(?<!%)%[-+#0-9.]*[diuxfs]")
+    # Median's descfunc 1-4, 6-9, 12, 20-23 put the value in front of / behind a text without placeholders; the text D2R
+    # keeps for the key has them (tbl2json.py), so the line reads "+12 %+d to Strength".
+    VALUE_FIRST_FUNCS = {"1", "2", "3", "4", "6", "7", "8", "9", "12", "20", "21", "22", "23"}
+    # Class lock (stat 492, Median 463): the line's text is the plugin's (item_text.cpp); the row only has to be listed.
+    CLASS_LOCK_STAT = "492"
+
+    def item_stat_lines(self) -> None:
+        """What D2R's item property formatter (0x2d6520) prints for each itemstatcost row, read in game (docs/item-tooltips.md,
+        `py -3 tools/game_checks.py tooltiptext`):
+          - descfunc 1-4, 6-9, 12, 20-23 with a text that has printf placeholders print "+12 %+d to Strength": function 19.
+          - a row whose three strings are empty prints "FLYING POLAR BUFFALO ERROR" (a missing string) or the value alone: D2R's own
+            description where D2R has one for the stat (97, 107, 126: Median draws those lines in code), no line otherwise.
+          - descfunc 31 and 34 (Median's, no strings): D2R prints a Chronicle text for 31 and nothing for 34: no line.
+          - descfunc 32, 33, 35-38 print nothing in D2R: the plugin (item_text.cpp) writes those lines; the row stays.
+          - the class lock stat is listed (descfunc 19) so that the plugin can write its line."""
+        texts = strings_ns.effective_texts()
+        converted, restored, hidden, listed = [], [], [], 0
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "itemstatcost.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            d2r_path = D2R / bank / "itemstatcost.txt"
+            d2r_rows = {}
+            dh = []
+            if d2r_path.exists():
+                dh, drows = read_tsv(d2r_path)
+                d2r_rows = {r[0]: r for r in drows if is_record(r)}
+            col = {c: h.index(c) for c in ("*ID", "descpriority", "descfunc", "descval", "descstrpos", "descstrneg", "descstr2")}
+            gcol = {c: h.index(c) for c in ("dgrp", "dgrpfunc", "dgrpval", "dgrpstrpos", "dgrpstrneg", "dgrpstr2")}
+            converted, restored, hidden, listed, ungrouped = [], [], [], 0, []
+            for r in rows:
+                if not is_record(r):
+                    continue
+                fn = r[col["descfunc"]]
+                if r[gcol["dgrp"]] and not any(r[gcol[c]] for c in ("dgrpstrpos", "dgrpstrneg", "dgrpstr2")):
+                    # a group without a text prints the missing-string placeholder (stat 343: one member, no description)
+                    for c in ("dgrp", "dgrpfunc", "dgrpval"):
+                        r[gcol[c]] = ""
+                    ungrouped.append(r[0])
+                if r[col["*ID"]] == self.CLASS_LOCK_STAT:
+                    r[col["descfunc"]], r[col["descval"]] = "19", ""
+                    r[col["descpriority"]] = r[col["descpriority"]] or "1"
+                    r[col["descstrpos"]] = r[col["descstrneg"]] = "itemcls_classonly"
+                    listed += 1
+                    continue
+                if not fn:
+                    continue
+                strings = [r[col[c]] for c in ("descstrpos", "descstrneg", "descstr2")]
+                if not any(strings):
+                    d = d2r_rows.get(r[0])
+                    if d and d[dh.index("descstrpos")]:
+                        for c in ("descfunc", "descval", "descstrpos", "descstrneg", "descstr2"):
+                            r[col[c]] = d[dh.index(c)]
+                        restored.append(r[0])
+                    else:
+                        r[col["descfunc"]], r[col["descval"]] = "", ""
+                        hidden.append(r[0])
+                elif fn in self.VALUE_FIRST_FUNCS and any(self.PRINTF.search(texts.get(s.split(":", 1)[-1], "")) for s in strings if s):
+                    r[col["descfunc"]], r[col["descval"]] = "19", ""
+                    r[col["descstrneg"]] = r[col["descstrneg"]] or r[col["descstrpos"]]
+                    converted.append(r[0])
+            write_tsv(p, h, rows)
+        self.report.append(f"\nitem stat lines (itemstatcost): {len(converted)} stats with printf texts get descfunc 19, {len(restored)} get D2R's "
+                           f"description back ({', '.join(restored)}), {len(hidden)} without any string are not listed ({', '.join(hidden)}), "
+                           f"class lock stat listed: {listed}, {len(ungrouped)} groups without a text dropped ({', '.join(ungrouped)})")
 
     def tab_tables(self) -> None:
         """plugin/src/mxl_tabs.h: D2Sigma's formula function tabpoints(tab) (0x100a6a70 -> D2Skills.cpp 0x100aefe0) sums
@@ -2367,7 +2475,9 @@ def main() -> int:
     m.cooldown_tables()
     m.collide_tables()
     m.tab_tables()
+    m.median_stat_wording()
     m.advanced_stats()
+    m.item_stat_lines()
     m.clamp_automap_cels()
     m.automap_tables()
     m.extra_calc_codes()
