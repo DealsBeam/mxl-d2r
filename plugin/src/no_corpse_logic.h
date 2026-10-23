@@ -114,4 +114,63 @@ inline void FormatReport(char* out, size_t outSize, long corpses, long penalties
 	              corpses, penalties);
 }
 
+// --- Corpses that are already stored in a save (made by D2R's own death before the part existed) ------------------------
+// Median's characters never have one, so a loaded corpse is picked up for the player when the character enters the game
+// (D2R's own pickup, the one a click on the body runs): items back on the body locations, an item whose place is taken
+// goes into the inventory, and the body is gone. docs/subsystems/death.md section 8.
+
+// What a pickup attempt left: `ok` is the pickup function's success byte, `remaining` how many of the corpse's body items
+// it could not place (they stay on the corpse), `leftItems` how many items the corpse still holds after the pickup (any
+// location: the pickup moves the body-location items only).
+struct PickupResult {
+	bool ok = false;
+	int64_t remaining = 0;
+	int leftItems = 0;
+};
+
+// The body may only be deleted when nothing is left on it: deleting it with an item still inside would lose the item.
+constexpr auto CorpseMayBeRemoved(const PickupResult& r) noexcept -> bool {
+	return r.ok && r.remaining == 0 && r.leftItems == 0;
+}
+
+// Ids of the corpses in a player's corpse list, copied out first (a pickup edits the list while it is walked). Fixed 16:
+// D2R's creator refuses a 16th corpse (count >= 0x10), a save holds at most one.
+class CorpseIds {
+public:
+	static constexpr int Max = 16;
+	// A list entry with flag 0 is no corpse (D2R keeps other pending units in the same list); ids repeat only in a damaged list.
+	auto Add(uint32_t flag, uint32_t id) noexcept -> bool {
+		if (flag == 0 || id == 0 || count_ >= Max) {
+			return false;
+		}
+		for (int i = 0; i < count_; ++i) {
+			if (ids_[i] == id) {
+				return false;
+			}
+		}
+		ids_[count_++] = id;
+		return true;
+	}
+	auto Count() const noexcept -> int { return count_; }
+	auto At(int i) const noexcept -> uint32_t { return ids_[i]; }
+
+private:
+	uint32_t ids_[Max] = {};
+	int count_ = 0;
+};
+
+// Counters of the stored-corpse pickup, reported by `mxl` and `h state`.
+struct PickupCounters {
+	volatile long enters = 0;   // the hook ran (a character was placed in a level)
+	volatile long picked = 0;   // corpses picked up and removed
+	volatile long kept = 0;     // corpses left in place (items still on them, or the pickup said no)
+	volatile long faults = 0;   // an exception inside a game call (the corpse is left as it was)
+};
+
+// "on: stored corpses are picked up when a character enters a level (0x485350): picked 1, kept 0, faults 0"
+inline void FormatPickupReport(char* out, size_t outSize, long picked, long kept, long faults) noexcept {
+	std::snprintf(out, outSize, "on: stored corpses are picked up when a character enters a level (0x485350): picked %ld, kept %ld, faults %ld",
+	              picked, kept, faults);
+}
+
 }  // namespace nocorpse
