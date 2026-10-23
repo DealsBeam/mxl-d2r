@@ -42,15 +42,15 @@ are vanilla's routine re-implemented, the Median additions being the skills2 lay
 | 18 | 0x100ab710 | 122 | Fire Ball, CatapultPlague, RogueMissile | self buff: D2R 0x553e60 + layers; the 6 rows with layers -> **slot 174** |
 | 24 | 0x100ab400 | 17 | Fire Wall, Charged Bolt Sentry | D2R 0x553950 (D2R also caps active walls); D2Sigma clamps the spot to aurarangecalc (only burning_veil sets one: not ported) |
 | 27 | 0x100ad9d0 | 53 | Teleport, jitan_s_gate | D2R 0x554c40 + distance limit aurarangecalc (-1 refuses) for players -> **slot 179** (47 rows with a range) |
-| 41 | 0x100a9290 | 4 | vampiric_strike, deathgaze | not compared (4 skills) |
-| 54 | 0x100aa050 | 1 | queen_of_blades_2 | not compared (queen_of_blades_2) |
+| 41 | 0x100a9290 | 4 | vampiric_strike, batstrike_2, deathgaze | **wrapper `SrvDoFan`** (`sigma_skills.cpp`, D2R slot 41 = 0x56dd60 wrapped in place): D2R's function plus Median's melee hit on the target; check `replacedskills` |
+| 54 | 0x100aa050 | 1 | queen_of_blades_2 | same as D2R (0x56f610), read side by side (p4-engine-b); no change |
 | 68 | 0x100a9f50 | 39 | Shout, lightning_shield | same as D2R (0x567500): nova + buff; layers unused by its rows |
-| 73 | 0x100aa120 | 2 | hammer_of_zerae, power_shift | not compared (2 skills) |
+| 73 | 0x100aa120 | 2 | hammer_of_zerae, power_shift | **wrapper `SrvDoHammer`** (D2R slot 73 = 0x561f80 wrapped in place): the missile is chosen by calc2 (syn3 0 -> the base missile, 2 -> the `_2` variant), the hammer swap; check `replacedskills` |
 | 77 | 0x100abb40 | 2 | Leap | aurarangecalc like vanilla Leap |
-| 78 | 0x100abd10 | 1 | Leap Attack | not compared (Leap Attack) |
-| 112 | 0x100ac550 | 1 | MonCurseCast | not compared (MonCurseCast) |
+| 78 | 0x100abd10 | 1 | Leap Attack | same as D2R (0x568910); no change |
+| 112 | 0x100ac550 | 1 | MonCurseCast | same as D2R (0x5794b0); no change |
 | 114 | 0x100ad460 | 9 | jinn, blade_spirits | calls the original (Raven) |
-| 120 | 0x100aa320 | 1 | takedown | not compared (takedown) |
+| 120 | 0x100aa320 | 1 | takedown | same as D2R (0x576160); no change |
 | 122 | 0x100ab920 | 0 | | unused |
 | 124 | 0x100a9510 | 38 | Hurricane, war_spirit | storm: D2R 0x575de0 + layers; land_of_the_dead -> **slot 180** |
 

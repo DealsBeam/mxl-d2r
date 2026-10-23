@@ -20,6 +20,9 @@
 // Off words: wpauto, mapreveal, hotkeys.
 #include "travel.h"
 
+#include "client_messages.h"
+#include "client_messages_logic.h"
+
 #include "d2r.h"
 #include "travel_logic.h"
 
@@ -185,6 +188,9 @@ void ActivateFor(Game* game, Unit* player) noexcept {
 		return;
 	}
 	g_wpSet(record, static_cast<uint16_t>(number));
+	if (RewardSoundsOn()) {
+		SendRewardMessage(player, clientmsg::MsgWaypointOpen, "", 1);  // Median's message 0x5e: the waypoint-open sound
+	}
 	g_lastLevel.store(level);
 	g_lastNumber.store(number);
 	const uint32_t n = g_activated.fetch_add(1) + 1;

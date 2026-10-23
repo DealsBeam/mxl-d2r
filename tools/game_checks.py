@@ -1724,6 +1724,347 @@ def check_casts():
     add(nm, "PASS" if good else "FAIL", "; ".join(notes), shots, log)
 
 
+def check_cursemissile():
+    nm = "Curse skills without a client missile: no nMissile assert (cltdofunc 30 wrapper, sigma_skills.cpp CltDoCurse)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    import csv
+    rows = list(csv.reader(open(os.path.join(MOD_DATA, "global", "excel", "skills.txt"), encoding="latin-1"), delimiter="	"))
+    ix = {n: i for i, n in enumerate(rows[0])}
+    bare, with_missile = [], []
+    for r in rows[1:]:
+        if len(r) <= ix["cltmissilec"] or r[ix["cltdofunc"]] != "30" or not r[ix["*Id"]].isdigit():
+            continue
+        (bare if not r[ix["cltmissilea"]] else with_missile).append(int(r[ix["*Id"]]))
+    if len(bare) < 3 or not with_missile:
+        return add(nm, "BLOCKED", "skills.txt has %d curse rows without and %d with a cltmissilea" % (len(bare), len(with_missile)))
+    # 66 Amplify Damage, 91 Lower Resist and 77 Terror are Median curses with no client missile; 71 Dim Vision keeps its own
+    samples = [i for i in (66, 91, 77) if i in bare] or bare[:3]
+    keep = 71 if 71 in with_missile else with_missile[0]
+    log, notes, good = [], [], True
+    m = log_mark()
+    for sk in samples + [keep]:
+        ok, l = H("cltdo %d" % sk)
+        log += l
+        ret = re.search(r"returned=(-?\d+)", " ".join(l))
+        good = good and ok and ret is not None and ret.group(1) == "1"
+        notes.append("skill %d %s" % (sk, "returned %s" % (ret.group(1) if ret else "-")))
+    time.sleep(0.5)
+    new = [a for a in assertions_since(m) if "nMissile" in a]
+    good = good and not new
+    # control: D2R's own function (0x2b05d0) asserts on the same bare row
+    m2 = log_mark()
+    ok, l = H("cltdo %d orig" % samples[0])
+    log += l
+    time.sleep(0.5)
+    ctl = [a for a in assertions_since(m2) if "nMissile" in a]
+    add(nm, "PASS" if good and ctl else ("FAIL" if not good else "REVIEW"),
+        "%d bare curse rows (%d with a missile); %s; nMissile asserts through the table: %d; control, D2R's own function on skill %d: %d" % (
+            len(bare), len(with_missile), ", ".join(notes), len(new), samples[0], len(ctl)), [sh("cursemissile")], log + new + ctl)
+
+
+def assert_lines(lines):
+    """`asserttrace show` lines: [(message, file, [frame rvas])]."""
+    out = []
+    for ln in lines:
+        m = re.search(r"assert \d+: (.*?) \| (.*?) \| ([0-9a-f ]*)$", ln)
+        if m:
+            out.append((m.group(1), m.group(2), [int(x, 16) for x in m.group(3).split()]))
+    return out
+
+
+def check_asserttrace():
+    nm = "Engine assert trace (harness asserttrace): the call chain of an engine assert, and the probes of the open asserts"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    log = []
+    ok, l = H("asserttrace on")
+    log += l
+    if not ok:
+        return add(nm, "FAIL", "the hook of the assert report function 0x75ff0 did not install: %s" % " ".join(l)[:120], [], log)
+    H("asserttrace clear")
+    # control: D2R's own client curse function on a Median curse without a client missile raises nMissile from 0x2b05d0
+    H("cltdo 66 orig")
+    got = assert_lines(H("asserttrace show")[1])
+    ctl = [a for a in got if "nMissile" in a[0] and any(0x2b05d0 <= f < 0x2b0800 for f in a[2])]
+    notes = ["control (cltdo 66 orig): %d nMissile assert(s), chain %s" % (len(ctl), " ".join("%x" % f for f in ctl[0][2][:6]) if ctl else "-")]
+    # probes of the open asserts: the treasure goblin (nRadius), a hit by an andariel_ai monster (nSkillCastId)
+    goto(2)
+    kill_all_near()
+    H("asserttrace clear")
+    H("spawn 2791 1")
+    time.sleep(6)
+    probes = assert_lines(H("asserttrace show")[1])
+    notes.append("treasure goblin spawn: %s" % ("; ".join("%s <- %s" % (a[0], " ".join("%x" % f for f in a[2][:8])) for a in probes) or "no assert"))
+    kill_all_near()
+    # the warp asserts of `goto` into Median-only levels (docs/testing.md assert table)
+    warps = []
+    for area in (16, 191, 250, 134):
+        H("asserttrace clear")
+        goto(area)
+        time.sleep(1.5)
+        found = assert_lines(H("asserttrace show")[1])
+        warps += found
+        notes.append("goto %d: %s" % (area, "; ".join(sorted(set("%s <- %s" % (a[0][:34], " ".join("%x" % f for f in a[2][:5])) for a in found))) or "no assert"))
+    goto(1)
+    log += ["%s | %s | %s" % (a[0], a[1], " ".join("%x" % f for f in a[2])) for a in got + probes + warps]
+    add(nm, "PASS" if ctl else "FAIL", "; ".join(notes), [sh("asserttrace")], log)
+
+
+def check_cherry():
+    name = "Cherries (item spells 12 / 17, D2Sigma 0x1007fa90 / 0x1007fb70): the cherry teleports to the Pacman level and casts its skill, home_cherry goes back, a set stat 467 refuses the cherry"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    rows, bad, shots = [], [], []
+    god(True)
+    try:
+        goto(1)
+        H("packclear")
+        # control first: stat 467 (itemstatcost_467, D2R id 496) above 0 makes the cherry's calc1 0 = no destination
+        H("stat player 496 set 1")
+        H("item kpac inv")
+        ok, _l = H("use kpac")
+        area = hstate()["player"].get("area")
+        rows.append("control, stat 467 = 1: cherry %s, area %s" % ("USED" if ok else "refused", area))
+        if ok or area != 1:
+            bad.append("the cherry was used with stat 467 set (area %s)" % area)
+        H("stat player 496 set 0")
+        H("packclear")
+        H("item kpac inv")
+        m = mxl_mark()
+        ok, lines = H("use kpac")
+        area = None
+        for _ in range(10):
+            time.sleep(2)
+            area = hstate()["player"].get("area")
+            if area == 219:
+                break
+        got = [ln for ln in mxl_lines_since(m) if "cherry:" in ln]
+        shots.append(sh("cherry"))
+        rows.append("cherry: use %s, area %s (the Pacman level is D2R level 219); %s" % ("ok" if ok else "refused", area, got[-1][-70:] if got else "no cherry log line"))
+        if not ok or area != 219:
+            bad.append("the cherry did not move the character to level 219 (area %s)" % area)
+        if not got or not re.search(r"skill 1828 level 1 cast [1-9]", got[-1]):
+            bad.append("the cherry's skill 1828 was not cast: %s" % (got[-1][-70:] if got else "no log line"))
+        H("packclear")
+        H("item pacb inv")
+        ok, lines = H("use pacb")
+        for _ in range(10):
+            time.sleep(2)
+            area = hstate()["player"].get("area")
+            if area == 1:
+                break
+        rows.append("home_cherry: use %s, area %s" % ("ok" if ok else "refused", area))
+        if not ok or area != 1:
+            bad.append("home_cherry did not move the character to level 1 (area %s)" % area)
+    finally:
+        H("stat player 496 set 0")
+        god(False)
+        goto(1)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) + (("; " + "; ".join(bad)) if bad else ""), shots, rows)
+
+
+def _skillstats():
+    """The counters of the wrapped srvdofunc slots 41 and 73 (`skillstats`): (fan casts, melee hits, hammer casts, swaps)."""
+    ok, lines = H("skillstats")
+    m = re.search(r"fan casts=(\d+) melee hits=(\d+) hammer casts=(\d+) swaps=(\d+)", " ".join(lines))
+    return tuple(int(x) for x in m.groups()) if m else (0, 0, 0, 0)
+
+
+def check_replacedskills():
+    """Audit item 'replaced vanilla skill-function slots 41, 54, 73, 78, 112, 120': D2Sigma's version of slot 41 (vampiric_strike,
+    deathgaze, batstrike_2, skills_2759) throws the melee hit at the target before the missile scatter, D2R's does not (the plugin
+    wraps it); slot 73 (hammer_of_zerae, power_shift) takes srvmissilea / b / c by calc2 (hammer_of_zerae's calc2 = 1 + syn3, the
+    player's stat 396 = D2R 425 with the skill as layer), D2R's always takes srvmissilea (wrapped). The other slots were compared in
+    the disassembly and run D2R's own function. PASS: each 41 skill counts a melee hit and throws missiles; hammer_of_zerae with
+    syn3 = 2 throws hammer_of_zerae_missile_2 (and hammer_of_zerae_missile without syn3)."""
+    nm = "Replaced skill functions (slots 41 and 73): vampiric_strike / deathgaze / batstrike_2 hit then scatter missiles, hammer_of_zerae picks its missile by calc2"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    by_name, t, h = _skill_ids_by_name()
+    mt = _tsv(os.path.join(BUILT_EXCEL, "missiles.txt"))
+    mrow = {r[0]: i for i, r in enumerate(mt[1:]) if r and r[0]}
+    need = ("vampiric_strike", "deathgaze", "batstrike_2", "hammer_of_zerae", "power_shift")
+    sid = {n: by_name.get(n) for n in need}
+    if None in sid.values() or "hammer_of_zerae_missile" not in mrow or "hammer_of_zerae_missile_2" not in mrow:
+        return add(nm, "BLOCKED", "skills or missiles missing from the built tables: %s" % [n for n, v in sid.items() if v is None])
+    fight_ready()
+    god(True)
+    notes, problems, shots, log = [], [], [], []
+    H("packclear")
+    for slot_ in ("rhand", "lhand"):
+        H("unequip " + slot_)
+    # The skills want weapon types (itypea1): vampiric_strike / batstrike_2 h2h (claw, j20 has no requirements), deathgaze axe (115),
+    # hammer_of_zerae / power_shift blun (mace 124).
+    cls0 = hstate()["player"].get("class") or 0
+    weapon_of = {"vampiric_strike": "j20", "batstrike_2": "j20", "deathgaze": "115", "hammer_of_zerae": "124", "power_shift": "124"}
+    wielded = {"code": ""}
+
+    def wield(name):
+        code = weapon_of[name]
+        if wielded["code"] != code:
+            H("unequip rhand")
+            H("class %d" % (6 if code == "j20" else cls0))  # claws are assassin-only
+            ok_w, _lw = H("equip %s q=2 rhand" % code)
+            wielded["code"] = code if ok_w else ""
+            if not ok_w:
+                notes.append("could not equip %s for %s" % (code, name))
+
+    def cast(name, rounds=4):
+        skill = sid[name]
+        wield(name)
+        kill_all_near()
+        tid = tough_target(18)
+        if tid is not None:
+            H("setstate mon:%d 1 1" % tid)
+        H("moveto nearest")
+        H("setskill %d 5" % skill)
+        before = _skillstats()
+        H("missiles reset")
+        seen_text, ok = "", False
+        for _ in range(rounds):
+            H("moveto nearest")
+            time.sleep(0.3)
+            H("stat player 8 set %d" % (rd("player", 9) or 0))
+            ok, cl = H("cast %d nearest" % skill)
+            log.extend(cl[:2])
+            time.sleep(1.5)
+            seen_text = " ".join(H("missiles")[1])
+            if ok and re.search(r"seen=[1-9]", seen_text):
+                break
+        after = _skillstats()
+        classes = {int(c): int(n) for c, n in re.findall(r"class (\d+) x(\d+)", seen_text)}
+        return ok, tuple(a - b for a, b in zip(after, before)), classes, tid
+
+    for name in ("vampiric_strike", "deathgaze", "batstrike_2"):
+        ok, d, classes, tid = cast(name)
+        notes.append("%s (slot 41): cast %s, fan casts +%d, melee hits +%d, missile classes %s" % (name, "OK" if ok else "FAIL", d[0], d[1], classes))
+        if not ok or d[0] < 1 or d[1] < 1 or not classes:
+            problems.append("%s: cast %s, fan casts +%d, melee hits +%d, missiles %s" % (name, ok, d[0], d[1], classes))
+        shots.append(sh("replaced_%s" % name))
+    plain, second = mrow["hammer_of_zerae_missile"], mrow["hammer_of_zerae_missile_2"]
+    for label, syn3 in (("syn3 = 0", 0), ("syn3 = 2", 2)):
+        setstat("player", 425, syn3, sid["hammer_of_zerae"])
+        ok, d, classes, tid = cast("hammer_of_zerae")
+        want, other = (plain, second) if syn3 == 0 else (second, plain)
+        notes.append("hammer_of_zerae, %s (slot 73): cast %s, casts +%d, swaps +%d, missile classes %s (plain %d, _2 %d)" % (
+            label, "OK" if ok else "FAIL", d[2], d[3], classes, plain, second))
+        if not ok or d[2] < 1 or want not in classes or other in classes or (syn3 == 2 and d[3] < 1):
+            problems.append("hammer_of_zerae %s: cast %s, casts +%d, swaps +%d, classes %s, expected only %d" % (label, ok, d[2], d[3], classes, want))
+        shots.append(sh("replaced_hammer_%d" % syn3))
+    setstat("player", 425, 0, sid["hammer_of_zerae"])
+    ok, d, classes, tid = cast("power_shift")
+    notes.append("power_shift (slot 73): cast %s, casts +%d, swaps +%d, missile classes %s" % ("OK" if ok else "FAIL", d[2], d[3], classes))
+    if not ok or d[2] < 1 or not classes:
+        problems.append("power_shift: cast %s, casts +%d, classes %s" % (ok, d[2], classes))
+    H("class %d" % cls0)
+    alive = hstate()["ok"]
+    god(False)
+    kill_all_near()
+    if not alive:
+        problems.append("the game is gone")
+    add(nm, "PASS" if not problems else "FAIL", ("%s | " % "; ".join(problems) if problems else "") + " | ".join(notes), shots, log)
+
+
+def _vendor_codes():
+    """Codes of weapons and armor rows in the built tables (the vendor's potions and scrolls are always in stock and not counted)."""
+    codes = set()
+    for tbl in ("weapons.txt", "armor.txt"):
+        rows = _tsv(os.path.join(BUILT_EXCEL, "base", tbl))
+        ci = rows[0].index("code")
+        codes.update(r[ci].strip() for r in rows[1:] if len(r) > ci and r[ci].strip())
+    return codes
+
+
+def check_vendorstock():
+    """Audit item 'Vendor stock rules (npcstores, D2NPC_10093f90)'. Median's stock builder (D2NPC 0x10093a30): item level
+    ilvl = player level + 5, in Normal and Nightmare at most the act's last area (Act 1: levels row 35, MonLvl1Ex / 2Ex = 15 / 63)
+    + 5; every item needs its base level <= ilvl; normal copies only while ilvl < 25 (NormalAreaLevelHigh); magic copies rand in
+    [MagicMin, MagicMax] (3 at most) at that item level. D2R's builder (0x53c9f0) has the same shape, with its own cap (Normal
+    only), a MagicLvl threshold per item (txt_migrate wrote 25 into it from the wrong npcstores byte) and 1 to 2 extra magic
+    copies above item level 24."""
+    nm = "Vendor stock (Charsi, Act 1): item level cap, magic stock at low levels, normal copies below item level 25, magic copies at most 3"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    gear = _vendor_codes()
+    st0 = hstate()["player"]
+    lvl0 = st0.get("level") or 1
+    mdiff = re.search(r"difficulty = (\d)", " ".join(H("difficulty")[1]))
+    diff0 = int(mdiff.group(1)) if mdiff else 0
+    median_cap = {0: 15 + 5, 1: 63 + 5}
+    rows, bad, log = [], [], []
+    try:
+        for diff in (0, 1, 2):
+            for clvl in (10, 40, 90):
+                H("difficulty %d" % diff)
+                H("stat player 12 set %d" % clvl)
+                close_menu()
+                menu = npc_menu_near(154)
+                if menu is None:
+                    bad.append("diff %d level %d: no Charsi menu" % (diff, clvl))
+                    continue
+                H("shop 154 restock")
+                H("menu 1")
+                time.sleep(2.5)
+                ok, lines = H("shop 154")
+                items = [kv(l) for l in lines if l.startswith("item ")]
+                trace = re.search(r"last item level (-?\d+) -> (-?\d+) \(cap\), difficulty (-?\d+)", " ".join(lines))
+                g.click(*TRADE_CLOSE)
+                time.sleep(0.8)
+                close_menu()
+                geared = [it for it in items if it.get("code", "").strip() in gear]
+                magic = [it for it in geared if it.get("quality") == "4"]
+                normal = [it for it in geared if it.get("quality") == "2"]
+                per_code = {}
+                for it in magic:
+                    per_code[it["code"]] = per_code.get(it["code"], 0) + 1
+                # The item level the builder used: the cap function's result (the items' own ilvl field reads 101 for every item
+                # of this build, see docs/vendors.md).
+                top = int(trace.group(2)) if trace else 0
+                cap = min(clvl + 5, median_cap.get(diff, 999))
+                line = "diff %d level %d: %d weapons/armor (%d normal, %d magic), builder item level %d (in %s, Median %d), most copies of one magic code %d" % (
+                    diff, clvl, len(geared), len(normal), len(magic), top, trace.group(1) if trace else "?", cap, max(per_code.values()) if per_code else 0)
+                rows.append(line)
+                log.append(line)
+                if not geared:
+                    bad.append("diff %d level %d: no weapons or armor in stock" % (diff, clvl))
+                    continue
+                if top > cap:
+                    bad.append("diff %d level %d: item level %d above Median's cap %d" % (diff, clvl, top, cap))
+                if clvl == 10 and not magic:
+                    bad.append("diff %d level 10: no magic items (Median stocks them from the item's base level up)" % diff)
+                if cap >= 25 and normal:
+                    bad.append("diff %d level %d: %d normal weapons/armor at item level %d (Median stops at 25)" % (diff, clvl, len(normal), cap))
+                if per_code and max(per_code.values()) > 3:
+                    bad.append("diff %d level %d: %d copies of one magic item (Median at most 3)" % (diff, clvl, max(per_code.values())))
+    finally:
+        H("stat player 12 set %d" % lvl0)
+        H("difficulty %d" % diff0)
+        close_menu()
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:1800], [], log)
+
+
+def check_warprevisit():
+    name = "Median-only levels entered twice by goto (warp tile asserts, ptWarp) - probe for docs/testing.md assert table"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    H("asserttrace on")
+    notes = []
+    for area in (250, 16, 191, 134):
+        for visit in (1, 2):
+            H("asserttrace clear")
+            goto(area)
+            time.sleep(2)
+            found = assert_lines(H("asserttrace show")[1])
+            notes.append("goto %d (visit %d): %s" % (area, visit, "; ".join(sorted(set("%s <- %s" % (a[0][:30], " ".join("%x" % f for f in a[2][:5])) for a in found))) or "no assert"))
+            goto(2)
+    add(name, "PASS", "; ".join(notes), [sh("warprevisit")], notes)
+
+
 def spawn_id(cls=18):
     """Spawns a monster and returns its unit id (the `spawned class N id=M` line; the monster exists once that line is
     written, even when the closing "spawn OK" line is late)."""
@@ -6359,6 +6700,7 @@ def check_wpauto():
     bit_far = wpbit(num)
     res.append("B: left to distance %s, bit cleared and still %s after 1.5 s (rule must not fire)" % (far, bit_far))
     walked_ok = None
+    snd0 = reward_stats()
     if far is not None and bit_far == 0:
         H("move %d %d" % (wp["x"], wp["y"]))
         t0 = time.time()
@@ -6372,6 +6714,17 @@ def check_wpauto():
                 break
         walked_ok = d_at is not None
         res.append("C: walking to the object set the bit at distance %s" % d_at)
+        # Median's message 0x5e (the waypoint-open sound, row 2642) comes with the activation: the plugin's message 0x70.
+        snd1 = None
+        for _ in range(10):
+            time.sleep(0.5)
+            snd1 = reward_stats()
+            if snd0 and snd1 and snd1[1] > snd0[1]:
+                break
+        sound_ok = bool(snd0 and snd1 and snd1[1] == snd0[1] + 1 and snd1[2] == 0x70 and snd1[3] == 2642)
+        res.append("D: waypoint-open sound (message 0x70, row 2642): played %s -> %s, last message 0x%x sound %s"
+                   % (snd0[1] if snd0 else None, snd1[1] if snd1 else None, snd1[2] if snd1 else 0, snd1[3] if snd1 else None))
+        walked_ok = walked_ok and (sound_ok or not (snd0 and snd0[0]))
     status = [l for l in H("travel")[1] if l.startswith("travel ")]
     log += res + status
     if far is None or bit_far != 0:
@@ -10325,7 +10678,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
+          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
@@ -10440,6 +10793,8 @@ def run_all(only=None):
                 add("Test character start state", "BLOCKED", "cannot be repaired: %r" % (e,))
                 only = ["-"]  # no check runs on a character that cannot be put in a clean state
             p0 = hstate()["player"]
+            if os.environ.get("MXL_ASSERT_TRACE"):  # every engine assert of the run gets its call chain in mxl-core.log (harness `asserttrace`)
+                H("asserttrace on")
             for name, fn in CHECKS:
                 if only and name not in only:
                     continue

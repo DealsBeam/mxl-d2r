@@ -420,6 +420,12 @@ auto DungeonLockoutProbe(void* gameArg, void* playerArg, int dst) noexcept -> in
 	return static_cast<int>(dungeon::Check(g_lockout, who, dst, Now(), quest));
 }
 
+void DungeonLockoutItemEntered(void* game, void* player, int from) noexcept {
+	if (g_context != nullptr && g_unitRoom != nullptr && game != nullptr && IsPlayer(static_cast<Unit*>(player))) {
+		Entered(static_cast<Game*>(game), static_cast<Unit*>(player), from);
+	}
+}
+
 void DungeonLockoutCounts(int* refused, int* started) noexcept {
 	std::lock_guard<std::mutex> lock(g_mutex);
 	*refused = g_refusals;

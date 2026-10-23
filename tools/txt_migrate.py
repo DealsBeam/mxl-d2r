@@ -1687,10 +1687,13 @@ class Migrator:
         """Shops. Median leaves every item's vendor columns empty; D2Sigma stocks vendors from npcstores.bin, 52-byte
         rows (fields read from the data, docs/vendors.md):
           +0 u16 NPC (monstats row)   +4 char[4] item code (space padded)   +8 u8 always in stock (consumables)
-          +16 u8 Min  +17 u8 Max  +19 u8 MagicLvl  +24 u8 MagicMin  +25 u8 MagicMax   (equipment)
+          +16 u8 Min  +17 u8 Max  +19 u8 (25 on 297 rows: the item level up to which normal copies are made, a constant of
+          Median's builder, not a column)  +24 u8 MagicMin  +25 u8 MagicMax   (equipment)
           +40/+41 u8 flags used only by Atma, Geglash and Cain on sacred items (not a shop; not converted)
         These become D2R's per-item columns <Vendor>Min/Max/MagicMin/MagicMax/MagicLvl; always-in-stock rows
-        get Min = Max = 1 like D2R's potions (PermStoreItem stays as Median set it)."""
+        get Min = Max = 1 like D2R's potions (PermStoreItem stays as Median set it). MagicLvl is the item level from which
+        magic copies are made (D2R reads it per item); Median stocks magic copies from the item's base level on, so it is 0
+        (byte +19, 25, is the normal-copy limit and was wrongly written into it before: no magic stock below item level 25)."""
         vendor = {"charsi": "Charsi", "gheed": "Gheed", "akara": "Akara", "fara": "Fara", "lysander": "Lysander",
                   "drognan": "Drognan", "hratli": "Hratli", "alkor": "Alkor", "ormus": "Ormus", "elzix": "Elzix",
                   "asheara": "Asheara", "cain2": "Cain", "halbu": "Halbu", "jamella": "Jamella", "larzuk": "Larzuk",
@@ -1708,7 +1711,7 @@ class Migrator:
             if row[8]:
                 values = (1, 1, 0, 0, 0)
             else:
-                values = (row[16], row[17], row[24], row[25], row[19])
+                values = (row[16], row[17], row[24], row[25], 0)
             if prefix is None or not any(values):
                 skipped[npc] += 1
                 continue
