@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import skill_icons  # noqa: E402  (read_dc6, palette, SHEETS)
 
 ROOT = Path(__file__).resolve().parent.parent
-BIN = ROOT / "extract" / "mxl" / "data" / "global" / "excel" / "stateicons.bin"
+BIN = ROOT / "assets" / "median" / "data" / "global" / "excel" / "stateicons.bin"
 IDMAP = ROOT / "work" / "named" / "idmap.json"
 IDKEYS = ROOT / "work" / "mod" / "strings_idkeys.json"
 OUT = ROOT / "plugin" / "src"

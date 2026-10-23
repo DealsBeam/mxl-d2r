@@ -8,7 +8,7 @@
   plugin/src/mxl_goblins.h       GoblinChance per level (levels +0x15c) and the monstats3 treasure goblin rows
   plugin/src/mxl_monster_looks.h monstats3 rank bits, NameColor, automap fields and spawn overlays per monster
 
-Sources are the compiled tables in extract/mxl (raw bytes: the sigma decode has no names for these fields); ids go
+Sources are the compiled tables in assets/median (raw bytes: the sigma decode has no names for these fields); ids go
 through work/named/idmap.json: levels and monsters are Median row numbers in the sources and D2R ids in the output.
 Quest ids, bits, classes and item codes need no mapping (Median keeps the vanilla quest array and its item codes).
 
@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BINS = ROOT / "extract" / "mxl" / "data" / "global" / "excel"
+BINS = ROOT / "assets" / "median" / "data" / "global" / "excel"
 IDMAP = ROOT / "work" / "named" / "idmap.json"
 SRC = ROOT / "plugin" / "src"
 MODXL = ROOT / "work" / "mod" / "data" / "global" / "excel"

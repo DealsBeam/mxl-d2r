@@ -30,8 +30,8 @@ import objpreset  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 IDMAP = ROOT / "work" / "named" / "idmap.json"
 EXCEL = ROOT / "work" / "mod" / "data" / "global" / "excel"
-MXL_TILES = ROOT / "extract" / "mxl" / "data" / "global" / "tiles"
-MXL_OBJPRESET = ROOT / "extract" / "mxl" / "data" / "global" / "excel" / "objpreset.bin"
+MXL_TILES = ROOT / "assets" / "median" / "data" / "global" / "tiles"
+MXL_OBJPRESET = ROOT / "assets" / "median" / "data" / "global" / "excel" / "objpreset.bin"
 
 
 class Ds1:

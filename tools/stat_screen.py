@@ -1,6 +1,6 @@
 """Median's statscreen table (extra character stat pages) decoded; the stats it lists.
 
-Input:  extract/mxl/data/global/excel/statscreen.bin (tools/mpq_extract.py), extract/mxl/data/local/lng/eng/*.tbl
+Input:  assets/median/data/global/excel/statscreen.bin (tools/mpq_extract.py), assets/median/data/local/lng/eng/*.tbl
 Output: `python tools/stat_screen.py` prints docs/subsystems/stat-screen.md's row table (markdown, to stdout).
         `advanced_stat_rows()` is what txt_migrate.py's advanced_stats() flags in itemstatcost.advdisplay.
 
@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EXTRACT = ROOT / "extract" / "mxl"
+EXTRACT = ROOT / "assets" / "median"
 NAMED = ROOT / "work" / "named"
 TABLES = (("string", 0), ("patchstring", 10000), ("expansionstring", 20000))
 NO_STRING = 5382

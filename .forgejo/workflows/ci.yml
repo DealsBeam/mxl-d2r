@@ -47,3 +47,8 @@ jobs:
       - uses: https://git.werdegames.com/actions-mirror/checkout@v4
       - name: Python syntax
         run: python3 -m compileall -q tools
+      - name: Median inputs come from assets/median (D2R-only release, docs/setup.md)
+        run: |
+          if grep -rnE '"extract" / "mxl"|mxl_extracted"? / "2_txt"|DEFAULT_MXL = SUGMA' tools --include=*.py; then
+            echo "tools must read Median's files from assets/median, not extract/mxl or ..\mxl_extracted"; exit 1
+          fi

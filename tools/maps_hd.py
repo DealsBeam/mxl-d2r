@@ -17,7 +17,7 @@ one per D2R map. Median ships 574 .ds1 files:
 
   py -3 tools/maps_hd.py report [--out DIR]       inventory, decisions, counts; writes report.json / report.md in DIR
   py -3 tools/maps_hd.py build DATA_DIR           write DATA_DIR/hd/env/preset/<map>.json for every map that needs one
-tools/install_mod.py calls build() on the data folder it installs. Needs D2R (CASC) and extract/mxl tiles; reads the built
+tools/install_mod.py calls build() on the data folder it installs. Needs D2R (CASC) and assets/median tiles; reads the built
 tables in work/mod/data/global/excel for the level -> map relation.
 """
 import argparse
@@ -31,7 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 ROOT = Path(__file__).resolve().parent.parent
-MXL_TILES = ROOT / "extract" / "mxl" / "data" / "global" / "tiles"
+MXL_TILES = ROOT / "assets" / "median" / "data" / "global" / "tiles"
 EXCEL = ROOT / "work" / "mod" / "data" / "global" / "excel"
 DEFAULT_GAME = os.environ.get("MXL_D2R_GAME", r"C:\Program Files (x86)\Diablo II Resurrected")
 CLASSIC_MPQS = [r"C:\Games\median-xl\patch_d2.mpq", r"C:\Games\median-xl\d2exp.mpq", r"C:\Games\median-xl\d2data.mpq"]

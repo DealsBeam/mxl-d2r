@@ -1,7 +1,7 @@
 # NPC services and hirelings: what D2Sigma does and how to port it
 
 Research lane, 2026-10-20. Source: `D2Sigma.dll` (1.10 build, base 0x10000000), read with the Ghidra scripts in
-`tools/ghidra_scripts`; tables from `work/sigma` and `extract/mxl`. Modules: D2NPC.cpp (22 functions),
+`tools/ghidra_scripts`; tables from `work/sigma` and `assets/median`. Modules: D2NPC.cpp (22 functions),
 D2NpcActions.cpp (39), npc_speech.cpp (7), D2Interact.cpp (6), D2Hirelings.cpp (23), plus the client file
 `ui\NpcMenu.cpp` and the packet handlers in D2PacketServer.cpp that call into them. No plugin code in this lane.
 "Confirmed" means read from the code and matched against table data; "likely" means inferred; unresolved items are
