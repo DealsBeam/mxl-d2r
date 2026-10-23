@@ -266,8 +266,7 @@ The engine loads `.model` / `.texture` only at paths D2R already has (section 3 
 a folder mod overrides vanilla paths). **Unit JSON files are different**: a new `data/hd/character/enemy/<name>.json` is found
 through monsters.json (hd_monsters.py writes about 1,200 of them). Player forms are monsters to the renderer, so they use the same
 free route as enemies: **no new path and no plugin hook were needed.** The model and texture files are written over the vanilla
-paths of units Median never spawns: Druid `enemy/horse/torso_lod0..4.model` + `horse/textures/horse_alb.texture` (its ORM and normal
-maps are the werebear's own, see the findings table); enemy
+paths of units Median never spawns: Druid `enemy/horse/torso_lod0..4.model` + `horse/textures/horse_{alb,nrm,orm}.texture`; enemy
 `enemy/wargoatman/torso_lod0..4.model` + `pig/textures/pig_{alb,nrm,orm,sss}.texture`. Nine such units exist (`colossal1-3`,
 `corpsefire`, `cowking`, `darkelder`, `horse`, `pig`, `seagull`, `wargoatman`); each new 3D model uses one. Registering new paths
 through D2RLoader's ResourceService (in-memory files under `data/...d2rloader/<plugin-id>/`) was not tried for models; it stays
@@ -284,9 +283,10 @@ scale does not apply. `set_scale` multiplies it by the rig's u (bear 1.0: the ow
 | Albedo `.texture` RGBA8 (format 31) | drawn as colour noise (maps are read as block compressed) |
 | Albedo RGBA8 2048 px (22 MB) | **GPU device lost** ("Present failed" 0x887A0005) at the first draw, every time |
 | Albedo BC3 (format 62, `d2r_texture.write_bc3`) 1024 px | correct colours |
-| Normal / ORM / mask as BC3 | too dark (decoded as sRGB); BC5 (format 61, `write_bc5`: red and green only) is what D2R uses for them |
-| Albedo as baked (mean 41 of 255) | reads as black in game; `ALBEDO_GAMMA` 0.5 in `wereowl_models.py` lifts it |
-| Bear rig with our flat BC5 normal + ORM (the wolf rig took them fine) | the whole body drew **black** (only specks of the albedo showed); the same mesh with the werebear's own `werebear_orm` / `werebear_nrm` (and our albedo) is lit and textured. Not understood (not the material parameters, the unit JSON or the normals: those are equal or checked). `USES["druid"]["shared"]` points the two maps at the vanilla werebear paths; their fur detail lies noisily over our UV atlas, which reads as fur |
+| Normal / ORM / mask as BC3 sRGB (format 62) | too dark (decoded as sRGB) |
+| Normal / ORM as BC5 (an earlier reading of "format 61") | **wrong**: format 61 is **BC3 read linearly** (`d2r_texture.write_bc3(..., linear=True)`). Decoding the vanilla `werebear_nrm` / `werebear_orm` as BC3 gives DXT5nm (R 255, G = y, B 0, A = x) and ORM (R occlusion about 220, G roughness about 170, B 0, A 255); BC5 data under format 61 decodes as a tilted normal. Both flat maps are now BC3 linear (normal 255,128,0,128; ORM 255,160,0,255) |
+| Albedo as baked (mean 41 of 255) | reads as black in game; `tools/sprite3d/albedo_clean.py` fills the near-black texels and sets the median luma to 100 (the old `ALBEDO_GAMMA` 0.5 lift gave about 96) |
+| Bear rig with our flat BC5 normal + ORM (the wolf rig took them fine) | the whole body drew **black**. Two causes: the wrong BC5 format (above), and **the werebear material's own mask / thickness maps on our UVs**: with flat BC3-linear maps and the werebear mask the body was still black (also with a uniform grey albedo, so not the albedo); pointing `MaskTexture` / `ThicknessTexture` at the black `pig_sss` texture (what the Corrupted always did) lit it. The previous lane's `shared` werebear maps had hidden this |
 | Bear rig, werebear albedo too (UV mismatch test) | lit brown: geometry, normals and bone bindings are fine |
 
 Crash notes: three D2R instances at about 6.5 GB VRAM each exceed 16 GB, and a device lost in one game can take the others down;
@@ -305,11 +305,27 @@ neutral: stands on bent legs, torso leaning a little forward, arms at its sides,
 walk and run: a hunched forward stride (the bear's: the torso leans about 30 degrees, not a straight-backed human walk), big steps,
 the legs look long and thin under the heavy body; attack: head and shoulders lunge forward, the arms are hidden in the fur mass so
 the swipe reads as a body lunge; cast and get hit: a subtle bob and recoil.
-Known flaws: the owl is wider and its torso shorter than the bear, so the arms are carried up behind the head ruff and the legs
-are stretched between the owl's hip and the bear's (long thin shins); the ORM / normal maps are the bear's, not the owl's; the
-albedo is a noisy dark chart atlas (grey-brown with black patches, nearly black in shadow); no fur shell, no jaw / ear animation;
-automatic skinning (some shoulder stretch in swings). The wolf-rig screenshots for comparison: `checks-20261023-093955-s1`
-(`wolfrig_*`).
+Known flaws (before lane wereowl-quality): the owl is wider and its torso shorter than the bear, so the arms are carried up behind
+the head ruff and the legs are stretched between the owl's hip and the bear's (long thin shins); the albedo is a noisy dark chart atlas
+(grey-brown with black patches, nearly black in shadow); no fur shell, no jaw / ear animation; automatic skinning (some shoulder
+stretch in swings). The wolf-rig screenshots for comparison: `checks-20261023-093955-s1` (`wolfrig_*`).
+
+### Lane wereowl-quality (2026-10-23, slot 3, `morph_shots.py --tag t6 / h2`)
+Done: (1) the texture formats and the mask finding above: the Druid form uses our own flat BC3-linear normal / ORM and the black
+mask, and the body is lit (no black); (2) the albedo is cleaned (`tools/sprite3d/albedo_clean.py`: near-black and unseen texels
+inpainted, light denoise, median luma 100; the raw bake and its coverage map are kept in `assets/hd/wereowl/source/`);
+(3) skin weights come from Blender bone heat (`tools/sprite3d/owl_refit.py` + `owl_weights.py` -> `assets/hd/wereowl/druid_lods.npz`:
+voxel-remeshed proxy, 8 nearest proxy vertices, 20 smoothing rounds, 4 influences). Offline (linear blend skinning on the bear
+skeleton, synthetic idle / walk / swing / arms-up poses) the 99th percentile edge stretch fell from 1.36-1.54 (capsule weights)
+to 1.13-1.32; the 99.9th percentile is slightly worse in walk / swing (2.9-3.0 against 2.5-2.6: loose feather shells), the worst
+edge better (5.7-8.6 against 8.8-15).
+Not done: proportions. rig_fit gained per-segment stretch (`stretch` / `girth` / `rscale` profile fields, off for `bear`); with the
+current posed-joint table it changed the pose previews very little, so the owl is still wider and shorter than the bear. A real fix
+needs a regenerated or hand-sculpted mesh (shorter ruff, longer torso and legs, arms away from the head), not a refit.
+In game the swing deformation is hard to judge from the fixed camera crops; the new weights are not visibly worse than the capsule ones.
+The in-game brightness changes with the area light between runs (h2 is darker than t6 with the same files), so the before / after
+brightness in screenshots is not exact. The Corrupted Wereowl (`cheat mspawn 1985`) draws (white-blown with the cleaned albedo at
+gamma 1; its albedo gamma is 1.7 now, `ALBEDO_GAMMA` in `wereowl_models.py`, which looked balanced: dark fur, light chest).
 
 ## 4. Pipeline sketch: artist's Blender rig -> D2R unit
 

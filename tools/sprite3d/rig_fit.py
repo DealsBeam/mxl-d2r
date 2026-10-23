@@ -20,7 +20,10 @@ legs are short), so the method is:
 Profiles map the generic roles to the skeleton's bone names. Only the roles with weights end up in `bones`. Optional profile
 fields: `k` (the mesh is scaled by k first), `dz` (and moved by it along z), `posed` (joint roles of the mesh that replace the
 POSED table), `skip` (roles the skeleton has no bone for: the weight chains bridge them), `leg_snap` (False: the leg joints stay
-where `posed` puts them instead of at the scaled bind skeleton), `keep` ({axis: roles} carried without travel along that axis).
+where `posed` puts them instead of at the scaled bind skeleton), `keep` ({axis: roles} carried without travel along that axis),
+`stretch` (True: each segment is also scaled along its length by bind length / posed length, clipped to `smin` .. `smax`, with
+`girth` the exponent that shares that scale across the other two axes), `rscale` ({role: factor} extra uniform scale per role).
+The capsule weights are the fallback; the Druid form uses Blender bone heat weights made from this fit (owl_refit.py, owl_weights.py).
 """
 import json
 import sys
@@ -209,15 +212,28 @@ def fit(profile, bones, pos, nrm, tris, soft=2.0):
     idx = np.argsort(-W, axis=1)[:, 4:]
     np.put_along_axis(W, idx, 0, axis=1)
     W /= W.sum(1, keepdims=True)
-    # carry
+    # carry: per joint an affine map  b + M (v - c) / u  with M = R S (S stretches along the posed segment to the bind segment's
+    # length when the profile has `stretch`, its girth the stretch to the power `girth`; `rscale` scales whole roles)
+    stretch, girth, rscale = profile.get("stretch", False), profile.get("girth", 0.0), profile.get("rscale", {})
     out = np.zeros_like(pos)
     on = np.zeros_like(nrm)
     for j, k in enumerate(cols):
         b, c = inst[k][1], inst[k][3]
-        R = rot[k]
-        moved = b + ((pos - c) / u) @ R.T
+        M = rot[k].copy()
+        role = k.split("_", 1)[1] if k[:2] in ("R_", "L_") else k
+        if stretch and role not in NO_ROT:
+            seg = next(((ka, kb) for ka, kb, r in segs if ka == k and inst[kb][1] is not None), None)
+            if seg:
+                dp, db = inst[seg[1]][0] - inst[seg[0]][0], inst[seg[1]][1] - inst[seg[0]][1]
+                s = float(np.clip(np.linalg.norm(db) / np.linalg.norm(dp), profile.get("smin", 0.6), profile.get("smax", 1.9)))
+                g = s ** girth
+                d = dp / np.linalg.norm(dp)
+                M = M @ (g * np.eye(3) + (s - g) * np.outer(d, d))
+        if role in rscale:
+            M = M * rscale[role]
+        moved = b + ((pos - c) / u) @ M.T
         out += W[:, [j]] * moved
-        on += W[:, [j]] * (nrm @ R.T)
+        on += W[:, [j]] * (nrm @ np.linalg.inv(M))
     on /= np.linalg.norm(on, axis=1, keepdims=True) + 1e-9
     top = np.argsort(-W, axis=1)[:, :4]
     wts = np.take_along_axis(W, top, 1)
