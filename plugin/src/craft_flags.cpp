@@ -111,13 +111,27 @@ auto RecipeIndex(Game* game, const uint8_t* record) noexcept -> int32_t {
 }
 
 // Byte 1 (portal): the level of the recipe the slot belongs to. Row 2 and any slot this table does not know stay D2R's.
+// D2R's portal creator 0x432ce0 returns at once when the destination level is in another act than the room (`cmp bl, al` / `jnz` after
+// the two act lookups 0x143e2b5c8); the Cow Level (an act 1 level) has to be reachable from every town (audit CR6), so the jump is
+// replaced by a 6-byte nop. Every other caller makes same-act portals only (town portals, the cube's Red Portal, the plugin's own
+// level portals check the act before they call).
+constexpr uint64_t PortalActCheckRva = 0x432dd5;
+constexpr uint8_t PortalActCheckOriginal[] = {0x3a, 0xd8, 0x0f, 0x85, 0x8a, 0x01, 0x00, 0x00};
+constexpr uint8_t PortalActCheckPatched[] = {0x3a, 0xd8, 0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00};
+bool g_actCheckPatched = false;
+
 int64_t PortalHook(Game* game, Unit* player, const uint8_t* slot) {
 	int32_t recipe = 0, index = 0;
 	const uint8_t* first = g_record != nullptr && game != nullptr ? g_record(d2r::DataFlag(game), 0) : nullptr;
 	if (first != nullptr &&
 	    craft::SlotOf(reinterpret_cast<uintptr_t>(first), reinterpret_cast<uintptr_t>(slot), mxl_cube::RecipeCount, &recipe, &index)) {
 		const int32_t median = craft::PortalLevel(recipe, index);
-		if (median != 0 && median != CowLevelMedian) {
+		if (median == CowLevelMedian) {
+			const int cow = g_actCheckPatched ? CubeCowPortal(game, player) : -1;  // any town but Rogue Encampment (audit CR6); there D2R's own handler
+			if (cow >= 0) {
+				return cow;
+			}
+		} else if (median != 0) {
 			return CubeLevelPortal(game, player, median) ? 1 : 0;
 		}
 	}
@@ -216,8 +230,11 @@ auto InstallCraftFlags(const D2RL::PluginContext* context, char* report, size_t 
 	const bool ok = context->InstallInlineHook(ExecRva, ExecEntry, sizeof(ExecEntry), reinterpret_cast<void*>(&ExecHook),
 	                                           reinterpret_cast<void**>(&g_execOriginal));
 	const bool portals = ok && InstallPortalHandler(context->exeBase);
-	std::snprintf(report, reportSize, ok ? "on: %d output effects (gold, player and game flags), %s" : "off: hook failed",
+	g_actCheckPatched = portals && context->PatchBytes(PortalActCheckRva, PortalActCheckOriginal, sizeof(PortalActCheckOriginal), PortalActCheckPatched,
+	                                                   sizeof(PortalActCheckPatched));
+	std::snprintf(report, reportSize, ok ? "on: %d output effects (gold, player and game flags), %s%s" : "off: hook failed",
 	              static_cast<int>(sizeof(mxl_cube::Effects) / sizeof(mxl_cube::Effects[0])),
-	              portals ? "portal outputs by level" : "portal outputs left to D2R (handler table differs)");
+	              portals ? "portal outputs by level" : "portal outputs left to D2R (handler table differs)",
+	              g_actCheckPatched ? ", portals cross acts" : ", portals stay in their act");
 	return ok;
 }

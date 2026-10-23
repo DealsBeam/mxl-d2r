@@ -294,33 +294,39 @@ void __cdecl TransmuteOnUi(const D2RL::PluginContext*, void*) noexcept {
 // ---------------------------------------------------------------------------------------------------------------------------
 // 2. hotkeys
 
-auto __cdecl OnAction(const D2RL::PluginContext* context, const D2RL::Input::ActionEvent* event, void* userData) noexcept -> D2RL::Input::ActionResult {
-	if (context == nullptr || !D2RL::Input::HasActionEventField(event, D2RL::Input::ActionEventRequiredSize) ||
-	    event->kind != D2RL::Input::ActionEventKind::Pressed) {
-		return D2RL::Input::ActionResult::Ignored;
-	}
-	const auto which = static_cast<int>(reinterpret_cast<intptr_t>(userData));
+// One press of action `which` (0 pickup toggle, 1 map reveal, 2 transmute). The InputService callback and the harness verb `hotkey` both
+// come here, so a test drives exactly what a key press runs.
+auto PressAction(const D2RL::PluginContext* context, int which) noexcept -> bool {
 	switch (which) {
 	case 0:  // X
 		g_pickupPresses.fetch_add(1);
 		g_pickupOn.store(!g_pickupOn.load());
 		context->LogInfo(g_pickupOn.load() ? "mxl-core: auto pickup on (hotkey)" : "mxl-core: auto pickup off (hotkey)");
-		return D2RL::Input::ActionResult::Handled;
-	case 1:  // R
+		return true;
+	case 1:  // L
 		g_revealPresses.fetch_add(1);
 		if (g_mapRevealOn && g_threads != nullptr) {
 			g_threads->runOnUiThread(context, RevealOnUi, nullptr);
 		}
-		return D2RL::Input::ActionResult::Handled;
-	case 2:  // C
+		return true;
+	case 2:  // K
 		g_transmutePresses.fetch_add(1);
 		if (g_threads != nullptr) {
 			g_threads->runOnUiThread(context, TransmuteOnUi, nullptr);
 		}
-		return D2RL::Input::ActionResult::Handled;
+		return true;
 	default:
+		return false;
+	}
+}
+
+auto __cdecl OnAction(const D2RL::PluginContext* context, const D2RL::Input::ActionEvent* event, void* userData) noexcept -> D2RL::Input::ActionResult {
+	if (context == nullptr || !D2RL::Input::HasActionEventField(event, D2RL::Input::ActionEventRequiredSize) ||
+	    event->kind != D2RL::Input::ActionEventKind::Pressed) {
 		return D2RL::Input::ActionResult::Ignored;
 	}
+	return PressAction(context, static_cast<int>(reinterpret_cast<intptr_t>(userData))) ? D2RL::Input::ActionResult::Handled
+	                                                                                       : D2RL::Input::ActionResult::Ignored;
 }
 
 auto RegisterHotkeys(const D2RL::PluginContext* context) noexcept -> int {
@@ -538,6 +544,11 @@ auto TravelRevealNow() noexcept -> int {
 	return DoReveal();
 }
 
+// Test harness: the press of a hotkey action without the key (0 pickup, 1 reveal, 2 transmute); false = no such action or no context.
+auto TravelPressAction(int which) noexcept -> bool {
+	return g_context != nullptr && PressAction(g_context, which);
+}
+
 void TravelStatus(char* out, size_t outSize) noexcept {
 	std::snprintf(out, outSize, "%u waypoints activated (last: number %d, level %d, %u scans, pickup %s) | reveals %u (+%u cells) | keys pickup %u reveal %u transmute %u | transmutes %u (blocked %u, cube %s)",
 	              g_activated.load(), g_lastNumber.load(), g_lastLevel.load(), g_scans.load(), g_pickupOn.load() ? "on" : "off", g_reveals.load(),
@@ -545,7 +556,7 @@ void TravelStatus(char* out, size_t outSize) noexcept {
 	              g_cubeOpen.load() ? "open" : "closed");
 }
 
-auto TravelAutomap(uint64_t* cells, int* layer, int* revealFlag, int* layers) noexcept -> bool {
+auto TravelAutomap(uint64_t* cells, int* layer, int* revealFlag, int* layers, uint64_t* currentCells) noexcept -> bool {
 	if (g_base == 0) {
 		return false;
 	}
@@ -553,6 +564,9 @@ auto TravelAutomap(uint64_t* cells, int* layer, int* revealFlag, int* layers) no
 		*cells = AllCells(layers);
 		const auto* cur = *reinterpret_cast<uint8_t* const*>(g_base + CurLayerRva);
 		*layer = cur != nullptr ? d2r::At<int32_t>(cur, 0) : -1;
+		if (currentCells != nullptr) {
+			*currentCells = cur != nullptr ? LayerCells(cur) : 0;
+		}
 		*revealFlag = *reinterpret_cast<const uint8_t*>(g_base + RevealFlagRva);
 		return true;
 	} __except (EXCEPTION_EXECUTE_HANDLER) {

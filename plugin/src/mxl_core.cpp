@@ -96,7 +96,7 @@ char g_statRulesReport[320] = "off: not the expected game image";
 char g_trophyReport[200] = "off: not the expected game image";
 char g_missileHitsReport[1024] = "";
 char g_cubeReport[192] = "off: not the expected game image";
-char g_craftReport[96] = "off: not the expected game image";
+char g_craftReport[160] = "off: not the expected game image";
 char g_gameEndReport[96] = "off: not the expected game image";
 char g_mapMemoryReport[128] = "off: not the expected game image";
 char g_noCorpseReport[160] = "off: not the expected game image";
@@ -164,7 +164,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina statclick manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 respecbuffs lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -217,7 +217,7 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	if (command == nullptr || command->plugin == nullptr || g_context == nullptr) {
 		return D2RL::ConsoleCommandResult::Failed;
 	}
-	char line[256];
+	char line[384];
 	std::snprintf(line, sizeof(line), "mxl-core %s | D2R %s | image 0x%08x (expects 0x%08x, %s) | exe base 0x%llx",
 	              PluginVersion, g_context->buildVersion ? g_context->buildVersion : "?", ImageStamp(g_context),
 	              ExpectedImage, BuildMatches(g_context) ? "match" : "MISMATCH, hooks off",
@@ -257,7 +257,12 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	}
 	std::snprintf(line, sizeof(line), "cube conditions %s", g_cubeReport);
 	Say(command, line);
-	std::snprintf(line, sizeof(line), "craft flags %s", g_craftReport);
+	{
+		uint32_t cowOutside = 0, cowRefused = 0, noQuest = 0, flagSet = 0, noPortal = 0;
+		CowPortalCounts(&cowOutside, &cowRefused, &noQuest, &flagSet, &noPortal);
+		std::snprintf(line, sizeof(line), "craft flags %s | Cow portals outside act 1: %u opened, %u refused (quest not done %u, flag set %u, portal not created %u)", g_craftReport, cowOutside, cowRefused,
+		              noQuest, flagSet, noPortal);
+	}
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "game end %s (games ended %d)", g_gameEndReport, GameEndCount());
 	Say(command, line);
@@ -300,7 +305,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	{
 		int refused = 0, started = 0;
 		DungeonLockoutCounts(&refused, &started);
-		std::snprintf(line, sizeof(line), "dungeon lockout %s (refused %d, clocks started %d)", g_lockoutReport, refused, started);
+		std::snprintf(line, sizeof(line), "dungeon lockout %s (refused %d, clocks started %d, portals taken across acts %d)", g_lockoutReport, refused, started,
+		              DungeonActTravels());
 		Say(command, line);
 	}
 	{
@@ -553,8 +559,8 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		std::snprintf(line, sizeof(line), "mxl-core: heat %s", g_heatReport);
 		context->LogInfo(line);
 		{
-			const StatRulesParts parts{!Off("potionamounts"), !Off("stamina")};
-			if (!parts.potionAmounts && !parts.stamina) {
+			const StatRulesParts parts{!Off("potionamounts"), !Off("stamina"), !Off("statclick")};
+			if (!parts.potionAmounts && !parts.stamina && !parts.shiftClick) {
 				std::snprintf(g_statRulesReport, sizeof(g_statRulesReport), "%s", OffNote);
 			} else {
 				InstallStatRules(context, parts, g_statRulesReport, sizeof(g_statRulesReport));
@@ -640,7 +646,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 		{
-			char report[96];
+			char report[160];
 			if (Off("craftflags")) {
 				std::snprintf(report, sizeof(report), "%s", OffNote);
 			} else {
@@ -663,7 +669,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			if (Off("quests2")) {
 				std::snprintf(g_quests2Report, sizeof(g_quests2Report), "%s", OffNote);
 			} else {
-				InstallQuestsAct2To5(context, g_quests2Report, sizeof(g_quests2Report));
+				InstallQuestsAct2To5(context, !Off("respecbuffs"), g_quests2Report, sizeof(g_quests2Report));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: act 2-5 quests %s", g_quests2Report);
 			context->LogInfo(line);

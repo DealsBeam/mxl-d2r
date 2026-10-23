@@ -54,12 +54,16 @@ constexpr uint64_t UnitRoomRva = 0x34b440;     // (unit) -> room
 constexpr uint64_t PortalLevelRva = 0x34ad40;  // (portal object) -> destination level (word)
 constexpr uint64_t UnitMessageRva = 0x491960;  // (player, message, subject)
 constexpr uint64_t GetStatRva = 0x2f5020;      // (unit, stat, layer)
+constexpr uint64_t TravelRva = 0x4f2e40;       // (game, player, level, 0): the NPC travel / waypoint warp, it changes the act too
+constexpr uint64_t LevelActRva = 0x3e2b5c8;    // (dataFlag, level id) -> act
 
 // 0x491ff0: mov rax,rsp / push rbx / push rbp / push rdi / push r14 / sub rsp,0x68 / mov rbx,r8 (15 bytes; dump of
 // build 93847, timestamp 0x6ab3782c)
 constexpr uint8_t WarpEntry[] = {0x48, 0x8b, 0xc4, 0x53, 0x55, 0x57, 0x41, 0x56, 0x48, 0x83, 0xec, 0x68, 0x49, 0x8b, 0xd8};
 // 0x58f680: mov [rsp+8],rcx / push rbp rbx rsi rdi r14 r15 / mov rbp,rsp (16 bytes)
 constexpr uint8_t PortalEntry[] = {0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8b, 0xec};
+// 0x4f2e40: mov [rsp+8],rbx / mov [rsp+16],rbp / mov [rsp+32],rsi / push rdi (16 bytes)
+constexpr uint8_t TravelEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57};
 
 constexpr int GameDifficulty = 0x104;  // byte
 constexpr int GameFrame = 0x170;       // u32
@@ -77,6 +81,8 @@ using UnitRoomFn = void* (*)(Unit* unit);
 using PortalLevelFn = uint16_t (*)(Unit* portal);
 using UnitMessageFn = void (*)(Unit* player, int32_t message, Unit* subject);
 using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
+using TravelFn = void (*)(Game* game, Unit* player, int32_t level, int32_t zero);
+using LevelActFn = uint8_t (*)(uint32_t dataFlag, int32_t level);
 using QuestBitFn = int32_t (*)(void* record, int32_t quest, int32_t bit);
 using UnitBySlotFn = Unit* (*)(uint32_t slot);
 
@@ -90,6 +96,9 @@ PortalLevelFn g_portalLevel = nullptr;
 UnitMessageFn g_unitMessage = nullptr;
 GetStatFn g_getStat = nullptr;
 QuestBitFn g_questBit = nullptr;
+TravelFn g_travel = nullptr;  // null when the entry bytes of 0x4f2e40 are not the expected ones
+LevelActFn g_levelAct = nullptr;
+int g_actTravels = 0;
 
 std::mutex g_mutex;
 dungeon::Lockout g_lockout;
@@ -197,8 +206,8 @@ auto Allowed(Game* game, Unit* player, int32_t src, int32_t dst) noexcept -> boo
 }
 
 // After an allowed move: the clock of the level the player now stands in.
-void Entered(Game* game, Unit* player, int32_t src) noexcept {
-	const int32_t now = LevelOf(player);
+void Entered(Game* game, Unit* player, int32_t src, int32_t arriving = 0) noexcept {
+	const int32_t now = arriving > 0 ? arriving : LevelOf(player);
 	if (now <= 0 || now == src) {
 		return;
 	}
@@ -370,6 +379,18 @@ int64_t PortalHook(int64_t* ctx) {
 	if (dst > 0 && !Allowed(game, player, src, dst)) {
 		return 0;
 	}
+	// A portal into another act's level (the Cow Level portal made in any town, the way back out of it): D2R's operate function
+	// only moves inside the act it stands in (generating an act 1 level inside act 5's level data ends the process), so the
+	// move is the NPC travel's, which sets the act up.
+	if (g_travel != nullptr && dst > 0 && src > 0) {
+		const auto flag = d2r::At<uint8_t>(game, d2r::GameDataFlag);
+		if (g_levelAct(flag, dst) != g_levelAct(flag, src)) {
+			g_travel(game, player, dst, 0);
+			++g_actTravels;
+			Entered(game, player, src, dst);
+			return 1;
+		}
+	}
 	const int64_t moved = g_portalOriginal(ctx);
 	if (moved != 0) {
 		Entered(game, player, src);
@@ -405,6 +426,10 @@ void DungeonLockoutCounts(int* refused, int* started) noexcept {
 	*started = g_started;
 }
 
+auto DungeonActTravels() noexcept -> int {
+	return g_actTravels;
+}
+
 auto InstallDungeonLockout(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
 	g_context = context;
 	RegisterGameEnd(&ForgetGame);
@@ -422,8 +447,12 @@ auto InstallDungeonLockout(const D2RL::PluginContext* context, char* report, siz
 	                                               reinterpret_cast<void*>(&PortalHook),
 	                                               reinterpret_cast<void**>(&g_portalOriginal));
 	const bool timer = InstallTimerOverlay(context);
-	std::snprintf(report, reportSize, "%s: %d levels; tile warps %s, portals %s, countdown %s", warp && portal ? "on" : "partly off",
+	g_levelAct = reinterpret_cast<LevelActFn>(base + LevelActRva);
+	g_travel = std::memcmp(reinterpret_cast<const void*>(base + TravelRva), TravelEntry, sizeof(TravelEntry)) == 0
+	               ? reinterpret_cast<TravelFn>(base + TravelRva)
+	               : nullptr;
+	std::snprintf(report, reportSize, "%s: %d levels; tile warps %s, portals %s (across acts %s), countdown %s", warp && portal ? "on" : "partly off",
 	              static_cast<int>(mxl_dungeons::EntryCount), warp ? "on" : "hook failed", portal ? "on" : "hook failed",
-	              timer ? "on screen" : "in chat lines only");
+	              g_travel != nullptr ? "by travel" : "refused: entry bytes differ", timer ? "on screen" : "in chat lines only");
 	return warp && portal;
 }
