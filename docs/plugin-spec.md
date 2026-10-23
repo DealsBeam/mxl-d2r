@@ -852,6 +852,13 @@ animation length at 100 + stat 68 + IAS (stat 93, no diminishing returns, no cap
 The hook on 0x56ac00 (only Whirlwind calls it) rescales D2R's length to 1.13c's speed and applies the table; it
 logs stat 68 / IAS / both speeds for the first hits, to confirm whether D2R's stat 68 carries the base 100 that
 1.13c adds itself (the code assumes so when stat 68 >= 100). Word `whirlwind` in mxl-core-off.txt turns it off.
+
+Chance to cast during a spin (mxl-core 0.63.0, `InstallWhirlwindProcs`, word `wwproc`, `mxl` line `whirlwind procs`). D2R has the
+bug Median fixes: D2RCore's function 20 (chance to cast on striking 198 / on attack 195) calls the exe's item cast `0x5896e0(caster,
+skill, level, target, flag)`, which returns 0 when the caster has state 54 `uninterruptable` (`0x2f6220` bit test on the stat list's
+state array), and a spin holds states 54 and 174 `whirlwind`. The detour on `0x5896e0` (expected-byte check) clears the state-54 bit
+only when state 174 is on, calls the original and restores the bit; `mxl` counts casts let through and refused. Other holders of
+state 54 keep D2R's refusal; the target-less cast `0x589820` is not hooked. Check `wwproc`, control `MXL_CONTROL=wwproc`.
 Data side: anim/seqtrans SQ, plrmode SQ/KB, D2R's stop functions, the overlay Character column and the HD state
 machine copies (txt-migrate.md, tools/hd_skill_anims.py).
 
@@ -1067,7 +1074,7 @@ the `mxl` line says why).
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind cube craftflags quests quests2 waypoints wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem mercrevive questxp questrewards`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind wwproc cube craftflags quests quests2 waypoints wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem mercrevive questxp questrewards`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500

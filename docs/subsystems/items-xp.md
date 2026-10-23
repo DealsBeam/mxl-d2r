@@ -298,6 +298,9 @@ How it works (read in the game with the harness verb `evtrace`, and in `D2RCore.
   skill 47 level 10); function 20 itself works for real skills (861 -> 64 class-3456 missiles, 855 -> 64 class-3124 missiles,
   Fire Bolt 36 -> a class-58 missile). Check `itemevents` asserts all of this; a cast-on-kill of Teleport 54 reaches the handler
   with warp 1 but the player was not seen to move (not investigated).
+- **Whirlwind (lane p4-ww-morph, plugin 0.63.0).** Function 20 is native to D2RCore and calls the exe's item cast `0x5896e0`, which
+  refuses while the caster has state 54; a Whirlwind spin holds it, so no strike of a spin cast anything. The plugin's detour
+  (`whirlwind.cpp`, word `wwproc`) clears the bit during the cast when state 174 is on. Check `wwproc`.
 - **Not ported / open**, listed in docs/unported.md: function 32 (no stat of the mod's itemstatcost uses it).
 - **Harness.** `evtrace on|off|clear|dump` (thunk-slot logger), `list`, `rec <stat>` (the record's event words), `peek`, `watch`
   (debug-register watch), `fire <event> player|m<id> player|m<id>|none` (calls `0x44d570`; the harness's `kill` does not raise the
@@ -360,8 +363,8 @@ references by raw bytes, which finds callers in code Ghidra did not disassemble)
 
 ## 10. Uncertainties
 
-- The item event ids: 10 / 11 / 12 are D2RCore's own handlers, verified for 11 (thorns 397) only; 12 (cold, 396) and 10 are
-  expected to behave the same (same code path, different damage field).
+- The item event ids: 10 / 11 / 12 are D2RCore's own handlers; thorns 397 (11), 396 (12) and 128 (10) are all verified in game
+  (`itemevents`, lane p4-quests-verify: each takes 50 points off the attacker).
 - The `0x7e240` socket arithmetic and `0x7e120` die are read from decompiler output with register arguments; treat as
   inferred.
 - Whether D2R's inline hook relocates the `jg rel32` that follows the first 9 bytes of `0x44fef0` (the SDK source is
