@@ -1,10 +1,10 @@
 import sys
 from collections import defaultdict
 sys.path.insert(0, "tools")
-from func_slots import read, V113, D2R, SKILL_COLS, MISSILE_COLS, ROOT
+from func_slots import read, vanilla, D2R, SKILL_COLS, MISSILE_COLS, ROOT
 named = ROOT / "work" / "named"
 for table, cols, key in (("skills.txt", SKILL_COLS, "skill"), ("missiles.txt", MISSILE_COLS, "Missile")):
-    vh, vr = read(V113 / table); dh, dr = read(D2R / table); mh, mr = read(named / table)
+    vh, vr = vanilla(table); dh, dr = read(D2R / table); mh, mr = read(named / table)
     vn = {r[vh.index(key)] for r in vr}
     for c in cols:
         if c not in mh:
