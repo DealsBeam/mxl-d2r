@@ -71,6 +71,9 @@ synchronise. TCP/IP with two clients was **not tested** (docs/unported.md row "S
 
 ## 7. Not built: pages 3-10, Mode, Sort (what remains)
 
+Owner decision (2026-10-23): the personal stash stays at 2 pages for now. Not pursued: a D2RLoader feature request for more
+custom pages, and the sidecar below.
+
 * **Pages 3-10:** needs "parked" pages: on a page switch, move all items of page 2 into a plugin-owned store and fill page 2 from
   the store for the new page; the store would have to be written next to the `.d2s` atomically and recovered at load. Risk: loss
   on crash between the two steps; vanilla tools would not see parked items. Not done because no safe supported way exists.
