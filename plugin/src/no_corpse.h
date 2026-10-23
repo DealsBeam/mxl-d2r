@@ -12,6 +12,13 @@ void NoCorpseRememberImage(const D2RL::PluginContext* context) noexcept;
 // hooks are installed (report says which). Off word: nocorpse.
 auto InstallNoCorpse(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;
 
+// Soulstealer bosses (the monsters of mxl_soulstealer.h) heal 1/10 of their max life when they kill a player (audit DC5): the
+// death penalty hook of InstallNoCorpse calls it with the killer. Needs those hooks. Off word: soulstealer.
+auto InstallSoulstealer(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;
+
+// Heals done since the plugin loaded; returns whether the part is on. For the `mxl` command and the harness `state`.
+auto SoulstealerHeals(long* heals, long* deaths, long* lastType, long* lastClass, long* lastLife, long* lastMax) noexcept -> bool;
+
 // Holds the respawn request (client packet 0x41, handler 0x4b6160) back until 5 s after the death. Needs the death stamps
 // of InstallNoCorpse's hooks. Off word: respawnwait.
 auto InstallRespawnWait(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;

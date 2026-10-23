@@ -16,7 +16,7 @@ skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap sk
 cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes
-respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick.
+respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick soulstealer.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -2187,7 +2187,9 @@ def have_merc():
 def ensure_merc():
     """A hired mercenary (Kashya, act 1 Rogue) standing next to the player in the field. Starts from any state of the character: a
     dead character is revived first (it cannot hire), the old mercenary may be dead or missing (the hire replaces it), gold is
-    set, the hire quest is set, and when the server refuses one list entry the next free one is tried."""
+    set, the hire quest is set, the hirer's list is made again for every hire (as the client's hire menu does: a list made long before
+    is the suspected cause of the one full-suite run where the server refused all entries), and when the server refuses one list
+    entry the next free one is tried."""
     revive_if_dead()
     if not have_merc():
         for attempt in range(3):
@@ -2198,7 +2200,7 @@ def ensure_merc():
             H("quest 2 0 set")  # Kashya hires once Blood Raven is dead (Median's gate is the quest alone)
             hired = False
             for n in range(6):  # `hire` counts the free entries of the list (hired / unavailable ones are skipped)
-                ok, lines = H("hire 150 %d" % n)
+                ok, lines = H("hire 150 %d reopen" % n)
                 if ok:
                     hired = True
                     break
@@ -2212,6 +2214,15 @@ def ensure_merc():
                     time.sleep(1)
             if hired or have_merc():
                 break
+            # The server refused every entry (seen once in a full suite, when the character had stood in town a long time with a
+            # corpse record and a hire list made long before): start the hire over from a fresh state - a hirer copy next to the
+            # character (the handler checks the distance), then a new town entry (the hire lists are rebuilt per game session).
+            g.log("ensure_merc: attempt %d refused, state: %s" % (attempt, hstate()["player"]))
+            H("spawn 150")
+            time.sleep(3)
+            if attempt >= 1:
+                goto(2)
+                time.sleep(3)
             time.sleep(2)
     if not have_merc():
         return False
@@ -8938,7 +8949,7 @@ def _ground_drops(seen):
 
 
 def check_dropilvl():
-    name = "Drop item level (audit IT16 / DF10): a monster's drops do not take the town's level: the same after a trip to town as without one"
+    name = "Drop item level (audit IT16 / DF10): a monster's drops take the item level of the area it was found in (its monster level), not the town's, with and without a town trip"
     if not need_game():
         return add(name, "BLOCKED", "not in a game")
     areas, mons = _monlevel_tables()
@@ -8964,7 +8975,7 @@ def check_dropilvl():
                 H("remove %s" % code)
         rows.append("reader check (items created with ilvl 1 / 33 / 77 / 100 / 150 / 255 read): %s" % calib)
         log.append(rows[-1])
-        reader_follows = any(w == g_ for _, w, g_ in calib)  # False: the generator gives every item the same level whatever is asked
+        reader_follows = all(w == g_ for _, w, g_ in calib)  # False: the generator gives every item the same level whatever is asked
 
         def drops_in(area, diff, trip):
             """Kills 4 monsters of a class with a treasure class, several times; returns (item levels, monster levels, drops)."""
@@ -8992,7 +9003,7 @@ def check_dropilvl():
             log.append("area %d diff %d trip %s: drops %s" % (area, diff, trip, sorted({(d["code"] if "code" in d else d.get("class"), int(d["ilvl"])) for d in drops}, key=str)[:14]))
             return sorted({int(d["ilvl"]) for d in drops}), sorted(levels), len(drops)
 
-        for area, diff in ((2, 0), (76, 2)):
+        for area, diff in ((2, 0), (76, 0), (2, 2), (76, 2)):  # town-adjacent and deep, Normal and Hell
             straight = drops_in(area, diff, False)
             trip = drops_in(area, diff, True)
             want, town = areas[area][diff], areas[1][diff]
@@ -9005,14 +9016,96 @@ def check_dropilvl():
                 bad.append("a trip to town changed the item levels: %s" % rows[-1])
             elif town != want and trip[0] == [town]:
                 bad.append("the drops carry the town's level %d: %s" % (town, rows[-1]))
+            elif straight[1] != [want] or trip[1] != [want]:
+                bad.append("monster level is not the area level %d: %s" % (want, rows[-1]))
+            elif straight[0] != [want] or trip[0] != [want]:
+                bad.append("the drops are not at the area level %d (Median: the monster's level = the area level): %s" % (want, rows[-1]))
     finally:
         H("difficulty 0")
         goto(1)
         god(False)
-    status = "FAIL" if bad else ("PASS" if reader_follows else "PARTIAL")
-    if status == "PARTIAL":
-        rows.append("PARTIAL because the item levels do not vary with the area: every item the harness makes or a monster drops reads the same level, so this run shows only that the town's level does not appear")
+    if not reader_follows:
+        bad.append("the item level reader returned the same level for every item created with a different `ilvl=`")
+    status = "FAIL" if bad else "PASS"
     add(name, status, "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
+
+
+def check_soulstealer():
+    name = "Soulstealer heal (audit DC5): a Soulstealer boss that kills a player heals 10% of its max life, an ordinary monster does not"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    txt = mxl_text()
+    # Control run: mxl-core-off.txt word `soulstealer` - the plugin leaves the heal out and a boss that kills a player must not heal.
+    control = "soulstealer off: left out by mxl-core-off.txt" in txt
+    if not control and "soulstealer on:" not in txt:
+        return add(name, "BLOCKED", "`mxl` does not say `soulstealer on:`: %s" % next((l for l in txt.splitlines() if "soulstealer" in l), "no soulstealer line"))
+    log, rows, bad = [], [], []
+
+    def heals():
+        m = re.search(r"soulstealer on:.*heals (\d+)", mxl_text())
+        return int(m.group(1)) if m else -1
+
+    def trial(label, classes, expect_heal):
+        revive_if_dead()
+        fight_ready()
+        cls, ref, top = None, None, 0
+        for cls in classes:  # the first class that spawns with a life stat (some Soulstealer rows are placeholders)
+            ids = _spawn_ids(cls, 1)
+            ref = "mon:%d" % ids[0] if ids else None
+            top = rd(ref, 7) if ref else 0
+            if top:
+                setstat(ref, 6, top * 3 // 10)
+                time.sleep(2.5)  # a monster that regenerates by itself (or is healed by its own script) cannot show the kill heal
+                if rd(ref, 6) <= top * 0.35:
+                    break
+                log.append("%s: class %d healed itself from 30%% to %d%% with no kill" % (label, cls, 100 * rd(ref, 6) // top))
+                top = 0
+                continue
+            log.append("%s: class %d %s" % (label, cls, "did not spawn" if not ids else "has no max life (%s)" % ref))
+        if not top:
+            bad.append("%s: none of the classes %s spawned with a max life" % (label, list(classes)))
+            return
+        setstat(ref, 6, top * 3 // 10)  # 30% life, room to heal
+        before, n0 = rd(ref, 6), heals()
+        setstat("player", 7, BIG_LIFE)  # (a boss with life leech would otherwise heal from the damage it deals, which hides the kill heal)
+        setstat("player", 6, 256)  # 1 life point: the killing blow deals ~1 point, so a boss's own life leech cannot refill it before the heal
+        killed = False
+        for _ in range(4):
+            ok, line, lines = hv("hit player phys 2000000000 %s" % ref, "hit")
+            log.extend(lines)
+            time.sleep(1.5)
+            if player_dead(hstate()["player"]):
+                killed = True
+                break
+            setstat("player", 6, 256)  # 1 life point: the killing blow deals ~1 point, so a boss's own life leech cannot refill it before the heal
+        after, n1 = rd(ref, 6), heals()
+        gain = after - before
+        rows.append("%s (class %d, max life %d raw): player killed %s; boss life %d -> %d (gain %.1f%% of max); heals counter %d -> %d" % (
+            label, cls, top, killed, before, after, 100.0 * gain / top, n0, n1))
+        log.append(rows[-1])
+        if not killed:
+            bad.append("%s: the player did not die" % label)
+        elif expect_heal and control:
+            if gain > 0.02 * top:
+                bad.append("%s: part off but the boss healed: %s" % (label, rows[-1]))
+        elif expect_heal and not (0.09 * top <= gain <= 0.12 * top and n1 == n0 + 1):
+            bad.append("%s: expected a heal of about 10%% of max life and one counted heal: %s" % (label, rows[-1]))
+        elif not expect_heal and (gain > 0.02 * top or n1 != n0):
+            bad.append("%s: an ordinary monster healed: %s" % (label, rows[-1]))
+        revive_if_dead()
+
+    try:
+        # Zagraal and Kabraxis (Median: Soulstealer bosses). The Leoric row (2907) refills itself to full life when it kills a player
+        # (a script of its own, measured: 30% -> 100% with no plugin heal counted), so it cannot show the 10% rule.
+        for boss in (2049, 1852):
+            trial("Soulstealer boss %d" % boss, (boss,), True)
+        trial("control, ordinary monster", (719,), False)
+    finally:
+        revive_if_dead()
+        goto(1)
+    if control:
+        name = "Soulstealer heal (audit DC5), CONTROL with the part off (mxl-core-off.txt `soulstealer`): a boss that kills a player does not heal"
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
 
 
 def check_cowtowns():
@@ -9849,7 +9942,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("arealevel", check_arealevel),
           ("bugfixes", check_bugfixes),
           # lane p4-verify-a
-          ("respecbuffs", check_respecbuffs), ("signet", check_signet), ("dropilvl", check_dropilvl), ("cubehotkey", check_cubehotkey),
+          ("respecbuffs", check_respecbuffs), ("signet", check_signet), ("dropilvl", check_dropilvl), ("soulstealer", check_soulstealer), ("cubehotkey", check_cubehotkey),
           ("cowtowns", check_cowtowns), ("freerespec", check_freerespec), ("grit", check_grit), ("statclick", check_statclick)]
 
 
