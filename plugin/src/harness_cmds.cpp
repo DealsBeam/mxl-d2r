@@ -18,6 +18,7 @@
 #include "engine_gaps.h"
 #include "engine_gaps_logic.h"
 #include "gamble_logic.h"
+#include "vendor_stock.h"
 #include "goblins.h"
 #include "hirelings.h"
 #include "hirelings_logic.h"
@@ -3635,16 +3636,34 @@ auto CmdLevelAct(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 
 // `shop [npc class]`: the inventory of the nearest vendor (the server builds it when a player opens the trade panel: `interact <npc>`,
 // then `menu <Trade line>`); bug #18 buys through the panel itself (a right click), see tools/game_checks.py check_vendors.
+//
+// `shop <class> restock` marks the stock stale (byte +0x35 of the NPC's shop state, (game, npc, &scratch) 0x502b70; the trade request 0x540850 clears and
+// rebuilds a stale stock for a single player), so the next trade panel is built for the player's level and difficulty as they are now.
+// The stock is otherwise built once per game, which a check that changes the level between two shops needs to get around.
 auto CmdShop(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long cls = -1;
 	if (t.n > 1 && !hcmd::ParseInt(t.tok[1], &cls)) {
-		return Fail(c, "usage: shop [npc class]");
+		return Fail(c, "usage: shop [npc class] [restock]");
 	}
 	Unit* npc = NearestMonster(c, cls, true);
 	if (npc == nullptr) {
 		return Fail(c, "shop: no such NPC alive in this area");
 	}
-	Out("shop npc id=%u class=%d", IdOf(npc), ClassOf(npc));
+	if (t.n > 2 && hcmd::LowerEq(t.tok[2], "restock")) {
+		uint8_t scratch[8] = {};
+		uint8_t* state = Fn<uint8_t* (*)(Game*, Unit*, void*)>(RvaNpcMercList)(c->game, npc, scratch);
+		if (state == nullptr) {
+			return Fail(c, "shop: the NPC has no shop state");
+		}
+		state[0x35] = 1;
+		Out("shop restock marked for npc id=%u (built %d)", IdOf(npc), static_cast<int>(state[0x34]));
+		return true;
+	}
+	{
+		const VendorStockTrace trace = VendorStockTraceNow();
+		Out("shop npc id=%u class=%d | stock builds %ld, last item level %d -> %d (cap), difficulty %d", IdOf(npc), ClassOf(npc), trace.builds,
+		    trace.ilvlIn, trace.ilvlOut, trace.difficulty);
+	}
 	int items = 0;
 	EachItemOf(npc, [&](Unit* it) {
 		++items;

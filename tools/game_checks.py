@@ -1895,6 +1895,7 @@ def check_replacedskills():
         H("unequip " + slot_)
     # The skills want weapon types (itypea1): vampiric_strike / batstrike_2 h2h (claw, j20 has no requirements), deathgaze axe (115),
     # hammer_of_zerae / power_shift blun (mace 124).
+    cls0 = hstate()["player"].get("class") or 0
     weapon_of = {"vampiric_strike": "j20", "batstrike_2": "j20", "deathgaze": "115", "hammer_of_zerae": "124", "power_shift": "124"}
     wielded = {"code": ""}
 
@@ -1902,6 +1903,7 @@ def check_replacedskills():
         code = weapon_of[name]
         if wielded["code"] != code:
             H("unequip rhand")
+            H("class %d" % (6 if code == "j20" else cls0))  # claws are assassin-only
             ok_w, _lw = H("equip %s q=2 rhand" % code)
             wielded["code"] = code if ok_w else ""
             if not ok_w:
@@ -1954,12 +1956,94 @@ def check_replacedskills():
     notes.append("power_shift (slot 73): cast %s, casts +%d, swaps +%d, missile classes %s" % ("OK" if ok else "FAIL", d[2], d[3], classes))
     if not ok or d[2] < 1 or not classes:
         problems.append("power_shift: cast %s, casts +%d, classes %s" % (ok, d[2], classes))
+    H("class %d" % cls0)
     alive = hstate()["ok"]
     god(False)
     kill_all_near()
     if not alive:
         problems.append("the game is gone")
     add(nm, "PASS" if not problems else "FAIL", ("%s | " % "; ".join(problems) if problems else "") + " | ".join(notes), shots, log)
+
+
+def _vendor_codes():
+    """Codes of weapons and armor rows in the built tables (the vendor's potions and scrolls are always in stock and not counted)."""
+    codes = set()
+    for tbl in ("weapons.txt", "armor.txt"):
+        rows = _tsv(os.path.join(BUILT_EXCEL, "base", tbl))
+        ci = rows[0].index("code")
+        codes.update(r[ci].strip() for r in rows[1:] if len(r) > ci and r[ci].strip())
+    return codes
+
+
+def check_vendorstock():
+    """Audit item 'Vendor stock rules (npcstores, D2NPC_10093f90)'. Median's stock builder (D2NPC 0x10093a30): item level
+    ilvl = player level + 5, in Normal and Nightmare at most the act's last area (Act 1: levels row 35, MonLvl1Ex / 2Ex = 15 / 63)
+    + 5; every item needs its base level <= ilvl; normal copies only while ilvl < 25 (NormalAreaLevelHigh); magic copies rand in
+    [MagicMin, MagicMax] (3 at most) at that item level. D2R's builder (0x53c9f0) has the same shape, with its own cap (Normal
+    only), a MagicLvl threshold per item (txt_migrate wrote 25 into it from the wrong npcstores byte) and 1 to 2 extra magic
+    copies above item level 24."""
+    nm = "Vendor stock (Charsi, Act 1): item level cap, magic stock at low levels, normal copies below item level 25, magic copies at most 3"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    gear = _vendor_codes()
+    st0 = hstate()["player"]
+    lvl0 = st0.get("level") or 1
+    mdiff = re.search(r"difficulty = (\d)", " ".join(H("difficulty")[1]))
+    diff0 = int(mdiff.group(1)) if mdiff else 0
+    median_cap = {0: 15 + 5, 1: 63 + 5}
+    rows, bad, log = [], [], []
+    try:
+        for diff in (0, 1, 2):
+            for clvl in (10, 40, 90):
+                H("difficulty %d" % diff)
+                H("stat player 12 set %d" % clvl)
+                close_menu()
+                menu = npc_menu_near(154)
+                if menu is None:
+                    bad.append("diff %d level %d: no Charsi menu" % (diff, clvl))
+                    continue
+                H("shop 154 restock")
+                H("menu 1")
+                time.sleep(2.5)
+                ok, lines = H("shop 154")
+                items = [kv(l) for l in lines if l.startswith("item ")]
+                trace = re.search(r"last item level (-?\d+) -> (-?\d+) \(cap\), difficulty (-?\d+)", " ".join(lines))
+                g.click(*TRADE_CLOSE)
+                time.sleep(0.8)
+                close_menu()
+                geared = [it for it in items if it.get("code", "").strip() in gear]
+                magic = [it for it in geared if it.get("quality") == "4"]
+                normal = [it for it in geared if it.get("quality") == "2"]
+                per_code = {}
+                for it in magic:
+                    per_code[it["code"]] = per_code.get(it["code"], 0) + 1
+                # The item level the builder used: the cap function's result (the items' own ilvl field reads 101 for every item
+                # of this build, see docs/vendors.md).
+                top = int(trace.group(2)) if trace else 0
+                cap = min(clvl + 5, median_cap.get(diff, 999))
+                line = "diff %d level %d: %d weapons/armor (%d normal, %d magic), builder item level %d (in %s, Median %d), most copies of one magic code %d" % (
+                    diff, clvl, len(geared), len(normal), len(magic), top, trace.group(1) if trace else "?", cap, max(per_code.values()) if per_code else 0)
+                rows.append(line)
+                log.append(line)
+                if not geared:
+                    bad.append("diff %d level %d: no weapons or armor in stock" % (diff, clvl))
+                    continue
+                if top > cap:
+                    bad.append("diff %d level %d: item level %d above Median's cap %d" % (diff, clvl, top, cap))
+                if clvl == 10 and not magic:
+                    bad.append("diff %d level 10: no magic items (Median stocks them from the item's base level up)" % diff)
+                if cap >= 25 and normal:
+                    bad.append("diff %d level %d: %d normal weapons/armor at item level %d (Median stops at 25)" % (diff, clvl, len(normal), cap))
+                if per_code and max(per_code.values()) > 3:
+                    bad.append("diff %d level %d: %d copies of one magic item (Median at most 3)" % (diff, clvl, max(per_code.values())))
+    finally:
+        H("stat player 12 set %d" % lvl0)
+        H("difficulty %d" % diff0)
+        close_menu()
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:1800], [], log)
 
 
 def check_warprevisit():
@@ -9050,7 +9134,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
+          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),

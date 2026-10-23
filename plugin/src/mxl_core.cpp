@@ -47,6 +47,7 @@
 #include "dungeon_lockout.h"
 #include "engine_gaps.h"
 #include "gamble.h"
+#include "vendor_stock.h"
 #include "unique_limits.h"
 #include "goblins.h"
 #include "monster_ai.h"
@@ -130,6 +131,7 @@ char g_tooltipProbeReport[256] = "off: test harness only";
 char g_stashPagesReport[256] = "off: not the expected game image";
 char g_buffIconsReport[256] = "off: not the expected game image";
 char g_gambleReport[192] = "off: not the expected game image";
+char g_vendorStockReport[256] = "off: not the expected game image";
 char g_uniqueLimitsReport[192] = "off: not the expected game image";
 char g_engineGapsReport[256] = "off: not the expected game image";
 char g_itemEventsReport[448] = "off: not the expected game image";
@@ -165,7 +167,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits vendorstock
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -397,6 +399,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "combat %s", g_combatReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "gamble %s", g_gambleReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "vendorstock %s", g_vendorStockReport);
 	Say(command, line);
 	{
 		unique_limits::Counts counts = {};
@@ -883,6 +887,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallGamble(context, g_gambleReport, sizeof(g_gambleReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: gamble %s", g_gambleReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("vendorstock")) {
+				std::snprintf(g_vendorStockReport, sizeof(g_vendorStockReport), "%s", OffNote);
+			} else {
+				InstallVendorStock(context, g_vendorStockReport, sizeof(g_vendorStockReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: vendor stock %s", g_vendorStockReport);
 			context->LogInfo(line);
 		}
 		{

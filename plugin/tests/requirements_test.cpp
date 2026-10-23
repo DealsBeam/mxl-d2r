@@ -23,6 +23,7 @@ int RunItemsExtTests();  // items_ext_test.cpp
 int RunItemGenTests();  // item_gen_test.cpp
 int RunItemRulesTests();  // item_rules_test.cpp
 int RunGambleTests();  // gamble_test.cpp
+int RunVendorStockTests();  // vendor_stock_test.cpp
 int RunUniqueLimitsTests();  // unique_limits_test.cpp
 int RunEngineGapsTests();  // gamble_test.cpp
 int RunWaypointsTests();  // waypoints_test.cpp
@@ -154,6 +155,7 @@ int main() {
 	failures += RunItemGenTests();
 	failures += RunItemRulesTests();
 	failures += RunGambleTests();
+	failures += RunVendorStockTests();
 	failures += RunUniqueLimitsTests();
 	failures += RunEngineGapsTests();
 	failures += RunWaypointsTests();
