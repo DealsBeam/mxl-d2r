@@ -91,6 +91,17 @@ int main() {
 	FormatPickupReport(pk, sizeof(pk), 1, 0, 0);
 	Check(std::strstr(pk, "picked 1, kept 0, faults 0") != nullptr && std::strstr(pk, "0x485350") != nullptr, "pickup report");
 
+	// Soulstealer: only monster killers from the list heal, 10% of max life, never above the maximum
+	Check(IsSoulstealer(1913) && IsSoulstealer(2907) && IsSoulstealer(2049) && !IsSoulstealer(0) && !IsSoulstealer(1914), "soulstealer list");
+	Check(SoulstealerHeals(UnitTypeMonster, 1913) && !SoulstealerHeals(UnitTypeMonster, 1914) && !SoulstealerHeals(0, 1913) &&
+	          !SoulstealerHeals(-1, 1913),
+	      "heals only for a Soulstealer monster killer");
+	Check(SoulstealerLife(1000, 10000) == 2000 && SoulstealerLife(9500, 10000) == 10000 && SoulstealerLife(10000, 10000) == 10000 &&
+	          SoulstealerLife(0, 0) == 0 && SoulstealerLife(2147483000, 2147483647) == 2147483647,
+	      "10% of max life, clamped");
+	FormatSoulstealerReport(line, sizeof(line), 2);
+	Check(std::strstr(line, "heal 1/10 of max life") != nullptr && std::strstr(line, "heals 2") != nullptr, "soulstealer report");
+
 	if (failures == 0) {
 		std::printf("no_corpse tests: ok\n");
 	}

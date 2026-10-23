@@ -110,6 +110,7 @@ char g_gameEndReport[96] = "off: not the expected game image";
 char g_mapMemoryReport[128] = "off: not the expected game image";
 char g_noCorpseReport[160] = "off: not the expected game image";
 char g_respawnWaitReport[160] = "off: not the expected game image";
+char g_soulstealerReport[200] = "off: not the expected game image";
 char g_corpsePickupReport[200] = "off: not the expected game image";
 char g_cooldownsReport[320] = "off: not the expected game image";
 char g_questsReport[192] = "off: not the expected game image";
@@ -176,7 +177,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits vendorstock npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits vendorstock npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -314,6 +315,14 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		std::snprintf(line, sizeof(line), "no corpse %s", report);
 		Say(command, line);
 		std::snprintf(line, sizeof(line), "respawn wait %s (held %ld, let through %ld)", g_respawnWaitReport, held, respawns);
+		Say(command, line);
+		long heals = 0, deaths = 0, lastType = -1, lastClass = -1, lastLife = -1, lastMax = -1;
+		if (SoulstealerHeals(&heals, &deaths, &lastType, &lastClass, &lastLife, &lastMax)) {
+			nocorpse::FormatSoulstealerReport(report, sizeof(report), heals, deaths, lastType, lastClass, lastLife, lastMax);
+		} else {
+			std::snprintf(report, sizeof(report), "%s", g_soulstealerReport);
+		}
+		std::snprintf(line, sizeof(line), "soulstealer %s", report);
 		Say(command, line);
 		long enters = 0, picked = 0, kept = 0, faults = 0;
 		if (CorpsePickupCounts(&enters, &picked, &kept, &faults)) {
@@ -713,6 +722,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallRespawnWait(context, g_respawnWaitReport, sizeof(g_respawnWaitReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: respawn wait %s", g_respawnWaitReport);
+			context->LogInfo(line);
+			if (Off("soulstealer")) {
+				std::snprintf(g_soulstealerReport, sizeof(g_soulstealerReport), "%s", OffNote);
+			} else {
+				InstallSoulstealer(context, g_soulstealerReport, sizeof(g_soulstealerReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: soulstealer %s", g_soulstealerReport);
 			context->LogInfo(line);
 			if (Off("corpsepickup")) {
 				std::snprintf(g_corpsePickupReport, sizeof(g_corpsePickupReport), "%s", OffNote);
