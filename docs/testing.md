@@ -369,6 +369,7 @@ for them (the server frames are driven from it). `menu` runs on the UI thread. A
 | `wpobj` | every waypoint object of the game (class, position, distance, level, whether it is within 36 sub-tiles) and the player's level and waypoint number |
 | `travel` | (client side) the hotkey bindings (key and modifier as D2RLoader reports them), counters (waypoints activated, scans, reveals, key presses, transmutes, cube open / closed) and the distinct UI messages seen (`uimsgs`) |
 | `stashprobe <tab>` / `stashprobe result` | queues, on the game thread, a rune created by ItemService in shared stash tab `<tab>` and destroyed again; `result` answers `1 page=<n> create=0 ...` when the tab took the item, `0` when it refused |
+| `stashpage state\|open\|close\|toggle\|msgs\|uia <target> <command> [text]\|widget <panel> [child]\|vis <panel> <child> <0\|1>\|put <code> [x y]\|fill <1\|2>\|drop <code>\|list\|move <id> <1\|2> [x y]\|result` | (client side; put / fill / drop / list / move queue work on the game thread, `result` has the answer) the personal stash page 2: panel state (1 closed, 2 open), a native UI message through WidgetService (`uia PanelManager OpenPanel BankExpansionLayout`), a widget rect, items created / listed / moved between page 1 and page 2 in one ItemService transaction |
 
 Where the answers cannot come from a call they come from the screenshot: the NPC popup text (`cain_menu.png`) and
 D2R's own cheat output.
@@ -715,6 +716,20 @@ Cause of every non-pass of the first 0.55.0 run (88 checks; 94 PASS / 9 FAIL / 4
 | heat, sprint (slot 1, found in the full run) | heat: the drain per tick is a share of the **maximum** mana, so a fixed 100-point bar was gone in one tick on the 6300-mana character; sprint: the slowest walk leg read 0.52 against 0.62 units per frame | check | heat sets the full bar; sprint repeats a walk leg that does not give the expected ratio |
 
 Final runs (same code, the two check edits for heat and sprint re-run on both slots afterwards): slot 1 (level 150) 106 PASS / 0 FAIL, slot 3 (level 34) 108 PASS / 0 FAIL of 111 rows each; the other rows are the standing REVIEW (short aliases, tooltip: screenshots to read by hand) and PARTIAL (map reveal: the level is already drawn whole on arrival) rows. Run folders `checks-20261023-062317-s1`, `-064559-s1`, `-071122-s1` and `checks-20261023-062317-s3`, `-064419-s3`, `-070748-s3`.
+
+### Stash pages: personal page 2 (lane stash-pages, 2026-10-23, slot 3, background mode, plugin of this branch)
+
+Throwaway character `StashPg` (`MXL_CHAR=StashPg`), saves backed up before each step; design in `docs/stash-pages.md`.
+
+| Step | Result |
+|---|---|
+| `game_checks --slot 3 all stashpage2 stashpages` (final DLL) | `stashpages` PASS (shared tabs 0-9 accept an item, 10 and 12 refuse); `stashpage2` PASS (2 items on page 2, the stock stash has the "1 / 2" strip, right arrow opens the page 2 panel, the arrow on page 2 returns to the stock stash, an item moves 2 -> 1 -> 2, clean-up). Engine `BC_ASSERT` lines in d2rloader.log also appear in other lanes' runs (startup / shutdown) |
+| Persistence | page 2 filled with 1x1 runes (392 items), Save and Exit, reloaded: 392 present, nothing lost |
+| Load without the provider | `mxl-core-off.txt` = `stashpages` with items on page 6: the load stops with D2RCore's two ERROR lines, the `.d2s` hash is unchanged afterwards |
+| Strip with the part off | `stashpages` off: the stock stash opens without the "1 / 2" strip (screenshot checked) |
+| X / Esc / arrows | switching 1 -> 2 -> 1, X on either panel closes the stash, Esc on page 2 returns to page 1: as designed |
+
+Not tested: TCP/IP with two clients (page replication is D2RLoader's); personal pages 3-10 and Sort are not built (`docs/unported.md`).
 
 ### No durability in the UI (lane no-durability, 2026-10-23, slot 2, background mode, plugin 0.55.0 + durabilitytip / repairui)
 
