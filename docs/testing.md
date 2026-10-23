@@ -780,4 +780,4 @@ placement at your resolution, whether the art and tints look like Median's, and 
 | `arealevel` (MU3, data part) | **PASS**: monster levels of areas 216, 205, 204, 137, 3 in Normal and Hell equal levels.txt MonLvlEx |
 | `bugfixes` (OT4) | **PASS** in the control run (in the first run my own assertion failed: the max resist caps every value from 75 up at the same damage): life / mana 60000 hold, resist 286 / 300 / 1000 / 65586 / 2^31-1 give the damage of 255, hits of 1e9 / 1.5e9 / 2^31-1 take exactly that much, death in the wolf / bear / might states leaves no state, alive after the respawn |
 
-Not tested: TCP/IP with two clients and the shared stash (docs/unported.md row "Shared stash in TCP/IP"), the str / dex glitch and whirlwind chance-to-cast (OT4).
+TCP/IP with two clients (slots 1 + 3, background input, LAN-only unlisted host): the session runs and both clients show the stash pages ready, but the harness cannot run stash verbs on the joiner (game-thread runner refuses), so the shared stash row stays `verify` (docs/unported.md "Shared stash in TCP/IP"). Not tested: the str / dex glitch and whirlwind chance-to-cast (OT4).
