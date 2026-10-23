@@ -82,7 +82,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.59.0";
+constexpr const char* PluginVersion = "0.60.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
