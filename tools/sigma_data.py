@@ -124,7 +124,7 @@ def levels_and_goblins(idmap: dict) -> tuple[str, str, str]:
            "// level seals this long after a portal into it is used; 0 = no clock), lockGroup (+0x15f; levels sharing a",
            "// non-zero group lock together), minDifficulty (+0x151: 0 Normal, 1 Nightmare, 2 Hell), levelReq per",
            "// difficulty (+0x158..+0x15a, player level), classLock (+0x15e: 0 none, else only class value - 1 may enter).",
-           "// Raw, meaning not established: unk152 (+0x152), unk155 (+0x155: set on harder areas), portalObject",
+           "// Raw, meaning not established: unk152 (+0x152), unk155 (+0x155: Median's Tplock column, the town portal lock, town_rules.cpp), portalObject",
            "// (+0x156 u16, 585 only on level 247 = the rainbow portal; a Median objects row, not remapped), unk15b",
            "// (+0x15b). questLock is QuestFlagEx of leveldefs.bin (+4; 0 = none): D2Sigma's warp test refuses the level",
            "// unless the player's record of that quest holds bit 1, 0, 0xe or 0xf. The goblin chance (+0x15c) is in",

@@ -218,10 +218,64 @@ class _BITMAPINFOHEADER(ctypes.Structure):
                 ("biClrImportant", wt.DWORD)]
 
 
+RESTORES = []  # one entry per restore_noactivate(): (window, foreground window before, foreground window after, handed back)
+FG_GRACE_UNTIL = 0.0  # time.time() until which the game window may be the foreground window (game_checks' watchdog reads it)
+
+
+def _give_back_focus(before, h):
+    """Foreground back to `before` after the game window took it. A plain SetForegroundWindow is refused (returns 0: this process has no
+    foreground right then); attaching this thread's input queue to the two windows' threads for the call makes it work. No input is sent."""
+    me = ctypes.windll.kernel32.GetCurrentThreadId()
+    t_game = user32.GetWindowThreadProcessId(h, None)
+    t_before = user32.GetWindowThreadProcessId(before, None)
+    user32.AttachThreadInput(me, t_game, True)
+    user32.AttachThreadInput(me, t_before, True)
+    try:
+        user32.SetWindowPos(h, 1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+        return bool(user32.SetForegroundWindow(before))
+    finally:
+        user32.AttachThreadInput(me, t_game, False)
+        user32.AttachThreadInput(me, t_before, False)
+
+
+def restore_noactivate(h, wait=3.0):
+    """Restore a minimized window without activating it: SW_SHOWNOACTIVATE, then the window goes to the bottom of the z-order so it does
+    not cover the user's windows (PrintWindow does not need it on top). D2R activates its window by itself when it is restored (as it
+    does when it is created, see _keep_out_of_front); if the foreground window is the game window right after, the foreground goes back to
+    the window that had it, the same single give-back as at launch (it hands focus back, it never takes it). FG_GRACE_UNTIL tells the
+    watchdog of game_checks to let those few milliseconds pass. Records (window, foreground before, foreground after, handed back) in
+    RESTORES. True when the window has a size afterwards."""
+    global FG_GRACE_UNTIL
+    if not user32.IsIconic(h):
+        return True
+    before = user32.GetForegroundWindow()
+    FG_GRACE_UNTIL = time.time() + wait + 2.0
+    user32.ShowWindow(h, 4)  # SW_SHOWNOACTIVATE
+    user32.SetWindowPos(h, 1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)  # HWND_BOTTOM, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+    t0 = time.time()
+    handed = False
+    while time.time() - t0 < wait:  # D2R takes the focus a moment after the restore: watch the whole time, not only until it has a size
+        if before and before != h and user32.GetForegroundWindow() == h:
+            handed = _give_back_focus(before, h) or handed
+        time.sleep(0.01)
+    time.sleep(0.5)  # the first frame after the restore
+    if before and before != h and user32.GetForegroundWindow() == h:
+        handed = _give_back_focus(before, h) or handed
+        time.sleep(0.2)
+    after = user32.GetForegroundWindow()
+    RESTORES.append((h, before, after, handed))
+    FG_GRACE_UNTIL = time.time() + 0.5
+    log(f"window {h} was minimized: restored (foreground window {before} -> {after}, focus handed back: {handed})")
+    return not user32.IsIconic(h)
+
+
 def grab_printwindow(h):
     """Client area of window h via PrintWindow(PW_RENDERFULLCONTENT): works with the window behind others or on
-    another monitor, needs no focus and never touches the desktop. Returns an RGB PIL image."""
+    another monitor, needs no focus and never touches the desktop. A minimized window is restored first
+    (restore_noactivate: no focus change). Returns an RGB PIL image."""
     from PIL import Image
+    if user32.IsIconic(h):
+        restore_noactivate(h)
     gdi = ctypes.windll.gdi32
     wr = wt.RECT()
     user32.GetWindowRect(h, ctypes.byref(wr))
