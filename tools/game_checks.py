@@ -322,24 +322,52 @@ def create_character(cls, name):
     return ok
 
 
+def cinematic_playing():
+    """A cut scene plays in the game (the Act 5 one after the Tyrael walk): letterboxed, so the strip at the bottom where the HUD
+    orbs are is black. Esc then skips the scene instead of opening the game menu."""
+    from PIL import ImageStat
+    im = g.grab_client(g.need_window()).convert("L")
+    w, h = im.size
+    return ImageStat.Stat(im.crop((0, int(.93 * h), w, h))).mean[0] < 3 and ImageStat.Stat(im.crop((0, int(.2 * h), w, int(.8 * h)))).mean[0] > 8
+
+
+def skip_cinematic():
+    n = 0
+    while n < 12 and cinematic_playing():
+        g.log("a cut scene plays: Esc held (%d)" % (n + 1))
+        g.press("esc", hold=3)  # "Hold any button to skip"
+        time.sleep(5)
+        n += 1
+    return n
+
+
 def switch_character(name, cls, class_id):
     """Save and Exit, then play another character of the slot (created first when it does not exist); True when the game shows that
     class (`h state` class). A character that is already open is left as it is."""
     p = hstate()["player"]
     if p.get("class") == class_id:
         return True
-    g.key("esc")
-    time.sleep(1.5)
-    g.click(*g.UI["save_exit"])
-    time.sleep(6)
-    for _ in range(12):  # the save of a character with a long session behind it takes longer than 9 s
+    for attempt in range(3):
+        skip_cinematic()
+        g.key("esc")
+        time.sleep(1.5)
+        g.click(*g.UI["save_exit"])
+        time.sleep(6)
+        for _ in range(12):  # the save of a character with a long session behind it takes longer than 9 s
+            if not g.in_game():
+                break
+            time.sleep(3)
         if not g.in_game():
             break
-        time.sleep(3)
     if g.in_game():
         return False
     STATE["in_game"] = False
     time.sleep(2)
+    if not g.menu_visible():  # after a long session the game can come back to the intro cinematic (morphdeath_blocked.png): skip it
+        g.clear_intro(60)
+        time.sleep(2)
+        g.click(0.62, 0.40)  # the menu swallows the first click
+        time.sleep(1)
     card = card_of(name)
     ok = create_character(cls, name) if card is None else enter_game(card)
     return bool(ok) and hstate()["player"].get("class") == class_id
@@ -523,6 +551,22 @@ def clear_shape_states():
     return on
 
 
+# Median's stances and Paladin's alignment (states.txt: alignment 105, way_of_the_spider 308, way_of_the_phoenix 309, way_of_the_gryphon 332,
+# way_of_the_raven 783): a cast of an earlier check leaves them on; Phoenix adds mastery and max mana and every later mana test pays for it
+# (meleenotarget: both clicks lost ~1540 mana in the full group2, skillscaling read a mastery of 10 that was set to 0)
+STANCE_STATES = (105, 308, 309, 332, 783)
+
+
+def clear_stance_states():
+    on = []
+    for s in STANCE_STATES:
+        ok, lines = H("hasstate %d" % s)
+        if re.search(r"hasstate \d+: 1", " ".join(lines)):
+            on.append(s)
+            H("setstate player %d 0" % s)
+    return on
+
+
 def right_panel_open():
     """The inventory (or stash / cube) panel is open: the dark-red banner of the right-hand panel, 1600 x 900 client (0.09 of the
     pixels of that strip; 0.00 on every scene screenshot of earlier runs, 0.04 for a cube-only panel)."""
@@ -555,6 +599,9 @@ def clean_start_state(label, report_dead=False):
     forms = clear_shape_states()
     if forms:
         notes.append("shapeshift states %s were on (taken off)" % forms)
+    stances = clear_stance_states()
+    if stances:
+        notes.append("stance states %s were on (taken off)" % stances)
     held = release_held_item()
     if held:
         notes.append("item %d (%s) was held on the cursor (dropped; it blocks skill casts and NPC menus)" % held)
