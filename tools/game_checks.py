@@ -2074,7 +2074,7 @@ def spawn_id(cls=18):
 
 
 def check_item_events():
-    nm = "Item events (D2RCore registry): thorns 397, life on kill 265, cast on kill 376, open wounds / crushing blow skip immune monsters"
+    nm = "Item events (D2RCore registry): thorns 397 / 396 / 128, life on kill 265, cast on kill 376, open wounds / crushing blow skip immune monsters"
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
     goto(2)
@@ -2104,6 +2104,20 @@ def check_item_events():
     thorns = ok and a is not None and b is not None and a - b >= 50 * 256 and (a - b) % (50 * 256) == 0
     notes.append("thorns 50: monster life %s -> %s (%s)" % (a, b, "-%d points" % ((a - b) // 256) if thorns else "WRONG"))
     H("kill nearest")
+    # thorns variants: stat 396 (func 12) and 128 (func 10) take the same 50 points per event (event 3)
+    thorns_var = {}
+    for stat in (396, 128):
+        H("unequip lring")
+        okv, lv = H("equip rin %d=50 lring" % stat)
+        m2 = spawn_id()
+        H("stat m%d 6 0 set 700000" % m2)
+        a2 = life_of(m2)
+        H("evtrace fire 3 player m%d" % m2)
+        b2 = life_of(m2)
+        thorns_var[stat] = okv and a2 is not None and b2 is not None and a2 - b2 >= 50 * 256 and (a2 - b2) % (50 * 256) == 0
+        notes.append("thorns variant %d: monster life %s -> %s (%s)" % (stat, a2, b2, "-%d points" % ((a2 - b2) // 256) if thorns_var[stat] else "WRONG"))
+        H("kill nearest")
+    thorns = thorns and all(thorns_var.values())
     # life on kill: stat 265 = 50 (D2RCore function 33 -> D2R function 28), +50 points to a character at 100 life
     # (the character's own gear may heal on a kill too: the gain is measured against a kill without the ring)
     H("unequip lring")
@@ -10767,6 +10781,466 @@ def check_bugfixes():
     if again:
         bad.append("states %s are on after the respawn" % again)
     add(nm, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
+
+# ------------------------------------------------------------------ lane p4-quests-verify (docs/unported.md rows of quests / objects / D2 bugfixes)
+def _plugin_counter(st, pattern):
+    m = re.search(pattern, st.get("plugin", ""))
+    return int(m.group(1)) if m else None
+
+
+def _ground_items():
+    """Items (no gold) on the ground: `h dump ground nogold` count and the codes."""
+    ok, lines = H("dump ground nogold")
+    n = 0
+    codes = []
+    for ln in lines:
+        m = re.match(r"ground items (\d+)", ln)
+        if m:
+            n = int(m.group(1))
+        c = re.search(r"code=(\S+)", ln)
+        if c and ln.startswith("ground "):
+            codes.append(c.group(1))
+    return n, codes
+
+
+def check_towerkill():
+    """Quest 5 (Forgotten Tower) through a real Countess kill. The Countess is spawned, put on quest 5's unit list with
+    `questreg` (the level code does that for the real one) and killed, so D2R's own kill event reaches the quest handler
+    (0x5e10c0). A: the killer already holds quest 5 bit 0 while the quest object is active (another player's quest in the same
+    game): Median's guard (`TowerKillHook`) skips the handler, so no reward and no second end of the quest; with the off word
+    `quests` (MXL_CONTROL="quests") the vanilla handler runs and completes quest 5 a second time. B (guard on only): the quest is
+    open for the killer and the natural reward path runs: the `Quest Countess` class (counter of `mxl`), the drops on the
+    ground, quest bits 0 and 13."""
+    name = "Quest 5 repeat guard and natural Countess kill (real kill event, questreg)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    ctl = "quests" in CONTROL
+    rows, bad, log = [], [], []
+    saved = _qbits(5)
+    if saved is None:
+        return add(name, "BLOCKED", "could not read quest 5")
+    goto(25)
+    close_menu()
+    H("difficulty 0")
+    god(True)
+
+    def counters():
+        t = mxl_text()
+        m = re.search(r"quest rewards .*\(hellforge (\d+), countess (\d+), prison of ice (\d+)\)", t)
+        return tuple(int(x) for x in m.groups()) if m else None
+
+    def kill_countess():
+        ok, l = H("spawn 45")
+        m = re.search(r"id=(\d+)", " ".join(l))
+        if not m:
+            return False
+        mid = int(m.group(1))
+        ok2, l2 = H("questreg %d 5" % mid)
+        log.extend(l + l2)
+        H("kill %d" % mid)
+        time.sleep(4)
+        return ok2
+
+    def setup(bit0):
+        for b in (0, 0xd, 0xe, 0xf):
+            H("quest 5 %d clear" % b)
+        if bit0:
+            H("quest 5 0 set")
+        H("questobj 5 poke 312 0")  # the Countess-dead / reward-given flags (quest data +0x118 / +0x119): an earlier check
+        H("questobj 5 poke 313 0")  # (questrewards' `countessreward`) leaves the reward given, and it is rolled once per player
+        H("questobj 5 poke 17 1")  # the finish branch of the handler needs byte +0x11
+        log.extend(H("questobj 5 active 1")[1])
+
+    try:
+        # A: repeat
+        setup(True)
+        s0 = _plugin_counter(hstate(), r"tower skips=(\d+)")
+        n0, _c0 = _ground_items()
+        c0 = counters()
+        reached = kill_countess()
+        s1 = _plugin_counter(hstate(), r"tower skips=(\d+)")
+        n1, codes = _ground_items()
+        c1 = counters()
+        b13 = _qbits(5)[13] == "1"
+        rows.append("A, bit 0 already set: tower skips %s -> %s, ground items %d -> %d %s, Countess class rolls %s -> %s, bit 13 %s" % (
+            s0, s1, n0, n1, codes[:6], c0, c1, "set" if b13 else "clear"))
+        if not reached:
+            bad.append("the Countess could not be put on quest 5's list")
+        if ctl:
+            # the hook is off: no counter moves; what the vanilla handler does with the repeat is reported, not required
+            if not (s1 == s0):
+                bad.append("control run: the guard counter moved with the hook off (%s -> %s)" % (s0, s1))
+            rows.append("control: the vanilla handler %s the quest again" % ("completed" if b13 or n1 > n0 else "did not complete"))
+        elif not (s1 is not None and s0 is not None and s1 == s0 + 1 and n1 == n0 and not b13):
+            bad.append("the guard did not skip the second reward (skips %s -> %s, items %d -> %d, bit 13 %s)" % (s0, s1, n0, n1, b13))
+        # B: natural
+        setup(False)
+        n2, _ = _ground_items()
+        c2 = counters()
+        reached = kill_countess()
+        s2 = _plugin_counter(hstate(), r"tower skips=(\d+)")
+        n3, codes = _ground_items()
+        c3 = counters()
+        bits = _qbits(5)
+        rows.append("B, quest open: tower skips %s, Countess class rolls %s -> %s, ground items %d -> %d %s, quest 5 bits 0 / 13 = %s / %s" % (
+            s2, c2, c3, n2, n3, codes[:8], bits[0], bits[13]))
+        if not ctl and not (reached and s2 == s1 and c2 and c3 and c3[1] == c2[1] + 1 and n3 > n2 and bits[0] == "1" and bits[13] == "1"):
+            bad.append("the natural kill did not run the reward path (skips %s, rolls %s -> %s, items %d -> %d, bits %s)" % (s2, c2, c3, n2, n3, bits[:16]))
+    finally:
+        _qrestore(5, saved)
+        god(False)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad) + ("; control run: off word quests" if ctl else ""), [], log)
+
+
+def portal_ids():
+    """{id: distance} of the portal objects (classes 59, 60, 600) of the game (a portal's partner in the other level is listed too)."""
+    ids = {}
+    for ln in H("objects")[1]:
+        m = re.match(r"object id=(\d+) class=(59|60|600) mode=\d+ dist=(\d+)", ln)
+        if m:
+            ids[int(m.group(1))] = int(m.group(3))
+    return ids
+
+
+def check_lockwarp():
+    """The dungeon lockout's quest-table condition (`0x5d810` (3), `Entry::questLock`) through real warps. A cube-made portal to a
+    quest-locked level (`portal 66`: Median level 66, quest 13) and the real portal function (`enter <id>`, `0x58f680`): refused
+    while quest 13 has none of its bits (the `lockout refused` counter goes up, the character stays in town), taken once bit 1 is
+    set (the character stands in the level). The same for level 73 (Duriel's Lair), where D2R's own check `0x516a50` sits in front
+    as well. Control run MXL_CONTROL="lockout": the plugin hook is off and D2R's own portal function does not take the cube portal at all (the
+    character stays in town): the warp and its quest decision are the plugin's."""
+    name = "Dungeon lockout quest condition: real portal warps into quest-locked levels (refused, then taken)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    ctl = "lockout" in CONTROL
+    rows, bad, log = [], [], []
+    saved = _qbits(13)
+    if saved is None:
+        return add(name, "BLOCKED", "could not read quest 13")
+    god(True)
+    try:
+        for level in ((66,) if ctl else (66, 73)):
+            goto(40)
+            close_menu()
+            H("difficulty 0")
+            for b in (0, 1, 0xe, 0xf):
+                H("quest 13 %d clear" % b)
+            lc = [] if ctl else H("lockcheck %d" % level)[1]  # the verb needs the lockout hook
+            before = portal_ids()
+            okp, lp = H("portal %d" % level)
+            log += lc + lp
+            after = portal_ids()
+            new = sorted((i for i in after if i not in before), key=lambda i: after[i])  # the nearest new one is the town side
+            if not okp or not new:
+                bad.append("level %d: no portal could be opened (%s)" % (level, lp[:1]))
+                continue
+            pid = new[0]  # the portals of the earlier levels stay in town: enter this one by its id
+            r0 = lockout_counts(hstate())[0]
+            ok, le = H("enter %d" % pid)
+            time.sleep(4)
+            st = hstate()
+            area0 = st["player"].get("area")
+            r1 = lockout_counts(st)[0]
+            log += le
+            rows.append("level %d without the quest: %s -> area %s, lockout refused %s -> %s" % (level, " ".join(lc)[:40], area0, r0, r1))
+            if ctl:
+                # D2R's own portal function (0x58f680) does not take a cube portal to a Median level (partner level id -1): the warp and its
+                # quest decision are the plugin's, so with the hook off the character stays in town and nothing is counted
+                rows.append("control: D2R's own portal function %s" % ("did not take the portal" if area0 == 40 else "moved the character"))
+                if area0 != 40:
+                    bad.append("control run: D2R's own function moved the character to area %s" % area0)
+                continue
+            if not (area0 == 40 and r1 == (r0 or 0) + 1):
+                bad.append("level %d without quest 13: not refused (area %s, refused %s -> %s)" % (level, area0, r0, r1))
+                continue
+            H("quest 13 1 set")
+            log += H("enter %d" % pid)[1]
+            time.sleep(4)
+            area1 = hstate()["player"].get("area")
+            rows.append("level %d with quest 13 bit 1: area %s" % (level, area1))
+            if area1 != level:
+                bad.append("level %d with quest 13 bit 1: the portal did not take the character (area %s)" % (level, area1))
+    finally:
+        _qrestore(13, saved)
+        god(False)
+        revive_if_dead()
+        goto(40)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad) + ("; control run: off word lockout" if ctl else ""), [], log)
+
+
+def check_tyraelwalk():
+    """Tyrael's travel gate through the real objects. Act 4 (area 103): Tyrael's portal object (class 566, operate function 73,
+    mode 2 = open) is used with quest 28 clear: the character is moved to Harrogath (area 109) and D2R's own function sets quest 28
+    bit 0. Back in area 103 the Tyrael menu is read with quest 28 clear (no travel line, handler 0x1162f0) and set (the line is
+    there); clicking it (`menu <line>`) takes the character to Harrogath and sets the Harrogath waypoint (number 30)."""
+    name = "Tyrael travel: portal object sets quest 28, the travel line walks to Harrogath and sets the waypoint"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    rows, bad, log = [], [], []
+    saved = {q: _qbits(q) for q in (26, 28)}
+    if None in saved.values():
+        return add(name, "BLOCKED", "could not read quests 26 / 28")
+    god(True)
+    try:
+        goto(103)
+        close_menu()
+        H("quest 26 0 set")
+        H("quest 28 0 clear")
+        ok, lo = H("object 566")
+        m = re.search(r"id=(\d+)", " ".join(lo))
+        log += lo
+        if not (ok and m):
+            return add(name, "BLOCKED", "the portal object could not be made", [], log)
+        oid = int(m.group(1))
+        log += H("objmode %d 2" % oid)[1]
+        ok, lop = H("operate %d 73" % oid)
+        log += lop
+        time.sleep(4)
+        area = hstate()["player"].get("area")
+        bit = _qbits(28)[0]
+        rows.append("portal object 566 used with quest 28 clear: %s, area %s, quest 28 bit 0 = %s" % (" ".join(lop)[:70], area, bit))
+        if not (area == 109 and bit == "1"):
+            bad.append("the portal walk did not move the character to Harrogath and set quest 28 (area %s, bit %s)" % (area, bit))
+        # the menu with quest 28 clear: no travel line; with it set: the line, and a click on it
+        goto(103)
+        close_menu()
+        H("quest 26 0 set")
+        H("quest 28 0 clear")
+        npc_menu(367)  # the first talk plays the long speech and can miss the menu
+        close_menu()
+        time.sleep(1)
+        menu = npc_menu(367) or []
+        has0 = any("handler=image+0x1162f0" in ln for ln in menu)
+        close_menu()
+        H("quest 28 0 set")
+        menu = npc_menu(367) or []
+        has1 = any("handler=image+0x1162f0" in ln for ln in menu)
+        log += menu
+        idx = next((int(re.search(r"line (\d+)", ln).group(1)) for ln in menu if "handler=image+0x1162f0" in ln), None)
+        H("waypoint n 30 clear")
+        wp0 = wpbit(30)
+        area2 = None
+        if idx is not None:
+            log += H("menu %d" % idx)[1]
+            time.sleep(6)
+            area2 = hstate()["player"].get("area")
+        wp1 = wpbit(30)
+        rows.append("travel line with quest 28 clear: %s, set: %s; clicked: area %s, Harrogath waypoint %s -> %s" % (has0, has1, area2, wp0, wp1))
+        if has0 or not has1 or area2 != 109 or wp1 != 1:
+            bad.append("travel line gate or walk wrong (line without quest %s, with quest %s, area %s, waypoint %s)" % (has0, has1, area2, wp1))
+    finally:
+        for q, bits in saved.items():
+            _qrestore(q, bits)
+        close_menu()
+        god(False)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [sh("tyraelwalk")], log)
+
+
+def check_worldstone():
+    """Object functions 70 (Worldstone / Throne objects 563 and 569, plugin `ThroneHook`, off word `worldstone`) and 31 (Gidbinn's
+    altar, class 252, D2R's own function). Objects are made next to the character (`object`), opened with `objmode 2` and used
+    through the real operate functions (`operate`). Function 70: Baal's flag (quest 36 byte +0xa6) clear: no move; set but quest 39
+    (the lockout's questLock of levels 131 / 132) not done: refused by the lockout; quest 39 done: 131 -> 132; and from 132 the
+    function takes the character back to 131 (D2R's own function only goes 131 -> 132 and returns 0 elsewhere; control run
+    MXL_CONTROL="worldstone"). Function 31: refused while quest 19 bit 7 is set, taken with it clear (object mode 0 -> 1)."""
+    name = "Object functions 70 (Worldstone / Throne, both ways, lockout) and 31 (Gidbinn altar) through real operate calls"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    ctl = "worldstone" in CONTROL
+    rows, bad, log = [], [], []
+    saved = {q: _qbits(q) for q in (19, 39)}
+    if None in saved.values():
+        return add(name, "BLOCKED", "could not read quests 19 / 39")
+    god(True)
+
+    def make(cls, mode):
+        ok, lo = H("object %d" % cls)
+        m = re.search(r"id=(\d+)", " ".join(lo))
+        log.extend(lo)
+        if not (ok and m):
+            return None
+        oid = int(m.group(1))
+        log.extend(H("objmode %d %d" % (oid, mode))[1])
+        return oid
+
+    def operate(oid, fn):
+        """(result, area afterwards, object mode afterwards)"""
+        ok, lo = H("operate %d %d" % (oid, fn))
+        log.extend(lo)
+        text = " ".join(lo)
+        m = re.search(r"result (-?\d+)", text)
+        mm = re.search(r"mode now (\d+)", text)
+        time.sleep(3)
+        return (int(m.group(1)) if m else None), hstate()["player"].get("area"), (int(mm.group(1)) if mm else None)
+
+    try:
+        goto(131)
+        close_menu()
+        H("difficulty 0")
+        for b in (0, 1, 0xe, 0xf):
+            H("quest 39 %d clear" % b)
+        thr = make(569, 2)
+        if thr is None:
+            return add(name, "BLOCKED", "object 569 could not be made", [], log)
+        H("questobj 36 poke 166 0")
+        r_a, a_a, _m = operate(thr, 70)
+        H("questobj 36 poke 166 1")
+        refused0 = lockout_counts(hstate())[0]
+        r_b, a_b, _m = operate(thr, 70)
+        refused1 = lockout_counts(hstate())[0]
+        H("quest 39 0 set")
+        r_c, a_c, _m = operate(thr, 70)
+        rows.append("Throne object 569 in area 131: Baal flag clear -> result %s, area %s; flag set, quest 39 clear -> result %s, area %s (lockout refused %s -> %s); quest 39 done -> result %s, area %s" % (
+            r_a, a_a, r_b, a_b, refused0, refused1, r_c, a_c))
+        if ctl:
+            # D2R's own function: it only needs the flag (+0xa6), goes 131 -> 132 with no lockout (quest 39 still clear: r_b / a_b) and,
+            # standing in 132, finds nothing to do (r_c)
+            if not (r_a == 0 and a_a == 131 and r_b == 1 and a_b == 132 and refused1 == refused0 and r_c == 0 and a_c == 132):
+                bad.append("control run: D2R's own function behaved differently (results %s %s %s, areas %s %s %s)" % (r_a, r_b, r_c, a_a, a_b, a_c))
+        elif not (r_a == 0 and a_a == 131 and r_b == 0 and a_b == 131 and refused1 == (refused0 or 0) + 1 and r_c == 1 and a_c == 132):
+            bad.append("function 70 forward: wrong results")
+        if a_c == 132:
+            chamber = make(563, 2)
+            r_d, a_d, _m = operate(chamber, 70) if chamber is not None else (None, None, None)
+            rows.append("Worldstone object 563 in area 132: result %s, area %s%s" % (r_d, a_d, " (control: D2R's function does not go back)" if ctl else ""))
+            if ctl:
+                if not (r_d == 0 and a_d == 132):
+                    bad.append("control run: D2R's own function should not go back from 132 (result %s, area %s)" % (r_d, a_d))
+            elif not (r_d == 1 and a_d == 131):
+                bad.append("function 70 back: the object in 132 did not take the character to 131 (result %s, area %s)" % (r_d, a_d))
+        else:
+            bad.append("the forward move did not reach area 132, so the way back was not tried")
+        # function 31: Gidbinn's altar; D2R's function is the same code as D2Sigma's (quest 17 byte +0x11, quest 19 bits 0 / 7 / 8)
+        goto(103)
+        close_menu()
+        for b in (0, 7, 8):
+            H("quest 19 %d clear" % b)
+        alt = make(252, 0)
+        if alt is None:
+            bad.append("object 252 could not be made")
+        else:
+            H("questobj 17 poke 17 1")
+            H("quest 19 7 set")
+            r1, _a, m1 = operate(alt, 31)
+            H("quest 19 7 clear")
+            r2, _a, m2 = operate(alt, 31)
+            rows.append("Gidbinn altar 252: with quest 19 bit 7 set -> result %s (mode %s); clear -> result %s (mode %s)" % (r1, m1, r2, m2))
+            if not (r1 == 0 and m1 == 0 and r2 == 1 and m2 == 1):
+                bad.append("function 31 results wrong (%s/%s, %s/%s)" % (r1, m1, r2, m2))
+        txt = mxl_text()
+        line = next((ln for ln in txt.splitlines() if "dungeon lockout" in ln), "")
+        rows.append("`mxl`: %s" % line.strip()[-190:])
+        if not ctl and "Worldstone / Throne objects both ways" not in line:
+            bad.append("`mxl` does not report the Worldstone hook")
+        if ctl and "Worldstone / Throne objects off" not in line:
+            bad.append("`mxl` does not report the Worldstone hook as off in the control run")
+    finally:
+        for q, bits in saved.items():
+            _qrestore(q, bits)
+        H("questobj 36 poke 166 0")
+        god(False)
+        revive_if_dead()
+        goto(40)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad) + ("; control run: off word worldstone" if ctl else ""), [], log)
+
+
+def check_hitfloor():
+    """Missile hit function 20 (`0x45ec20`) with its second calc floored at 0 (byte patch `0x45edce`, off word `hitfloor`) in play.
+    A Median missile of that function (missiles row 206) is fired at a skeleton that cannot move (velocity -100 %), its life is read
+    before and after in raw 1/256 points, with skill 0 at level 0 and level 1 as the missile's skill (`missile 206 dx dy skill
+    level`); every shot has to take life. The control run (MXL_CONTROL="hitfloor") shows the old bytes and fires the same shots.
+    The second calc is the hit's target-count cap (`0x464fe0` compares the targets already hit with it), so the floor only matters
+    for a skill whose `calc1` is 0 or less and a missile row with no value of its own; no skill tried (0-69) gave 0 targets, and the
+    notes make no claim about a difference in damage."""
+    name = "Missile hit 20 floor: low-damage missile hit on a monster, life before / after (patched vs control)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    ctl = "hitfloor" in CONTROL
+    rows, bad, log = [], [], []
+    goto(2)
+    close_menu()
+    kill_all_near()
+    god(False)
+    H("stat player 6 0 set 2000000")
+    gaps = " ".join(H("gaps")[1])
+    m = re.search(r"hit20=(\w+) hit20_patched=(\d)", gaps)
+    rows.append("bytes %s patched=%s" % (m.group(1) if m else None, m.group(2) if m else None))
+    if not m or m.group(2) != ("0" if ctl else "1"):
+        bad.append("hit 20 patch state does not match this run (control %s): %s" % (ctl, m.group(0) if m else gaps[:80]))
+
+    def shot(skill, level):
+        mid = spawn_id()
+        time.sleep(1.5)
+        H("stat m%d 67 0 set -100" % mid)
+        H("stat m%d 6 0 set 2000000" % mid)
+        st = hstate()
+        me = st["player"]
+        mon = next((x for x in st["mons"] if x.get("id") == mid), None)
+        if not mon:
+            return None
+        dx, dy = mon.get("mx", 0) - me["x"], mon.get("my", 0) - me["y"]
+        a = stat_of(H("stat m%d 6" % mid)[1])
+        log.extend(H("missile 206 %d %d %d %d" % (dx, dy, skill, level))[1])
+        time.sleep(3)
+        b = stat_of(H("stat m%d 6" % mid)[1])
+        H("kill %d" % mid)
+        return None if a is None or b is None else a - b
+
+    for skill, level in ((0, 0), (0, 1)):
+        d = [shot(skill, level) for _ in range(5)]
+        hit = [x for x in d if x]
+        rows.append("skill %d level %d: life taken per shot (raw 1/256) %s" % (skill, level, d))
+        if len(hit) < 4:
+            bad.append("skill %d level %d: only %d of 5 shots took life" % (skill, level, len(hit)))
+    kill_all_near()
+    H("stat player 6 0 set 2000000")
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad) + ("; control run: off word hitfloor" if ctl else ""), [], log)
+
+
+def check_strdex():
+    """D2 bugfix list (audit OT4), the str / dex glitch in D2R's code: an item whose requirement the character misses is inactive
+    (its stats are not on the character), becomes active when a worn item adds the strength and goes inactive again when that
+    item is taken off (D2's glitch keeps it active). Armor '841' (reqstr 455) with fire resist 77 and a ring with +600 strength,
+    in both orders of putting them on. The other two rows of the list stay untested: D2R's usable test refuses Median's class
+    skills for this character with code 5 (whirlwind 1234, werebear morph 1303; docs/unported.md)."""
+    name = "D2 bugfix str / dex glitch: a worn item loses its stats when the strength item is taken off (both orders)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    rows, bad, log = [], [], []
+    goto(2)
+    close_menu()
+    H("unequip lring")
+    H("unequip body")
+
+    def val(stat):
+        return stat_of(H("stat player %d" % stat)[1])
+
+    s0, r0 = val(0), val(39)
+    rows.append("base strength %s, fire resist %s" % (s0, r0))
+    if s0 is None or s0 >= 455:
+        bad.append("the character already meets the armor's requirement (strength %s)" % s0)
+    log += H("equip 841 39=77 body")[1]
+    a1 = val(39)
+    log += H("equip rin 0=600 lring")[1]
+    a2, s2 = val(39), val(0)
+    H("unequip lring")
+    a3 = val(39)
+    rows.append("armor first: fire resist %s (inactive), with the strength ring (str %s) %s, ring off %s" % (a1, s2, a2, a3))
+    if not (a1 == r0 and a2 == r0 + 77 and a3 == r0):
+        bad.append("armor first: the stats of the armor did not follow the strength (%s, %s, %s from %s)" % (a1, a2, a3, r0))
+    H("unequip body")
+    log += H("equip rin 0=600 lring")[1]
+    log += H("equip 841 39=77 body")[1]
+    b1 = val(39)
+    H("unequip lring")
+    b2 = val(39)
+    rows.append("ring first: fire resist %s (active), ring off %s" % (b1, b2))
+    if not (b1 == r0 + 77 and b2 == r0):
+        bad.append("ring first: the armor kept its stats after the ring came off (%s, %s from %s)" % (b1, b2, r0))
+    H("unequip body")
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -10818,7 +11292,10 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("teleportgold", check_teleportgold), ("skillafford", check_skillafford), ("hcdeath", check_hcdeath),
           ("meleenotarget", check_meleenotarget), ("reqlevel", check_reqlevel), ("cubedrop", check_cubedrop),
           # lane p4-leftovers
-          ("soulstealer", check_soulstealer)]
+          ("soulstealer", check_soulstealer),
+          # lane p4-quests-verify
+          ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
+          ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex)]
 
 
 def write_report(extra=""):

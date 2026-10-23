@@ -1083,6 +1083,12 @@ game destroy / create, client menu composition, quest handlers 13 / 14 / 25 / 38
 2. ~~Portal objects~~ lane dungeon-lockout: the portal object operate function is **`0x58f680`** (ctx `{game, portal, player, ?, object class}`; it pairs
    the portal with its twin through `0x490070`, places the player with `0x491ca0`, returns 1 moved / 0 failed with unit message `0x14`). Entry bytes
    `48 89 4c 24 08 55 53 56 57 41 56 41 57 48 8b ec`. Destination level = word from `0x34ad40(portal)`. Hooked by dungeon_lockout.cpp.
+2b. Object operate table (exe `0x23a51c0`, ctx `{game, object, player, 0, class, ...}`): fn 15 = `0x58f680` (portal), fn 31 = `0x5ea260` (Gidbinn altar,
+   the same code as D2Sigma's), fn 49 = `0x5e5210` (Hellforge), fn 70 = `0x548c40` (Worldstone / Throne objects 563 / 569: needs object mode 2 from
+   `0x34ab60`, the player in level 131 and quest 36 byte `+0xa6`, then `0x488180(game, player, 0x84, 0xb)`; hooked by dungeon_lockout.cpp
+   `ThroneHook`, entry bytes `48 89 5c 24 08 57 48 83 ec 20 48 8b d9 48 8b 49 08`, off word `worldstone`), fn 73 = `0x5e57e0` (Tyrael's portal,
+   sets quest 28 bit 0). `0x34e5f0(unit, mode)` sets an object's mode (harness `objmode`), `0x518220(game, id)` finds a quest object (`+0x11`
+   finish byte, `+0x12` active byte, `+0x2b0` kill handler slot).
 3. ~~System message sender~~ lane client-ui: chat packet 0x26 via `0x48fde0` + `0x477a30`, section 13.
 4. Stat-update packet sender (0x1d-0x1f family) not located; gold sync argued from the game's own gold code (section 10), **untested**.
 5. The game create function `0x4049d0` has no direct callers (called through a job pointer); the destroy hook covers the reset need, so this is

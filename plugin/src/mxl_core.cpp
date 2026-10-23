@@ -82,7 +82,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.61.0";
+constexpr const char* PluginVersion = "0.62.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -357,8 +357,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	{
 		int refused = 0, started = 0;
 		DungeonLockoutCounts(&refused, &started);
-		std::snprintf(line, sizeof(line), "dungeon lockout %s (refused %d, clocks started %d, portals taken across acts %d)", g_lockoutReport, refused, started,
-		              DungeonActTravels());
+		std::snprintf(line, sizeof(line), "dungeon lockout %s (refused %d, clocks started %d, portals taken across acts %d, Worldstone / Throne warps %d)", g_lockoutReport, refused, started,
+		              DungeonActTravels(), DungeonThroneWarps());
 		Say(command, line);
 	}
 	{
@@ -778,7 +778,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			if (Off("lockout")) {
 				std::snprintf(g_lockoutReport, sizeof(g_lockoutReport), "%s", OffNote);
 			} else {
-				InstallDungeonLockout(context, g_lockoutReport, sizeof(g_lockoutReport));
+				InstallDungeonLockout(context, g_lockoutReport, sizeof(g_lockoutReport), !Off("worldstone"));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: dungeon lockout %s", g_lockoutReport);
 			context->LogInfo(line);

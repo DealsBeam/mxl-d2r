@@ -360,8 +360,8 @@ references by raw bytes, which finds callers in code Ghidra did not disassemble)
 
 ## 10. Uncertainties
 
-- The item event ids: 10 / 11 / 12 are D2RCore's own handlers, verified for 11 (thorns 397) only; 12 (cold, 396) and 10 are
-  expected to behave the same (same code path, different damage field).
+- The item event ids: 10 / 11 / 12 are D2RCore's own handlers; thorns 397 (11), 396 (12) and 128 (10) are all verified in game
+  (`itemevents`, lane p4-quests-verify: each takes 50 points off the attacker).
 - The `0x7e240` socket arithmetic and `0x7e120` die are read from decompiler output with register arguments; treat as
   inferred.
 - Whether D2R's inline hook relocates the `jg rel32` that follows the first 9 bytes of `0x44fef0` (the SDK source is
