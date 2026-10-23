@@ -134,8 +134,11 @@ def replace_with_mesh(tree, keep, pos, nrm, uv, tris, bone=None, bone_idx=None, 
     if drop_others:
         tree["Meshes"] = [me]
         tree["TriTopologies"] = [topo]
+        keep = next(mb for mo in tree["Models"] for mb in mo["MeshBindings"] if mb["Mesh"] is me)
         for mo in tree["Models"]:
-            mo["MeshBindings"] = [mb for mb in mo["MeshBindings"] if mb["Mesh"] is me]
+            # vanilla files carry the whole mesh set in both Models (lodLevel N and N+1); a Model left without a binding makes the
+            # engine assert (model_asset.cpp:305 MeshBindingCount >= 1) when the file is loaded by its plain name (a new path)
+            mo["MeshBindings"] = [mb for mb in mo["MeshBindings"] if mb["Mesh"] is me] or [keep]
     return tree
 
 

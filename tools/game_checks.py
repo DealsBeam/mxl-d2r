@@ -15,7 +15,7 @@ classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner 
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
-questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits.
+questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -8241,6 +8241,76 @@ def check_bufficons():
     add(name, "PASS" if not problems else "FAIL", note, shots, log)
 
 
+def _ap_pixels(path, box=(640, 260, 960, 620)):
+    from PIL import Image
+    import numpy as np
+    return np.asarray(Image.open(path).convert("RGB").crop(box), dtype=np.int16)
+
+
+def _ap_diff(a, b):
+    import numpy as np
+    return np.abs(a - b).sum(2) > 60
+
+
+def check_assetpaths():
+    """Assets at new paths (lane new-asset-paths, docs/hd-models.md section 3c): the Druid's Wereowl form (unit mxl_wereowl3d) and the
+    Corrupted Wereowl have their model, texture and index entries at data/hd/character/mxl/..., not over the vanilla horse / pig
+    paths. The engine loads a model of a path that its index (model_lod_desc.bin) does not list and never draws it, so the proof is
+    the picture: a spawned unit changes pixels around the player that stayed still between three shots before the spawn.
+    Judged: the Druid's form (`wereowl`: 5-9 % of the pixels against under 1 % with the index entry missing; limit 3 %). The Corrupted Wereowl is only
+    reported: its green aura changes 25-30 % of the picture with or without the model."""
+    nm = "Assets at new paths: the Druid's Wereowl form (model, textures at data/hd/character/mxl/) is drawn"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    fight_ready()
+    enable_debug()
+    god(True)
+    mark = log_mark()
+    time.sleep(3.0)
+    base = []
+    for k in range(3):  # the background's own change between shots (rain, light, leftovers of an earlier check)
+        sh("assetpaths_base_%d" % k)
+        base.append(_shot_path("assetpaths_base_%d" % k))
+        time.sleep(1.0)
+    px = [_ap_pixels(p) for p in base]
+    moving = _ap_diff(px[0], px[1]) | _ap_diff(px[1], px[2])  # pixels that change by themselves: animated leftovers, rain
+    noise = float(moving.mean())
+    rows, shots, bad = [], [], []
+    for uid in ("wereowl", "corrupted_wereowl"):
+        known = {m.get("id") for m in hstate()["mons"]}
+        cheat("mspawn %s" % uid)
+        time.sleep(2.5)
+        new = [m for m in hstate()["mons"] if m.get("id") not in known and not m.get("npc")]
+        for m in sorted(new, key=lambda m: m["id"])[1:]:  # the minions of a boss are in the picture: only the unit itself is judged
+            H("kill %d" % m["id"])
+        time.sleep(3.5)
+        best = 0.0
+        for k in range(3):
+            name = "assetpaths_%s_%d" % (uid, k)
+            shot = sh(name)
+            best = max(best, float((_ap_diff(px[2], _ap_pixels(_shot_path(name))) & ~moving).mean()))
+            if k == 0:
+                shots.append(shot)
+            time.sleep(0.4)
+        for m in new:
+            H("kill %d" % m["id"])
+        time.sleep(1.0)
+        clean_area()
+        rows.append("%s: %d unit(s) spawned (the first one %s), %.1f%% of the pixels around the player changed" % (
+            uid, len(new), "judged" if uid == "wereowl" else "only reported: its aura draws without the model", 100 * best))
+        if not new:
+            bad.append("%s did not spawn" % uid)
+        elif uid == "wereowl" and best < 0.03:
+            bad.append("%s: not drawn (%.1f%% changed)" % (uid, 100 * best))
+    asserts = [a for a in assertions_since(mark) if re.search(r"MeshBindingCount|isMeshFlipbook|model_asset|LOD", a)]
+    if asserts:
+        bad.append("model assertions in d2rloader.log: %s" % sorted(set(asserts))[:3])
+    god(False)
+    add(nm, "PASS" if not bad else "FAIL", "%s; %.1f%% of the pixels moved by themselves before the spawn and are not counted%s" % ("; ".join(rows), 100 * noise, ("; PROBLEMS: " + "; ".join(bad)) if bad else ""),
+        shots)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -8277,7 +8347,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("potionamounts", check_potionamounts), ("manarules", check_manarules),
           ("mercrevive", check_mercrevive), ("questxp", check_questxp), ("questrewards", check_questrewards),
           ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash),
-          ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons), ("uniquelimits", check_uniquelimits)]
+          ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons), ("uniquelimits", check_uniquelimits),
+          ("assetpaths", check_assetpaths)]
 
 
 def write_report(extra=""):
