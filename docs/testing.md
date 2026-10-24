@@ -880,7 +880,7 @@ releases the lock at its end, so the lock is taken again before each install). `
 ## Lane suite-main-060: full suite on main (plugin 0.63.0)
 
 Test-only lane. Runs on plugin 0.60.0 (slot 1 `checks-20261023-220521-s1` and `checks-20261023-224514-s1`), 0.61.0 (`checks-20261024-002546-s1/-s2`) and, as asked by the coordinator after #153 / #154,
-on **0.63.0** (c2d85b0) with `group1.txt` on slot 1 and `group2.txt` on slot 2 in parallel. The run `checks-20261024-000518-s1` is void from about 00:11 (lane p4-ww-morph ran commands on slot 1 without `MXL_SLOT`).
+on **0.63.0** (c2d85b0) with `group1.txt` on slot 1 and `group2.txt` on slot 2 in parallel. The run `checks-20261024-000518-s1` is void from about 00:11 (lane p4-ww-morph ran commands on slot 1 without `MXL_SLOT`). **Final pair on 0.63.0: `checks-20261024-120836-s1` PASS 82, FAIL 0, BLOCKED 0, PARTIAL 0, REVIEW 5; `checks-20261024-120837-s2` PASS 67, FAIL 0, BLOCKED 1 (`mapreveal`, by design after debug mode), PARTIAL 1 (`meleenotarget`), REVIEW 11** (the REVIEW rows are the start-state notes and two screenshot checks).
 
 Fixes of the checks (all in `tools/game_checks.py`, no plugin change):
 
@@ -896,9 +896,20 @@ Fixes of the checks (all in `tools/game_checks.py`, no plugin change):
 | `strdex` | needs the armor's level (a level 19 character): the stats stayed inactive; the rare ring has random affixes | sets the level 90 for the check; the ring may add resistance |
 | `mapreveal` | FAIL when the level is already drawn whole on arrival; left the character in Lut Gholein (`skillafford` then read the column value, formula cost 256) | PARTIAL for that case; goes back to Act 1; `skillafford` starts in a field level |
 | `morphdeath` | Andariel hit a level 2 bear for ~16 and stopped; Save and Exit took longer than 9 s after a long session | life 12 for the monster kill; `switch_character` waits up to 42 s |
+| start state of every check (stances) | a Way of the Phoenix / Spider / Gryphon / Raven cast of an earlier check stays on the character: Phoenix adds fire damage, mastery and max mana (`meleenotarget`, `bugfixes`, `skillscaling` failed in the full `group2.txt`) | `clear_stance_states()` takes states 308 / 309 / 332 / 783 off and notes it. State 105 (alignment) is left alone: the test character carries it from the start and with it off the casts of `replacedskills` did not start and the 2e9 hit of `playerdeath` did not land (run `checks-20261024-085517-s2`) |
+| `hitfloor` | the missile's damage at skill level 0 is the character's flat damage: the earlier runs had it from a Phoenix left on by another check; with the stance taken off (or in a fresh game) all five level 0 shots did nothing | sets flat damage (stats 21 / 22, 48 / 49, 50 / 51) for the shots and puts the values back |
+| `mercrevive` | `kill nearest` killed a leftover class 2796 next to the mercenary, the mercenary stayed at 1 life | kills the mercenary by its unit id |
+| `meleenotarget` (pool) | in the full `group2.txt` the pool falls by itself (idle dip 740-864 points in 1.2 s, no click), which hides the cost of a click; the usable code was read at a low pool (code 1 = not enough mana) | mana to the maximum before the usable code; an idle baseline: with an idle dip above 100 points the mana judgement is dropped and the status is PARTIAL (the attack modes are still judged) |
+| `assetpaths` | the cheat line `mspawn corrupted_wereowl` is lost now and then (none in 11 s) | the cheat is sent once more |
 
-Not regressions (start state, the check or the order of the group): `tplock` (one FAIL on 0.61.0, passed in four later runs), `itemevents` (thorns 686816 vs 687200 once, passed alone), `statorder`
-(panel), `bugfixes` / `meleenotarget` / `strdex` / `skillafford` / `mapreveal` (order), `npcheal` and `soulstealer` (a different NPC class or the boss 2049 fails in each run, never the same set; 2049 fails with
-"heals counter 0 -> 0" while 1852 heals 10 %). Open in the group order: `meleenotarget` (and in one run `skillscaling`, "mastery stat of ltng read 10, set 0") fail in the full `group2.txt` on slot 2 and pass alone and
-after `uniquelimits charmlimit arealevel bugfixes` (mana maximum 7825-7950 instead of 8192 and both click kinds pay about 1540 mana: something an earlier check leaves on the character); `morphdeath` is BLOCKED
-inside the full `group1.txt` ("the Druid test character cannot be opened") and passes alone and after `wwproc`.
+Not regressions (start state, the check or the order of the group): `tplock` (one FAIL on 0.61.0, passed in later runs), `itemevents` (thorns 686816 vs 687200 once, passed alone), `statorder` (panel), `bugfixes` / `strdex` /
+`skillafford` / `mapreveal` / `hitfloor` / `mercrevive` (order or start state, see the table), `npcheal` and `soulstealer` (a different NPC class or the boss 2049 fails in some runs, never the same set; 2049 fails with "heals counter 0 -> 0" while 1852 heals 10 %;
+`npcheal` passed in the last pair).
+
+Open, not fixed (the lane is test-only):
+
+- **The mana pool of the test character falls by itself in the full `group2.txt` on slot 2** (idle dip 740-864 points in 1.2 s, `meleenotarget` PARTIAL; in the earlier pair the plain click "paid" about 1540 mana and `bugfixes` read 58575 mana). `meleenotarget` passes alone and after `uniquelimits charmlimit arealevel bugfixes`; the stance states, the worn items and the player states (only 105) are not the cause, so some check in the middle of the group leaves something else (a stat list, a monster that drains) - not bisected.
+- **An engine crash at the end of `group1.txt` on slot 1** (`checks-20261024-105541-s1`: `d2r-lastresort-crash-report (2026_10_24 01_55_42 UTC pid-31948).log`, access violation at `D2R.exe+0x7761DC`, generated 11:56:27 during `morphdeath`'s character switch to the Druid; the stack slots hold the string `data/hd/chicken/chicken_state_machine.js`, i.e. the game was loading an HD asset). The run ended without a `morphdeath` row; `wwproc morphdeath` alone (`checks-20261024-115748-s1`) and the full `group1.txt` again (`checks-20261024-120836-s1`) pass. One crash in three runs, not reproduced, not traced to a commit.
+- Asserts: every assert of the final runs is a row of the table above. `nMissile >= 0 && nMissile < NumMissileStats` still fires once at the Summoner kill (class 2054) on 0.63.0 (`checks-20261024-105541-s1`, 11:08:52) although the table row says fixed by `cursemissile` (`cursemissile` itself has 0 asserts); the fix covers the curse client function, not whatever the kill of class 2054 reaches. `activeUnit` was not seen in these runs.
+- `morphdeath` was BLOCKED inside the full `group1.txt` in the first runs of the lane (cut scene after `tyraelwalk` swallowing Esc and Save and Exit); `switch_character` now skips the cut scene and retries, and it passed in the last two full runs.
+

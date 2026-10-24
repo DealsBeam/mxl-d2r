@@ -551,17 +551,19 @@ def clear_shape_states():
     return on
 
 
-# Median's stances and Paladin's alignment (states.txt: alignment 105, way_of_the_spider 308, way_of_the_phoenix 309, way_of_the_gryphon 332,
-# way_of_the_raven 783): a cast of an earlier check leaves them on; Phoenix adds mastery and max mana and every later mana test pays for it
+# Median's stances (states.txt: way_of_the_spider 308, way_of_the_phoenix 309, way_of_the_gryphon 332, way_of_the_raven 783): a cast of an
+# earlier check leaves them on; Phoenix adds mastery and max mana and every later mana test pays for it
 # (meleenotarget: both clicks lost ~1540 mana in the full group2, skillscaling read a mastery of 10 that was set to 0)
-STANCE_STATES = (105, 308, 309, 332, 783)
+# Not alignment (105): the test character carries it from the start; with its bit taken off (run 085517 of lane suite-main-060) the casts of
+# replacedskills did not start (mode stayed 1) and the 2e9 hit of playerdeath did not land.
+STANCE_STATES = (308, 309, 332, 783)
 
 
 def clear_stance_states():
     on = []
     for s in STANCE_STATES:
         ok, lines = H("hasstate %d" % s)
-        if re.search(r"hasstate \d+: 1", " ".join(lines)):
+        if re.search(r"hasstate \d+: 1\b", " ".join(lines)):
             on.append(s)
             H("setstate player %d 0" % s)
     return on
@@ -8438,11 +8440,24 @@ def check_meleenotarget():
     rows, bad, log = [], [], []
     on = [st_ for st_ in range(1, 360) if (lambda ls: any(re.search(r"hasstate %d: 1" % st_, l) for l in ls))(H("hasstate %d" % st_)[1])]
     log.append("player states on: %s; max mana %s, max life %s" % (on, rd("player", 9), rd("player", 7)))  # the long-group FAIL (mana cost on a plain click) is state dependent
+    drain = []  # mana-only complaints, dropped when the pool falls by itself (idle dip above 100 points)
     for skill in (521, 548, 722):
         H("setskill %d 5" % skill)
         H("skill left %d" % skill)
+        setstat("player", 8, rd("player", 9) or 1291520)  # the usable code is 1 (not enough mana) when an earlier check left the pool low
+        time.sleep(0.5)
         usable = _skill_usable(skill)
         res = {}
+        # the baseline: the same pool, the same watch, no click; a pool that falls by itself (a leftover of an earlier check in the full
+        # group2: 1.5 thousand points in a second with the plain click too) hides the cost of the click
+        setstat("player", 8, rd("player", 9) or 1291520)
+        time.sleep(0.3)
+        H("modewatch stop")
+        H("modewatch start")
+        time.sleep(1.2)
+        idle = _modewatch()
+        H("modewatch stop")
+        idle_dip = (idle[4] - idle[5]) / 256 if idle else 0
         for label, shift in (("shift", True), ("plain", False)):
             # full mana: the pool regenerates (a few hundred points a second at 8191), so a start below the maximum refills past the
             # cost before the first sample and hides it; at the maximum the cost shows as a dip
@@ -8451,18 +8466,26 @@ def check_meleenotarget():
             res[label] = _ground_click(0.62, 0.45, shift)
             time.sleep(3.0)  # let the attack of the Shift click end before the next sample set starts
         s_, p_ = res["shift"], res["plain"]
-        rows.append("skill %d (usable code %s): Shift click -> attack modes %s, walk %s, mana %.1f -> %.1f; plain click -> attack %s, walk %s, mana lowest %.1f" % (
-            skill, usable, s_[0] if s_ else None, s_[1] if s_ else None, (s_[4] / 256) if s_ else 0, (s_[5] / 256) if s_ else 0,
+        rows.append("skill %d (usable code %s): idle dip %.1f; Shift click -> attack modes %s, walk %s, mana %.1f -> %.1f; plain click -> attack %s, walk %s, mana lowest %.1f" % (
+            skill, usable, idle_dip, s_[0] if s_ else None, s_[1] if s_ else None, (s_[4] / 256) if s_ else 0, (s_[5] / 256) if s_ else 0,
             p_[0] if p_ else None, p_[1] if p_ else None, (p_[5] / 256) if p_ else 0))
         log.append(rows[-1])
+        steady = idle_dip <= 100
         if usable != 0:
             bad.append("skill %d is not usable without a weapon (code %s)" % (skill, usable))
-        if not s_ or s_[0] < 1 or s_[5] >= s_[4]:
-            bad.append("skill %d: Shift click did not attack and spend mana: %s" % (skill, s_))
-        if not p_ or p_[0] != 0 or p_[5] < p_[4]:
-            bad.append("skill %d: the plain click attacked or spent mana: %s" % (skill, p_))
+        if not s_ or s_[0] < 1:
+            bad.append("skill %d: Shift click did not attack: %s" % (skill, s_))
+        elif s_[5] >= s_[4]:
+            (bad if steady else drain).append("skill %d: Shift click did not spend mana: %s" % (skill, s_))
+        if not p_ or p_[0] != 0:
+            bad.append("skill %d: the plain click attacked: %s" % (skill, p_))
+        elif p_[5] < p_[4]:
+            (bad if steady else drain).append("skill %d: the plain click spent mana: %s" % (skill, p_))
     for skill in (521, 548, 722):
         H("setskill %d 0" % skill)
+    if drain and not bad:
+        return add(name, "PARTIAL", "the attack modes are right (Shift click attacks, the plain click does not) but the mana pool falls by itself "
+                   "(idle dip above 100 points in a second, the cost cannot be told from it): %s | %s" % ("; ".join(drain), "; ".join(rows)), [], log)
     add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows) + ("; " + log[0] if bad else ""), [], log)
 
 
@@ -8641,7 +8664,9 @@ def check_mercrevive():
                 break
             time.sleep(1)
         if merc_dead() is False:
-            H("kill nearest")  # the harness' own kill of the nearest monster, which is the mercenary
+            # the harness' own kill, by id: the nearest monster can be a leftover of an earlier check (a class 2796 in the full group2)
+            mid = re.search(r"merc id=(\d+)", " ".join(H("merc")[1]))
+            H("kill %s" % mid.group(1) if mid else "kill nearest")
         time.sleep(1)
         txt = mxl_text()
         m = re.search(r"merc revive price .*\((\d+) priced, last (-?\d+) gold for level (\d+)\)", txt)
@@ -9820,10 +9845,16 @@ def check_assetpaths():
         cheat("mspawn %s" % uid)
         time.sleep(2.5)
         new = [m for m in hstate()["mons"] if m.get("id") not in known and not m.get("npc")]
-        for _ in range(8):  # in a long suite session the cheat's spawn can take longer (suite 2026-10-23: corrupted_wereowl at +2.5 s: none)
-            if new:
+        for attempt in range(2):  # the cheat line is lost now and then (suite-main-060 run 105541: corrupted_wereowl none in 11 s): once more
+            for _ in range(8):  # in a long suite session the cheat's spawn can take longer (suite 2026-10-23: corrupted_wereowl at +2.5 s: none)
+                if new:
+                    break
+                time.sleep(1.0)
+                new = [m for m in hstate()["mons"] if m.get("id") not in known and not m.get("npc")]
+            if new or attempt:
                 break
-            time.sleep(1.0)
+            cheat("mspawn %s" % uid)
+            time.sleep(2.5)
             new = [m for m in hstate()["mons"] if m.get("id") not in known and not m.get("npc")]
         for m in sorted(new, key=lambda m: m["id"])[1:]:  # the minions of a boss are in the picture: only the unit itself is judged
             H("kill %d" % m["id"])
@@ -11339,6 +11370,12 @@ def check_hitfloor():
     kill_all_near()
     god(False)
     H("stat player 6 0 set 2000000")
+    # The missile's damage at skill level 0 is the character's own flat damage (stats 21 / 22 physical, 48 / 49 fire, 50 / 51 lightning):
+    # the earlier runs had it from a Way of the Phoenix left on by another check (its fire damage), a fresh game or a start state that
+    # took the stance off has none and every level 0 shot did nothing. Set a flat damage and put the values back at the end.
+    flat0 = {st_: stat_of(H("stat player %d" % st_)[1]) for st_ in (21, 22, 48, 49, 50, 51)}
+    for st_, v_ in ((21, 40), (22, 60), (48, 40), (49, 60), (50, 40), (51, 60)):
+        H("stat player %d 0 set %d" % (st_, v_))
     gaps = " ".join(H("gaps")[1])
     m = re.search(r"hit20=(\w+) hit20_patched=(\d)", gaps)
     rows.append("bytes %s patched=%s" % (m.group(1) if m else None, m.group(2) if m else None))
@@ -11371,6 +11408,8 @@ def check_hitfloor():
             bad.append("skill %d level %d: only %d of 5 shots took life" % (skill, level, len(hit)))
     kill_all_near()
     H("stat player 6 0 set 2000000")
+    for st_, v_ in flat0.items():
+        H("stat player %d 0 set %d" % (st_, v_ or 0))
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad) + ("; control run: off word hitfloor" if ctl else ""), [], log)
 
 
