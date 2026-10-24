@@ -962,3 +962,56 @@ click the game did not take failed `levelcap` once: three tries, the last with a
 
 The hardened `cainsub` / `levelcap` were run once alone after the change (`checks-20261025-002747-s3`: PASS both); group1 was not run a third time on the final check code. The REVIEW rows are the start-state notes
 (worn items changed, stance 309, inventory panel).
+
+## Lane p4-soak: soak of the translation event guard (plugin 0.64.0, 2026-10-25)
+
+Test only (plus fixes to `tools/game_checks.py`). Plugin 0.64.0 built from main 79bbf15 (`tools/build_plugin.ps1`, cmake from the Visual Studio install), data from `tools/build.py`, installed into slots 1-3 with
+`install_mod.py --slot N`; the `mxl` check of every run reads `mxl-core 0.64.0` and `translation guard on: the unit translation event handler 0x775fc0 skips an event with an unreadable payload`.
+Every full run is `py -3 tools/game_checks.py all $(cat group1.txt) --slot N` (or `group2.txt`), run folders `%USERPROFILE%\mxl-d2r-runs\checks-20261025-*` (not committed), three slots in parallel.
+`run_all` now also reads `transguard` (no probe) before it stops the game and writes the counters into the report (`Translation event guard counters at the end of the run`, INFO): the groups never call the
+probe, so every skipped event counted is a real one, and the three pointers of the first eight skips are in `mxl-core.log` (`translation event skipped: event ..., payload ..., payload+0x70 ...`).
+
+| Run | List | Slot | Result | Crash files | Guard (events / real skips) |
+|---|---|---|---|---|---|
+| `checks-20261025-010224-s1` | group1 | 1 | PASS 81, FAIL 1 (`morphdeath`: Andariel did not kill the bear, see below), REVIEW 4 | 0 | 321 / 0 |
+| `checks-20261025-010229-s2` | group1 | 2 | PASS 82, REVIEW 5 | 1 first-chance report at exit (below) | 314 / 0 |
+| `checks-20261025-010235-s3` | group1 | 3 | PASS 82, REVIEW 5 | 1 first-chance report at exit | 299 / 0 |
+| `checks-20261025-021629-s1` | group1 | 1 | PASS 80, FAIL 2 (`dropilvl`, `wwproc`), REVIEW 4 | 0 | 319 / 0 |
+| `checks-20261025-021635-s2` | group1 | 2 | PASS 82, REVIEW 4 | 1 at exit | 319 / 0 |
+| `checks-20261025-021640-s3` | group1 | 3 | PASS 81, FAIL 1 (`monhover`), REVIEW 4 | 1 at exit | 321 / **1** |
+| `checks-20261025-032834-s2`, `-032839-s3` | group2 | 2, 3 | aborted after 13 / 14 checks (all PASS): the game died, `Present failed` (`DXGI_ERROR_DEVICE_REMOVED` 0x887A0005) in both processes in the same second (03:43:56), `d2r-crash-report` | 2 each (`.log` + `.dmp`) | not read |
+| `checks-20261025-034503-s2`, `-034508-s3` | group2 | 2, 3 | aborted after 13 checks (all PASS): slot 2 `Present failed` again (04:02:17); slots 3 and 1 hung at the same moment (not responding, killed) | slot 2: 2 | not read |
+| `checks-20261025-034025-s1` (killed) | group1 | 1 | hung at the same moment (04:02:30, check 29 of 88) | 0 | not read |
+
+**The guard did skip a real event.** In `checks-20261025-021640-s3` the guard logged, at 03:17:25, during the character switch of `morphdeath` (`a cut scene plays: Esc held`, the Druid is loading):
+`translation event skipped: event 00000001DD1AFCF8, payload 00000000a90f0d90, payload+0x70 0000000000002035 (not readable memory)`; the end-of-run counter says `events=321 skipped=1`. The payload pointer
+read from the event (`+0x70`) is `0x2035`, a small integer and no pointer: the same kind of value as `0x8000003F0` and `0x46B000003FD` of the two crash reports, at the same place in the sequence. D2R would have read
+`byte [0x2035 + 0x870]` there (the instruction of the crash at `D2R.exe+0x7761DC`). The run went on: the Druid loaded, `morphdeath` and all later checks PASS, no crash file besides the exit-time report below. The other five
+complete group1 runs saw about 300 events each and no unreadable one. **Outcome (a): no crash at `D2R.exe+0x7761DC` in six full group1 runs with the guard on, and the guard skipped a real event at the point where the crash
+happened before.** (One real skip in six runs; before the guard the crash came in 2 of about 7 runs.)
+
+**Crash files that are not the crash.** The runs of slots 2 and 3 above each leave one `d2r-lastresort-crash-report (... pid-N).log` (reports with this address since 2026-10-22: 6 on slot 1, 17 on slot 2, 7 on slot 3):
+`Record: 1 of at most 2`, a first-chance access violation at `Allocation Base 00007FFA3FFD0000 + 0x163644` (not `D2R.exe`), written within a second of the report `game_ctl.stop`, i.e. when the game exits
+(`Generated` = the end of the run). It is a handled first-chance exception of a driver / system module at shutdown, not a death of the game: the run had finished and written its report. A real crash is the report whose
+module is `D2R.exe` (`+0x7761DC` for bug #34) or a `d2r-crash-report` before the end of the run.
+
+**The `Present failed` deaths and the hangs are the machine, not the mod.** `d2r-crash-report`: `D2Prism\src\D2Prism.cpp:2112 BC_ASSERT: result.Succeeded(), "Present failed"`, `systemCode 0x887A0005`
+(`DXGI_ERROR_DEVICE_REMOVED`). Slots 2 and 3 died in the same second (03:43:56); at 04:02:17 slot 2 died again and the games of slots 1 and 3 hung. After that every new
+D2R start of the session hung 10-20 s after the window opened (not responding, CPU idle; the main thread waits in `D2RLoader.exe+0x10e7d50` <- `dxgi.dll+0x62be4`, the window thread is in `win32u`): a DXGI wait that is
+not answered, with `dwm.exe` showing 21 GB of GPU memory in the process counters and `Virtual Desktop Monitor` in status Error in `Win32_VideoController` (the PC has a remote-desktop / streaming host running). The single
+start at 04:37 worked; the following ones (single or in parallel) did not, over more than an hour, so the group2 pair could not be finished in this session (see "Left").
+
+**Flaky checks found in the full runs and fixed** (`tools/game_checks.py`; each passes alone):
+
+- `morphdeath` (bear killed by Andariel, `checks-20261025-010224-s1`): Andariel's one hit took 7 of the 12 life left and no second hit came in 40 s. The life is put back to 1 point every second while she is at it and a second
+  Andariel comes after 15 s.
+- `monhover` (`checks-20261025-021640-s3`): `scrollportals` ran before it and left the Barbarian at **1 life point** (`life=1/8191` in the `state` before the zombie spawn); the zombie killed the character and the 24 clicks went to
+  a corpse ("You have died" in `monster_fight.png`). `clean_start_state` now sets the life to full when it is under half of the maximum and says so in the row of the check (a REVIEW note).
+- `wwproc` (`checks-20261025-021629-s1`): 3 of the 4 spins hurt a monster (the check wanted 4), the procs came anyway (6 Fire Bolts for 6 hits). The spins must hurt 2 monsters; the proof stays the Fire Bolts.
+- `dropilvl` (`checks-20261025-021629-s1`): after the town trip in Hell, area 2, 7 drops of item level 1 were counted: they are items of the Normal visit that reach the client as new units a moment after the arrival (the
+  area is the same game level), not drops of the kills. The check waits 3 s after the arrival before it records the ground items it must ignore.
+- `cainsub` and `levelcap` (hardened by p4-stability, not yet re-run in a full group): PASS in all six full group1 runs above.
+
+`checks-20261025-032845-s1` (`cainsub levelcap dropilvl wwproc monhover` alone, before these fixes): 6 PASS.
+**Left:** `group2.txt` in full twice (both pairs died with the machine's GPU, above; the first 13-14 checks PASS on both slots each time, no `transguard` skip read because the counters are only written at the end of a run); the three
+check fixes (`morphdeath`, `monhover`, `wwproc`, `dropilvl`) and the start-state life repair are compiled and read, but were not run in a full group after the edit (a game could not be started for more than an hour).
