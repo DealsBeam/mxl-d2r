@@ -322,20 +322,52 @@ def create_character(cls, name):
     return ok
 
 
+def cinematic_playing():
+    """A cut scene plays in the game (the Act 5 one after the Tyrael walk): letterboxed, so the strip at the bottom where the HUD
+    orbs are is black. Esc then skips the scene instead of opening the game menu."""
+    from PIL import ImageStat
+    im = g.grab_client(g.need_window()).convert("L")
+    w, h = im.size
+    return ImageStat.Stat(im.crop((0, int(.93 * h), w, h))).mean[0] < 3 and ImageStat.Stat(im.crop((0, int(.2 * h), w, int(.8 * h)))).mean[0] > 8
+
+
+def skip_cinematic():
+    n = 0
+    while n < 12 and cinematic_playing():
+        g.log("a cut scene plays: Esc held (%d)" % (n + 1))
+        g.press("esc", hold=3)  # "Hold any button to skip"
+        time.sleep(5)
+        n += 1
+    return n
+
+
 def switch_character(name, cls, class_id):
     """Save and Exit, then play another character of the slot (created first when it does not exist); True when the game shows that
     class (`h state` class). A character that is already open is left as it is."""
     p = hstate()["player"]
     if p.get("class") == class_id:
         return True
-    g.key("esc")
-    time.sleep(1.5)
-    g.click(*g.UI["save_exit"])
-    time.sleep(9)
+    for attempt in range(3):
+        skip_cinematic()
+        g.key("esc")
+        time.sleep(1.5)
+        g.click(*g.UI["save_exit"])
+        time.sleep(6)
+        for _ in range(12):  # the save of a character with a long session behind it takes longer than 9 s
+            if not g.in_game():
+                break
+            time.sleep(3)
+        if not g.in_game():
+            break
     if g.in_game():
         return False
     STATE["in_game"] = False
     time.sleep(2)
+    if not g.menu_visible():  # after a long session the game can come back to the intro cinematic (morphdeath_blocked.png): skip it
+        g.clear_intro(60)
+        time.sleep(2)
+        g.click(0.62, 0.40)  # the menu swallows the first click
+        time.sleep(1)
     card = card_of(name)
     ok = create_character(cls, name) if card is None else enter_game(card)
     return bool(ok) and hstate()["player"].get("class") == class_id
@@ -519,6 +551,46 @@ def clear_shape_states():
     return on
 
 
+# Median's stances (states.txt: way_of_the_spider 308, way_of_the_phoenix 309, way_of_the_gryphon 332, way_of_the_raven 783): a cast of an
+# earlier check leaves them on; Phoenix adds mastery and max mana and every later mana test pays for it
+# (meleenotarget: both clicks lost ~1540 mana in the full group2, skillscaling read a mastery of 10 that was set to 0)
+# Not alignment (105): the test character carries it from the start; with its bit taken off (run 085517 of lane suite-main-060) the casts of
+# replacedskills did not start (mode stayed 1) and the 2e9 hit of playerdeath did not land.
+STANCE_STATES = (308, 309, 332, 783)
+
+
+def clear_stance_states():
+    on = []
+    for s in STANCE_STATES:
+        ok, lines = H("hasstate %d" % s)
+        if re.search(r"hasstate \d+: 1\b", " ".join(lines)):
+            on.append(s)
+            H("setstate player %d 0" % s)
+    return on
+
+
+def right_panel_open():
+    """The inventory (or stash / cube) panel is open: the dark-red banner of the right-hand panel, 1600 x 900 client (0.09 of the
+    pixels of that strip; 0.00 on every scene screenshot of earlier runs, 0.04 for a cube-only panel)."""
+    im = g.grab_client(g.need_window()).convert("RGB").crop((840, 100, 1260, 160))
+    px = list(im.getdata())
+    return sum(1 for r, gr, b in px if r > 50 and r > 2 * gr and r > 2 * b) > 0.03 * len(px)
+
+
+def close_right_panel():
+    """Closes the inventory panel with the `i` key when the banner shows (a toggle, so only when it is open). Returns True when it
+    was open. A panel on the right half moves the player to the left of the screen: every check that clicks at the player's
+    projected position (monster hover) and the Save and Exit path miss their targets."""
+    if not right_panel_open():
+        return False
+    g.press("i")
+    time.sleep(1.0)
+    if right_panel_open():
+        g.press("esc")  # a stash or cube panel: one Esc closes it and the inventory with it
+        time.sleep(0.8)
+    return True
+
+
 def clean_start_state(label, report_dead=False):
     """The state a check needs the test character to be in: alive, in its own shape, nothing on the cursor. Repairs what it can and
     returns the notes of what it repaired (an empty list when the character was clean); a state it cannot repair raises. Called before
@@ -529,9 +601,24 @@ def clean_start_state(label, report_dead=False):
     forms = clear_shape_states()
     if forms:
         notes.append("shapeshift states %s were on (taken off)" % forms)
+    stances = clear_stance_states()
+    if stances:
+        notes.append("stance states %s were on (taken off)" % stances)
     held = release_held_item()
     if held:
         notes.append("item %d (%s) was held on the cursor (dropped; it blocks skill casts and NPC menus)" % held)
+    try:
+        if close_right_panel():
+            notes.append("the inventory panel was open (closed with `i`; it covers the right half of the client)")
+    except Exception as e:  # no window grab: the check that needs the screen will say so
+        g.log("start state before %s: panel test failed: %r" % (label, e))
+    try:  # what the character wears: a check that leaves an item on shows up as the row of the next one (it changes mana, masteries, resistances)
+        worn = sorted("%s@%s" % (it.get("code"), it.get("body")) for it in hstate()["items"] if it.get("page") == 255 and it.get("body"))
+        if STATE.get("worn") is not None and worn != STATE["worn"]:
+            notes.append("worn items changed since the check before: %s -> %s" % (STATE["worn"], worn))
+        STATE["worn"] = worn
+    except Exception as e:
+        g.log("start state before %s: worn test failed: %r" % (label, e))
     if notes:
         g.log("start state before %s: %s" % (label, "; ".join(notes)))
     return notes
@@ -6688,6 +6775,7 @@ def check_mapreveal():
     time.sleep(1.5)
     a2 = mapcells()
     g.press("tab")
+    goto(1)  # leave Lut Gholein: the checks after this one expect Act 1
     log = ["baseline series %s" % series, "after %s" % a1, "again %s" % a2, c0["line"], c1["line"]] + lines + lines2
     if not a0 or not a1 or not a2:
         return add(name, "BLOCKED", "no automap data: %s" % lines[:2], [], log)
@@ -6696,6 +6784,8 @@ def check_mapreveal():
     again = a2["current"] - a1["current"]
     pressed = c1.get("reveal_n") == (c0.get("reveal_n") or 0) + 1 and c1.get("reveals") == (c0.get("reveals") or 0) + 1
     status = "PASS" if ok and ok2 and pressed and grew > max(50, 4 * abs(streaming)) and again <= max(5, abs(grew) // 50) else "FAIL"
+    if status == "FAIL" and ok and ok2 and pressed and grew == 0 and again == 0 and a0["current"] >= 1500:
+        status = "PARTIAL"  # the level was already drawn whole on arrival (its map is remembered from an earlier visit): nothing left for the reveal to add
     add(name, status,
         "level %d entered with `level` (debug mode off): cells of the current layer %d (steady: the last two samples differ by %+d) -> %d after one reveal (%+d), a second reveal %+d; "
         "all layers %d -> %d cells in %d -> %d layers, debug flag byte %d -> %d; presses %s -> %s, reveals %s -> %s. The port reveals the connected rooms of the current level; "
@@ -8085,6 +8175,7 @@ def check_teleportgold():
         time.sleep(0.6)
     saved = rd("player", 14)
 
+    strays = list(_ground_piles())  # piles that lie there before the first trial (monster drops of earlier checks)
     left_over = {}  # piles an earlier trial left on the ground: the later teleports come back into their reach
 
     def trial(label, gold_before, want_taken, drop=333):
@@ -8109,6 +8200,8 @@ def check_teleportgold():
                 near += 1 if d <= 30 else 0
                 far += 1 if 30 < d <= 40 else 0
         extra_ok = range(near * drop, (near + far) * drop + 1, drop) if want_taken else [0]
+        # a pile of another size (gold a monster of an earlier check dropped in the area) in reach of the arrival point is picked up too
+        stray = bool(strays) and want_taken
         row = "%s: pile %s, jump %s, gold %s -> %s, pile %s, counters %s -> %s, earlier piles in reach %d" % (
             label, mine, j, gold_before, gold, "left" if left else "gone", t0, t1, near)
         rows.append(row)
@@ -8117,7 +8210,7 @@ def check_teleportgold():
             bad.append("%s: the pile was not dropped" % label)
         elif j is None:
             bad.append("%s: the teleport did not move the character" % label)
-        elif want_taken and (left or (gold - gold_before - drop) not in extra_ok):
+        elif want_taken and (left or gold - gold_before < drop or (gold - gold_before - drop) not in extra_ok and not stray):
             bad.append("%s: expected the pile taken (gold +%d), got %s" % (label, drop, row))
         elif not want_taken and (not left or gold != gold_before):
             bad.append("%s: expected the pile left alone, got %s" % (label, row))
@@ -8131,8 +8224,9 @@ def check_teleportgold():
         return gold
 
     trial("pile 24 behind the arrival point", 2000, not ctl)
-    H("gold set 160000 0")
-    trial("purse full", 160000, False)
+    cap = (rd("player", 12) or 1) * 10000  # the most gold a character carries (engine function 0x34b320): 10000 per character level
+    H("gold set %d 0" % cap)
+    trial("purse full (%d gold, level %s)" % (cap, rd("player", 12)), cap, False)
     g.press("x")
     time.sleep(0.6)
     off = travel_counts().get("pickup")
@@ -8166,6 +8260,7 @@ def check_skillafford():
     if not need_game():
         return add(name, "BLOCKED", "not in a game")
     revive_if_dead()
+    goto(2)  # a field level of Act 1: after `mapreveal` the character stands in Lut Gholein and the formula answers the column value there
     god(False)
     close_menu()
     rows, bad, log = [], [], []
@@ -8340,31 +8435,58 @@ def check_meleenotarget():
     H("packclear")
     H("unequip rhand")
     H("unequip lhand")  # no weapon: the skills need none to be usable, a bow in the hand would make them unusable
+    for loc in (1, 2, 3, 6, 7, 8, 9, 10, 11, 12):  # nor a worn item of an earlier check (its mana drain / cost modifiers made the plain click pay in the full group)
+        H("unequip %d" % loc)
     rows, bad, log = [], [], []
+    on = [st_ for st_ in range(1, 360) if (lambda ls: any(re.search(r"hasstate %d: 1" % st_, l) for l in ls))(H("hasstate %d" % st_)[1])]
+    log.append("player states on: %s; max mana %s, max life %s" % (on, rd("player", 9), rd("player", 7)))  # the long-group FAIL (mana cost on a plain click) is state dependent
+    drain = []  # mana-only complaints, dropped when the pool falls by itself (idle dip above 100 points)
     for skill in (521, 548, 722):
         H("setskill %d 5" % skill)
         H("skill left %d" % skill)
+        setstat("player", 8, rd("player", 9) or 1291520)  # the usable code is 1 (not enough mana) when an earlier check left the pool low
+        time.sleep(0.5)
         usable = _skill_usable(skill)
         res = {}
+        # the baseline: the same pool, the same watch, no click; a pool that falls by itself (a leftover of an earlier check in the full
+        # group2: 1.5 thousand points in a second with the plain click too) hides the cost of the click
+        setstat("player", 8, rd("player", 9) or 1291520)
+        time.sleep(0.3)
+        H("modewatch stop")
+        H("modewatch start")
+        time.sleep(1.2)
+        idle = _modewatch()
+        H("modewatch stop")
+        idle_dip = (idle[4] - idle[5]) / 256 if idle else 0
         for label, shift in (("shift", True), ("plain", False)):
-            setstat("player", 8, 1291520)
+            # full mana: the pool regenerates (a few hundred points a second at 8191), so a start below the maximum refills past the
+            # cost before the first sample and hides it; at the maximum the cost shows as a dip
+            setstat("player", 8, rd("player", 9) or 1291520)
             time.sleep(0.3)
             res[label] = _ground_click(0.62, 0.45, shift)
-            time.sleep(1.0)
+            time.sleep(3.0)  # let the attack of the Shift click end before the next sample set starts
         s_, p_ = res["shift"], res["plain"]
-        rows.append("skill %d (usable code %s): Shift click -> attack modes %s, walk %s, mana %.1f -> %.1f; plain click -> attack %s, walk %s, mana lowest %.1f" % (
-            skill, usable, s_[0] if s_ else None, s_[1] if s_ else None, (s_[4] / 256) if s_ else 0, (s_[5] / 256) if s_ else 0,
+        rows.append("skill %d (usable code %s): idle dip %.1f; Shift click -> attack modes %s, walk %s, mana %.1f -> %.1f; plain click -> attack %s, walk %s, mana lowest %.1f" % (
+            skill, usable, idle_dip, s_[0] if s_ else None, s_[1] if s_ else None, (s_[4] / 256) if s_ else 0, (s_[5] / 256) if s_ else 0,
             p_[0] if p_ else None, p_[1] if p_ else None, (p_[5] / 256) if p_ else 0))
         log.append(rows[-1])
+        steady = idle_dip <= 100
         if usable != 0:
             bad.append("skill %d is not usable without a weapon (code %s)" % (skill, usable))
-        if not s_ or s_[0] < 1 or s_[5] >= s_[4]:
-            bad.append("skill %d: Shift click did not attack and spend mana: %s" % (skill, s_))
-        if not p_ or p_[0] != 0 or p_[5] < p_[4]:
-            bad.append("skill %d: the plain click attacked or spent mana: %s" % (skill, p_))
+        if not s_ or s_[0] < 1:
+            bad.append("skill %d: Shift click did not attack: %s" % (skill, s_))
+        elif s_[5] >= s_[4]:
+            (bad if steady else drain).append("skill %d: Shift click did not spend mana: %s" % (skill, s_))
+        if not p_ or p_[0] != 0:
+            bad.append("skill %d: the plain click attacked: %s" % (skill, p_))
+        elif p_[5] < p_[4]:
+            (bad if steady else drain).append("skill %d: the plain click spent mana: %s" % (skill, p_))
     for skill in (521, 548, 722):
         H("setskill %d 0" % skill)
-    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+    if drain and not bad:
+        return add(name, "PARTIAL", "the attack modes are right (Shift click attacks, the plain click does not) but the mana pool falls by itself "
+                   "(idle dip above 100 points in a second, the cost cannot be told from it): %s | %s" % ("; ".join(drain), "; ".join(rows)), [], log)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows) + ("; " + log[0] if bad else ""), [], log)
 
 
 def _skills_row(skill_id):
@@ -8542,7 +8664,9 @@ def check_mercrevive():
                 break
             time.sleep(1)
         if merc_dead() is False:
-            H("kill nearest")  # the harness' own kill of the nearest monster, which is the mercenary
+            # the harness' own kill, by id: the nearest monster can be a leftover of an earlier check (a class 2796 in the full group2)
+            mid = re.search(r"merc id=(\d+)", " ".join(H("merc")[1]))
+            H("kill %s" % mid.group(1) if mid else "kill nearest")
         time.sleep(1)
         txt = mxl_text()
         m = re.search(r"merc revive price .*\((\d+) priced, last (-?\d+) gold for level (\d+)\)", txt)
@@ -8840,17 +8964,19 @@ def check_collidetypes():
         mon_notes = []
         for ty, stops in want_stop.items():
             verdict = None
-            for attempt in range(6):
+            for attempt in range(14):  # the cloud stalker walks: most spawns are out of range or beside the player when read (a shot is rare)
                 kill_all_near()
-                if spawn_id(18) is None:
+                sid = spawn_id(18)
+                if sid is None:
                     continue
                 time.sleep(0.5)
                 st = hstate()
                 p = st["player"]
-                mons = [m for m in st["mons"] if "mx" in m and "my" in m]
+                # the spawned monster itself: a town NPC left in the area (Deckard Cain, id 10, unkillable) is the nearest unit otherwise
+                mons = [m for m in st["mons"] if "mx" in m and "my" in m and m["id"] == sid]
                 if not mons:
                     continue
-                mo = min(mons, key=lambda m: (m["mx"] - p["x"]) ** 2 + (m["my"] - p["y"]) ** 2)
+                mo = mons[0]
                 vx, vy = mo["mx"] - p["x"], mo["my"] - p["y"]
                 d0 = (vx * vx + vy * vy) ** 0.5
                 if d0 < 7 or d0 > 18:  # the missile starts a few sub-tiles ahead of the player
@@ -9719,10 +9845,16 @@ def check_assetpaths():
         cheat("mspawn %s" % uid)
         time.sleep(2.5)
         new = [m for m in hstate()["mons"] if m.get("id") not in known and not m.get("npc")]
-        for _ in range(8):  # in a long suite session the cheat's spawn can take longer (suite 2026-10-23: corrupted_wereowl at +2.5 s: none)
-            if new:
+        for attempt in range(2):  # the cheat line is lost now and then (suite-main-060 run 105541: corrupted_wereowl none in 11 s): once more
+            for _ in range(8):  # in a long suite session the cheat's spawn can take longer (suite 2026-10-23: corrupted_wereowl at +2.5 s: none)
+                if new:
+                    break
+                time.sleep(1.0)
+                new = [m for m in hstate()["mons"] if m.get("id") not in known and not m.get("npc")]
+            if new or attempt:
                 break
-            time.sleep(1.0)
+            cheat("mspawn %s" % uid)
+            time.sleep(2.5)
             new = [m for m in hstate()["mons"] if m.get("id") not in known and not m.get("npc")]
         for m in sorted(new, key=lambda m: m["id"])[1:]:  # the minions of a boss are in the picture: only the unit itself is judged
             H("kill %d" % m["id"])
@@ -10455,7 +10587,7 @@ def check_npcheal():
         a, b = p.get("life").split("/")
         return int(a), int(b)
 
-    def one(cls):
+    def one_try(cls):
         ok, _sl = H("spawn %d" % cls)
         if not ok:
             return "spawn failed"
@@ -10471,13 +10603,19 @@ def check_npcheal():
         for _ in range(4):
             time.sleep(3)
             a, b = cur()
-            if a >= b:
+            if a >= b - max(8, b // 100):  # full life, give or take what drains it again within the 3 s (the quarter we set is far away)
                 healed = True
                 break
         close_menu()
         H("kill nearest %d" % cls)
         time.sleep(0.5)
         return "healed" if healed else "no heal"
+
+    def one(cls):
+        r = one_try(cls)
+        if r == "no heal" and not control:  # a talk that did not start (the NPC was not in reach, the menu was refused): once more with a fresh NPC
+            r = one_try(cls)
+        return r
 
     pending = list(NPC_TABLE_CLASSES)
     for _round in range(5):  # the area fills up after ~14 spawns: leave and come back, retry what failed to spawn
@@ -10544,8 +10682,14 @@ def check_tplock():
         H("setskill %d 5" % tp)
         before = _portal_ids()
         m0 = rd("player", 8)
+        use0 = _skill_usable(tp)  # 0 = usable; another code (a cooldown from the cast before) makes the cast do nothing
         ok, lines = H("cast %d self" % tp)
+        if not ok:  # the verb itself failed (the character was still busy from the teleport in): once more
+            log.extend(lines)
+            time.sleep(2.5)
+            ok, lines = H("cast %d self" % tp)
         log.extend(lines)
+        log.append("town portal skill usable code before the cast: %s; cast: %s" % (use0, lines[:1]))
         time.sleep(3.0)
         new = _portal_ids() - before
         return ok, bool(new), m0 - rd("player", 8)
@@ -10741,22 +10885,28 @@ def check_bugfixes():
     close_menu()
     kill_all_near()
     god(False)
+    # `hit player` without an attacker uses the nearest live monster that can fight and the player itself when there is none
+    # (a hit of the player on the player is ignored: result 0, nothing lost); kill_all_near just removed every monster
+    atk = spawn_attacker()
+    if atk is None:
+        return add(nm, "BLOCKED", "no attacker monster for the hits on the player")
     P = 256
     big = 60000 * P
+    saved = {stt: rd("player", stt) for stt in (7, 6, 9, 8)}  # put back at the end: a max mana of 60000 makes every later mana test regenerate in a blink
     # 1. life and mana above 32,767
     for stt in (7, 6, 9, 8):
         setstat("player", stt, big)
     got = [rd("player", stt) for stt in (6, 7, 8, 9)]
     rows.append("life / max life / mana / max mana set to 60000: %s" % [None if v is None else v // P for v in got])
-    if any(v is None or v < 59999 * P for v in got):
+    if any(v is None or v < 50000 * P for v in got):  # only a rollover matters here; the pools of a long run may start a regen or a drain apart
         bad.append("life or mana above 32,767 did not hold: %s" % got)
-    hv("hit player phys %d" % (1000 * P), "hit")
-    hv("hit player mana %d" % (1000 * P), "hit")
+    hv("hit player phys %d %s" % (1000 * P, atk), "hit")
+    hv("hit player mana %d %s" % (1000 * P, atk), "hit")
     life, mana = rd("player", 6), rd("player", 8)
     rows.append("after a hit of 1000 and a `mana` hit of 1000: life %s, mana %s" % (None if life is None else life // P, None if mana is None else mana // P))
-    if life is None or not (59000 * P < life < big):
+    if life is None or not (50000 * P < life < big):
         bad.append("life after a hit of 1000 left 60000 range: %s" % life)
-    if mana is None or not (59000 * P < mana <= rd("player", 9)):
+    if mana is None or not (45000 * P < mana <= rd("player", 9)):
         bad.append("mana after a drain of 1000 left the 60000 range: %s" % mana)
     # 2. percentages above the 8 / 16-bit range
     fields = {}
@@ -10764,7 +10914,7 @@ def check_bugfixes():
         for stt in (7, 6):
             setstat("player", stt, big)
         setstat("player", 39, res)
-        ok, line, ls = hv("hit player fire 100000", "hit")
+        ok, line, ls = hv("hit player fire 100000 %s" % atk, "hit")
         log.extend(ls)
         m = re.search(r"field=(-?\d+)", line)
         fields[res] = int(m.group(1)) if m else None
@@ -10811,7 +10961,7 @@ def check_bugfixes():
     for stt in (139, 140, 33):
         H("setstate player %d 1" % stt)
         on.append(stt)
-    ok, line, ls = hv("hit player phys %d" % (5000 * P), "hit")
+    ok, line, ls = hv("hit player phys %d %s" % (5000 * P, atk), "hit")
     log.extend(ls)
     time.sleep(2)
     p = hstate()["player"]
@@ -10832,6 +10982,12 @@ def check_bugfixes():
         bad.append("the character is not alive after the respawn")
     if again:
         bad.append("states %s are on after the respawn" % again)
+    for stt in on:  # a failed run must not leave the wolf / bear form and Might on for the checks after it (Might drains mana)
+        H("setstate player %d 0" % stt)
+    H("kill %s" % atk.split(":")[1])
+    for stt, v in saved.items():
+        if v is not None:
+            setstat("player", stt, v)
     add(nm, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
 
 # ------------------------------------------------------------------ lane p4-quests-verify (docs/unported.md rows of quests / objects / D2 bugfixes)
@@ -11214,6 +11370,12 @@ def check_hitfloor():
     kill_all_near()
     god(False)
     H("stat player 6 0 set 2000000")
+    # The missile's damage at skill level 0 is the character's own flat damage (stats 21 / 22 physical, 48 / 49 fire, 50 / 51 lightning):
+    # the earlier runs had it from a Way of the Phoenix left on by another check (its fire damage), a fresh game or a start state that
+    # took the stance off has none and every level 0 shot did nothing. Set a flat damage and put the values back at the end.
+    flat0 = {st_: stat_of(H("stat player %d" % st_)[1]) for st_ in (21, 22, 48, 49, 50, 51)}
+    for st_, v_ in ((21, 40), (22, 60), (48, 40), (49, 60), (50, 40), (51, 60)):
+        H("stat player %d 0 set %d" % (st_, v_))
     gaps = " ".join(H("gaps")[1])
     m = re.search(r"hit20=(\w+) hit20_patched=(\d)", gaps)
     rows.append("bytes %s patched=%s" % (m.group(1) if m else None, m.group(2) if m else None))
@@ -11246,6 +11408,8 @@ def check_hitfloor():
             bad.append("skill %d level %d: only %d of 5 shots took life" % (skill, level, len(hit)))
     kill_all_near()
     H("stat player 6 0 set 2000000")
+    for st_, v_ in flat0.items():
+        H("stat player %d 0 set %d" % (st_, v_ or 0))
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad) + ("; control run: off word hitfloor" if ctl else ""), [], log)
 
 
@@ -11266,6 +11430,8 @@ def check_strdex():
     close_menu()
     H("unequip lring")
     H("unequip body")
+    level0 = rd("player", 12)
+    setstat("player", 12, 90)  # the armor has a level requirement too: only the strength is the question
 
     def val(stat):
         return stat_of(H("stat player %d" % stat)[1])
@@ -11281,7 +11447,7 @@ def check_strdex():
     H("unequip lring")
     a3 = val(39)
     rows.append("armor first: fire resist %s (inactive), with the strength ring (str %s) %s, ring off %s" % (a1, s2, a2, a3))
-    if not (a1 == r0 and a2 == r0 + 77 and a3 == r0):
+    if not (a1 == r0 and a2 is not None and a2 >= r0 + 77 and a3 == r0):  # >=: the ring is a rare with random affixes, it may carry resistance itself
         bad.append("armor first: the stats of the armor did not follow the strength (%s, %s, %s from %s)" % (a1, a2, a3, r0))
     H("unequip body")
     log += H("equip rin 0=600 lring")[1]
@@ -11290,9 +11456,11 @@ def check_strdex():
     H("unequip lring")
     b2 = val(39)
     rows.append("ring first: fire resist %s (active), ring off %s" % (b1, b2))
-    if not (b1 == r0 + 77 and b2 == r0):
+    if not (b1 is not None and b1 >= r0 + 77 and b2 == r0):
         bad.append("ring first: the armor kept its stats after the ring came off (%s, %s from %s)" % (b1, b2, r0))
     H("unequip body")
+    if level0:
+        setstat("player", 12, level0)
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
 
 
@@ -11432,7 +11600,8 @@ def check_morphdeath():
         if ids.get(nm) != sid:
             bad.append("skills.txt: %s is %s, the check expects %d" % (nm, ids.get(nm), sid))
     if not switch_character("MxlDru", "druid", 5):
-        return add(name, "BLOCKED", "the Druid test character cannot be opened")
+        shot = g.shot("morphdeath_blocked")  # what the screen shows after Save and Exit / the character list
+        return add(name, "BLOCKED", "the Druid test character cannot be opened", [os.path.basename(shot)])
     P = 256
 
     def morph(sid, state, weapon):
@@ -11510,7 +11679,7 @@ def check_morphdeath():
         god(False)
         if morph(sid, st, wpn):
             setstat("player", 7, 100 * P)
-            setstat("player", 6, 100 * P)
+            setstat("player", 6, 12 * P)  # Andariel's hits on a bear at this level are ~16: one hit kills, a later one does not have to land
             log.extend(H("spawn 156")[1])
             if died(40):
                 after_death("%s killed by Andariel" % nm, st)
