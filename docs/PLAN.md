@@ -173,6 +173,29 @@ model). Draft plan, edit before starting: [realm-plan.md](realm-plan.md).
 
 Rule for Phases 4-6 meanwhile: Median logic stays server-side in the plugins, and Median's state lives in the save files.
 
+## Progress estimate (2026-10-25, plugin 0.64.0)
+
+Judgement estimates, not measurements. Same method as the tables below. Since 0.55.0 (PRs #140-#156): Phase 1 closed (all 37
+Sigma tables named, #143); Phase 4 lanes p4-engine-a/b, p4-verify-a/b, p4-leftovers, p4-quests-verify, p4-ww-morph, no-corpse-2 and
+p4-stability decided every engine row of unported.md (ported and checked, or an honest row); full suite on 0.64.0: group 1 81 PASS,
+group 2 67 PASS + `mapreveal` BLOCKED by design (`checks-20261024-231804-s1` / `-s2`). Phase 4 is not at 100% because the guard for
+D2R's own client crash at `0x7761DC` (bugs.md #34, 2 of ~7 group 1 runs before the guard) is not yet proven on real events.
+Honest rows left as Phase 4 gaps: Soulstealer 40% / 25% heals, natural Hellforge smash, hit-20 target cap effect.
+UI rows (27), two-player rows (party xp, shared stash TCP/IP, trade, tagged drops) and seasonal features are counted in Phases 5 / 6.
+
+| Phase | Share of total work | Phase done | Adds to overall |
+|---|---|---|---|
+| 0 Setup | 2% | 100% | 2.0% |
+| 1 Tools (extract, decode, convert) | 12% | 100% | 12.0% |
+| 2 Data port (tables, strings, install, booting) | 10% | 100% | 10.0% |
+| 3 Triage of Median's engine code | 8% | 100% | 8.0% |
+| 4 Plugins (engine behaviour) | 30% | 99% | 29.7% |
+| 5 Graphics | 28% | 45% | 12.6% |
+| 6 Test and release | 10% | 50% | 5.0% |
+| **Total** | **100%** | **79.3%** | **79.3%** |
+
+Phase 7 (private realm) is outside this estimate.
+
 ## Progress estimate (2026-10-23, plugin 0.55.0)
 
 Judgement estimates, not measurements. Same method as the tables below. Since 0.53.0: the `medianxl` string namespace
