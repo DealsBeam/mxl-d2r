@@ -553,6 +553,30 @@ auto CltDoCurse(Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t 
 	return 1;
 }
 
+// Client start function 18 (0x2b0df0, table 0x235f590) draws the skill's cltmissilec at the caster. A row that runs it without
+// a client missile (Median's treasure goblin aura skills_2511 = 2583 has none) makes it assert "nMissile >= 0 && nMissile <
+// NumMissileStats" twice per cast; the function returns 1 afterwards, so the row simply draws nothing, which is Median's look.
+// The wrapper returns the same 1 without the asserts.
+constexpr uint64_t CltStTable = 0x235f590;
+constexpr int CltStMissileCSlot = 18;
+constexpr uint64_t RvaCltStMissileC = 0x2b0df0;
+CltDoFn g_cltStMissileC = nullptr;
+auto CltStMissileC(Unit* unit, int32_t skillId, int32_t level) noexcept -> int64_t {
+	if (unit == nullptr || g_cltStMissileC == nullptr) {
+		return 0;
+	}
+	const uint32_t dataFlag = g_unitDataFlag(unit);
+	const uint8_t* skill = d2r::api.getSkillRecord(dataFlag, skillId);
+	if (skill == nullptr) {
+		return 0;
+	}
+	const int32_t missile = At<int16_t>(skill, SkCltMissile + 3 * 2);
+	if (missile < 0 || missile >= d2r::api.missileCount(dataFlag)) {
+		return 1;
+	}
+	return g_cltStMissileC(unit, skillId, level);
+}
+
 // D2R's area applier of the server aura / curse functions (0x4327d0 -> 0x4398b0) asserts "nRadius > 0" and applies nothing when the
 // skill's radius calc (aurarangecalc, skill +0x84) gives 0 or less. Median's self-only auras and monster property auras (property
 // dmg% = aura, e.g. the treasure goblin's skills_2511, srvdofunc 65) leave aurarangecalc blank: D2Sigma applies the state to the
@@ -650,6 +674,17 @@ auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t
 		                            used ? ";" : "", CltDoCurseSlot, curseOk ? "" : " FAILED");
 		used += n > 0 ? static_cast<size_t>(n) : 0;
 	}
+	const uint64_t startRva = CltStTable + static_cast<uint64_t>(CltStMissileCSlot) * 8;
+	const uint64_t startFn = *reinterpret_cast<const volatile uint64_t*>(context->exeBase + startRva);
+	g_cltStMissileC = reinterpret_cast<CltDoFn>(context->exeBase + RvaCltStMissileC);
+	const bool startOk = startFn == context->exeBase + RvaCltStMissileC &&
+	                     context->PatchWriteU64(startRva, &startFn, sizeof(startFn), reinterpret_cast<uint64_t>(&CltStMissileC));
+	installed += startOk ? 1 : 0;
+	if (used < reportSize) {
+		const int n = std::snprintf(report + used, reportSize - used, "%s cltstfunc %d start without client missile%s",
+		                            used ? ";" : "", CltStMissileCSlot, startOk ? "" : " FAILED");
+		used += n > 0 ? static_cast<size_t>(n) : 0;
+	}
 	const bool areaOk = context->InstallInlineHook(RvaAreaAura, AreaAuraEntry, sizeof(AreaAuraEntry),
 	                                               reinterpret_cast<void*>(&AreaAuraHook), reinterpret_cast<void**>(&g_areaAura));
 	installed += areaOk ? 1 : 0;
@@ -669,5 +704,5 @@ auto SigmaSkillCounters(long* fanCasts, long* fanMeleeHits, long* hammerCasts, l
 }
 
 auto SigmaSkillCount() noexcept -> int {
-	return static_cast<int>(sizeof(Functions) / sizeof(Functions[0]) + sizeof(ClientFunctions) / sizeof(ClientFunctions[0]) + 4);
+	return static_cast<int>(sizeof(Functions) / sizeof(Functions[0]) + sizeof(ClientFunctions) / sizeof(ClientFunctions[0]) + 5);
 }

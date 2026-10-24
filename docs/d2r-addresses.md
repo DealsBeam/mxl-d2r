@@ -843,6 +843,15 @@ Waypoint object classes (`objects.txt` OperateFn 23, the same 16 rows in Median 
 
 Checked in game (slot 1, 2026-10-22, `py -3 tools/game_checks.py --slot 1 all mapreveal wpauto hotkeys stashpages`): the waypoint of Cold Plains (number 1) is set within 1.5 s when its bit is cleared at distance 3, stays clear at distance 47, and a `move` to it sets it at distance 25; the reveal call returns, the automap layer list grows from 1 to 25 layers (the act's levels), a second reveal adds nothing and the debug flag is as it was (the cell count stays 8878: `cheat goto` and the town arrive with the automap already drawn whole, so no picture shows the difference; an earlier run that sampled a Cold Plains still streaming in saw 965 -> 8663 cells, which is the streaming, not proof); X / R / C pressed as window messages reach the actions (X toggles, R reveals, C with the cube closed is counted and ignored); an item created through ItemService lands in shared stash tabs 0-9 and tab 10 is refused.
 
+## 19. Client skill function tables (lane p4-stability, 2026-10-24; plugin/src/sigma_skills.cpp)
+
+| Name | RVA | Notes |
+|---|---|---|
+| client start table (`cltstfunc`) | `0x235f590` | 55 slots (the bound is read from `0x235f7c0`), read by the skill start function `0x218030` at `skill record +0x148`; null = nothing runs |
+| slot 18 | `0x2b0df0` | draws the skill's `cltmissilec` (record `+0x144`) at the caster; asserts `nMissile >= 0 && nMissile < NumMissileStats` twice and returns 1 for a row without one (52 Median rows, e.g. the curses Amplify Damage 66, Terror 77, Lower Resist 91 and monster skills; the treasure goblin's spawn raised it in the old trace); wrapped in place by `CltStMissileC` (plugin 0.64.0) |
+| client do table (`cltdofunc`) | `0x235f7d0` | 130 slots; slot 30 = `0x2b05d0` (curse, wrapped by `CltDoCurse`), 31 = `0x2b0ac0`, 32 = `0x2b0180`, 33 = `0x2b0800` |
+| `UnitTranslationLayer` event handler, type 0x10 | `0x775fc0` (loop `0x77a3b0`) | D2R's own; the crash `D2R.exe+0x7761DC` of docs/bugs.md #34 reads `[[event]+0x70]+0x870` |
+
 ## Appendix A. Quest descriptor table (D2R, verified)
 
 `0x239c5c0`, 36 entries of 0x20 bytes: `+0` init function VA, `+8` u32 act (0-4), `+0xc` u32 (`0x64` or 0), `+0x10`

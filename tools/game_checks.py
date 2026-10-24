@@ -619,9 +619,67 @@ def clean_start_state(label, report_dead=False):
         STATE["worn"] = worn
     except Exception as e:
         g.log("start state before %s: worn test failed: %r" % (label, e))
+    try:  # Molten Core (1682) is a passive: its stat 297 turns the mana regeneration into the heat drain on any class
+        heat = stat_of(H("stat player 297")[1]) or 0
+        if heat > 0 and hstate()["player"].get("class") != 1:
+            left = clear_heat_stat()
+            notes.append("stat 297 (heat drain of Molten Core) was %d (taken off, now %s)" % (heat, left))
+    except Exception as e:
+        g.log("start state before %s: heat test failed: %r" % (label, e))
+    try:  # the mana pool of a quiet character does not fall by itself: a pool that does hides the cost of every mana check
+        dip = mana_idle_dip()
+        if dip is not None and dip > MANA_DIP_LIMIT:
+            notes.append("the mana pool fell by %d points in %.1f s with nothing cast (%s)" % (dip, MANA_DIP_WINDOW, mana_drain_evidence()))
+    except Exception as e:
+        g.log("start state before %s: mana test failed: %r" % (label, e))
     if notes:
         g.log("start state before %s: %s" % (label, "; ".join(notes)))
     return notes
+
+
+def clear_heat_stat():
+    """Take the heat drain off the character: `setskill <id> 0` only writes the base level, the passive stat 297 that Molten Core
+    (1682) put on the character stays until the next stat recalculation, and with it the mana drain of plugin/src/heat.cpp. The stat
+    is set to 0, and what is still left (the part that sits in the skill's stat list) is cancelled by a negative value of the unit's
+    own stat. Returns the stat 297 afterwards."""
+    _setskill(1682, 0)
+    for _ in range(2):
+        left = stat_of(H("stat player 297")[1]) or 0
+        if left == 0:
+            break
+        H("stat player 297 set %d" % 0)
+        rest = stat_of(H("stat player 297")[1]) or 0
+        if rest:
+            H("stat player 297 set %d" % -rest)
+    return stat_of(H("stat player 297")[1])
+
+
+MANA_DIP_LIMIT = 100  # points; the idle regeneration of a full pool is above the pool, so any fall is a drain
+MANA_DIP_WINDOW = 1.2
+
+
+def mana_idle_dip():
+    """Points the player's mana falls in MANA_DIP_WINDOW seconds from a full pool with nothing cast (plugin `manamin`: the lowest and
+    highest value of every server frame), None when the pool or the answer is missing."""
+    full = rd("player", 9)
+    if not full:
+        return None
+    setstat("player", 8, full)
+    time.sleep(0.2)
+    H("manamin reset")
+    time.sleep(MANA_DIP_WINDOW)
+    m = re.search(r"manamin min=(-?\d+) max=(-?\d+)", " ".join(H("manamin")[1]))
+    return (int(m.group(2)) - int(m.group(1))) if m else None
+
+
+def mana_drain_evidence():
+    """What can drain a pool, for the note of a start state that shows it: the player states on, the monsters in reach, the worn items."""
+    on = [s for s in range(1, 360) if "hasstate %d: 1" % s in " ".join(H("hasstate %d" % s)[1])]
+    st = hstate()
+    mons = ["%s@%s" % (m.get("class"), m.get("dist")) for m in st["mons"] if not m.get("npc")][:10]
+    worn = sorted("%s@%s" % (it.get("code"), it.get("body")) for it in st["items"] if it.get("page") == 255 and it.get("body"))
+    heat = stat_of(H("stat player 297")[1])
+    return "states on %s; stat 297 (heat) %s; monsters %s; worn %s" % (on, heat, mons, worn)
 
 
 def goto(area, timeout=40):
@@ -1074,6 +1132,13 @@ def check_heat():
     kill_all_near()
     cls0 = hstate()["player"].get("class")
     log = []
+    # Molten Core is a passive: left at level 5 it keeps stat 297 on the character, and every later check in the same game then
+    # loses mana to the heat drain (p4-stability: npcheal / soulstealer / meleenotarget saw the bar fall 740-864 points in 1.2 s
+    # with no click). Remember the levels and put them back at the end.
+    before = {}
+    for sid in (482, 1682):
+        m = re.search(r"skill id=%d level=(-?\d+)" % sid, " ".join(H("skills")[1]))
+        before[sid] = int(m.group(1)) if m else 0
     for cmd in ("class 1", "setskill 482 5", "setskill 1682 5"):
         ok, lines = H(cmd)
         log += lines
@@ -1110,11 +1175,18 @@ def check_heat():
     H("stat player 8 set %d" % full)
     if cls0 is not None:
         H("class %d" % cls0)
+    _setskill(482, before[482])
+    if before[1682] > 0:
+        _setskill(1682, before[1682])
+        left = stat_of(H("stat player 297")[1])
+    else:
+        left = clear_heat_stat()
     good = (rate is not None and rate > 0 and top is not None and top >= full // 2 and mid is not None and mid < top and low is not None and low < mid
-            and empty == 0 and peak > 0 and seen_negative and town == 12800)
+            and empty == 0 and peak > 0 and seen_negative and town == 12800 and (not left or before[1682] > 0))
     add(nm, "PASS" if good else "FAIL",
         "stat 297 = %s; mana x256 from full: %s -> %s (2.5 s) -> %s (5 s) -> %s (empty, floor 0); Flamefront at empty: peak %s, "
-        "stat 297 went negative: %s; in town (set to 12800, 3 s later): %s" % (rate, top, mid, low, empty, peak, seen_negative, town), (), log)
+        "stat 297 went negative: %s; in town (set to 12800, 3 s later): %s; stat 297 after the skill levels went back (%s): %s" % (
+            rate, top, mid, low, empty, peak, seen_negative, town, before, left), (), log)
 
 
 def check_trophytimer():
@@ -1235,8 +1307,17 @@ def check_cain_submenu():
     before = len([l for l in menu if "line " in l])
     shot0 = sh("cain_menu_page")
     ok, l = H("menu %d" % plugin_idx[0])
-    time.sleep(2.5)
-    ok2, after = g.hcmd("menu list", 5)
+    ok2, after = False, None
+    for attempt in range(2):  # the client rebuilds the list when the server's plugin message arrives: wait for it, ask once more when it did not
+        for _ in range(8):
+            time.sleep(1.5)
+            ok2, after = g.hcmd("menu list", 5)
+            if ok2 and after != menu:
+                break
+        if ok2 and after != menu:
+            break
+        if attempt == 0:
+            ok, l = H("menu %d" % plugin_idx[0])
     s = sh("cain_submenu")
     n_after = len([x for x in (after or []) if "line " in x])
     same = after == menu
@@ -1926,6 +2007,18 @@ def check_asserttrace():
     got = assert_lines(H("asserttrace show")[1])
     ctl = [a for a in got if "nMissile" in a[0] and any(0x2b05d0 <= f < 0x2b0800 for f in a[2])]
     notes = ["control (cltdo 66 orig): %d nMissile assert(s), chain %s" % (len(ctl), " ".join("%x" % f for f in ctl[0][2][:6]) if ctl else "-")]
+    # control 2: Amplify Damage (66) has cltstfunc 18 and no client missile; D2R's own start function of its table slot
+    # (cltstfunc 18, 0x2b0df0) asserts nMissile, the table entry (the plugin's wrapper CltStMissileC) does not and returns 1
+    H("asserttrace clear")
+    ok_o, l_o = H("cltst 66 orig")
+    orig_got = [a_ for a_ in assert_lines(H("asserttrace show")[1]) if "nMissile" in a_[0] and any(0x2b0df0 <= f < 0x2b1000 for f in a_[2])]
+    H("asserttrace clear")
+    ok_t, l_t = H("cltst 66")
+    table_got = [a_ for a_ in assert_lines(H("asserttrace show")[1]) if "nMissile" in a_[0]]
+    notes.append("skill 66 start function: D2R's own (orig) %d nMissile assert(s) [%s]; through the table %d [%s]" % (
+        len(orig_got), " ".join(l_o)[-70:], len(table_got), " ".join(l_t)[-70:]))
+    start_ok = ok_o and ok_t and bool(orig_got) and not table_got and "returned=1" in " ".join(l_t)
+    log += l_o + l_t
     # probes of the open asserts: the treasure goblin (nRadius), a hit by an andariel_ai monster (nSkillCastId)
     goto(2)
     kill_all_near()
@@ -1934,6 +2027,10 @@ def check_asserttrace():
     time.sleep(6)
     probes = assert_lines(H("asserttrace show")[1])
     notes.append("treasure goblin spawn: %s" % ("; ".join("%s <- %s" % (a[0], " ".join("%x" % f for f in a[2][:8])) for a in probes) or "no assert"))
+    # the goblin's aura skill 2583 (cltstfunc 18 chain seen on the old plugin) has no client missile: the wrapper CltStMissileC must keep it from asserting
+    goblin_missile = [x for x in probes if "nMissile" in x[0]]
+    if goblin_missile:
+        notes.append("FAIL: the treasure goblin still raised %d nMissile assert(s)" % len(goblin_missile))
     kill_all_near()
     # the warp asserts of `goto` into Median-only levels (docs/testing.md assert table)
     warps = []
@@ -1946,7 +2043,7 @@ def check_asserttrace():
         notes.append("goto %d: %s" % (area, "; ".join(sorted(set("%s <- %s" % (a[0][:34], " ".join("%x" % f for f in a[2][:5])) for a in found))) or "no assert"))
     goto(1)
     log += ["%s | %s | %s" % (a[0], a[1], " ".join("%x" % f for f in a[2])) for a in got + probes + warps]
-    add(nm, "PASS" if ctl else "FAIL", "; ".join(notes), [sh("asserttrace")], log)
+    add(nm, "PASS" if ctl and start_ok and not goblin_missile else "FAIL", "; ".join(notes), [sh("asserttrace")], log)
 
 
 def check_cherry():
@@ -3349,10 +3446,21 @@ def leave_and_reenter(menu_open=False):
     if not menu_open:
         g.key("esc")
         time.sleep(1.5)
-    g.click(*g.UI["save_exit"])
-    time.sleep(9)
+    left = False
+    for attempt in range(3):  # a click the game did not take (seen once in a full group1 run) is repeated: first on the open menu, then with a new Esc
+        if attempt == 2:
+            g.key("esc")
+            time.sleep(1.5)
+        g.click(*g.UI["save_exit"])
+        time.sleep(9)
+        for _ in range(8):  # the save of a character with a long session behind it takes longer than 9 s
+            if not g.in_game():
+                break
+            time.sleep(3)
+        left = not g.in_game()
+        if left:
+            break
     STATE["in_game"] = False
-    left = not g.in_game()
     if not left:  # the click did not leave the game (a dead character has no pause menu): the game goes on
         STATE["in_game"] = True
         return False
@@ -7324,6 +7432,10 @@ def check_skillscaling():
     plain_weapon = pick(lambda s: s["flags"] == 0 and s["srcdam"] != 0 and not has_ele(s) and active(s) and not s["pcalc"], 2)
     blvl = lambda s: [n for n in re.findall(r"skill\('([^']+)'\.blvl\)", s["ecalc"]) if n in by_name]  # noqa: E731
     calc_ele = pick(lambda s: elem_ok(s) and active(s) and blvl(s), 8)  # synergy formulas over other skills' levels
+    # a worn item of an earlier check (skillstarts leaves a random amulet and ring on the character) can carry a mastery of its own:
+    # one full group run read "mastery stat of ltng read 6, set 0" from it. The check measures the stats it sets, nothing else.
+    for loc in ("rhand", "lhand", 1, 2, 3, 6, 7, 8, 9, 10, 11, 12):
+        H("unequip %s" % loc)
     groups = [("BaseSynergy elemental", syn_ele), ("BaseSynergy physical", syn_phys), ("StaticDamage elemental", static_ele),
               ("StaticDamage physical", static_phys), ("plain elemental", plain_ele), ("plain physical", plain_phys),
               ("synergy-formula elemental", calc_ele[:2])]
@@ -7948,7 +8060,9 @@ def check_townmana():
     kill_all_near()
     prep(skill)
     f_ok, f0, f1 = cast_mana(skill)
-    field_ok = f_ok and f0 is not None and f1 is not None and f0 - f1 >= 5
+    # the cost of skill 1558 at level 5 is 2 points: earlier runs read "1008" because the heat drain a former check left on the
+    # character (Molten Core, check `heat`) was counted into it, so the field leg needs only a fall (the town leg then shows none)
+    field_ok = f_ok and f0 is not None and f1 is not None and f0 - f1 >= 1
     notes.append("field: skill %d cast %s, mana %s -> lowest %s (cost %s)" % (skill, "OK" if f_ok else "refused", f0, f1, (f0 - f1) if f0 is not None and f1 is not None else "?"))
     kill_all_near()
     for s_, v in saved.items():
@@ -8310,6 +8424,14 @@ def _hc_line():
     return d
 
 
+def _hc_hard(d):
+    """True when an `h hc` line says Hardcore: the info word's bit (the character's own record) or, when it looks like flags (the word of
+    a client that has just joined can hold garbage), the client word's bit 0x800."""
+    m = re.search(r"hc info=0x[0-9a-f]+ hardcore=(\d)", d.get("line", ""))
+    word = int(d.get("client", "0"), 16)
+    return bool((m and m.group(1) != "0") or (word < 0x10000 and word & 0x800))
+
+
 def _d2s_status():
     """The character's status byte in the save (offset 0x14 of the D2R header: 0x04 hardcore, 0x08 died, 0x20 expansion)."""
     with open(os.path.join(SAVES, g.CHAR_NAME + ".d2s"), "rb") as f:
@@ -8366,7 +8488,7 @@ def check_hcdeath():
         if not status1 & 4:
             bad.append("control: the saved status byte has no Hardcore bit: 0x%02x" % status1)
         return add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
-    if h2.get("hardcore") != "0" or int(h2.get("client", "0"), 16) & 0x800:
+    if _hc_hard(h2):
         bad.append("after the death the character is still Hardcore: %s" % h2["line"])
     if int(h2.get("converted", 0)) != int(h1.get("converted", 0)) + 1 or int(h2.get("deaths", 0)) != int(h1.get("deaths", 0)) + 1:
         bad.append("the plugin's counters did not each rise by one: %s -> %s" % (h1["line"], h2["line"]))
@@ -8377,18 +8499,21 @@ def check_hcdeath():
     alive = p.get("mode") not in (0, 17)
     h3 = _hc_line()
     rows.append("respawn pressed (was dead %s), mode now %s, flags %s" % (revived, p.get("mode"), h3["line"]))
-    if not alive or h3.get("hardcore") != "0":
+    if not alive or _hc_hard(h3):
         bad.append("the character did not come back as a Softcore player: %s" % rows[-1])
     if not leave_and_reenter():
         bad.append("Save and Exit + Play did not get back into a game")
     else:
         status1 = _d2s_status()
         h4 = _hc_line()
+        # the client word (client+0x5658) of a game that has just been joined is not always the flags: runs read 0x5f8ae86f, 0xe83d1d8d
+        # (and a changing 0x373611c7 before the first `hc on`), i.e. a Hardcore bit of garbage with the info word and the save clear.
+        # The character's own record (info word) and the save decide; the client word counts only when it looks like flags.
         rows.append("save status byte 0x%02x -> 0x%02x (Hardcore bit 0x04 %s), after re-entering: %s" % (
             status0, status1, "set" if status1 & 4 else "clear", h4["line"]))
         if status1 & 4:
             bad.append("the saved status byte still has the Hardcore bit: 0x%02x" % status1)
-        if h4.get("hardcore") != "0":
+        if _hc_hard(h4):
             bad.append("the re-entered character is Hardcore: %s" % h4["line"])
     add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
 
@@ -10132,23 +10257,42 @@ def check_soulstealer():
         if not top:
             bad.append("%s: none of the classes %s spawned with a max life" % (label, list(classes)))
             return
-        setstat(ref, 6, top * 3 // 10)  # 30% life, room to heal
-        before, n0 = rd(ref, 6), heals()
-        setstat("player", 7, BIG_LIFE)  # (a boss with life leech would otherwise heal from the damage it deals, which hides the kill heal)
-        setstat("player", 6, 256)  # 1 life point: the killing blow deals ~1 point, so a boss's own life leech cannot refill it before the heal
-        killed = False
-        for _ in range(4):
-            ok, line, lines = hv("hit player phys 2000000000 %s" % ref, "hit")
-            log.extend(lines)
-            time.sleep(1.5)
-            if player_dead(hstate()["player"]):
-                killed = True
-                break
+        for attempt in range(3):
+            if attempt:  # the player was dead before the hit landed (see below): a fresh boss at 30 % life, the player revived
+                revive_if_dead()
+                fight_ready()
+                ids = _spawn_ids(cls, 1)
+                ref = "mon:%d" % ids[0] if ids else None
+                top = rd(ref, 7) if ref else 0
+                if not top:
+                    bad.append("%s: the boss did not spawn again for try %d" % (label, attempt + 1))
+                    return
+            setstat(ref, 6, top * 3 // 10)  # 30% life, room to heal
+            before, n0 = rd(ref, 6), heals()
+            setstat("player", 7, BIG_LIFE)  # (a boss with life leech would otherwise heal from the damage it deals, which hides the kill heal)
             setstat("player", 6, 256)  # 1 life point: the killing blow deals ~1 point, so a boss's own life leech cannot refill it before the heal
-        after, n1 = rd(ref, 6), heals()
+            killed = False
+            first_hit = ""
+            for k in range(4):
+                ok, line, lines = hv("hit player phys 2000000000 %s" % ref, "hit")
+                log.extend(lines)
+                if k == 0:
+                    first_hit = line
+                time.sleep(1.5)
+                if player_dead(hstate()["player"]):
+                    killed = True
+                    break
+                setstat("player", 6, 256)  # 1 life point: the killing blow deals ~1 point, so a boss's own life leech cannot refill it before the heal
+            after, n1 = rd(ref, 6), heals()
+            # the hit of an earlier try found the player dead already (`life=0->0`): something else took the one life point between the
+            # `stat set` and the hit (the boss's own swing at a player it stands next to counts as its kill, so that is another source)
+            if killed and "life=0->0" in first_hit and n1 == n0 and attempt < 2:
+                log.append("%s: the player was dead before the hit (%s); last killer: %s; trying again" % (label, first_hit[:90], _last_killer()))
+                continue
+            break
         gain = after - before
-        rows.append("%s (class %d, max life %d raw): player killed %s; boss life %d -> %d (gain %.1f%% of max); heals counter %d -> %d" % (
-            label, cls, top, killed, before, after, 100.0 * gain / top, n0, n1))
+        rows.append("%s (class %d, max life %d raw): player killed %s; boss life %d -> %d (gain %.1f%% of max); heals counter %d -> %d%s" % (
+            label, cls, top, killed, before, after, 100.0 * gain / top, n0, n1, "; try %d" % (attempt + 1) if attempt else ""))
         log.append(rows[-1])
         if not killed:
             bad.append("%s: the player did not die" % label)
@@ -10156,10 +10300,14 @@ def check_soulstealer():
             if gain > 0.02 * top:
                 bad.append("%s: part off but the boss healed: %s" % (label, rows[-1]))
         elif expect_heal and not (0.09 * top <= gain <= 0.12 * top and n1 == n0 + 1):
-            bad.append("%s: expected a heal of about 10%% of max life and one counted heal: %s" % (label, rows[-1]))
+            bad.append("%s: expected a heal of about 10%% of max life and one counted heal: %s; last killer: %s" % (label, rows[-1], _last_killer()))
         elif not expect_heal and (gain > 0.02 * top or n1 != n0):
             bad.append("%s: an ordinary monster healed: %s" % (label, rows[-1]))
         revive_if_dead()
+
+    def _last_killer():
+        m = re.search(r"player deaths \d+ \(last killer: [^)]*\)", mxl_text())
+        return m.group(0) if m else "not reported"
 
     try:
         # Zagraal and Kabraxis (Median: Soulstealer bosses). The Leoric row (2907) refills itself to full life when it kills a player
@@ -10588,6 +10736,13 @@ def check_npcheal():
         return int(a), int(b)
 
     def one_try(cls):
+        # a hostile monster of the Blood Moor next to the character (p4-stability run: three zombies at 2-3 yards, none of them ours)
+        # keeps the character in its hit recovery and the NPC never opens: clear the field first
+        try:
+            if any(not m.get("npc") and float(m.get("dist") or 99) < 15 for m in hstate()["mons"]):
+                kill_all_near()
+        except (TypeError, ValueError):
+            pass
         ok, _sl = H("spawn %d" % cls)
         if not ok:
             return "spawn failed"
@@ -10606,6 +10761,11 @@ def check_npcheal():
             if a >= b - max(8, b // 100):  # full life, give or take what drains it again within the 3 s (the quarter we set is far away)
                 healed = True
                 break
+        if not healed:  # what the player and the NPC looked like when the heal did not come (a talk that never started, an NPC out of reach)
+            a, b = cur()
+            menu_ok, _ml = H("menu list")
+            log.append("npc class %d: no heal, life %d/%d after 12 s; menu %s; near %s" % (
+                cls, a, b, "open" if menu_ok else "closed", ["%s@%s mode %s" % (m.get("class"), m.get("dist"), m.get("mode")) for m in hstate()["mons"][:6]]))
         close_menu()
         H("kill nearest %d" % cls)
         time.sleep(0.5)
@@ -10613,7 +10773,9 @@ def check_npcheal():
 
     def one(cls):
         r = one_try(cls)
-        if r == "no heal" and not control:  # a talk that did not start (the NPC was not in reach, the menu was refused): once more with a fresh NPC
+        if r in ("no heal", "interact failed") and not control:  # a talk that did not start (the NPC was not in reach, the menu was refused, the NPC died): once more with a fresh NPC
+            log.append("npc class %d: %s, trying once more" % (cls, r))
+            kill_all_near()
             r = one_try(cls)
         return r
 
@@ -11695,6 +11857,88 @@ def check_morphdeath():
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
 
 
+def check_transguard():
+    """Crash guard on D2R's unit translation event handler 0x775fc0 (plugin/src/translation_guard.cpp, docs/bugs.md #34): the hook is on,
+    it has seen events of the game(s) so far, and a probe event with the payload word of the crash reports (0x8000003F0) is skipped."""
+    nm = "Translation event guard (D2R.exe+0x7761DC crash): the hook is on, the probe event is skipped"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    line = _mxl_line("translation guard")
+    log = [line]
+    if "translation guard on" not in line:
+        return add(nm, "FAIL", "the `mxl` command has no `translation guard on` line: %s" % (line or "missing"))
+    ok0, l0 = H("transguard")
+    seen0 = re.search(r"events=(\d+) skipped=(\d+)", " ".join(l0))
+    ok, l1 = H("transguard probe")
+    log += l0 + l1
+    m = re.search(r"events=(\d+) skipped=(\d+) probe=(\S+)", " ".join(l1))
+    good = ok0 and ok and m is not None and m.group(3) == "skipped" and seen0 is not None and int(m.group(2)) == int(seen0.group(2)) + 1
+    add(nm, "PASS" if good else "FAIL", "%s; before the probe %s events, %s skipped; probe: %s" % (
+        line[:110], seen0.group(1) if seen0 else "?", seen0.group(2) if seen0 else "?", m.group(0) if m else " ".join(l1)[:80]), [], log)
+
+
+def check_morphstress():
+    """Stress for the engine crash of 2026-10-24 (`D2R.exe+0x7761DC`, the client's unit translation layer, during `morphdeath`'s
+    character switch; docs/bugs.md): the Druid casts each of Median's three forms many times (the form is taken off by `setstate`
+    after a short run) and the characters are switched with a form on / with fresh equipment. Not in the groups; run it alone:
+    `MXL_STRESS_CYCLES=20 py -3 tools/game_checks.py all morphstress`."""
+    name = "Morph stress: Druid forms cast many times, character switches in between (crash hunt)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    cycles = int(os.environ.get("MXL_STRESS_CYCLES", "10"))
+    rows, bad, log = [], [], []
+    P = 256
+    done = {nm: 0 for nm, *_ in MORPH_FORMS}
+
+    def cast_form(nm, sid, state, weapon):
+        H("unequip rhand")
+        H("equip %s rhand" % weapon)
+        for _ in range(3):
+            setstat("player", 7, 2000 * P)
+            setstat("player", 6, 2000 * P)
+            setstat("player", 9, 10000 * P)
+            setstat("player", 8, 10000 * P)
+            H("setskill %d 1" % sid)
+            log.extend(H("cast %d self" % sid)[1])
+            for _ in range(8):
+                time.sleep(0.5)
+                if _state_on(state):
+                    return True
+        return False
+
+    for cyc in range(cycles):
+        if not switch_character("MxlDru", "druid", 5):
+            bad.append("cycle %d: the Druid could not be opened" % cyc)
+            break
+        revive_if_dead()
+        goto(2)
+        close_menu()
+        kill_all_near()
+        god(False)
+        for nm, sid, st, wpn in MORPH_FORMS if cyc % 2 == 0 else reversed(MORPH_FORMS):
+            for k in range(3):
+                if cast_form(nm, sid, st, wpn):
+                    done[nm] += 1
+                else:
+                    bad.append("cycle %d: %s did not start" % (cyc, nm))
+                time.sleep(1.0 + k)
+                H("setstate player %d 0" % st)
+                time.sleep(0.5)
+        # leave morphed on odd cycles: the switch happens with a form on
+        if cyc % 2 == 1:
+            nm, sid, st, wpn = MORPH_FORMS[2]
+            cast_form(nm, sid, st, wpn)
+        rows.append("cycle %d done: %s" % (cyc, done))
+        g.log("morphstress cycle %d: %s" % (cyc, done))
+        if not switch_character("MxlBarb", "barbarian", 4):
+            bad.append("cycle %d: the Barbarian could not be opened" % cyc)
+            break
+        H("equip rin 198:%d=100 lring" % ((36 << 6) | 5))
+        time.sleep(0.3)
+        H("unequip lring")
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows[-1:] + bad), [], log)
+
+
 CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", check_goblins), ("respec", check_respec),
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
@@ -11750,7 +11994,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # lane p4-quests-verify
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
-          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath)]
+          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard)]
 
 
 def write_report(extra=""):
