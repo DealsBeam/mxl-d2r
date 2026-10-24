@@ -17,6 +17,7 @@
 #include "dungeon_lockout.h"
 #include "engine_gaps.h"
 #include "hardcore_death.h"
+#include "translation_guard.h"
 #include "required_level.h"
 #include "teleport.h"
 #include "engine_gaps_logic.h"
@@ -3204,6 +3205,17 @@ auto CmdHardcore(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// `transguard [probe]`: the translation event guard's counters (translation_guard.cpp); `probe` feeds the hook one event with the payload
+// word of the crash reports (0x8000003F0), which must be skipped (and counts as one skipped event and one log line).
+auto CmdTransGuard(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	const bool probe = t.n >= 2 && hcmd::LowerEq(t.tok[1], "probe");
+	const bool skipped = probe ? TranslationGuardProbe() : false;
+	unsigned seen = 0, skips = 0;
+	TranslationGuardStats(&seen, &skips);
+	Out("transguard events=%u skipped=%u%s", seen, skips, probe ? (skipped ? " probe=skipped" : " probe=NOT skipped") : "");
+	return !probe || skipped ? true : Fail(c, "transguard: the probe event was not skipped");
+}
+
 // `tpgold`: the teleport gold pickup's counters (teleport.cpp): teleports that looked around, gold piles in reach, piles taken.
 auto CmdTeleportGold(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	unsigned teleports = 0, seen = 0, piles = 0;
@@ -3694,6 +3706,43 @@ auto CmdCltDo(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	const int64_t r = reinterpret_cast<CltFn>(entry)(unit, static_cast<int32_t>(skill), 1);
 	Out("cltdo skill=%lld cltdofunc=%d cltmissilea=%d %s returned=%lld", skill, slot, missile, orig ? "orig" : "table",
 	    static_cast<long long>(r));
+	return true;
+}
+
+// `cltst <skill id> [orig]`: the client start function of the skill (record +0x148 = cltstfunc, table 0x235f590) called the way
+// the client's skill start 0x218030 calls it; `orig` calls D2R's own function of slot 18 (0x2b0df0) directly, past the plugin's wrapper.
+auto CmdCltSt(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long skill = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &skill)) {
+		return Fail(c, "usage: cltst <skill id> [orig]");
+	}
+	if (g_playerId == 0) {
+		return Fail(c, "cltst: no player seen yet");
+	}
+	Unit* unit = Fn<ClientFindFn>(RvaClientFind)(static_cast<uint32_t>(g_playerId), 0);
+	if (unit == nullptr) {
+		return Fail(c, "cltst: no client player unit");
+	}
+	const uint32_t dataFlag = Fn<UnitDataFlagFn>(RvaUnitDataFlag)(unit);
+	const uint8_t* record = d2r::api.getSkillRecord(dataFlag, static_cast<int32_t>(skill));
+	if (record == nullptr) {
+		return Fail(c, "cltst: no skills.txt row %lld", skill);
+	}
+	const int slot = d2r::At<int16_t>(record, 0x148);
+	const int bound = *reinterpret_cast<const volatile int32_t*>(g_base + 0x235f7c0);
+	const int missile = d2r::At<int16_t>(record, 0x144);
+	if (slot < 0 || slot >= bound) {
+		return Fail(c, "cltst: skill %lld has no client start function (cltstfunc %d, table bound %d)", skill, slot, bound);
+	}
+	using CltFn = int64_t (*)(Unit*, int32_t, int32_t);
+	const bool orig = t.n > 2 && hcmd::LowerEq(t.tok[2], "orig") && slot == 18;
+	const uint64_t entry = orig ? g_base + 0x2b0df0
+	                            : *reinterpret_cast<const volatile uint64_t*>(g_base + 0x235f590 + static_cast<uint64_t>(slot) * 8);
+	if (entry == 0) {
+		return Fail(c, "cltst: slot %d is empty", slot);
+	}
+	const int64_t r = reinterpret_cast<CltFn>(entry)(unit, static_cast<int32_t>(skill), 1);
+	Out("cltst skill=%lld cltstfunc=%d cltmissilec=%d %s returned=%lld", skill, slot, missile, orig ? "orig" : "table", static_cast<long long>(r));
 	return true;
 }
 
@@ -5033,13 +5082,13 @@ const Verb Verbs[] = {
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
-    {"cstat", CmdClientStat, true}, {"cltdo", CmdCltDo, true}, {"skillstats", CmdSkillStats, false}, {"asserttrace", CmdAssertTrace, false}, {"panelrow", CmdPanelRow, false}, {"tip", CmdTip, true}, {"tiplog", CmdTipLog, true}, {"tipfmt", CmdTipFmt, true},
+    {"cstat", CmdClientStat, true}, {"cltdo", CmdCltDo, true}, {"cltst", CmdCltSt, true}, {"skillstats", CmdSkillStats, false}, {"asserttrace", CmdAssertTrace, false}, {"panelrow", CmdPanelRow, false}, {"tip", CmdTip, true}, {"tiplog", CmdTipLog, true}, {"tipfmt", CmdTipFmt, true},
     {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"itemdesc", CmdItemDesc, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"questobj", CmdQuestObj, false}, {"questreg", CmdQuestReg, false}, {"objects", CmdObjects, false}, {"object", CmdObject, false}, {"operate", CmdOperate, false}, {"objmode", CmdObjMode, false}, {"portal", CmdPortal, false},{"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},
     {"mapcells", CmdMapCells, true}, {"reveal", CmdReveal, true}, {"hotkey", CmdHotkey, true}, {"wpobj", CmdWpObj, false}, {"travel", CmdTravel, true}, {"stashprobe", CmdStashProbe, true},
-    {"stashpage", CmdStashPage, true}, {"ccorpses", CmdClientCorpses, true}, {"afford", CmdAfford, false}, {"hc", CmdHardcore, false}, {"tpgold", CmdTeleportGold, false}, {"modewatch", CmdModeWatch, false}, {"peek", CmdPeek, false},
+    {"stashpage", CmdStashPage, true}, {"ccorpses", CmdClientCorpses, true}, {"afford", CmdAfford, false}, {"transguard", CmdTransGuard, false}, {"hc", CmdHardcore, false}, {"tpgold", CmdTeleportGold, false}, {"modewatch", CmdModeWatch, false}, {"peek", CmdPeek, false},
 };
 
 const Verb* FindVerb(const char* name) noexcept {

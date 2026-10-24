@@ -29,6 +29,7 @@
 #include "missile_hits.h"
 #include "mana_costs.h"
 #include "hardcore_death.h"
+#include "translation_guard.h"
 #include "required_level.h"
 #include "teleport.h"
 #include "item_rules.h"
@@ -82,7 +83,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.63.0";
+constexpr const char* PluginVersion = "0.64.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -96,6 +97,7 @@ char g_manaCostsReport[160] = "off: not the expected game image";
 char g_skillAffordReport[160] = "off: not the expected game image";
 char g_teleportGoldReport[200] = "off: not the expected game image";
 char g_hardcoreDeathReport[200] = "off: not the expected game image";
+char g_translationGuardReport[220] = "off: not the expected game image";
 char g_requiredLevelReport[200] = "off: not the expected game image";
 char g_itemRulesReport[320] = "off: not the expected game image";
 char g_skillDamageReport[160] = "off: not the expected game image";
@@ -178,7 +180,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits vendorstock npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits vendorstock npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -255,6 +257,12 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	{
 		std::snprintf(line, sizeof(line), "required level %s (%d of 2 sites patched)", g_requiredLevelReport, RequiredLevelPatchedSites());
+		Say(command, line);
+	}
+	{
+		unsigned seen = 0, skipped = 0;
+		TranslationGuardStats(&seen, &skipped);
+		std::snprintf(line, sizeof(line), "translation guard %s (%u events, %u skipped)", g_translationGuardReport, seen, skipped);
 		Say(command, line);
 	}
 	{
@@ -613,6 +621,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			InstallHardcoreDeath(context, g_hardcoreDeathReport, sizeof(g_hardcoreDeathReport));
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: hardcore death %s", g_hardcoreDeathReport);
+		context->LogInfo(line);
+		if (Off("transguard")) {
+			std::snprintf(g_translationGuardReport, sizeof(g_translationGuardReport), "%s", OffNote);
+		} else {
+			InstallTranslationGuard(context, g_translationGuardReport, sizeof(g_translationGuardReport));
+		}
+		std::snprintf(line, sizeof(line), "mxl-core: translation guard %s", g_translationGuardReport);
 		context->LogInfo(line);
 		if (Off("teleportgold")) {
 			std::snprintf(g_teleportGoldReport, sizeof(g_teleportGoldReport), "%s", OffNote);
