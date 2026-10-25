@@ -39,6 +39,7 @@ SAMPLES = {  # stat -> (value, layer) where the plain 12 / 0 does not show the l
     478: (VALUE, SKILL_SAMPLE),
     456: (VALUE, 0),
     492: (4, 0),                  # class lock: Paladin
+    404: (9, 11278), 406: (9, 12185), 407: (9, 12376), 414: (1, 11278),
 }
 # The lines that name a skill, a class or an event of the item (the D2R functions) are checked on real items.
 ITEM_FUNCS = {11, 13, 14, 15, 16, 17, 18, 22, 23, 24, 27, 28, 29}
@@ -154,7 +155,10 @@ def expected(stat: int, fn: int, row: dict, texts: dict):
     text = neg if value < 0 and neg else pos
     if stat == 492:
         return CLASS_ONLY[value - 1], "text"
-    if fn in (31, 34) or fn == 0:
+    if fn in (31, 34):
+        import tbl2json
+        return tbl2json.load_median()[0][sample(stat)[1]][1], "text"
+    if fn == 0:
         return "", "none"
     if fn in ITEM_FUNCS:
         return "(skill, class or event of the item)", "item"

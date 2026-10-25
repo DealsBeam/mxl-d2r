@@ -1028,6 +1028,52 @@ start at 04:37 worked; the following ones (single or in parallel) did not, over 
 **Left:** `group2.txt` in full twice (both pairs died with the machine's GPU, above; the first 13-14 checks PASS on both slots each time, no `transguard` skip read because the counters are only written at the end of a run); the three
 check fixes (`morphdeath`, `monhover`, `wwproc`, `dropilvl`) and the start-state life repair are compiled and read, but were not run in a full group after the edit (a game could not be started for more than an hour).
 
+## Lane town-monsters: Median towns
+
+Use a character created only for this check, with its explicit name so the harness never selects another lane's character:
+`MXL_SLOT=2 MXL_RUN=town-monsters MXL_CHAR=TwnCodexOct py -3 tools/game_checks.py --slot 2 all mxl townmonsters`.
+Take slot 2's lock as `town-monsters`, check it is still held immediately before installing with `tools/install_mod.py`,
+and re-lock before every later install (game_checks releases it at the end). Never start if another lane's game is running.
+The `MXL_CHAR` path now selects that exact character or creates it, and backs up only that character's files.
+
+Repeat with `MXL_CONTROL=mediantowns` to leave D2R's five-town classifier intact. Both runs use the game's own level
+thunk and room check, walk the player through the open Tur Dulra / Scosglen border and observe a native Scytheclaw's
+room. The control must show the monster entering level 242; enabled must keep it in 271. Missing borders, inability
+to walk to the setup or a monster that never acts cannot pass. All four added towns' room checks are read too.
+No monster/path/collision flags are overridden by the harness. `h town [level]`, `h town x y`, `h town edges`,
+monster `area=` in `h state` and optional `h spawn class count x y` provide the observations. Off word `mediantowns`;
+console line `median towns`; version unchanged.
+
+Final evidence (slot 2, throwaway `TwnCodexOct`, plugin 0.66.0):
+- Control `checks-20261025-190752-s2`: `mxl` PASS, `townmonsters` PASS (bug reproduced: active Scytheclaw 30 enters 242).
+- Enabled `checks-20261025-191034-s2`: `mxl` PASS, `townmonsters` PASS (active Scytheclaw 30 stays outside 242).
+- All nine town ids, adjacent/invalid controls, and room checks in all four added towns match the expected classifier.
+- Both runs: zero new crash files, no cursor or foreground changes, transguard skips 0. Enabled loader scan reports
+  50 ERROR/ASSERT lines (startup level-type/automap, debug skill-description and exit pool assertions); it is not a clean assertion log.
+  No mxl-core error/fail/assert lines. Earlier control setup attempts were BLOCKED/FAIL, including one enabled attempt
+  that exposed an SDK patch-length refusal; the final equal-length guarded patch installs successfully.
+- The fixture streams the outdoor approach using actual Teleport casts before spawning; it can blink past an approach
+  obstruction. After spawn it uses walking only. No monster position, collision or path flags are overridden.
+- The manual slot lock was retained between install/test iterations by a local runner, then released only after the
+  last game stopped. Only the lane-created character was selected/backed up/patched. No slot/save incidents.
+- Left: dedicated missile/skill aggression scenarios (shared classifier corrected), documented in `unported.md`.
+
+### Layered special item text (special-text, 2026-10-25, background, slot 3)
+
+`tooltiptext specialtext`: **PASS**, `checks-20261025-185239-s3`. The corrected audit reads 313 property lines
+(294 OK / 19 ITEM); the new check sends all 812 referenced Median string IDs through the real property formatter,
+checks 64 colour probes (four stats x 16 values), and reads Azure Wrath, Staff of Herding, unique 30 and Optical Detector
+through the item builder. All 778 short paragraphs match fully; 34 long paragraphs match bounded prefixes, with their
+precise IDs and remaining tail limitation in [unported.md](unported.md). `special-text-readback.txt` in the run folder
+keeps the complete text answers. The harness adds `tipcolour` after the existing plain `tipfmt` answer.
+
+Control: `MXL_CONTROL=itemtext`, off word `itemtext`, `specialtext` **PASS**, `checks-20261025-184439-s3`:
+no Median special paragraphs; Azure's missing hidden-passive name returns; descfunc 31 prints the native Random Class
+line. The final and control runs have zero crash files, zero cursor / foreground changes and no watchdog abort.
+The lane's wrapper selected/created only `SpTextThree`; the earlier baseline used only `SpecialTxt` in slot 2
+(`checks-20261025-182658-s2`). It did not use the default most-recent-character selection or back up other saves.
+The earlier failed long-colour-boundary probe and intermediate build/startup problem are recorded in
+[item-tooltips.md](item-tooltips.md). Existing startup, magic-item harness and exit pool assertions are unchanged.
 
 ## Waypoint arrival and HD panel regression (lane waypoints)
 

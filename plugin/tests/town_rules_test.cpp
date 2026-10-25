@@ -2,6 +2,7 @@
 #include "../src/town_rules_logic.h"
 
 #include <cstdio>
+#include <initializer_list>
 
 namespace {
 
@@ -16,6 +17,12 @@ void Check(bool ok, const char* what) {
 }  // namespace
 
 int RunTownRulesTests() {
+	for (const int id : {1, 40, 75, 103, 109, 138, 139, 242, 243}) {
+		Check(town::IsTown(id), "all Median towns, including mapped custom ids");
+	}
+	for (const int id : {-1, 0, 2, 137, 140, 241, 244, 270, 271, 100000}) {
+		Check(!town::IsTown(id), "fields, neighbouring ids and invalid levels are not towns");
+	}
 	Check(town::NeedsHealFlag(0) && !town::NeedsHealFlag(1), "heal flag is written only where clear");
 	// Median's Tplock levels (levels.txt) include the Act 2 treasure tomb (61) and Duriel's lair (73); towns and unknown levels do not.
 	Check(town::TownPortalLocked(61) && town::TownPortalLocked(73), "Tplock levels refuse");

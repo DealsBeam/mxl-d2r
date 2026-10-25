@@ -1011,7 +1011,8 @@ writes Median's line for the stats whose Median descfunc D2R lacks and otherwise
 | 33 (309) | `<skill> Cooldown Reduced by %.1g` seconds, frames / 25 (25 fps is an assumption, unported.md) |
 | 35 (444) | `Innate <Element> Damage: N (P% of <Attribute>)`; P = value + value * stat 513 / 100; element = layer low byte, attribute = the second byte |
 | 36 (289 at value 2), 37 (478), 38 (456) | the Median wording ("Orb Effects Applied to this Item are Doubled", "<skill> Maximum Skill Level Increased by N", "Activation Frequency +N") |
-| 31, 34 | nothing (no strings) |
+| 31 (404 / 406 / 407), 34 (414) | text at the Median string ID in the layer, resolved by key through `mxl_special_text.h`; 31 uses colour value minus one (1..13, otherwise 3), 34 always orange 8 |
+| 27 / 28 with skills2 `AltTooltip` | omit the ordinary +skill line, as Sigma does; the special paragraph describes the hidden passive |
 
 The `innate` part makes descfunc 35 match D2Sigma 0x10077d80: truncate P to an integer before multiplying the attribute, and use max(Strength, Dexterity) for attribute code 4. The displayed P retains its fractional part. It also extends `stat_rules.cpp`'s guarded passive refresh after a stat-spending packet to all four attributes: otherwise a Dexterity point can discard innate fire until the next refresh. The hidden passive formulas remain data-driven. Turning `innate` off retains the previous tooltip arithmetic and Strength-only refresh for control runs. `statclick` independently controls Shift-click widening; either part can install the shared packet hook. `mxl` reports the refresh and tooltip on its own `innate damage` line. See [damage-ied-audit.md](damage-ied-audit.md).
 
@@ -1119,3 +1120,13 @@ auratargetstate/State1-3, misc state/cstate, states overlays), so even compacted
 arrays to a larger area (enlarge the pool element, redirect the four accessors and any inlined copies, check network
 state sync and saves for fixed 16-block assumptions).
 - Atma/Geglash sacred-item service (npcstores +40/+41, docs/vendors.md).
+
+### Median town safety (`mediantowns`)
+
+`town_rules.cpp` replaces D2R's shared five-id `IsTown` leaf (RVA `0x327850`) with the nine `IsTown` flags from Median's
+compiled levels table (already generated in `mxl_goblins.h`). This brings Caldeum (138), Silver City (139), Tur Dulra
+(242) and Frozen Sea (243) under the engine's existing monster path, population, AI, missile and skill town checks.
+Tur Dulra and Scosglen (271) both use level type 44 and connect through reciprocal Vis0 entries, Warp0 -1; a data
+change to their level type would conflate town and field. `mediantowns` in `mxl-core-off.txt` disables the replacement.
+`mxl` prints `median towns on: 9 towns from Median IsTown (0x327850)` when installed. Expected-byte mismatch reports
+FAILED and leaves the function alone. Details and the precise source ids are in `d2r-addresses.md`, "Median town classification".

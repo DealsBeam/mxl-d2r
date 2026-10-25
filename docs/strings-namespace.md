@@ -193,3 +193,10 @@ shows the namespaced long form displays correctly, move them back. The rule for 
 Plugin rule that follows from the research: a string whose numeric ID the plugin would write into game memory or pass to D2R's
 lookup (`0x3e2b730`) cannot be group 2. Resolve text through the service instead; if a case turns up where only an ID works,
 list the key here and keep it native.
+
+### Layered item descriptions
+
+Median descfunc 31 / 34 store numeric TBL IDs in stat layers (property parameters). Those are saved data, not D2R string
+IDs. `tools/item_special_data.py` generates `mxl_special_text.h` from the original property references and the build's
+`strings_idkeys.json`, choosing `_mxl` aliases where needed and verifying the original text. The itemtext formatter uses
+key lookup at runtime; it never sends those Median numeric IDs to D2R's native string lookup.

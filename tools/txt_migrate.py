@@ -778,7 +778,7 @@ class Migrator:
           - descfunc 1-4, 6-9, 12, 20-23 with a text that has printf placeholders print "+12 %+d to Strength": function 19.
           - a row whose three strings are empty prints "FLYING POLAR BUFFALO ERROR" (a missing string) or the value alone: D2R's own
             description where D2R has one for the stat (97, 107, 126: Median draws those lines in code), no line otherwise.
-          - descfunc 31 and 34 (Median's, no strings): D2R prints a Chronicle text for 31 and nothing for 34: no line.
+          - descfunc 31 and 34 use layered string IDs and colours: preserve them for the itemtext plugin.
           - descfunc 32, 33, 35-38 print nothing in D2R: the plugin (item_text.cpp) writes those lines; the row stays.
           - the class lock stat is listed (descfunc 19) so that the plugin can write its line."""
         texts = strings_ns.effective_texts()
@@ -813,6 +813,10 @@ class Migrator:
                     listed += 1
                     continue
                 if not fn:
+                    continue
+                if fn in ("31", "34"):
+                    # These descriptions take their string ID from the stat LAYER (property parameter), not these
+                    # three columns. Clearing descfunc prevents D2R from ever calling the itemtext hook for them.
                     continue
                 strings = [r[col[c]] for c in ("descstrpos", "descstrneg", "descstr2")]
                 if not any(strings):

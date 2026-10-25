@@ -449,6 +449,90 @@ auto FindItemByCode(Ctx* c, uint32_t code, int page) noexcept -> Unit* {
 
 // --- verbs ------------------------------------------------------------------------------------------------------
 
+// Observe the game's own classifiers, not the plugin's replacement helper. Optional coordinates query a loaded room.
+auto CmdTown(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long level = 0, x = 0, y = 0;
+	void* room = Fn<UnitRoomFn>(RvaUnitRoom)(c->player);
+	if (t.n == 2 && hcmd::LowerEq(t.tok[1], "edges")) {
+		int32_t px = 0, py = 0;
+		if (room == nullptr || !d2r::UnitXY(c->player, &px, &py)) {
+			return Fail(c, "town edges: no room");
+		}
+		// InRoom searches only a room and its immediate neighbours. Walk the live room graph first,
+		// otherwise a border two rooms from the waypoint is invisible to this read-only scan.
+		void* rooms[512] = {room};
+		int roomCount = 1;
+		using NearFn = void (*)(void*, void***, uint32_t*);
+		for (int i = 0; i < roomCount; ++i) {
+			void** neighbours = nullptr;
+			uint32_t n = 0;
+			Fn<NearFn>(0x2efde0)(rooms[i], &neighbours, &n);
+			for (uint32_t j = 0; neighbours != nullptr && j < n && j < 512; ++j) {
+				bool seen = neighbours[j] == nullptr;
+				for (int k = 0; !seen && k < roomCount; ++k) {
+					seen = rooms[k] == neighbours[j];
+				}
+				if (!seen && roomCount < 512) {
+					rooms[roomCount++] = neighbours[j];
+				}
+			}
+		}
+		const auto at = [&](int32_t x, int32_t y) -> void* {
+			for (int i = 0; i < roomCount; ++i) {
+				void* r = rooms[i];
+				const int32_t rx = d2r::At<int32_t>(r, 0x80), ry = d2r::At<int32_t>(r, 0x84);
+				if (x >= rx && y >= ry && x < rx + d2r::At<int32_t>(r, 0x88) && y < ry + d2r::At<int32_t>(r, 0x8c)) {
+					return r;
+				}
+			}
+			return nullptr;
+		};
+		int count = 0, borders = 0;
+		for (int dx = -160; dx <= 160; ++dx) {
+			for (int dy = -160; dy <= 160; ++dy) {
+				const int32_t ax = px + dx, ay = py + dy;
+				void* a = at(ax, ay);
+				if (a == nullptr) {
+					continue;
+				}
+				for (int dir = 0; dir < 2; ++dir) {
+					const int32_t bx = ax + (dir == 0 ? 1 : 0), by = ay + (dir == 1 ? 1 : 0);
+					void* b = at(bx, by);
+					const int al = Fn<RoomLevelFn>(RvaRoomLevel)(a);
+					const int bl = b != nullptr ? Fn<RoomLevelFn>(RvaRoomLevel)(b) : al;
+					if (al == bl) {
+						continue;
+					}
+					using CollideFn = uint32_t (*)(void*, int32_t, int32_t, int32_t, uint32_t);
+					const uint32_t ca = Fn<CollideFn>(0x364d50)(a, ax, ay, 1, 0x1c09);
+					const uint32_t cb = Fn<CollideFn>(0x364d50)(b, bx, by, 1, 0x1c09);
+					if (borders++ < 8) {
+						Out("town border ax=%d ay=%d al=%d bx=%d by=%d bl=%d ca=%x cb=%x", ax, ay, al, bx, by, bl, ca, cb);
+					}
+					if ((ca | cb) == 0 && count++ < 64) {
+						Out("town edge ax=%d ay=%d al=%d bx=%d by=%d bl=%d", ax, ay, al, bx, by, bl);
+					}
+				}
+			}
+		}
+		Out("town edges count=%d borders=%d rooms=%d at=%d,%d", count, borders, roomCount, px, py);
+		return true;
+	}
+	if (t.n == 3 && hcmd::ParseInt(t.tok[1], &x) && hcmd::ParseInt(t.tok[2], &y)) {
+		room = room != nullptr ? Fn<InRoomFn>(RvaInRoom)(room, static_cast<int32_t>(x), static_cast<int32_t>(y)) : nullptr;
+	} else if (t.n > 2 || (t.n == 2 && !hcmd::ParseInt(t.tok[1], &level))) {
+		return Fail(c, "usage: town [level] | town <x> <y>");
+	}
+	const int32_t roomLevel = room != nullptr ? Fn<RoomLevelFn>(RvaRoomLevel)(room) : -1;
+	if (t.n != 2) {
+		level = roomLevel;
+	}
+	const int isTown = Fn<int32_t (*)(int32_t)>(0x2f0780)(static_cast<int32_t>(level));
+	const int roomTown = Fn<int32_t (*)(void*)>(0x2f0750)(room);
+	Out("town level=%lld istown=%d roomlevel=%d roomtown=%d x=%lld y=%lld", level, isTown, roomLevel, roomTown, x, y);
+	return true;
+}
+
 auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	Unit* p = c->player;
 	void* room = Fn<UnitRoomFn>(RvaUnitRoom)(p);
@@ -516,8 +600,10 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 			++mons;
 			int32_t mx = 0, my = 0;
 			d2r::UnitXY(u, &mx, &my);
-			Out("mon id=%u class=%d mode=%d dist=%.0f npc=%d life=%d/%d mx=%d my=%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u),
-			    Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(u)) != nullptr ? 1 : 0, Stat(u, StatLife) >> 8, Stat(u, 7) >> 8, mx, my);
+			void* monRoom = Fn<UnitRoomFn>(RvaUnitRoom)(u);
+			Out("mon id=%u class=%d mode=%d dist=%.0f npc=%d life=%d/%d mx=%d my=%d area=%d", IdOf(u), ClassOf(u), ModeOf(u), DistTo(p, u),
+			    Fn<NpcRecordFn>(RvaNpcRecord)(c->dataFlag, ClassOf(u)) != nullptr ? 1 : 0, Stat(u, StatLife) >> 8, Stat(u, 7) >> 8, mx, my,
+			    monRoom != nullptr ? Fn<RoomLevelFn>(RvaRoomLevel)(monRoom) : -1);
 		}
 	});
 	int objs = 0;
@@ -1203,9 +1289,10 @@ auto CmdLevel(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 }
 
 auto CmdSpawn(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
-	long long cls = 0, count = 1;
-	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &cls) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &count))) {
-		return Fail(c, "usage: spawn <monster class> [count]");
+	long long cls = 0, count = 1, sx = 0, sy = 0;
+	if (t.n < 2 || !hcmd::ParseInt(t.tok[1], &cls) || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &count)) ||
+	    (t.n > 3 && (t.n != 5 || !hcmd::ParseInt(t.tok[3], &sx) || !hcmd::ParseInt(t.tok[4], &sy)))) {
+		return Fail(c, "usage: spawn <monster class> [count [x y]]");
 	}
 	void* room = Fn<UnitRoomFn>(RvaUnitRoom)(c->player);
 	int32_t px = 0, py = 0;
@@ -1214,7 +1301,8 @@ auto CmdSpawn(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	}
 	int made = 0;
 	for (long long i = 0; i < count && i < 20; ++i) {
-		const int32_t x = px + 6 + static_cast<int32_t>(i % 5) * 2, y = py + 6 + static_cast<int32_t>(i / 5) * 2;
+		const int32_t x = (t.n == 5 ? static_cast<int32_t>(sx) : px + 6) + static_cast<int32_t>(i % 5) * 2;
+		const int32_t y = (t.n == 5 ? static_cast<int32_t>(sy) : py + 6) + static_cast<int32_t>(i / 5) * 2;
 		void* spawnRoom = Fn<InRoomFn>(RvaInRoom)(room, x, y);
 		if (spawnRoom == nullptr) {
 			continue;
@@ -4061,6 +4149,12 @@ auto CmdTipFmt(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	char text[256];
 	PlainText(raw, text, sizeof(text));
 	Out("tipfmt stat=%lld value=%lld layer=%lld mode=%lld flag=%lld ret=%d text=[%s]", stat, value, layer, mode, flag, ret, text);
+	// Keep the existing plain-text answer stable; also expose the actual escape for colour regression checks.
+	const auto* bytes = reinterpret_cast<const unsigned char*>(raw);
+	int colour = -1;
+	if (bytes[0] == 0xee && bytes[1] == 0x81 && bytes[2] == 0xbe && bytes[3] != 0) colour = bytes[3] - '0';
+	else if (bytes[0] == 0xc3 && bytes[1] == 0xbf && bytes[2] == 'c' && bytes[3] != 0) colour = bytes[3] - '0';
+	Out("tipcolour stat=%lld layer=%lld colour=%d bytes=%zu", stat, layer, colour, std::strlen(raw));
 	return true;
 }
 
@@ -5143,7 +5237,7 @@ struct Verb {
 };
 const Verb Verbs[] = {
     {"state", CmdState, false},   {"quest", CmdQuest, false}, {"flag", CmdFlag, false}, {"gameflag", CmdGameFlag, false},    {"gold", CmdGold, false}, {"waypoint", CmdWaypoint, false},
-    {"stat", CmdStat, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
+    {"stat", CmdStat, false}, {"town", CmdTown, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},

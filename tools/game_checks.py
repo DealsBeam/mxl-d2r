@@ -11,12 +11,12 @@ Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screens
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
 Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
-classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltiptext gameend itemstatsave trophy statcols
+classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltiptext specialtext gameend itemstatsave trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes
-respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick
+respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick townmonsters
 teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath.
 """
 import ctypes
@@ -3563,7 +3563,7 @@ def check_summoner():
 
 TIP_PINS = {  # results key (stat; GROUP + stat for a group line) -> the exact text of the line (docs/item-tooltips.md)
     16: "+12% Enhanced Defense", 36: "Physical Resist 12%", 74: "+1 Life Regenerated per Second",
-    112: "Hit Causes Monster to Flee 9%", 289: "Orb Effects Applied to this Item are Doubled", 404: "", 406: "", 407: "", 414: "",
+    112: "Hit Causes Monster to Flee 9%", 289: "Orb Effects Applied to this Item are Doubled",
     456: "Activation Frequency +12", 492: "(Paladin Only)", 534: "+1 Life Regenerated per Second (Based on Character Level)",
     10000 + 0: "+12 to all Attributes",
 }
@@ -3597,6 +3597,26 @@ def _tip_item(cmd):
         return None, [], " ".join(out)[:80]
     ok, lines = _tip_lines(int(m.group(1)))
     return int(m.group(1)), lines, "" if ok else "tip failed"
+
+
+def _tip_ready():
+    """Prime the real item builder through a background inventory hover."""
+    ok, lines = H("tip", 20)
+    if not ok or not any(l.startswith("tip build") for l in lines):
+        ok, out = H("item rin q=4 inv", 20)
+        m = re.search(r"item id=\d+ .* x=(\d+) y=(\d+)", " ".join(out)) if ok else None
+        if m:
+            x, y = int(m.group(1)), int(m.group(2))
+            fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
+            g.key("i")
+            time.sleep(1.2)
+            g.click(fx, fy, move_only=True)
+            time.sleep(1.0)
+            g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
+            time.sleep(2.0)
+            g.key("esc")
+            ok, lines = H("tip", 20)
+    return ok and any(l.startswith("tip build") for l in lines)
 
 
 def check_tooltiptext():
@@ -3633,25 +3653,9 @@ def check_tooltiptext():
     notes.append("%d lines: %s" % (len(judged), ", ".join("%d %s" % (sum(1 for j in judged if j["verdict"] == v), v)
                                                          for v in sorted({j["verdict"] for j in judged}))))
 
-    # 2. real items: the game's own item text builder (0x2dc4b0) needs one hover to give the harness its arguments
-    ok, lines = H("tip", 20)
-    if not ok or not any(l.startswith("tip build") for l in lines):
-        ok, out = H("item rin q=4 inv", 20)
-        m = re.search(r"item id=\d+ .* x=(\d+) y=(\d+)", " ".join(out)) if ok else None
-        if m:
-            x, y = int(m.group(1)), int(m.group(2))
-            fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
-            g.key("i")
-            time.sleep(1.2)
-            g.click(fx, fy, move_only=True)
-            time.sleep(1.0)
-            g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
-            time.sleep(2.0)
-            g.key("esc")
-            ok, lines = H("tip", 20)
-    if not ok or not any(l.startswith("tip build") for l in lines):
-        add(name, "FAIL" if bad else "PASS", "; ".join(bad[:6]) if bad else "; ".join(notes) + "; real items not read: no hover reached the item text builder (background mouse)")
-        return
+    # 2. Real items use the game's own builder, primed with a background hover.
+    if not _tip_ready():
+        return add(name, "FAIL", "real item text builder not reached by background hover", log=bad)
     seen = 0
     for label, cmd, wants in TIP_ITEMS:
         iid, text, err = _tip_item(cmd)
@@ -3678,6 +3682,77 @@ def check_tooltiptext():
                     bad.append("%s q=%d: [%s] %s" % (code, q, ta.norm(line), why))
     notes.append("%d lines of %d named items and %d bases" % (seen, len(TIP_ITEMS), len(TIP_BASES)))
     add(name, "PASS" if not bad else "FAIL", "; ".join(bad[:6]) if bad else "; ".join(notes), log=bad)
+
+
+def check_specialtext():
+    name = "Layered special item text (Sigma descfunc 31/34), colours and hidden passive names"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    import item_special_data as sd
+    import tbl2json
+    import tooltip_audit as ta
+    control = "itemtext" in CONTROL
+    goto(1)
+    close_menu()
+    original, _ = tbl2json.load_median()
+    refs = sd.references()
+    ids = sorted({r[3] for r in refs})
+    bad, notes = [], []
+    answers = []
+    # Every layered string referenced by uniques, sets, runewords, affixes and cube recipes goes through the engine.
+    # Long paragraphs exceed the native 256-byte property buffer; their complete list is documented separately.
+    sweep = [11278] if control else ids
+    long_ids = []
+    for sid in sweep:
+        want = ta.norm(original[sid][1])
+        ok, lines = H("tipfmt 404 9 %d 4" % sid, 20)
+        answers += lines
+        result = ta.parse_results(lines).get(404)
+        got = ta.norm(result[3]) if result else ""
+        if control:
+            if not ok or not result or got == want:
+                bad.append("off control did not reproduce the missing Median text: %r" % got)
+        elif len(original[sid][1].encode("utf-8")) > 251:
+            long_ids.append(sid)
+            if not ok or not got or not want.startswith(got):
+                bad.append("long string %d: expected a bounded prefix, got %r" % (sid, got))
+        elif not ok or got != want:
+            bad.append("string %d: want %r got %r" % (sid, want, got))
+    # All four stats, colour values 1..13, and Sigma's out-of-range fallback; func34 is always colour 8.
+    for stat in (404, 406, 407, 414):
+        for value in (-1, 0, *range(1, 15)):
+            ok, lines = H("tipfmt %d %d 11278 4" % (stat, value), 20)
+            answers += lines
+            m = re.search(r"tipcolour .* colour=(-?\d+)", " ".join(lines))
+            want = -1 if control else (8 if stat == 414 else value - 1 if 1 <= value <= 13 else 3)
+            if not ok or not m or int(m.group(1)) != want:
+                bad.append("stat %d colour value %d: expected %d, got %s" % (stat, value, want, lines))
+    if not _tip_ready():
+        return add(name, "FAIL", "real item builder not reached by background hover", log=bad)
+    for label, cmd, string_ids in (
+        ("Azure Wrath", "item 14@ uniq=1485 ground", (11278,)),
+        ("Staff of Herding", "item wd02 uniq=72 ground", (11646,)),
+        ("unique 30 (two special lines)", "item 0u1 uniq=30 ground", (12376, 12377)),
+        ("Optical Detector", "item a55 uniq=21 ground", (11861, 12185)),
+    ):
+        iid, lines, err = _tip_item(cmd)
+        got = ta.norm(" ".join(lines))
+        notes.append("%s item=%s: %s" % (label, iid, got))
+        if iid is None or not lines:
+            bad.append("%s: no tooltip (%s)" % (label, err))
+            continue
+        for sid in string_ids:
+            present = ta.norm(original[sid][1]) in got
+            if present == control:
+                bad.append("%s: string %d %s" % (label, sid, "unexpectedly present in off control" if control else "missing"))
+        if label == "Azure Wrath" and (("FLYING POLAR BUFFALO ERROR" in got) != control):
+            bad.append("Azure Wrath hidden passive suppression differs from control=%s" % control)
+    run = os.path.join(g.current_run(), "special-text-readback.txt")
+    with open(run, "w", encoding="utf-8") as f:
+        f.write("\n".join(answers + notes + bad) + "\n")
+    add(name + (" CONTROL itemtext off" if control else ""), "FAIL" if bad else "PASS",
+        "; ".join(bad[:6]) if bad else "%d string IDs (%d property references); four real uniques; all four stats / 16 colour values; %d long paragraphs bounded (docs/unported.md)" % (len(sweep), len(refs), len(long_ids)),
+        log=notes + bad)
 
 
 def check_gameend():
@@ -10967,6 +11042,147 @@ def check_statclick():
 # --- phase 4 lane p4-verify-b: town rules (SK4, NPC1, UQ5) ----------------------------------------------------------------------
 
 
+def check_townmonsters():
+    """Median IsTown through D2R's shared checks, then a real Scosglen monster following across the open town border.
+    MXL_CONTROL=mediantowns repeats the same engine actions with the classifier replacement disabled.
+    No monster relocation, path/collision edits or harness-side town decision is used.
+    """
+    name = "Median towns: Scosglen monsters cannot enter Tur Dulra"
+    control = "mediantowns" in os.environ.get("MXL_CONTROL", "").split()
+    towns = {1, 40, 75, 103, 109, 138, 139, 242, 243}
+    vanilla = {1, 40, 75, 103, 109}
+    expected = vanilla if control else towns
+    rows, log, bad = [], [], []
+    for level in sorted(towns | {0, 2, 137, 140, 241, 244, 270, 271, 100000}):
+        ok, lines = H("town %d" % level)
+        log += lines
+        line = next((kv(s) for s in lines if s.startswith("town level=")), {})
+        if not ok or int(line.get("istown", -1)) != int(level in expected):
+            bad.append("level %d classifier: %s" % (level, line))
+    rows.append("%s: level classifier for all nine towns, adjacent fields and invalid ids" % ("control" if control else "enabled"))
+    god(True)
+    try:
+        for level in (138, 139, 243, 242):
+            st = go(level)
+            ok, lines = H("town")
+            log += lines
+            line = next((kv(s) for s in lines if s.startswith("town level=")), {})
+            if st["player"].get("area") != level or not ok or int(line.get("roomtown", -1)) != int(not control):
+                bad.append("town %d room check: %s" % (level, line))
+        # Generate the connected outdoor level too: a direct debug arrival in a preset town
+        # does not create its outdoor neighbour's rooms.
+        go(271)
+        # Prepare the player near the entrance with the real Teleport skill, streaming rooms.
+        # No monster exists yet; the pursuit below uses walking only.
+        H("setskill 54 1")
+        H("stat player 9 set 256000")
+        p = hstate()["player"]
+        H("move %d %d walk" % (p["x"] + 7, p["y"]))
+        time.sleep(2)
+        for _ in range(64):
+            p = hstate()["player"]
+            if p["x"] >= 5955 or (p["x"] >= 5935 and 11280 <= p["y"] <= 11320):
+                break
+            H("stat player 8 set 256000")
+            if p["x"] >= 5900 and p["y"] > 11300:
+                H("cast 54 %d %d" % (p["x"] - 10, p["y"] - 35))
+            else:
+                H("cast 54 %d %d" % (min(p["x"] + 35, 5960), p["y"]))
+            time.sleep(1)
+            q = hstate()["player"]
+            if abs(q["x"] - p["x"]) < 3:
+                H("cast 54 %d %d" % (q["x"], q["y"] - 30))
+                time.sleep(1)
+        ok, lines = H("town edges", timeout=30)
+        log += lines
+        edges = [kv(s) for s in lines if s.startswith("town edge ")]
+        edges = [e for e in edges if {int(e["al"]), int(e["bl"])} == {242, 271}]
+        # levels.txt places Tur Dulra at Scosglen's eastern edge (relative OffsetX 194, OffsetY 123).
+        # Take short steps toward the border if the loaded rooms still stop short of it.
+        for _ in range(4):
+            if edges:
+                break
+            p = hstate()["player"]
+            H("move %d %d walk" % (p["x"] + (15 if p.get("area") == 271 else -40), p["y"]))
+            time.sleep(3)
+            ok, lines = H("town edges", timeout=30)
+            log += lines
+            edges = [kv(s) for s in lines if s.startswith("town edge ")]
+            edges = [e for e in edges if {int(e["al"]), int(e["bl"])} == {242, 271}]
+        if not edges:
+            return add(name, "FAIL" if bad else "BLOCKED", "; ".join(rows + bad + ["no loaded passable Tur Dulra / Scosglen border; no movement claim"]), [sh("town-border-blocked")], log)
+
+        def walk(x, y, area, seconds=12):
+            H("move %d %d walk" % (x, y))
+            end = time.time() + seconds
+            retry = time.time() + 2
+            while time.time() < end:
+                time.sleep(.5)
+                p = hstate()["player"]
+                if p.get("area") == area and (area == 242 or abs(p.get("x", 0) - x) + abs(p.get("y", 0) - y) < 4):
+                    return True
+                if time.time() >= retry:
+                    H("move %d %d walk" % (x, y))
+                    retry = time.time() + 2
+            return False
+
+        start = None
+        for e in edges[::max(1, len(edges) // 8)]:
+            ax, ay, bx, by = (int(e[k]) for k in ("ax", "ay", "bx", "by"))
+            if int(e["al"]) == 242:
+                ax, ay, bx, by = bx, by, ax, ay
+            dx, dy = bx - ax, by - ay  # field -> town
+            fx, fy, tx, ty = ax - 8 * dx, ay - 8 * dy, bx + 8 * dx, by + 8 * dy
+            ready = walk(fx, fy, 271, seconds=3)
+            if not ready:
+                # Fixture only: blink to the passable field approach before any monster is spawned.
+                H("stat player 8 set 256000")
+                H("cast 54 %d %d" % (fx, fy))
+                time.sleep(1)
+                p = hstate()["player"]
+                ready = p.get("area") == 271 and abs(p["x"] - fx) + abs(p["y"] - fy) < 5
+            if ready:
+                start = (fx, fy, tx, ty)
+                break
+        if start is None:
+            return add(name, "FAIL" if bad else "BLOCKED", "; ".join(rows + bad + ["player could not reach the field fixture"]), [sh("town-walk-blocked")], log)
+        fx, fy, tx, ty = start
+        # Scytheclaw is one of Scosglen's native mon1..6 rows, resolved through the same idmap as the build.
+        import json
+        with open(os.path.join(os.path.dirname(__file__), "..", "work", "named", "idmap.json"), encoding="utf-8") as f:
+            monster = next(e["id"] for e in json.load(f)["monstats"] if e["row"] == 1978)
+        ok, lines = H("spawn %d 1 %d %d" % (monster, fx - 4, fy + 3))
+        log += lines
+        match = next((re.search(r"spawned class \d+ id=(\d+)", s) for s in lines if "spawned class" in s), None)
+        if not ok or not match:
+            return add(name, "BLOCKED", "; ".join(rows + bad + ["engine refused the field Scytheclaw spawn"]), [], log)
+        mid = int(match.group(1))
+        time.sleep(2)
+        initial = next((m for m in hstate()["mons"] if m["id"] == mid), {})
+        log.append("field monster before retreat: %s" % initial)
+        arrived = walk(tx, ty, 242)
+        samples = []
+        for _ in range(24):
+            st = hstate()
+            m = next((m for m in st["mons"] if m["id"] == mid), {})
+            samples.append(m)
+            log.append("retreat player area=%s at=%s,%s monster=%s" % (st["player"].get("area"), st["player"].get("x"), st["player"].get("y"), m))
+            time.sleep(.5)
+        crossed = any(m.get("area") == 242 for m in samples)
+        engaged = bool(initial) and ((initial.get("mx"), initial.get("my")) != (fx - 4, fy + 3) or
+                                     any(m and (m.get("mx"), m.get("my"), m.get("mode")) !=
+                                         (initial.get("mx"), initial.get("my"), initial.get("mode")) for m in samples))
+        rows.append("Scytheclaw %d: player walked into town=%s, monster entered town=%s, monster acted=%s" % (mid, arrived, crossed, engaged))
+        if not arrived or not initial or not engaged:
+            bad.append("inconclusive pursuit setup")
+        if crossed != control:
+            bad.append("control must reproduce entry; enabled must prevent it")
+        H("kill %d" % mid)
+        add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [sh("townmonsters")], log)
+    finally:
+        god(False)
+
+
 def _skills_by_town(intown, limit=60, need_mana=True):
     """Selectable skills of the built skills.txt (any class: `setskill` gives them) without a restrict value: those with InTown 1 (intown True) or without
     it, by required level: [(id, name, mana)]. The mana filter keeps the skills whose cast costs something (D2R shows the result)."""
@@ -12441,7 +12657,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
-          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltiptext", check_tooltiptext), ("gameend", check_gameend), ("itemstatsave", check_itemstatsave),
+          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltiptext", check_tooltiptext), ("specialtext", check_specialtext), ("gameend", check_gameend), ("itemstatsave", check_itemstatsave),
           ("trophy", check_trophy), ("statcols", check_statcols),
           # the old "fix to test" rows of docs/bugs.md
           ("skilltree", check_skilltree), ("keybinds", check_keybinds), ("npcstrings", check_npcstrings), ("automap", check_automap),
@@ -12471,7 +12687,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash),
           ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons), ("uniquelimits", check_uniquelimits),
           ("assetpaths", check_assetpaths),
-          ("towncast", check_towncast),
+          ("towncast", check_towncast), ("townmonsters", check_townmonsters),
           ("npcheal", check_npcheal),
           ("tplock", check_tplock),
           ("charmlimit", check_charmlimit),

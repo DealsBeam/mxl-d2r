@@ -88,6 +88,34 @@ auto HealAll(const D2RL::PluginContext* context, int* set, int* already) noexcep
 
 }  // namespace
 
+namespace {
+
+// Shared by room check 0x2f0750 and level check thunk 0x2f0780, on both client and server.
+// This leaf has early returns and short branches; replace its entry without relocating a trampoline.
+constexpr uint64_t IsTownRva = 0x327850;
+constexpr uint8_t IsTownCode[] = {
+    0x83, 0xe9, 0x01, 0x74, 0x17, 0x83, 0xe9, 0x27, 0x74, 0x12, 0x83, 0xe9, 0x23, 0x74, 0x0d,
+    0x83, 0xe9, 0x1c, 0x74, 0x08, 0x83, 0xf9, 0x06, 0x74, 0x03, 0x33, 0xc0, 0xc3, 0xb8, 0x01,
+    0x00, 0x00, 0x00, 0xc3};
+
+int32_t IsTownHook(int32_t level) noexcept {
+	return town::IsTown(level) ? 1 : 0;
+}
+
+}  // namespace
+
+auto InstallMedianTowns(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+	uint8_t jump[sizeof(IsTownCode)];
+	std::memcpy(jump, IsTownCode, sizeof(jump));
+	const uint8_t opcode[] = {0xff, 0x25, 0, 0, 0, 0};
+	std::memcpy(jump, opcode, sizeof(opcode));
+	const auto target = reinterpret_cast<uint64_t>(&IsTownHook);
+	std::memcpy(jump + 6, &target, sizeof(target));
+	const bool ok = context->PatchBytes(IsTownRva, IsTownCode, sizeof(IsTownCode), jump, sizeof(jump));
+	std::snprintf(report, reportSize, "%s: %d towns from Median IsTown (0x327850)", ok ? "on" : "FAILED", mxl_goblins::TownCount);
+	return ok;
+}
+
 auto TownPortalRefusals() noexcept -> int {
 	return g_refusals.load();
 }
