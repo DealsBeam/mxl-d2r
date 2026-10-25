@@ -65,7 +65,7 @@ Median's own damage rules are not in this module but in the skill do-functions: 
 | D2Sigma | Role | D2R | Bucket / status |
 |---|---|---|---|
 | 0x100b41b0 | the unit's level capped at the class' maximum level (experience table), times 10000: the fixed-point base of the `/lvl` stats | D2R's per-level stats (`op` columns) | likely; **done** (data) |
-| 0x100b4240 | resist stat to its maximum stat (0x25 -> 0x26, 0x27 -> 0x28, 0x29 -> 0x2a, 0x2b -> 0x2c, 0x2d -> 0x2e) | the `maxstat` column of itemstatcost | **done** |
+| 0x100b4240 | resist stat to its maximum stat (0x25 -> 0x26, 0x27 -> 0x28, 0x29 -> 0x2a, 0x2b -> 0x2c, 0x2d -> 0x2e) | resistance / maximum-stat ids in D2R's damage table (`0x44df10`, entry +8 / +0xc); the bundled `itemstatcost.maxstat` cells are blank | **done** |
 | 0x100b42c0 | **resist limits**: players and mercenaries get 75 + the maximum-resist stat, never above 90; damage resist (0x24) limited to 50; monsters 1,000,000 | the clamp immediate in `0x4523e0` (and the two UI displays) | **done**: patched to 90 |
 | 0x100b43a0 | difficulty resist penalty: the difficultylevels row's ResistPenalty for the resist stats 0x27, 0x29, 0x2b, 0x2d, 0x6e | `difficultylevels.txt` ResistPenalty (-30 / -70 migrated) | **done** (data) |
 | 0x100b44a0 | `GetResist(stat)`: stat + penalty, at most the limit, at least -100 (damage resist: no penalty, at most 50) | D2R's resist read in `0x44df10` | vanilla shape; limits as above |
@@ -238,3 +238,27 @@ guard flag 0x100000 of D2Sigma is not set (unknown meaning in D2R). Same off wor
 5. Radament (Act 2): the `item_mana_bytime_3` monster property now has its skill (619); needs a fresh `txt_migrate.py`
    run so that monprop carries the parameter.
 6. Respec at Akara: the class' starting skills (Attack, Kick / Throw, ...) keep their levels.
+
+### Maximum-resistance report: works as Median (lane maxres-cap, 2026-10-25)
+
+The reported 90% ceiling is intentional. Keep `min(75 + maximum-resistance stat, 90)` for players and hirelings;
+ordinary resistance gear alone cannot raise the initial 75% limit. No gameplay change or plugin version bump is needed.
+
+Evidence available in this repository (no classic extraction required):
+
+- `docs/sigma-patch-audit.md`, row **game6-005**, records D2Sigma replacing both damage-clamp immediates at
+  D2Game RVAs `0xdb468` / `0xdb46c` with **0x5a (90)**. The D2Stats audit above independently records the
+  matching player / mercenary display limit in `0x100b42c0`, used by `GetResist` (`0x100b44a0`).
+- `assets/median/2_txt/itemstatcost.txt` ids **37/38, 39/40, 41/42, 43/44, 45/46** are resistance / maximum pairs
+  (magic, fire, lightning, cold, poison). Maximum stats have 7 Save Bits and Save Add 20, which is storage range,
+  not an effective cap. `maxstat` is blank in these source rows and in the installed migrated rows.
+  `properties.txt` property **pr146** grants stats is40/is42/is44/is46 together; **pr166/pr180/pr175/pr200** grant
+  individual elemental maxima. For example `uniqueitems.txt` **AzmodansHeart2** grants pr146 +2. These bonuses
+  raise the initial limit; they do not override the engine's ceiling. No contrary rule was found in the bundled data.
+- D2R 3.3 build 93847: `0x4524a1` reads the maximum-stat id from damage-table entry +0xc, `0x4524bb` adds 75,
+  and `0x4524dd` clamps to 95. `combat.cpp::InstallCombat` changes that immediate to 90. The character sheet
+  (`0x14e7294`) and hireling panel (`0x14f4686`) get the same immediate change. Off word **combat** disables
+  these existing patches and the other combat rules; the existing `mxl` combat line reports the three clamps.
+
+The input tree is labelled 2.14.4 in `assets/median/README.md`, while its `version.mxl` says 2.14.6. This report
+uses the checked-in data and the recorded D2Sigma audit; it does not infer a different cap from that label mismatch.
