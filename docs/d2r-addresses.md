@@ -1063,6 +1063,26 @@ items). Sigma runs it on the ground pickup into the inventory and on its quick-m
 | Unit data | `0x34a500(item)` | - | `+0` quality (7 = unique), `+0x34` unique index = the row of the migrated `uniqueitems.txt`; page byte `0x36cfe0` (0 backpack, 3 cube, 4 stash); unit mode at unit `+0xc` (0 stored, 1 equipped, 2 belt, 3 ground, 4 cursor); game at unit `+0xd8` (`0x48ff00`) |
 | Refusal text | - | - | Median string `12109` (`medianxl:12109`, "\xc3\xbfc1You can only carry one Relic"), sent as a system chat line (`SendClientMessage`). Sigma itself refuses with its own unit message `0x13`; 12109 is the only carry-limit text in Median's strings and is shown for every limit (the mapping of 0x13 to it was not proven) |
 
+## 22b. D2R's carry1 test compares a number, not the unique (lane carry1-fix, 2026-10-25; plugin/src/unique_carry.cpp)
+
+Found with the harness (`item <code> uniq=<row> inv` and a ground pickup with `pkt 16`) and the decompiled placement path. **D2R 3.3 refuses a
+second, different carry1 unique** (Butcher's Tooth `a60` row 18, then Laser Focus Crystal `a59` row 19: `item: placing failed`; the ground
+pickup stays on the ground). It is not the plugin: with `uniquelimits` in mxl-core-off.txt both paths are still refused (and with it on the plugin's
+counter shows `limited 1, refused 0`), and the groups of rows 18 / 19 (13 / 14) are different anyway.
+
+| What | RVA | Notes |
+|---|---|---|
+| Place item `bool (player, loc*, ids*, count, 0)` | `0x471500` | per item `0x473ed0`: grid check `0x472d20`, then the class / carry check `0x4734f0` (returns 0 = refuse) |
+| Carry check, unique half | `0x473960 (item, uniqueList, uniqueListEnd, baseList, baseListEnd)` | for a unique (quality 7, `0x36cf60`; unique index `0x36ce70` = item data +0x34) whose record has `+0x30 > 0` it walks the carried unique indexes (the placing structure's two lists of carried unique indexes, `+0x780` and `+0x423a`, ushort entries) and calls the record comparison `0x3e2b556` (a jump thunk to a function in the protected region) on the two records; true = refuse. Record = `0x194320(dataFlag, index)` = table `0x300a90(dataFlag)` + `0x13c8` (array), `+0x13d0` (count, int64), 0x15c bytes per record. The comparison read at run time: `a != 0 && a->dword[0x30] == b->dword[0x30]` |
+| Carry check, base half | `0x473960` second part | the items' base record byte `+0x13a` (misc.txt side) with the item code: refuse when the carried list has the same (code, value) pair; seen in the game: a normal `a60` is refused next to a unique `a60`, and unique 82 (`ebx`, no carry1) refuses its own second copy (not analysed further) |
+| carry1 column | loader `0x31f1d0`: name `carry1` (`0x1cfbdf0`), type 2, record offset `0x30` | an int, not a flag |
+
+Median's uniqueitems.txt has 1 in all 89 carry1 rows (rows 7-66 charms, relics and so on), so **every carry1 unique counted as "the same"**: only one of
+them fitted in the backpack. Vanilla Diablo II compares the unique itself. The part `uniquecarry` rewrites the number of each carry1 record to row + 1
+after the data tables are loaded (`DataTablesLoadedEvent`, as `collide_types.cpp` does for CollideType), so the comparison means "the same unique": the
+second copy of one unique is refused, different ones are carried together. The plugin's own limit table (section 22, groups of 1-3 relics) is applied on
+top, unchanged. Control: `MXL_CONTROL=uniquecarry` (the off list keeps letters only, a word with a digit such as `carry1` can never match).
+
 ## 23. Model and texture index: why new asset paths were invisible (lane new-asset-paths, 2026-10-23; tools/model_lod_desc.py)
 
 Read from the memory dump (`tools/d2r_find.py`, RVA = file offset); format and the in-game proof in [hd-models.md](hd-models.md) section 3c.

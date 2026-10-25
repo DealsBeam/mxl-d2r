@@ -53,6 +53,7 @@
 #include "gamble.h"
 #include "vendor_stock.h"
 #include "town_rules.h"
+#include "unique_carry.h"
 #include "unique_limits.h"
 #include "goblins.h"
 #include "monster_ai.h"
@@ -83,7 +84,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.65.0";
+constexpr const char* PluginVersion = "0.66.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -145,6 +146,7 @@ char g_buffIconsReport[256] = "off: not the expected game image";
 char g_gambleReport[192] = "off: not the expected game image";
 char g_vendorStockReport[256] = "off: not the expected game image";
 char g_uniqueLimitsReport[192] = "off: not the expected game image";
+char g_uniqueCarryReport[192] = "off: not the expected game image";
 char g_engineGapsReport[256] = "off: not the expected game image";
 char g_townRulesReport[256] = "off: not the expected game image";
 char g_itemEventsReport[448] = "off: not the expected game image";
@@ -180,7 +182,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits vendorstock npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -470,6 +472,16 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 			unique_limits::FormatReport(g_uniqueLimitsReport, sizeof(g_uniqueLimitsReport), true, counts);
 		}
 		std::snprintf(line, sizeof(line), "unique limits %s", g_uniqueLimitsReport);
+		Say(command, line);
+	}
+	{
+		long loads = 0, rewritten = 0, carry = 0;
+		if (UniqueCarryStats(&loads, &rewritten, &carry)) {
+			std::snprintf(g_uniqueCarryReport, sizeof(g_uniqueCarryReport),
+			              "on: each carry1 unique gets its own carry number (row + 1) after the table load (loads %ld, carry1 uniques %ld, rewritten %ld)", loads,
+			              carry, rewritten);
+		}
+		std::snprintf(line, sizeof(line), "unique carry %s", g_uniqueCarryReport);
 		Say(command, line);
 	}
 	std::snprintf(line, sizeof(line), "engine gaps %s", g_engineGapsReport);
@@ -1021,6 +1033,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallUniqueLimits(context, g_uniqueLimitsReport, sizeof(g_uniqueLimitsReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: unique limits %s", g_uniqueLimitsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("uniquecarry")) {
+				std::snprintf(g_uniqueCarryReport, sizeof(g_uniqueCarryReport), "%s", OffNote);
+			} else {
+				InstallUniqueCarry(context, g_uniqueCarryReport, sizeof(g_uniqueCarryReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: unique carry %s", g_uniqueCarryReport);
 			context->LogInfo(line);
 		}
 		{

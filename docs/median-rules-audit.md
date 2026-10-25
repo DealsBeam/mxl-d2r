@@ -101,7 +101,7 @@ Runners-up: GS2 (teleport picks up gold), SK8 (Shift attacks without a target), 
 | IC2 | Trade window and NPC stores are larger. | P1.0.0 | ported (unverified) | `inventory.txt` Trade Page and Monster rows; listed (Trade window) |
 | IC3 | Belt UI and the show-belt-rows hotkey work. | P1.2.0 | ported (D2R native) | D2R belts.txt carried |
 | IC4 | Set bonuses with more than 6 pieces. | Median sets | unknown | `docs/services.md` L10: set size >6 unknown in D2R. Check: equip a 7-piece set |
-| IC5 | Only one charm of a type may be carried (fixed bug: more than one charm). | P1.0.0 | ported and verified (lane p4-verify-b: check `charmlimit`, run `checks-20261023-195127-s1`) | D2R's `carry1` column plus the plugin's unique limits; the second copy of a carry1 / limited charm is refused, an unlimited charm takes two |
+| IC5 | Only one charm of a type may be carried (fixed bug: more than one charm). | P1.0.0 | ported and verified (lane p4-verify-b: check `charmlimit`, run `checks-20261023-195127-s1`) | D2R's `carry1` number made per-unique (plugin part `uniquecarry`, 0.66.0) plus the plugin's unique limits; the second copy of a carry1 / limited charm is refused, different carry1 uniques are carried together (before 0.66.0 only one carry1 unique fitted: D2R compares the number and Median has 1 everywhere), an unlimited charm takes two |
 
 ## 4. Item rules
 
