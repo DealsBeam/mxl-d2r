@@ -1011,7 +1011,8 @@ writes Median's line for the stats whose Median descfunc D2R lacks and otherwise
 | 33 (309) | `<skill> Cooldown Reduced by %.1g` seconds, frames / 25 (25 fps is an assumption, unported.md) |
 | 35 (444) | `Innate <Element> Damage: N (P% of <Attribute>)`; P = value + value * stat 513 / 100; element = layer low byte, attribute = the second byte |
 | 36 (289 at value 2), 37 (478), 38 (456) | the Median wording ("Orb Effects Applied to this Item are Doubled", "<skill> Maximum Skill Level Increased by N", "Activation Frequency +N") |
-| 31, 34 | nothing (no strings) |
+| 31 (404 / 406 / 407), 34 (414) | text at the Median string ID in the layer, resolved by key through `mxl_special_text.h`; 31 uses colour value minus one (1..13, otherwise 3), 34 always orange 8 |
+| 27 / 28 with skills2 `AltTooltip` | omit the ordinary +skill line, as Sigma does; the special paragraph describes the hidden passive |
 
 The `innate` part makes descfunc 35 match D2Sigma 0x10077d80: truncate P to an integer before multiplying the attribute, and use max(Strength, Dexterity) for attribute code 4. The displayed P retains its fractional part. It also extends `stat_rules.cpp`'s guarded passive refresh after a stat-spending packet to all four attributes: otherwise a Dexterity point can discard innate fire until the next refresh. The hidden passive formulas remain data-driven. Turning `innate` off retains the previous tooltip arithmetic and Strength-only refresh for control runs. `statclick` independently controls Shift-click widening; either part can install the shared packet hook. `mxl` reports the refresh and tooltip on its own `innate damage` line. See [damage-ied-audit.md](damage-ied-audit.md).
 

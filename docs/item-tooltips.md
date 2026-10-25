@@ -14,8 +14,8 @@ descfunc of the built table when it differs), the expected text (Median's string
 the expected one; `ITEM` = the line depends on the item (skill names, monster names, charges, proc chances), checked on real items
 below; `WRONG` / `DIFF` = fails (none left).
 
-Before: 72 of the 313 lines were wrong (53 leaked printf placeholders such as `+12% %+d%% Enhanced Defense`, 10 pointed at missing
-strings, 6 had no line where Median has one, 3 showed Chronicle placeholder text). Now: 294 `OK`, 19 `ITEM`, 0 wrong. The check
+The original stat-only audit counted 72 of the 313 lines as wrong (53 leaked printf placeholders such as `+12% %+d%% Enhanced Defense`, 10 pointed at missing
+strings, 6 had no line where Median has one, 3 showed Chronicle placeholder text). Its blank-line assumption for 31 / 34 was incorrect (follow-up below). Now: 294 `OK`, 19 `ITEM`, 0 wrong. The check
 `tooltiptext` runs the whole table again on every run and fails on any leaked placeholder, missing string or empty line.
 
 ## Root causes and fixes
@@ -27,7 +27,7 @@ strings, 6 had no line where Median has one, 3 showed Chronicle placeholder text
    for every stat that is displayed with Median's text (descstrpos / descstrneg / descstr2 and the group line columns). Descfuncs
    22 / 23 / 24 (reanimate, charged skill) are D2R's own code and keep D2R's text.
 2. **Missing strings (10) and no line (6).** The migration blanked the strings of rows where Median draws the line in code
-   (descfunc 31-38). Rows without strings in Median's table (31, 34) really print nothing; the others get the plugin line below, or
+   (descfunc 31-38). Functions 31 / 34 read a string ID from the stat layer, not the descstrpos columns; the others get the plugin line below, or
    D2R's description when Median has none (restored in `item_stat_lines`). Group lines without strings are dropped.
 3. **Median descfuncs 32-38** that D2R cannot draw are formatted by the plugin hook (`plugin/src/item_text.cpp`, off word
    `itemtext`), which only replaces the formatter's output for these stats and calls the original for the rest:
@@ -40,7 +40,7 @@ strings, 6 had no line where Median has one, 3 showed Chronicle placeholder text
    | 289 | 36 | `Orb Effects Applied to this Item are Doubled` (only at value 2) |
    | 478 | 37 | `Jitan's Gate Maximum Skill Level Increased by 12` |
    | 456 | 38 | `Activation Frequency +12` |
-   | 31, 34 | 31, 34 | nothing (Median has no strings for them) |
+   | 404 / 406 / 407, 414 | 31, 34 | layered Median text, coloured by the value (31) or fixed orange (34); see the special-text follow-up below |
    | 112 and every descfunc 5 stat whose Median text has no `%` | 5 | `Hit Causes Monster to Flee 9%`: N = value * 100 / 128, the number before or after the text by descval (D2R's descfunc 5 text carries the `%` itself) |
    | 492 | class lock | `(Paladin Only)` etc., see below |
 
@@ -297,13 +297,13 @@ results file is what `game_checks.py tooltiptext` writes.
 | 396 | attacker_takes_cold_damage | 3 | Attacker Takes Cold Damage of 12 | Attacker Takes Cold Damage of 12 | Attacker Takes Cold Damage of 12 | OK |
 | 397 | attacker_takes_fire_damage | 3 | Attacker Takes Fire Damage of 12 | Attacker Takes Fire Damage of 12 | Attacker Takes Fire Damage of 12 | OK |
 | 400 | amazing_grace | 3 | ÿc8Amazing Graceÿc0 | Amazing Grace | Amazing Grace | OK |
-| 404 | itemstatcost_375 | 31 -> - | _(no line)_ | +12 to a Random Class' Skill Levels | _(no line)_ | OK (no line) |
-| 406 | itemstatcost_377 | 31 -> - | _(no line)_ | +12 to a Random Class' Skill Levels | _(no line)_ | OK (no line) |
-| 407 | itemstatcost_378 | 31 -> - | _(no line)_ | +12 to a Random Class' Skill Levels | _(no line)_ | OK (no line) |
+| 404 | itemstatcost_375 | 31 | You Cannot Deal Fire, Lightning or Poison Damage Max Life gained per point of Vitality reduced by 0.9 100% of Vitality Added as Cold Damage to Weapon | +12 to a Random Class' Skill Levels | You Cannot Deal Fire, Lightning or Poison Damage Max Life gained per point of Vitality reduced by 0.9 100% of Vitality Added as Cold Damage to Weapon | OK |
+| 406 | itemstatcost_377 | 31 | ÿc5Reward can be used to upgrade Paragon's Hammer Transmute with a Xith rune to receive two quest entrance scrolls Difficulty Level: 125 ÿc4Infernal Machine (Heroic) | +12 to a Random Class' Skill Levels | Reward can be used to upgrade Paragon's Hammer Transmute with a Xith rune to receive two quest entrance scrolls Difficulty Level: 125 Infernal Machine (Heroic) | OK |
+| 407 | itemstatcost_378 | 31 | Can be upgraded to unlock a Paragon reward skill | +12 to a Random Class' Skill Levels | Can be upgraded to unlock a Paragon reward skill | OK |
 | 408 | itemstatcost_379 | 3 -> - | _(no line)_ | FLYING POLAR BUFFALO ERROR | _(no line)_ | OK (no line) |
 | 409 | bonus_damage_to_bloodlust | 4 | +12% Bonus Damage to Bloodlust | +12% Bonus Damage to Bloodlust | +12% Bonus Damage to Bloodlust | OK |
 | 410 | bonus_elemental_damage_to_b | 4 | +12% Bonus Elemental Damage to Bloodlust | +12% Bonus Elemental Damage to Bloodlust | +12% Bonus Elemental Damage to Bloodlust | OK |
-| 414 | itemstatcost_385 | 34 -> - | _(no line)_ | _(no line)_ | _(no line)_ | OK (no line) |
+| 414 | itemstatcost_385 | 34 | You Cannot Deal Fire, Lightning or Poison Damage Max Life gained per point of Vitality reduced by 0.9 100% of Vitality Added as Cold Damage to Weapon | _(no line)_ | You Cannot Deal Fire, Lightning or Poison Damage Max Life gained per point of Vitality reduced by 0.9 100% of Vitality Added as Cold Damage to Weapon | OK |
 | 416 | bonus_damage_to_mark_of_the | 4 | +12% Bonus Damage to Mark of the Wild | +12% Bonus Damage to Mark of the Wild | +12% Bonus Damage to Mark of the Wild | OK |
 | 417 | bonus_elemental_damage_to_m | 4 | +12% Bonus Elemental Damage to Mark of the Wild | +12% Bonus Elemental Damage to Mark of the Wild | +12% Bonus Elemental Damage to Mark of the Wild | OK |
 | 418 | duration_bonus_to_mark_of_t | 2 | 12% Duration Bonus to Mark of the Wild | 12% Duration Bonus to Mark of the Wild | 12% Duration Bonus to Mark of the Wild | OK |
@@ -404,3 +404,50 @@ results file is what `game_checks.py tooltiptext` writes.
 | 396 (group) | attacker_takes_cold_damage | 3 | Attacker Takes Elemental Damage of 12 |  | Attacker Takes Elemental Damage of 12 | OK |
 | 397 (group) | attacker_takes_fire_damage | 3 | Attacker Takes Elemental Damage of 12 |  | Attacker Takes Elemental Damage of 12 | OK |
 <!-- table:end -->
+
+## Layered special text follow-up (special-text, 2026-10-25)
+
+The earlier audit incorrectly treated empty descstrpos columns for functions 31 / 34 as proof of an empty line. Sigma
+`0x10077720` and `0x10077cb0` read the low layer word as a Median numeric string ID. Function 31 selects colour value minus
+one for values 1..13, otherwise colour 3; function 34 always selects orange (8). Sigma `0x100b5530` prefixes the colour and
+copies the text without interpolating the stat value. The migration had erased the functions, and the plugin also explicitly
+suppressed them. Both are corrected; original priorities (241 / 3 / 232 / 241) are preserved.
+
+`tools/item_special_data.py` scans every source property slot and generates a sorted ID-to-key mapping, checking each text
+against Median's TBL. The 812 IDs cover 2027 references: 585 unique properties, 2 set-item properties, 17 set bonuses,
+75 runeword properties, 19 automagic, 3 magic suffixes and 1326 cube recipe properties. Namespace keys are resolved through
+the localization service, including `_mxl` aliases. Numeric IDs remain unchanged in the stat layer and saved items.
+
+Azure Wrath (unique 1485, `14@`) uses stat 404, layer 11278, value 9. Before: its three special lines were absent and it
+printed `+2 to FLYING POLAR BUFFALO ERROR`. After: the expected orange paragraph is:
+
+> You Cannot Deal Fire, Lightning or Poison Damage
+> Max Life gained per point of Vitality reduced by 0.9
+> 100% of Vitality Added as Cold Damage to Weapon
+
+The spurious +skill line is omitted: Sigma's descfunc 27 (`0x100771a0`) and 28 (`0x100774c0`) test skills2 AltTooltip through
+`0x100af8f0` before naming a skill. Azure's hidden passive is skill 1651 (migrated 1723), AltTooltip=1, without a skilldesc.
+The generated header includes the complete AltTooltip skill set rather than a one-item exception.
+
+The `specialtext` game check reads all 812 IDs through D2R's formatter, probes all four stats with 16 colour values, and
+reads Azure Wrath, Staff of Herding, unique 30 and Optical Detector through the actual item builder. `tipfmt` now emits an
+additional `tipcolour` record so the colour is checked before the existing plain-text probe strips escape codes. An
+`MXL_CONTROL=itemtext` run expects the old behavior. Long paragraphs remain limited by the native 256-byte output buffer;
+see the precise list in [unported.md](unported.md). Full set/runeword assembly is outside this check; their referenced strings
+are covered through the same stat description path.
+
+The original baseline was read on the lane's `SpecialTxt` character in slot 2 (`checks-20261025-182658-s2`).
+The itemtext-off control passed in slot 3 (`checks-20261025-184439-s3`): all four unique paragraphs disappeared;
+Azure Wrath again printed the missing passive name, and D2R's descfunc 31 emitted `+9 to a Random Class' Skill Levels`.
+The initial on run (`checks-20261025-184050-s3`) passed the 313-line regression and restored all four unique tooltips,
+but caught one dangling colour introducer at the long-paragraph boundary (12383); truncation now drops incomplete colour
+escapes as well as incomplete UTF-8 characters. One earlier intermediate install (`checks-20261025-183809-s3`) could not
+start because a partial table regeneration had dropped build-time namespace aliases; full regeneration restored them,
+and final data validation has zero errors in both banks. These are build artifacts, not committed table changes.
+
+Final run: `checks-20261025-185239-s3`, `tooltiptext specialtext` **PASS**. The regression reads 313 property lines
+(294 OK, 19 item-dependent) and 54 lines from five named uniques plus six rare/magic bases. The special check reads
+812 IDs (778 complete short strings, 34 bounded long paragraphs), all four layered stats at 16 colour values, and four
+real uniques. No crash files, zero cursor or foreground changes, no watchdog abort. The plugin-off control above is PASS.
+Both use only the lane-created `SpTextThree` character; slot 1 was untouched. Existing engine/harness assertions remain
+in logscan (the assertion inventory is in testing.md); no plugin error/fail/assert lines were added by these checks.
