@@ -6,6 +6,17 @@ functions it installed.
 
 ## Waiting
 
+Damage / IED audit: `game_checks.py all ied iedtip --slot 3`, and the same
+with `MXL_CONTROL=innate`. Set `MXL_CHAR` to the lane's own throwaway; an
+explicit name is entered or created, never replaced by the selected card.
+`ied` grants the hidden passive using equipped stat=value pairs, checks
+the data formula, spends a real Dexterity point, and applies native weapon
+hits to a zero-resistance monster at SrcDam 128 and 64. `iedtip` checks the
+client formatter with explicitly set and restored client inputs. Harness verbs `passiverefresh` and
+`weaponhit mon:<id> [SrcDam]` expose the native passive refresh and weapon
+build/hit/apply pipeline; `weaponhit` reports raw damage fields (1/256 life)
+and whole life lost. See [damage-ied-audit.md](damage-ied-audit.md).
+
 Use [test-sessions.md](test-sessions.md) to run these checks by character.
 
 | Since | What | How to test | Expected |
@@ -1033,3 +1044,72 @@ The lane's wrapper selected/created only `SpTextThree`; the earlier baseline use
 (`checks-20261025-182658-s2`). It did not use the default most-recent-character selection or back up other saves.
 The earlier failed long-colour-boundary probe and intermediate build/startup problem are recorded in
 [item-tooltips.md](item-tooltips.md). Existing startup, magic-item harness and exit pool assertions are unchanged.
+
+### Maximum resistance is capped at 90 by design (lane maxres-cap, 2026-10-25)
+
+Median's rule is `min(75 + maximum-resistance stat, 90)`, not an uncapped maximum. See
+[subsystems/combat-stats.md](subsystems/combat-stats.md#maximum-resistance-report-works-as-median-lane-maxres-cap-2026-10-25)
+for the bundled data and D2Sigma patch evidence. The gameplay code and plugin version are unchanged.
+
+Slot 2, background harness, freshly created lane-owned character **MaxresCodex**. Initial runs used plugin
+**0.66.0** built from `ffd829032912c980ee97466921df447a648e3093`. Installed through `tools/install_mod.py::finish_install` after checking
+the owned slot lock; existing installed data was retained (no data change).
+
+- Existing check **resistcap: PASS**, run `checks-20261025-182129-s2`: 24/24 probes, player and Rogue hireling,
+  fire / lightning / cold / magic. With resistance 200, maximum-resistance +0 / +10 / +50 left exactly
+  25,000 / 15,000 / 10,000 of each 100,000-unit incoming hit: effective caps **75 / 85 / 90%**.
+- The first item-gear probe in that folder is **invalid / FAIL**: it supplied ten `stat=value` pairs to an
+  eight-pair harness command, which refused item creation. Its zero-resistance hits and screenshots are not
+  cap measurements. This was a probe error, not a gameplay failure.
+
+All run evidence stays outside git under `%USERPROFILE%\mxl-d2r-runs`. No game files or screenshots are committed.
+
+Corrected item probe (local driver `mxl-d2r-runs/maxres-cap-check.py`, built on `game_checks.run_all`, retained outside
+git to honour the docs-only direction) uses a `cm2` inventory charm with eight stat pairs, e.g.
+`h item cm2 fireresist=150 maxfireresist=10 lightresist=150 maxlightresist=10 coldresist=150 maxcoldresist=10 magicresist=150 maxmagicresist=10 inv`.
+It reads server `stat` and client `cstat`, calls the real damage step via `hit` outside town, then captures the character
+panel in town. It never substitutes its own cap into the game. The expected cap is only an assertion in the driver.
+
+**Confirmed display bug, separate from the correct gameplay ceiling:** with maximum-resistance **+16**, the character
+panel shows **91%**, while the incoming 100,000-unit hit leaves **9,300** (90% resistance, then a separate 7% damage reduction). The server and client
+raw stats both read resistance 150, maximum 16. Screenshots `maxresgear_0.png`, `_10.png`, `_15.png`, `_16.png` in
+`checks-20261025-182510-s2` show **75 / 85 / 90 / 91%** for fire / cold / lightning. The character panel's unpatched
+`cmp ecx,95` (`0x14e728f`) skips the patched `mov ecx,90` for computed maxima 91..94; the damage clamp and hireling
+panel use the patched register for their comparison. This display issue is recorded in `unported.md`; it is not a
+reason to raise the gameplay cap. No code change under the coordinator's docs-only direction.
+
+The corrected eight-pair run `checks-20261025-182510-s2` initially marked the damage probe FAIL because its
+expectation omitted that additional 7% damage reduction (for example 23,250 rather than 25,000 at the 75% cap).
+Its gear and client-stat reads and panel captures are valid. A subsequent normal / control pair accounts for
+stat 369 in the same way as the existing `resistcap` check. This run also logged a continuing `m_freed == 0`
+engine assertion and no crash; it is not presented as an assertion-free run.
+
+Final normal gear check **PASS (24/24)**: `checks-20261025-183121-s2`. With maximum resistance
+**+0 / +10 / +15 / +16 / +20 / +50**, effective caps were **75 / 85 / 90 / 90 / 90 / 90%** for fire,
+lightning, cold and magic. The loaded character supplied stat 369 = 7 despite a base-stat reset: damage fields
+were **23,250 / 13,950 / 9,300 / 9,300 / 9,300 / 9,300** after that additional reduction. Server and client
+raw resistance / maximum values matched the charm's 150 / requested maximum in every case. The panel screenshots
+show 75 / 85 / 90 / 91 / 90 / 90 for the three visible elemental rows.
+
+The final pair used the slot-installed 0.66.0 DLL, SHA-256
+`44048202f7ccd3dc7d609dda40e9cd349fad33c146250bc16045aa661d5dc18d` (another lane installed its build while
+this lane had released the lock). Initial source-build DLL SHA-256:
+`01f5f1bdadb813cc61deafe91887d0399c98f9bf0b9e32cb218e87c865edf340`.
+The `mxl` combat report confirms all three ceiling patches; the control uses the same DLL with **combat** disabled.
+
+Control gear check **PASS (24/24)**: `checks-20261025-183640-s2`, `MXL_CONTROL=combat`, same DLL and character.
+The `mxl` line says `combat off: left out by mxl-core-off.txt`. Maximum-resistance **+0 / +10 / +15 / +16 / +20 / +50**
+leaves **25,000 / 15,000 / 10,000 / 9,000 / 5,000 / 5,000** of a 100,000-unit hit, i.e. native effective caps
+**75 / 85 / 90 / 91 / 95 / 95%**. The character panel confirms 95% at +20 (screenshot `maxresgear_20.png`).
+The control also disables combat's post-resistance damage reduction, so stat 369 is intentionally excluded from
+that run's expected damage. Its report includes the preceding normal rows because the driver reuses the in-memory
+results list; the rows marked `control=True` are the control measurements.
+
+Final normal / control runs: **zero new engine assertion lines, zero crash files, watchdog abort None**.
+Both games stopped before returning; the driver retained the lock between them and released it afterwards,
+and the control off-file was removed. Only this lane's `MaxresCodex` save was modified. No slot/save incidents.
+Left: correct the character panel's +16..+19 display comparison in a separately authorized code change.
+
+Control log caveat: the slot-installed build logs an unrelated `median towns FAILED` safety-size mismatch at
+`0x327850`. The combat part is deliberately off in that run; cap probes and the native character panel still
+match the expected control values. This lane does not modify the towns part.

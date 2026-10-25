@@ -36,7 +36,7 @@ strings, 6 had no line where Median has one, 3 showed Chronicle placeholder text
    |---|---|---|
    | 534, 74 | 32 | value / 10 (at least 1) with a sign: `+1 Life Regenerated per Second (Based on Character Level)`; descval 1 puts the number first, 2 the text |
    | 309 | 33 | `Jitan's Gate Cooldown Reduced by 2` (seconds) |
-   | 444 | 35 | `Innate Cold Damage: 13 (45.0% of Vitality)`: element in the layer's low byte, attribute in the second byte, the percentage is the value raised by the item's stat 513 |
+   | 444 | 35 | `Innate Cold Damage: 13 (45.0% of Vitality)`: element in the layer's low byte, attribute in the second byte, the percentage is the value raised by the local player's stat 513 |
    | 289 | 36 | `Orb Effects Applied to this Item are Doubled` (only at value 2) |
    | 478 | 37 | `Jitan's Gate Maximum Skill Level Increased by 12` |
    | 456 | 38 | `Activation Frequency +12` |
@@ -51,9 +51,7 @@ strings, 6 had no line where Median has one, 3 showed Chronicle placeholder text
 
 ## Assumptions and what stays open
 
-- **Descfunc 35 (innate damage, stat 444).** The percentage formula (`value + value * stat513 / 100`) and the layer bytes (element,
-  attribute) are inferred from Median's strings and the data, not from Sigma's code (the flag check `FUN_100af880` in Sigma stays
-  unresolved). The damage number in front of "of" is read with the local player's attributes (the item unit is not a player).
+- **Descfunc 35 (innate damage, stat 444).** Confirmed in D2Sigma 0x10077d80 by lane damage-ied: percentage = value + value * player stat513 / 100. The display damage uses the integer part of that percentage; attribute code 4 uses max(Strength, Dexterity). The innate plugin part restores those two rules. The hidden innate passive uses a different formula; see [damage-ied-audit.md](damage-ied-audit.md).
 - **Descfunc 33 (cooldown, stat 309)** divides the stored value by 25 (frames per second); the divisor was not confirmed against
   Median.
 - **Skills without a name.** Skills 2001, 2004, 669, 2073, 2076 and 741 (`skills_1929`, `skills_1932`, `skills_597`, `skills_2001`,

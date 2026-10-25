@@ -49,5 +49,6 @@ int RunItemTextTests() {
 	Check(InnateAttribute(0x0302) == 3 && InnateAttribute(0x0402) == 4 && InnateAttribute(0x0902) == 0, "attribute is the next byte, out of range = Strength");
 	Check(InnatePercent(45, 20) == 54.0 && InnatePercent(45, 0) == 45.0, "percent adds the character's innate damage share");
 	Check(InnateDamage(100, 54.0) == 54 && InnateDamage(99, 50.0) == 49, "damage is the percent of the attribute, truncated");
+	Check(InnateDamage(199, 10.5) == 19, "classic tooltip truncates the effective percent before multiplying the attribute");
 	return failures;
 }

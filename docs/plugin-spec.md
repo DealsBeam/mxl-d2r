@@ -1014,6 +1014,8 @@ writes Median's line for the stats whose Median descfunc D2R lacks and otherwise
 | 31 (404 / 406 / 407), 34 (414) | text at the Median string ID in the layer, resolved by key through `mxl_special_text.h`; 31 uses colour value minus one (1..13, otherwise 3), 34 always orange 8 |
 | 27 / 28 with skills2 `AltTooltip` | omit the ordinary +skill line, as Sigma does; the special paragraph describes the hidden passive |
 
+The `innate` part makes descfunc 35 match D2Sigma 0x10077d80: truncate P to an integer before multiplying the attribute, and use max(Strength, Dexterity) for attribute code 4. The displayed P retains its fractional part. It also extends `stat_rules.cpp`'s guarded passive refresh after a stat-spending packet to all four attributes: otherwise a Dexterity point can discard innate fire until the next refresh. The hidden passive formulas remain data-driven. Turning `innate` off retains the previous tooltip arithmetic and Strength-only refresh for control runs. `statclick` independently controls Shift-click widening; either part can install the shared packet hook. `mxl` reports the refresh and tooltip on its own `innate damage` line. See [damage-ied-audit.md](damage-ied-audit.md).
+
 Descfuncs 22 / 23 / 24 (reanimate, charged skill) keep D2R's own text and placeholders. The data side (`tools/txt_migrate.py`
 `median_stat_wording`) gives the text of 296 kept strings that carry other placeholders under a `<key>_mxl` alias key
 (`tools/tbl2json.py`, [strings-namespace.md](strings-namespace.md)). `tooltip_probe.cpp` is harness-only: a ring of the last 512

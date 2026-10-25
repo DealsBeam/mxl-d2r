@@ -9,7 +9,7 @@
 // Hooks D2R's property line formatter (0x2d6520) for the descfuncs 31-38 that D2R writes no text for (or a wrong one) and for
 // the class lock stat 492. `lines` false hooks the function but changes nothing (the test harness readback needs the hook).
 // True when hooked.
-auto InstallItemText(const D2RL::PluginContext* context, bool lines, char* report, size_t reportSize) noexcept -> bool;
+auto InstallItemText(const D2RL::PluginContext* context, bool lines, bool innate, char* report, size_t reportSize) noexcept -> bool;
 
 // The formatter exactly as the item text builder calls it (with the plugin's lines); false return = no text. Used by the
 // harness to format one property. False in the first member when the hook is not installed.
