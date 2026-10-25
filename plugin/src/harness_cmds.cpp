@@ -121,6 +121,9 @@ constexpr uint64_t RvaDefaultIlvl = 0x43e8a0;   // (player, 0)
 constexpr uint64_t RvaMakeItem = 0x43d530;
 constexpr uint64_t RvaMaxDurability = 0x2f4b60;
 constexpr uint64_t RvaSetStatItem = 0x2f7940;   // (item, stat, value, layer)
+constexpr uint64_t RvaItemStatList = 0x3d5230;  // (owner, item, state, flags) -> the item's stat list of those flags, made if missing
+constexpr uint64_t RvaStatListAdd = 0x2f3330;   // (dataFlag, list, stat, value, layer): adds to the stat on that list
+constexpr int32_t MagicStatListFlag = 0x40;     // the item's magic property list: the one the save writes (item_spells.cpp, items_ext.cpp)
 constexpr uint64_t RvaLocInit = 0x382e10;       // (loc*, page, packed xy)
 constexpr uint64_t RvaInvRecord = 0x34a410;     // (player, page kind, expansion)
 constexpr uint64_t RvaFindSpot = 0x3865b0;      // (inventory, item, record, &x, &y, 0) -> found
@@ -232,6 +235,8 @@ using UseFn = uint64_t (*)(Game*, Unit*, Unit*, Unit*);
 using FreeItemFn = void (*)(Game*, Unit*);
 using InvChangeFn = uint8_t (*)(Unit*, int32_t*, int32_t*, uint32_t*, uint32_t*, uint64_t, uint64_t, uint8_t);
 using StatsChangedFn = void (*)(Unit*, int32_t);
+using ItemStatListFn = void* (*)(Unit*, Unit*, int32_t, int32_t);
+using StatListAddFn = void (*)(uint32_t, void*, int32_t, int32_t, int32_t);
 using UnitPositionFn = uint32_t (*)(Unit*);
 using BlockedFn = int32_t (*)(Unit*, int32_t, int32_t, int32_t);
 using SkillByIdFn = uint8_t* (*)(Unit*, int32_t, int32_t);
@@ -1622,8 +1627,16 @@ auto MakeItem(Ctx* c, uint32_t code, int quality, int ilvl, int page, const int 
 	if (const int32_t dur = Fn<ItemStatFn>(RvaMaxDurability)(item); dur != 0) {
 		Fn<SetItemStatFn>(RvaSetStatItem)(item, StatDurability, dur, 0);
 	}
+	// The stats go on the item's magic list (the one D2R saves and the owner reads, as for a rolled property), as a difference
+	// so that the value is the item's total; a plain set would sit on the base list and vanish in the save.
+	void* magic = nstats > 0 ? Fn<ItemStatListFn>(RvaItemStatList)(nullptr, item, 0, MagicStatListFlag) : nullptr;
 	for (int i = 0; i < nstats; ++i) {
-		Fn<SetStatFn>(RvaSetStat)(item, stats[i][0], static_cast<int32_t>(values[i]), stats[i][1]);
+		if (magic != nullptr) {
+			const int32_t delta = static_cast<int32_t>(values[i]) - Stat(item, stats[i][0], stats[i][1]);
+			Fn<StatListAddFn>(RvaStatListAdd)(d2r::DataFlag(c->game), magic, stats[i][0], delta, stats[i][1]);
+		} else {
+			Fn<SetStatFn>(RvaSetStat)(item, stats[i][0], static_cast<int32_t>(values[i]), stats[i][1]);
+		}
 	}
 	if (page < 0) {  // on the ground next to the player
 		Fn<DropFlagsFn>(RvaDropFlags)(item, 0x4000, 0);

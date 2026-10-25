@@ -11,7 +11,7 @@ Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screens
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
 Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
-classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltiptext gameend trophy statcols
+classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltiptext gameend itemstatsave trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
@@ -3700,6 +3700,52 @@ def check_gameend():
     add(n1, "PASS" if ok else "FAIL",
         "game flag 50 set by the recipe (%s): %s; after Save and Exit and Play again (a new game): %s; `mxl` games ended %s -> %s"
         % (l0[0][:40] if l0 else "-", g0[0], g1[0], e0, e1), [sh("gameend")], [x for x in t1.splitlines() if "game end" in x])
+
+
+def check_itemstatsave():
+    """The harness `item` verb puts its stat=value pairs on the item's magic stat list, the one the save writes: a charm made
+    with fireresist= / lightresist= / coldresist= / poisonresist= keeps the stats and gives them to the player after Save and Exit
+    and Play again (before 0.65.0 they sat on the base list: the item came back with none)."""
+    n1 = "Harness item stats survive Save and Exit (charm with fireresist / lightresist / coldresist / poisonresist set by name)"
+    if not need_game():
+        return add(n1, "BLOCKED", "not in a game")
+    close_menu()
+    want = (21, 22, 23, 24)
+    names = ("fireresist", "lightresist", "coldresist", "poisonresist")
+
+    def num(lines):
+        return int(lines[0].rsplit("=", 1)[1]) if lines and "=" in lines[0] else None
+
+    def player():
+        return [num(H("stat player %d" % s)[1]) for s in (39, 41, 43, 45)]
+
+    def charms():
+        out = []
+        for it in hstate()["items"]:
+            if it.get("code") == "cm2" and it.get("page") == 0:
+                out.append((it["id"], tuple(num(H("stat %d %d" % (it["id"], s))[1]) for s in (39, 41, 43, 45))))
+        return out
+
+    if charms():
+        return add(n1, "BLOCKED", "the character already carries a medium charm (cm2): the check would leave it or remove it")
+    p0 = player()
+    ok, lines = H("item cm2 " + " ".join("%s=%d" % (nm, v) for nm, v in zip(names, want)) + " inv")
+    live = charms()
+    p1 = player()
+    gain = [b - a for a, b in zip(p0, p1)]
+    if not leave_and_reenter():
+        H("remove cm2 1")
+        return add(n1, "BLOCKED", "could not leave and re-enter the game (made: %s, item stats live %s)" % (ok, live))
+    time.sleep(2)
+    after = charms()
+    p2 = player()
+    kept = [x for x in after if x[1] == want]
+    shot = sh("itemstatsave")
+    H("remove cm2 1")
+    good = ok and len(live) == 1 and live[0][1] == want and gain == list(want) and len(kept) == 1 and p2 == p1
+    add(n1, "PASS" if good else "FAIL",
+        "made %s; item stats live %s, player gained %s; after Save and Exit and Play again: charms %s, player %s (before %s)"
+        % (ok, live, gain, after, p2, p0), [shot])
 
 
 def _weapon_bonus(code):
@@ -11967,7 +12013,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
-          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltiptext", check_tooltiptext), ("gameend", check_gameend),
+          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltiptext", check_tooltiptext), ("gameend", check_gameend), ("itemstatsave", check_itemstatsave),
           ("trophy", check_trophy), ("statcols", check_statcols),
           # the old "fix to test" rows of docs/bugs.md
           ("skilltree", check_skilltree), ("keybinds", check_keybinds), ("npcstrings", check_npcstrings), ("automap", check_automap),
