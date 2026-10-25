@@ -149,6 +149,7 @@ char g_uniqueLimitsReport[192] = "off: not the expected game image";
 char g_uniqueCarryReport[192] = "off: not the expected game image";
 char g_engineGapsReport[256] = "off: not the expected game image";
 char g_townRulesReport[256] = "off: not the expected game image";
+char g_medianTownsReport[160] = "off: not the expected game image";
 char g_itemEventsReport[448] = "off: not the expected game image";
 char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
@@ -182,7 +183,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock mediantowns statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -487,6 +488,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	std::snprintf(line, sizeof(line), "engine gaps %s", g_engineGapsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "town rules %s (portal refusals %d)", g_townRulesReport, TownPortalRefusals());
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "median towns %s", g_medianTownsReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "stat columns %s", g_statColumnsReport);
 	Say(command, line);
@@ -1062,6 +1065,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallTownRules(context, heal, lock, g_townRulesReport, sizeof(g_townRulesReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: town rules %s", g_townRulesReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("mediantowns")) {
+				std::snprintf(g_medianTownsReport, sizeof(g_medianTownsReport), "%s", OffNote);
+			} else {
+				InstallMedianTowns(context, g_medianTownsReport, sizeof(g_medianTownsReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: median towns %s", g_medianTownsReport);
 			context->LogInfo(line);
 		}
 		{

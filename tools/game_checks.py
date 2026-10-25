@@ -16,7 +16,7 @@ skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap sk
 cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes
-respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick
+respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick townmonsters
 teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath.
 """
 import ctypes
@@ -77,7 +77,13 @@ def unlock():
 
 def backup_saves():
     dst = os.path.join(g.RUNS, "save-backup-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-s%d" % g.SLOT)
-    shutil.copytree(SAVES, dst)
+    if os.environ.get("MXL_CHAR"):
+        from pathlib import Path
+        os.makedirs(dst, exist_ok=True)
+        for p in Path(SAVES).glob(g.CHAR_NAME + ".*"):
+            shutil.copy2(p, dst)
+    else:
+        shutil.copytree(SAVES, dst)
     return dst
 
 
@@ -10667,6 +10673,147 @@ def check_statclick():
 # --- phase 4 lane p4-verify-b: town rules (SK4, NPC1, UQ5) ----------------------------------------------------------------------
 
 
+def check_townmonsters():
+    """Median IsTown through D2R's shared checks, then a real Scosglen monster following across the open town border.
+    MXL_CONTROL=mediantowns repeats the same engine actions with the classifier replacement disabled.
+    No monster relocation, path/collision edits or harness-side town decision is used.
+    """
+    name = "Median towns: Scosglen monsters cannot enter Tur Dulra"
+    control = "mediantowns" in os.environ.get("MXL_CONTROL", "").split()
+    towns = {1, 40, 75, 103, 109, 138, 139, 242, 243}
+    vanilla = {1, 40, 75, 103, 109}
+    expected = vanilla if control else towns
+    rows, log, bad = [], [], []
+    for level in sorted(towns | {0, 2, 137, 140, 241, 244, 270, 271, 100000}):
+        ok, lines = H("town %d" % level)
+        log += lines
+        line = next((kv(s) for s in lines if s.startswith("town level=")), {})
+        if not ok or int(line.get("istown", -1)) != int(level in expected):
+            bad.append("level %d classifier: %s" % (level, line))
+    rows.append("%s: level classifier for all nine towns, adjacent fields and invalid ids" % ("control" if control else "enabled"))
+    god(True)
+    try:
+        for level in (138, 139, 243, 242):
+            st = go(level)
+            ok, lines = H("town")
+            log += lines
+            line = next((kv(s) for s in lines if s.startswith("town level=")), {})
+            if st["player"].get("area") != level or not ok or int(line.get("roomtown", -1)) != int(not control):
+                bad.append("town %d room check: %s" % (level, line))
+        # Generate the connected outdoor level too: a direct debug arrival in a preset town
+        # does not create its outdoor neighbour's rooms.
+        go(271)
+        # Prepare the player near the entrance with the real Teleport skill, streaming rooms.
+        # No monster exists yet; the pursuit below uses walking only.
+        H("setskill 54 1")
+        H("stat player 9 set 256000")
+        p = hstate()["player"]
+        H("move %d %d walk" % (p["x"] + 7, p["y"]))
+        time.sleep(2)
+        for _ in range(64):
+            p = hstate()["player"]
+            if p["x"] >= 5955 or (p["x"] >= 5935 and 11280 <= p["y"] <= 11320):
+                break
+            H("stat player 8 set 256000")
+            if p["x"] >= 5900 and p["y"] > 11300:
+                H("cast 54 %d %d" % (p["x"] - 10, p["y"] - 35))
+            else:
+                H("cast 54 %d %d" % (min(p["x"] + 35, 5960), p["y"]))
+            time.sleep(1)
+            q = hstate()["player"]
+            if abs(q["x"] - p["x"]) < 3:
+                H("cast 54 %d %d" % (q["x"], q["y"] - 30))
+                time.sleep(1)
+        ok, lines = H("town edges", timeout=30)
+        log += lines
+        edges = [kv(s) for s in lines if s.startswith("town edge ")]
+        edges = [e for e in edges if {int(e["al"]), int(e["bl"])} == {242, 271}]
+        # levels.txt places Tur Dulra at Scosglen's eastern edge (relative OffsetX 194, OffsetY 123).
+        # Take short steps toward the border if the loaded rooms still stop short of it.
+        for _ in range(4):
+            if edges:
+                break
+            p = hstate()["player"]
+            H("move %d %d walk" % (p["x"] + (15 if p.get("area") == 271 else -40), p["y"]))
+            time.sleep(3)
+            ok, lines = H("town edges", timeout=30)
+            log += lines
+            edges = [kv(s) for s in lines if s.startswith("town edge ")]
+            edges = [e for e in edges if {int(e["al"]), int(e["bl"])} == {242, 271}]
+        if not edges:
+            return add(name, "FAIL" if bad else "BLOCKED", "; ".join(rows + bad + ["no loaded passable Tur Dulra / Scosglen border; no movement claim"]), [sh("town-border-blocked")], log)
+
+        def walk(x, y, area, seconds=12):
+            H("move %d %d walk" % (x, y))
+            end = time.time() + seconds
+            retry = time.time() + 2
+            while time.time() < end:
+                time.sleep(.5)
+                p = hstate()["player"]
+                if p.get("area") == area and (area == 242 or abs(p.get("x", 0) - x) + abs(p.get("y", 0) - y) < 4):
+                    return True
+                if time.time() >= retry:
+                    H("move %d %d walk" % (x, y))
+                    retry = time.time() + 2
+            return False
+
+        start = None
+        for e in edges[::max(1, len(edges) // 8)]:
+            ax, ay, bx, by = (int(e[k]) for k in ("ax", "ay", "bx", "by"))
+            if int(e["al"]) == 242:
+                ax, ay, bx, by = bx, by, ax, ay
+            dx, dy = bx - ax, by - ay  # field -> town
+            fx, fy, tx, ty = ax - 8 * dx, ay - 8 * dy, bx + 8 * dx, by + 8 * dy
+            ready = walk(fx, fy, 271, seconds=3)
+            if not ready:
+                # Fixture only: blink to the passable field approach before any monster is spawned.
+                H("stat player 8 set 256000")
+                H("cast 54 %d %d" % (fx, fy))
+                time.sleep(1)
+                p = hstate()["player"]
+                ready = p.get("area") == 271 and abs(p["x"] - fx) + abs(p["y"] - fy) < 5
+            if ready:
+                start = (fx, fy, tx, ty)
+                break
+        if start is None:
+            return add(name, "FAIL" if bad else "BLOCKED", "; ".join(rows + bad + ["player could not reach the field fixture"]), [sh("town-walk-blocked")], log)
+        fx, fy, tx, ty = start
+        # Scytheclaw is one of Scosglen's native mon1..6 rows, resolved through the same idmap as the build.
+        import json
+        with open(os.path.join(os.path.dirname(__file__), "..", "work", "named", "idmap.json"), encoding="utf-8") as f:
+            monster = next(e["id"] for e in json.load(f)["monstats"] if e["row"] == 1978)
+        ok, lines = H("spawn %d 1 %d %d" % (monster, fx - 4, fy + 3))
+        log += lines
+        match = next((re.search(r"spawned class \d+ id=(\d+)", s) for s in lines if "spawned class" in s), None)
+        if not ok or not match:
+            return add(name, "BLOCKED", "; ".join(rows + bad + ["engine refused the field Scytheclaw spawn"]), [], log)
+        mid = int(match.group(1))
+        time.sleep(2)
+        initial = next((m for m in hstate()["mons"] if m["id"] == mid), {})
+        log.append("field monster before retreat: %s" % initial)
+        arrived = walk(tx, ty, 242)
+        samples = []
+        for _ in range(24):
+            st = hstate()
+            m = next((m for m in st["mons"] if m["id"] == mid), {})
+            samples.append(m)
+            log.append("retreat player area=%s at=%s,%s monster=%s" % (st["player"].get("area"), st["player"].get("x"), st["player"].get("y"), m))
+            time.sleep(.5)
+        crossed = any(m.get("area") == 242 for m in samples)
+        engaged = bool(initial) and ((initial.get("mx"), initial.get("my")) != (fx - 4, fy + 3) or
+                                     any(m and (m.get("mx"), m.get("my"), m.get("mode")) !=
+                                         (initial.get("mx"), initial.get("my"), initial.get("mode")) for m in samples))
+        rows.append("Scytheclaw %d: player walked into town=%s, monster entered town=%s, monster acted=%s" % (mid, arrived, crossed, engaged))
+        if not arrived or not initial or not engaged:
+            bad.append("inconclusive pursuit setup")
+        if crossed != control:
+            bad.append("control must reproduce entry; enabled must prevent it")
+        H("kill %d" % mid)
+        add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [sh("townmonsters")], log)
+    finally:
+        god(False)
+
+
 def _skills_by_town(intown, limit=60, need_mana=True):
     """Selectable skills of the built skills.txt (any class: `setskill` gives them) without a restrict value: those with InTown 1 (intown True) or without
     it, by required level: [(id, name, mana)]. The mana filter keeps the skills whose cast costs something (D2R shows the result)."""
@@ -12171,7 +12318,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("monlevel", check_monlevel), ("normaltc", check_normaltc), ("leash", check_leash),
           ("gamble", check_gamble), ("enginegaps", check_engine_gaps), ("bufficons", check_bufficons), ("uniquelimits", check_uniquelimits),
           ("assetpaths", check_assetpaths),
-          ("towncast", check_towncast),
+          ("towncast", check_towncast), ("townmonsters", check_townmonsters),
           ("npcheal", check_npcheal),
           ("tplock", check_tplock),
           ("charmlimit", check_charmlimit),
@@ -12247,7 +12394,8 @@ def run_all(only=None):
         g.snapshot_marks()
         if not to_menu():
             add("start game", "BLOCKED", "game did not reach the main menu")
-        elif not enter_game():
+        elif not (create_character("barbarian", g.CHAR_NAME) if os.environ.get("MXL_CHAR") and card_of(g.CHAR_NAME) is None
+                  else enter_game((card_of(g.CHAR_NAME) or 1) if os.environ.get("MXL_CHAR") else 1)):
             add("enter game", "BLOCKED", "the character did not enter the game")
         else:
             try:

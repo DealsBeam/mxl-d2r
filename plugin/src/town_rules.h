@@ -1,5 +1,5 @@
 // Median's NPC healing and town portal lock on D2R (town_rules.cpp, rules in town_rules_logic.h).
-// Off words: npcheal, tplock.
+// Off words: npcheal, tplock, mediantowns.
 #pragma once
 
 #include <D2RLPlugin/api.h>
@@ -13,3 +13,6 @@ auto InstallTownRules(const D2RL::PluginContext* context, bool healAll, bool tow
 
 // Number of town portal casts refused in a locked level since load (for the `mxl` command); -1 when the hook is not installed.
 auto TownPortalRefusals() noexcept -> int;
+
+// Replace D2R's five-id town classifier with Median's IsTown flags. Off word: mediantowns.
+auto InstallMedianTowns(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;

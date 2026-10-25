@@ -1124,3 +1124,39 @@ game destroy / create, client menu composition, quest handlers 13 / 14 / 25 / 38
    cosmetic. The monster death drop caller `0x5930b0` (the other caller of `0x4404f0`) was not read.
 6. Client: the string ids for new menu lines (tbl lookup `0x143e2b730`) and the layout / frame of a longer menu are untested; records hold only 5 lines.
 7. Everything above is static analysis: none of the hooks has been run in the game yet.
+
+## Median town classification (lane town-monsters)
+
+Median `levels.bin` byte `+0x14b` (`IsTown` in `2_txt/sigma_named/levels.txt`) marks nine towns. The generated
+`mxl_goblins::Towns` already maps these through the build's level id map. D2R's leaf `0x327850(int level)` instead
+subtracts and compares only 1, 40, 75, 103 and 109. Its room wrapper `0x2f0750(room)` reads the level through
+`0x360fc0(room + 0x18)` and tail-calls that leaf; `0x2f0780(level)` is another tail thunk. Neither reads a town field
+from the loaded levels table. Level type is not the answer: Tur Dulra and Scosglen both use type 44.
+
+| Median row | D2R id | IsTown | Level type | Vis0 / Warp0 (Median ids) |
+|---|---|---|---|---|
+| 137 Caldeum | 138 | 1 | 36 | 187 / -1 (also Vis1 182 / Warp1 68) |
+| 138 Silver City | 139 | 1 | 39 | 142 / -1 (also Vis1 143 / Warp1 -1) |
+| 241 Tur Dulra | 242 | 1 | 44 | 270 / -1 |
+| 242 Frozen Sea | 243 | 1 | 44 | 245 / 100 |
+| 270 Scosglen | 271 | 0 | 44 | 241 / -1 |
+
+Tur Dulra and Scosglen have reciprocal open visibility connections; no warp object separates their walking rooms.
+`0x340e70` (path computation) checks unit type 1, excludes `0x3b01c0`'s special monsters, resolves the destination room,
+and calls `0x2f0750`; when true and its third parameter is zero it takes failure exit `0x341259`.
+`0x510f00` suppresses room monster population using the same check. `0x512a50` uses it when initializing a unit's
+flags through `0x34e5f0(unit, 2)`. Other callers include AI, target selection, skills and missiles. Room-generation
+functions `0x328880` / `0x3608a0` call the leaf directly. Fixing only a movement caller or a harness helper would
+leave those other readers inconsistent.
+
+`town_rules.cpp` replaces the leaf entry with a 14-byte absolute indirect jump to a predicate over Median's generated
+town list, checking all 34 original bytes first. It needs no trampoline (the original leaf has short branches and
+an early return), changes no calling convention and preserves every vanilla town. The `mediantowns` off word leaves
+the stock classifier intact; the `mxl` command has a `median towns` line. No plugin version change.
+
+Harness observations: `h town [level]` calls the game's level thunk and room check (also accepts `h town x y` for a
+loaded room); `h town edges` finds collision-free borders in loaded rooms, without moving anything. `h state` now
+includes each nearby monster's area. `h spawn class count x y` calls the existing native spawn routine at a chosen
+field position; it does not override its refusal checks. The `townmonsters` game check walks the player across the
+Tur Dulra / Scosglen border and watches a native Scytheclaw's actual room. `MXL_CONTROL=mediantowns` must reproduce
+entry and the enabled run must refuse it. Missing borders or failed setup are BLOCKED/FAIL, never PASS.
