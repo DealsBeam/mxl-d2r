@@ -165,7 +165,8 @@ guard flag 0x100000 of D2Sigma is not set (unknown meaning in D2R). Same off wor
   D2RLoader wrapper at `0x3e2b496` that only tracks damage) clamps `75 + max-resistance stat` with `mov eax,0x5f` at
   `0x4524dd`; the character sheet (`0x14e7294`, function `0x14e6e70`) and the hireling panel (`0x14f4686`, function
   `0x14f3400`) have the same clamp for the displayed number. `InstallCombat` patches the immediate of all three from `0x5f`
-  to `0x5a` (`PatchWriteU8` with the five instruction bytes as the expected value). Damage resistance (stat 36, cap 50)
+  to `0x5a`, and since 0.68.0 the character sheet's test before its clamp too (`cmp ecx,0x5f; jl +5; mov ecx,0x5f` at `0x14e728f`: with
+  only the `mov` patched a computed 91..94 passed the test and showed 91..94% while the damage stayed at 90) (`PatchWriteU8` with the five instruction bytes as the expected value). Damage resistance (stat 36, cap 50)
   is a separate constant and already matches. Verified in game: fire resist 300 with max-resist 0 / +10 / +20 took
   25% / 15% / 10% of a fire bolt's damage (95 would have been 5%).
 - **Median absorb stats 184 / 189 / 417 (D2R 369 / 373 / 446): done.** D2Sigma's absorb step (`0x10057a20`) is D2R's
@@ -258,7 +259,7 @@ Evidence available in this repository (no classic extraction required):
 - D2R 3.3 build 93847: `0x4524a1` reads the maximum-stat id from damage-table entry +0xc, `0x4524bb` adds 75,
   and `0x4524dd` clamps to 95. `combat.cpp::InstallCombat` changes that immediate to 90. The character sheet
   (`0x14e7294`) and hireling panel (`0x14f4686`) get the same immediate change. Off word **combat** disables
-  these existing patches and the other combat rules; the existing `mxl` combat line reports the three clamps.
+  these existing patches and the other combat rules; the existing `mxl` combat line reports the four clamp sites (`4/4 clamps`).
 
 The input tree is labelled 2.14.4 in `assets/median/README.md`, while its `version.mxl` says 2.14.6. This report
 uses the checked-in data and the recorded D2Sigma audit; it does not infer a different cap from that label mismatch.

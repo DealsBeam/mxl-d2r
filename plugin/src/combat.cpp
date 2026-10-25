@@ -18,7 +18,8 @@
 // Resistances: D2R's per-hit resist step 0x4523e0 clamps 75 + the element's max-resistance stat to 95 (`mov eax,0x5f` at
 // 0x4524dd); Median stops at 90. It is plain code in the main image (D2RLoader's stat engine lives in D2RCore.dll, so the
 // stat getter is a thunk, but this function is not), so the immediate is patched to 0x5a. The character sheet (0x14e6e70)
-// and the hireling panel (0x14f3400) show the same clamp; they are patched as well so the number shown is the number used.
+// and the hireling panel (0x14f3400) show the same clamp; they are patched as well so the number shown is the number used
+// (the sheet's compare at 0x14e728f too: min(75 + max, 90), as Median shows it).
 // The context flag the step tests (ctx+0x24, "defender is a non-hireling monster") is 0 for hirelings, so mercenaries
 // already take the player branch there: the resist cap covers them with no extra work.
 //
@@ -108,6 +109,16 @@ constexpr ResistClamp ResistClamps[] = {
     {0x4524dd, {0xb8, 0x5f, 0x00, 0x00, 0x00}, "per-hit resist step 0x4523e0"},
     {0x14e7294, {0xb9, 0x5f, 0x00, 0x00, 0x00}, "character sheet 0x14e6e70"},
     {0x14f4686, {0xba, 0x5f, 0x00, 0x00, 0x00}, "hireling panel 0x14f3400"},
+};
+// The character sheet tests the value before it clamps it (`cmp ecx,0x5f; jl +5; mov ecx,0x5f`), so with only the mov patched a
+// computed 91..94 passed the test and was shown as 91..94 while the damage step stopped at 90. The compare gets the same limit.
+struct ResistCompare {
+	uint64_t rva;
+	uint8_t bytes[3];
+	const char* what;
+};
+constexpr ResistCompare ResistCompares[] = {
+    {0x14e728f, {0x83, 0xf9, 0x5f}, "character sheet 0x14e6e70 compare"},
 };
 
 using AvoidCheckFn = int32_t (*)(Unit* attacker, Unit* defender, int32_t missile);
@@ -313,8 +324,14 @@ auto InstallCombat(const D2RL::PluginContext* context, bool damageReduction, cha
 			++resistPatched;
 		}
 	}
-	const bool resistOk = resistPatched == static_cast<int>(sizeof(ResistClamps) / sizeof(ResistClamps[0]));
-	const int resistTotal = static_cast<int>(sizeof(ResistClamps) / sizeof(ResistClamps[0]));
+	for (const ResistCompare& compare : ResistCompares) {
+		if (Matches(base, compare.rva, compare.bytes, sizeof(compare.bytes)) &&
+		    context->PatchWriteU8(compare.rva + 2, &compare.bytes[2], 1, static_cast<uint8_t>(mxl_combat::ResistMaxMedian))) {
+			++resistPatched;
+		}
+	}
+	const int resistTotal = static_cast<int>(sizeof(ResistClamps) / sizeof(ResistClamps[0]) + sizeof(ResistCompares) / sizeof(ResistCompares[0]));
+	const bool resistOk = resistPatched == resistTotal;
 	const bool all = hooked && resistOk && absorbHooked && reductionHooked;
 	std::snprintf(report, reportSize,
 	              "%s: avoid/dodge/evade cap 60+stat (max 75, mercenaries too), block cap 50+stat (max 80), resist cap 75+max (max 90, %d/%d "
