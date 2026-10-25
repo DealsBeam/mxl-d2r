@@ -9,7 +9,7 @@
 //                  printf conversion of its own (D2R's descfunc 5 formats a string that has one; Median's does not)
 //   33 (stat 309)  the cooldown of the skill named by the layer: "%s Cooldown Reduced by %.1g" with the value in seconds
 //   35 (stat 444)  "Innate <element> Damage: N (P% of <attribute>)": the element is the low byte of the layer (a string each),
-//                  the attribute the next byte: 0 Strength, 1 Energy, 2 Dexterity, 3 Vitality, 4 Strength + Dexterity
+//                  the attribute the next byte: 0 Strength, 1 Energy, 2 Dexterity, 3 Vitality, 4 max(Strength, Dexterity)
 //   36 (stat 289)  the string, only while the value is 2
 //   37 (stat 478)  "%s Maximum Skill Level Increased by %d" with the skill of the layer
 //   38 (stat 456)  like 32 without the division
@@ -90,7 +90,7 @@ constexpr auto InnateElement(uint32_t layer) noexcept -> int {
 	return element <= 5 ? static_cast<int>(element) : 0;
 }
 // The attribute (the byte above the element): 0-3 name a stat (Strength, Energy, Dexterity, Vitality: stats 0-3), 4 is Strength
-// plus Dexterity (named by two stats), anything above reads as 0.
+// or Dexterity, whichever is larger (named by two stats), anything above reads as 0.
 constexpr auto InnateAttribute(uint32_t layer) noexcept -> int {
 	const uint32_t attribute = (layer >> 8) & 0xff;
 	return attribute <= 4 ? static_cast<int>(attribute) : 0;
@@ -99,9 +99,11 @@ constexpr auto InnateAttribute(uint32_t layer) noexcept -> int {
 constexpr auto InnatePercent(int32_t value, int32_t innateElementalDamage) noexcept -> double {
 	return static_cast<double>(value) + static_cast<double>(value) * innateElementalDamage / 100.0;
 }
-// The damage: `percent` of the attribute, truncated.
+// D2Sigma 0x10077e42 truncates the percentage first (cvttsd2si),
+// then 0x10088e50 multiplies the attribute and divides by 100 in 64 bits.
+// This display arithmetic differs from the hidden innate passive's formula.
 constexpr auto InnateDamage(int32_t attribute, double percent) noexcept -> int32_t {
-	return static_cast<int32_t>(static_cast<double>(attribute) * percent / 100.0);
+	return static_cast<int32_t>(static_cast<int64_t>(attribute) * static_cast<int32_t>(percent) / 100);
 }
 
 }  // namespace item_text

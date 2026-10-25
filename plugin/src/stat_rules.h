@@ -10,7 +10,9 @@ struct StatRulesParts {
 	bool potionAmounts = true;  // off word "potionamounts": Potion of Life +50 life, Lam Esen's Tome 10 stat points
 	bool stamina = true;        // off word "stamina": D2Sigma's stamina recovery step
 	bool shiftClick = true;     // off word "statclick": Shift-click on a stat "+" adds 25 points (audit XP6)
+	bool innate = true;         // off word "innate": refresh attribute-dependent innate passives after stat spending
 };
 
 // Installs the selected parts; the report names each one. Returns true when every selected part is in.
 auto InstallStatRules(const D2RL::PluginContext* context, const StatRulesParts& parts, char* report, size_t reportSize) noexcept -> bool;
+auto InnateRefreshInstalled() noexcept -> bool;
