@@ -2998,6 +2998,41 @@ auto CmdHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	return true;
 }
 
+// Build and apply actual weapon damage, rather than injecting a chosen field
+// like `hit`. Uses the same native pipeline as area_damage.cpp.
+auto CmdPassiveRefresh(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
+	Fn<void (*)(Unit*, int32_t)>(0x33f830)(c->player, 1);
+	Out("passiverefresh: native passive stats recalculated");
+	return true;
+}
+
+// Build and apply actual weapon damage through the area_damage.cpp pipeline.
+auto CmdWeaponHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long src = 128;
+	if (t.n < 2 || (t.n > 2 && !hcmd::ParseInt(t.tok[2], &src)) || src < 1 || src > 255) {
+		return Fail(c, "usage: weaponhit <mon:id> [SrcDam 1-255]");
+	}
+	Unit* target = ResolveRef(c, t.tok[1]);
+	if (target == nullptr || TypeOf(target) != 1 || !IsAlive(target)) {
+		return Fail(c, "weaponhit: living monster required");
+	}
+	DamageBlock d;
+	DamageInit(d);
+	DmgField<uint32_t>(d, 0) = 2;
+	DmgField<uint16_t>(d, 4) = 1;
+	using WeaponFn = void (*)(Game*, Unit*, Unit*, void*, int32_t, uint8_t);
+	Fn<WeaponFn>(0x44c030)(c->game, c->player, target, d.b, 0, static_cast<uint8_t>(src));
+	const int32_t phys = DmgField<int32_t>(d, 0x18), fire = DmgField<int32_t>(d, 0x20);
+	const int32_t light = DmgField<int32_t>(d, 0x2c), cold = DmgField<int32_t>(d, 0x34);
+	const int32_t before = Stat(target, StatLife);
+	Fn<HitUnitFn>(RvaHitUnit)(c->game, c->player, target, 1, d.b);
+	Fn<ApplyDamageFn>(RvaApplyDamage)(c->game, c->player, target, d.b);
+	Out("weaponhit src=%lld phys=%d fire=%d light=%d cold=%d lost=%d result=0x%x", src, phys, fire, light, cold,
+	    hcmd::LifeLost(before, Stat(target, StatLife)), static_cast<unsigned>(DmgField<uint16_t>(d, 4)));
+	DamageDestroy(d);
+	return true;
+}
+
 // `avoid <ref> melee|missile|evade [n]`: D2R's avoid check 0x44ef70 (the hooked one: Median's caps) n times (default 200) against
 // the unit (arguments: attacker unit = the player, defender unit, missile flag; a Game there crashes the debug logger); evade is rolled while walking, so the unit's mode is set to walk (2) for the loop and put back. Tally of the
 // results: none, avoid (2), dodge (4), evade (8), block (0x10).
@@ -5094,9 +5129,9 @@ const Verb Verbs[] = {
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
     {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
-    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
+    {"hit", CmdHit, false}, {"weaponhit", CmdWeaponHit, false}, {"passiverefresh", CmdPassiveRefresh, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"cltdo", CmdCltDo, true}, {"cltst", CmdCltSt, true}, {"skillstats", CmdSkillStats, false}, {"asserttrace", CmdAssertTrace, false}, {"panelrow", CmdPanelRow, false}, {"tip", CmdTip, true}, {"tiplog", CmdTipLog, true}, {"tipfmt", CmdTipFmt, true},
-    {"hit", CmdHit, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"itemdesc", CmdItemDesc, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
+    {"hit", CmdHit, false}, {"weaponhit", CmdWeaponHit, false}, {"passiverefresh", CmdPassiveRefresh, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"itemdesc", CmdItemDesc, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"panelrow", CmdPanelRow, false},
     {"skilltab", CmdSkillTab, true}, {"strids", CmdStrIds, true}, {"str", CmdStr, true}, {"hover", CmdHover, true}, {"automap", CmdAutomap, true}, {"shop", CmdShop, false}, {"gamble", CmdGamble, false}, {"gaps", CmdGaps, false}, {"levelact", CmdLevelAct, false},
     {"dump", CmdDump, false}, {"evtrace", CmdEvTrace, false}, {"merc", CmdMerc, false}, {"mercreq", CmdMercReq, false}, {"mercprice", CmdMercPrice, false}, {"players", CmdPlayers, false}, {"tctrace", CmdTcTrace, false}, {"leash", CmdLeash, false}, {"a5done", CmdA5Done, false}, {"countessreward", CmdCountessReward, false}, {"questobj", CmdQuestObj, false}, {"questreg", CmdQuestReg, false}, {"objects", CmdObjects, false}, {"object", CmdObject, false}, {"operate", CmdOperate, false}, {"objmode", CmdObjMode, false}, {"portal", CmdPortal, false},{"hellforgereward", CmdHellforgeReward, false}, {"prisonreward", CmdPrisonReward, false}, {"hire", CmdHire, false}, {"help", CmdHelp, true},     {"menu", CmdMenu, true}, {"mstr", CmdMstr, true}, {"text", CmdText, true}, {"mapmem", CmdMapMem, true}, {"goblinsay", CmdGoblinSay, false}, {"rewardmsg", CmdRewardMsg, false}, {"rewardsnd", CmdRewardSound, true}, {"infopanel", CmdInfoPanel, true}, {"bufficons", CmdBuffIcons, true}, {"statorder", CmdStatOrder, true},

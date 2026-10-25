@@ -101,7 +101,7 @@ use func 11 and 24, which are the wrapper slots; 27's layer / value shape matche
 Rows using the new functions (work/named): func 27 `innate_fire_damage_1f_of` (**107 of the 186 automagic rows**, the
 elemental weapon prefixes EleWeapon1H1-4 / 2H1-4, 5 uniques, 14 cube recipes, 2 runes, 2 set items; layer =
 `2 << 8 | element`, value = the percent; the stat has no reader in D2Sigma's server code, its tooltip is descfunc 35
-"ModitemEleInnateSeq", so it is the display marker of the sibling firemindam / lightmindam / coldmindam mods);
+"ModitemEleInnateSeq", so it is a display marker. The attribute-scaled damage comes from hidden passive skills granted by pr375, in addition to the sibling flat firemindam / lightmindam / coldmindam mods; see [damage-ied-audit.md](../damage-ied-audit.md));
 func 28 `properties_419` (35 amulet uniques, a 1 / 1 / 1 marker on stat 494); func 29 `item_mana_bytime_2` / `_3`
 (boss monster properties: stat "syn1" with the skill as layer and a percent value, the synergy `calc_codes.cpp` reads).
 D2R's dispatcher (`0x3d4620`) looks the entry up in the 8-byte table at **0x2386ab0** (count 37 at 0x2386bd8) and silently

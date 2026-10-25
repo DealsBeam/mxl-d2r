@@ -140,6 +140,7 @@ char g_combatReport[256] = "off: not the expected game image";
 char g_statColumnsReport[256] = "off: not the expected game image";
 char g_infoPanelsReport[256] = "off: not the expected game image";
 char g_itemTextReport[256] = "off: not the expected game image";
+char g_innateReport[160] = "off: not the expected game image";
 char g_tooltipProbeReport[256] = "off: test harness only";
 char g_stashPagesReport[256] = "off: not the expected game image";
 char g_buffIconsReport[256] = "off: not the expected game image";
@@ -492,6 +493,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "item text %s (%u lines written)", g_itemTextReport, ItemTextLinesWritten());
 	Say(command, line);
+	std::snprintf(line, sizeof(line), "innate damage %s", g_innateReport);
+	Say(command, line);
 	std::snprintf(line, sizeof(line), "tooltip probe %s", g_tooltipProbeReport);
 	Say(command, line);
 	{
@@ -678,8 +681,8 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		std::snprintf(line, sizeof(line), "mxl-core: heat %s", g_heatReport);
 		context->LogInfo(line);
 		{
-			const StatRulesParts parts{!Off("potionamounts"), !Off("stamina"), !Off("statclick")};
-			if (!parts.potionAmounts && !parts.stamina && !parts.shiftClick) {
+			const StatRulesParts parts{!Off("potionamounts"), !Off("stamina"), !Off("statclick"), !Off("innate")};
+			if (!parts.potionAmounts && !parts.stamina && !parts.shiftClick && !parts.innate) {
 				std::snprintf(g_statRulesReport, sizeof(g_statRulesReport), "%s", OffNote);
 			} else {
 				InstallStatRules(context, parts, g_statRulesReport, sizeof(g_statRulesReport));
@@ -1158,8 +1161,12 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		const bool linesOff = Off("itemtext");
 		if (linesOff && !harness) {
 			std::snprintf(g_itemTextReport, sizeof(g_itemTextReport), "%s", "off: left out by mxl-core-off.txt");
+			std::snprintf(g_innateReport, sizeof(g_innateReport), "attribute refresh %s; tooltip off with itemtext", InnateRefreshInstalled() ? "on" : "off");
 		} else {
-			InstallItemText(context, !linesOff, g_itemTextReport, sizeof(g_itemTextReport));
+			const bool hooked = InstallItemText(context, !linesOff, !Off("innate"), g_itemTextReport, sizeof(g_itemTextReport));
+			std::snprintf(g_innateReport, sizeof(g_innateReport), "%s: attribute refresh %s; tooltip %s",
+			              Off("innate") ? "off" : "on", InnateRefreshInstalled() ? "on" : "off",
+			              hooked && !linesOff && !Off("innate") ? "classic max(Str,Dex), integer percent" : "previous arithmetic or disabled");
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: item text %s", g_itemTextReport);
 		context->LogInfo(line);

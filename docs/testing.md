@@ -6,6 +6,17 @@ functions it installed.
 
 ## Waiting
 
+Damage / IED audit: `game_checks.py all ied iedtip --slot 3`, and the same
+with `MXL_CONTROL=innate`. Set `MXL_CHAR` to the lane's own throwaway; an
+explicit name is entered or created, never replaced by the selected card.
+`ied` grants the hidden passive using equipped stat=value pairs, checks
+the data formula, spends a real Dexterity point, and applies native weapon
+hits to a zero-resistance monster at SrcDam 128 and 64. `iedtip` checks the
+client formatter with explicitly set and restored client inputs. Harness verbs `passiverefresh` and
+`weaponhit mon:<id> [SrcDam]` expose the native passive refresh and weapon
+build/hit/apply pipeline; `weaponhit` reports raw damage fields (1/256 life)
+and whole life lost. See [damage-ied-audit.md](damage-ied-audit.md).
+
 Use [test-sessions.md](test-sessions.md) to run these checks by character.
 
 | Since | What | How to test | Expected |
