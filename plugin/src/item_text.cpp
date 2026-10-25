@@ -62,6 +62,7 @@ StringByIdFn g_stringById = nullptr;
 FormatObserver g_observer = nullptr;
 bool g_installed = false;
 bool g_lines = false;
+bool g_innate = false;
 volatile LONG g_written = 0;
 
 template <typename T>
@@ -155,12 +156,16 @@ auto OwnLine(void* viewer, const int16_t* record, int32_t value, uint32_t layer,
 			void* player = Player(viewer);
 			int32_t points = g_getStat(player, attribute == 4 ? 0 : attribute, 0);
 			if (attribute == 4) {
-				points += g_getStat(player, 2, 0);
+				const int32_t dexterity = g_getStat(player, 2, 0);
+				// Sigma 0x10077e8a: compare / cmovg, not a sum.
+				points = g_innate ? (points > dexterity ? points : dexterity) : points + dexterity;
 				StringText("d2r:strchrdex", "Dexterity", second, sizeof(second));
 				std::snprintf(name + std::strlen(name), sizeof(name) - std::strlen(name), "/%s", second);
 			}
 			const double percent = item_text::InnatePercent(value, g_getStat(player, StatInnateElementalDamage, 0));
-			std::snprintf(text, sizeof(text), format, item_text::InnateDamage(points, percent), percent, name);
+			const int32_t damage = g_innate ? item_text::InnateDamage(points, percent)
+			                                : static_cast<int32_t>(static_cast<double>(points) * percent / 100.0);
+			std::snprintf(text, sizeof(text), format, damage, percent, name);
 		}
 	} else if (func == 36) {
 		if (value == 2) {
@@ -202,7 +207,7 @@ char FormatHook(void* viewer, const int16_t* record, int32_t value, uint32_t lay
 
 }  // namespace
 
-auto InstallItemText(const D2RL::PluginContext* context, bool lines, char* report, size_t reportSize) noexcept -> bool {
+auto InstallItemText(const D2RL::PluginContext* context, bool lines, bool innate, char* report, size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;
 	if (std::memcmp(reinterpret_cast<const void*>(base + FormatRva), FormatEntry, sizeof(FormatEntry)) != 0) {
 		std::snprintf(report, reportSize, "off: entry bytes of 0x2d6520 differ");
@@ -221,6 +226,7 @@ auto InstallItemText(const D2RL::PluginContext* context, bool lines, char* repor
 	g_skillNameId = reinterpret_cast<SkillNameIdFn>(base + SkillNameIdRva);
 	g_stringById = reinterpret_cast<StringByIdFn>(base + StringByIdRva);
 	g_lines = lines;
+	g_innate = innate;
 	g_installed = context->InstallInlineHook(FormatRva, FormatEntry, sizeof(FormatEntry), reinterpret_cast<void*>(&FormatHook),
 	                                         reinterpret_cast<void**>(&g_formatOriginal));
 	if (!g_installed) {
