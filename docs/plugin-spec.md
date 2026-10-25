@@ -1048,6 +1048,38 @@ handler (`0x12c870`) plays Median's sounds at the player's unit (217 item_gem, 4
 2608 as stand-in, 230 item_lightarmor); the chat line is the fallback when the hook is off. Harness verbs `rewardmsg`,
 `rewardsnd`, `goblinsay` (the goblin line with the variant's own monstats name).
 
+## Waypoint destinations (`waypoints.cpp`, off word `wparrival`)
+
+Waypoint travel `0x5933f0` chooses entry kind 13 for towns, levels 46/74 and 133-137;
+other levels get kind 0. For Median's seven added preset waypoint levels, kind 0
+selects the default preset entry (the portal/natural entrance), even though the map
+contains a real waypoint. The plugin redirects only the town-predicate call at
+`0x59347b` to include the generated Median waypoint levels >=138. The remaining
+vanilla tests stay intact. Kind 13 uses `0x3dad90` to find a room with flags
+`0x30000` and a preset object with Objects flag `+0x127 & 0x40`, then the engine's
+normal free-position search places the player beside it. No waypoint numbers,
+objects, map placements, portal destinations or saves are remapped.
+
+The generated Median list has 47 waypoints; the added levels use numbers
+50, 60, 61, 70, 71, 72, 80 and 90, all within D2R's native 112-bit record.
+Their map objects resolve to existing waypoint classes after the DS1 object-id
+remap and carry the expected Objects waypoint flag. The fallback is therefore
+entry selection, rather than a missing object-id list or a waypoint-bit overflow.
+
+The call's five expected bytes are checked; a small executable jump stub within
+rel32 reach redirects it to the predicate. `mxl` reports `waypoint arrival on`;
+`wparrival` in `mxl-core-off.txt` restores the original selection. Game check
+`wparrival` activates and travels to the eight added waypoints plus Cold Plains,
+comparing arrival with the real object's position. Disable automatic activation
+with `MXL_CONTROL=wpauto`; use `MXL_CONTROL="wpauto wparrival"` for the control
+expecting the old entry fallback in the seven preset areas. Duncraig (153)
+is a maze level and already finds its waypoint without the fix; it and Cold Plains
+remain correct in both runs. `waypoint approach` is test
+setup only: load entry 13 and move beside the object before recording its coordinates.
+The test clears the destination bit, operates the real object (function 23), checks
+activation, then travels from Cold Plains using the normal packet 0x4b
+(Rogue Encampment is the source for the vanilla Cold Plains control).
+
 ## Travel: waypoint auto-activation, map reveal, hotkeys (`travel.cpp`, off words `wpauto`, `mapreveal`, `hotkeys`)
 
 Pure rules in `travel_logic.h` (unit tests `tests/travel_test.cpp`); evidence and addresses in `docs/d2r-addresses.md` section 18.
@@ -1077,7 +1109,7 @@ the `mxl` line says why).
 ## Diagnosis switch and state trace
 
 `<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
-spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind wwproc cube craftflags quests quests2 waypoints wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem mercrevive questxp questrewards`. Never leave out
+spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind wwproc cube craftflags quests quests2 waypoints wparrival wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem mercrevive questxp questrewards`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct
 state x unit kind x on/off, and each mask check that says yes with its caller, to `mxl-core.log`; at most 1,500

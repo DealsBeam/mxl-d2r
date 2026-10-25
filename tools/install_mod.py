@@ -87,7 +87,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", default=DEFAULT_GAME)
     ap.add_argument("--name", default="MedianXL")
-    ap.add_argument("--slot", help="game slot 1..3 or 'all' (tools/game_slots.py); overrides --game")
+    ap.add_argument("--slot", default=os.environ.get("MXL_SLOT"), help="game slot 1..3 or 'all' (default MXL_SLOT); overrides --game")
     ap.add_argument("--savepath", help="save folder name written to modinfo.json (default <name>/, slots: <name>-sN/)")
     args = ap.parse_args()
 
@@ -104,7 +104,9 @@ def main() -> int:
     for n in slots:
         savepath = args.savepath or (f"{args.name}/" if n == 1 else f"{args.name}-s{n}/")
         print(f"== slot {n}: {game_slots.slot_dir(n)} (saves {savepath})")
-        rc |= install_one(Path(game_slots.slot_dir(n)), args.name, savepath, first)
+        rc = install_one(Path(game_slots.slot_dir(n)), args.name, savepath, first)
+        if rc:
+            return rc
         first = first or Path(game_slots.slot_dir(n)) / "mods" / args.name / f"{args.name}.mpq" / "data"
         if n != 1:
             game_slots.setup(n)  # d2rloader.toml of the main install, own save folder
@@ -114,6 +116,17 @@ def main() -> int:
 def install_one(game: Path, name: str, savepath: str, copy_data_from: Path = None) -> int:
     """Install into one game folder. copy_data_from: the data folder of an install made a moment ago (skips the
     ds1 renumbering and the file merging, copies the finished tree)."""
+    owner = os.environ.get("MXL_RUN")
+    if owner:
+        import game_slots
+        slot = game_slots.slot_of_game_dir(str(game))
+        info = game_slots.lock_info(slot) if slot is not None else None
+        if not info or not info[1] or info[1].split()[0] != owner:
+            print(f"refusing install: {game} is not locked by {owner}")
+            return 1
+        if game_slots.slot_processes(str(game)):
+            print(f"refusing install: {game} still has a running game")
+            return 1
     if not (game / "D2R.exe").exists() or not (game / "D2RLoader.exe").exists():
         print(f"{game} does not look like a D2R folder with D2RLoader installed")
         return 1

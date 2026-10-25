@@ -1075,6 +1075,43 @@ The lane's wrapper selected/created only `SpTextThree`; the earlier baseline use
 The earlier failed long-colour-boundary probe and intermediate build/startup problem are recorded in
 [item-tooltips.md](item-tooltips.md). Existing startup, magic-item harness and exit pool assertions are unchanged.
 
+## Waypoint arrival and HD panel regression (lane waypoints)
+
+Use an owned slot lock, background input and an explicitly named throwaway character
+(`MXL_SLOT=3`, `MXL_RUN=waypoints`, `MXL_CHAR=WpLane`, `MXL_INPUT=background`).
+`game_checks` creates the named character if absent; with `MXL_CHAR` set, its save
+backup includes only that character's files and it selects that character by name.
+
+Run `py -3 tools/game_checks.py all wparrival wppanel` with
+`MXL_CONTROL=wpauto` for the enabled case, then with
+`MXL_CONTROL="wpauto wparrival"` for the control. `wpauto` is disabled in both:
+the check clears each destination's server bit, operates its real object with
+function 23, and verifies that the bit becomes set. `waypoint approach` loads the
+waypoint room for setup; the object coordinates come independently from `wpobj`.
+Travel uses the normal server packet 0x4b from Cold Plains (town for the vanilla
+Cold Plains destination). A source-position check and animation wait prevent a
+refused travel request from being counted as an entry fallback. Every arrival
+must reach the requested level; the enabled check requires a stand position within
+12 sub-tiles of the object, while the control requires the seven added preset areas to
+reproduce their old fallback and the maze levels Cold Plains / Duncraig to remain correct.
+
+`wppanel` unlocks the test character's client act-tab quests, opens the native HD
+panel and clicks all five tabs using background input. It checks the actual button
+table against all 47 destinations (10/11/12/4/10) and saves five screenshots.
+Classic graphics (G) remains deferred in `unported.md`.
+
+The installer now honors `MXL_SLOT` by default. With `MXL_RUN` set it refuses a
+foreign/missing lock or a running game, before changing mod files or slot config.
+`py -3 tools/test_install_mod.py` runs four refusal/selection regression tests
+without writing game files. Reacquire the slot before every install; the default
+harness shutdown releases its lock.
+
+Final evidence under `%USERPROFILE%\mxl-d2r-runs`:
+
+| Run | Arrival | HD panel | Log/input safety |
+|---|---|---|---|
+| `checks-20261025-191716-s3` (enabled) | PASS: all nine destinations one subtile from their object | PASS: 47 entries | No new errors/asserts/crashes; zero cursor/focus changes |
+| `checks-20261025-192243-s3` (off control) | PASS: seven preset fallbacks, Cold Plains and Duncraig correct | PASS: 47 entries | No new errors/asserts/crashes; zero cursor/focus changes |
 ### Maximum resistance is capped at 90 by design (lane maxres-cap, 2026-10-25)
 
 Median's rule is `min(75 + maximum-resistance stat, 90)`, not an uncapped maximum. See

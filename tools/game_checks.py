@@ -81,7 +81,8 @@ def backup_saves():
         from pathlib import Path
         os.makedirs(dst, exist_ok=True)
         for p in Path(SAVES).glob(g.CHAR_NAME + ".*"):
-            shutil.copy2(p, dst)
+            if p.is_file():
+                shutil.copy2(p, dst)
     else:
         shutil.copytree(SAVES, dst)
     return dst
@@ -7063,6 +7064,109 @@ def wpobjs():
     return player, objs
 
 
+def check_wparrival():
+    name = "Waypoint travel arrives beside the level's real waypoint object"
+    log, rows, bad = [], [], []
+    control = "wparrival" in CONTROL
+    text = mxl_text()
+    log.append(text)
+    if ("waypoint arrival off:" if control else "waypoint arrival on:") not in text:
+        return add(name, "FAIL", "arrival part has the wrong on/off state", [], log)
+    god(True)
+    H("waypoint tabs")  # unlock test act tabs before the first panel is constructed
+    # Approach is setup: load the real waypoint room and stand beside its object.
+    # Record actual object coordinates before travel, independently of the selector.
+    for area in (3, 138, 139, 141, 147, 153, 155, 169, 242):
+        goto(area)
+        log.extend(H("waypoint approach")[1])
+        time.sleep(2)
+        player, objects = wpobjs()
+        here = [o for o in objects if o["level"] == area]
+        if not here:
+            bad.append("area %d has no loaded waypoint" % area)
+            continue
+        obj = min(here, key=lambda o: o["dist"])
+        log.append("destination object %s" % obj)
+        H("waypoint %d clear" % area)
+        # OperateFn 23 activates the real object and sends its waypoint record.
+        # The travel packet below does not depend on client panel state.
+        log.extend(H("operate %d 23" % obj["id"])[1])
+        time.sleep(1)
+        if wpbit(player["number"]) != 1:
+            bad.append("area %d did not activate" % area)
+            continue
+        source_area = 1 if area == 3 else 3
+        goto(source_area)
+        H("waypoint approach")
+        time.sleep(2)
+        _, sources = wpobjs()
+        source = next((o for o in sources if o["level"] == source_area), None)
+        if source is None:
+            bad.append("no source waypoint")
+            break
+        log.append("source object %s" % source)
+        H("move %d %d" % (source["x"] - 1, source["y"] - 1))
+        time.sleep(4)
+        source_player = hstate()["player"]
+        if max(abs(source_player.get("x", 0) - source["x"]), abs(source_player.get("y", 0) - source["y"])) > 5:
+            bad.append("could not walk beside the source waypoint for area %d" % area)
+            continue
+        log.extend(H("operate %d 23" % source["id"])[1])
+        time.sleep(3)  # allow the source object's activation animation to finish
+        packet = bytes([0x4b]) + struct.pack("<I", area)
+        log.extend(H("pkt " + " ".join("%02x" % b for b in packet))[1])
+        time.sleep(4)
+        p = hstate()["player"]
+        distance = max(abs(p.get("x", -99999) - obj["x"]), abs(p.get("y", -99999) - obj["y"]))
+        correct = p.get("area") == area and distance <= 12
+        expected = not control or area in (3, 153)  # maze levels already find their waypoint
+        rows.append("area %d object %d,%d -> player %s,%s area %s distance %d (%s)" % (
+            area, obj["x"], obj["y"], p.get("x"), p.get("y"), p.get("area"), distance,
+            "waypoint" if correct else "entry fallback" if p.get("area") == area else "travel refused"))
+        if correct != expected or p.get("area") != area:
+            bad.append(rows[-1])
+    log.extend(rows)
+    goto(1)
+    god(False)
+    add(name, "FAIL" if bad else "PASS", "; ".join(bad or rows), [], log)
+
+
+def check_wppanel():
+    name = "HD waypoint panel lists all 47 Median waypoints under their acts"
+    goto(1)
+    H("waypoint approach")
+    H("waypoint all set")
+    H("waypoint tabs")
+    _, objects = wpobjs()
+    source = next((o for o in objects if o["level"] == 1), None)
+    if source is None:
+        return add(name, "BLOCKED", "no real source waypoint")
+    H("operate %d 23" % source["id"])
+    H("waypoint open")
+    time.sleep(1)
+    g.key("esc")  # it is known open; rebuild tabs after changing test quest flags
+    H("waypoint tabs")
+    H("waypoint open")
+    time.sleep(3)
+    expected = ((1, 3, 4, 5, 6, 27, 29, 32, 35, 153),
+                (40, 48, 42, 57, 43, 44, 52, 74, 46, 147, 169),
+                (75, 76, 77, 78, 79, 80, 81, 83, 101, 138, 141, 155),
+                (103, 106, 107, 139),
+                (109, 111, 112, 113, 115, 123, 117, 118, 129, 242))
+    log, shots, bad = [], [], []
+    for tab, levels in enumerate(expected):
+        g.click(.1227 + tab * .04505, .205)
+        time.sleep(1)
+        lines = H("waypoint panel")[1]
+        log.extend(lines)
+        actual = [int(m.group(1)) for ln in lines if (m := re.search(r"waypoint button \d+: level (\d+)", ln))]
+        if actual != list(levels):
+            bad.append("tab %d: %s, expected %s" % (tab + 1, actual, levels))
+        shots.append(sh("waypoints_hd_tab%d" % (tab + 1)))
+    g.key("esc")
+    add(name, "FAIL" if bad else "PASS", "; ".join(bad) if bad else "10/11/12/4/10 buttons; all eight added areas present", shots, log)
+
+
 def check_wpauto():
     name = "Waypoint auto-activation: walking up to a waypoint (distance < 36) activates it, standing away does not"
     if not need_game():
@@ -12575,7 +12679,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
           ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("restrictitems", check_restrictitems), ("heat", check_heat),
           ("trophytimer", check_trophytimer),
-          ("mapreveal", check_mapreveal), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages), ("stashpage2", check_stashpage2),
+          ("mapreveal", check_mapreveal), ("wparrival", check_wparrival), ("wppanel", check_wppanel), ("wpauto", check_wpauto), ("hotkeys", check_hotkeys), ("stashpages", check_stashpages), ("stashpage2", check_stashpage2),
           ("skillscaling", check_skillscaling),
           ("nodurability", check_nodurability), ("nodurabilityui", check_nodurabilityui), ("autoid", check_autoid), ("townmana", check_townmana),
           ("potionamounts", check_potionamounts), ("manarules", check_manarules),

@@ -18,6 +18,14 @@ void Check(bool ok, const char* what) {
 }  // namespace
 
 int RunWaypointsTests() {
+	// The destination selector keeps towns and changes exactly the eight Median extras.
+	for (int level = -1; level < 300; ++level) {
+		bool expected = level == 1 || level == 40 || level == 75 || level == 103 || level == 109;
+		for (int extra : {138, 139, 141, 147, 153, 155, 169, 242}) {
+			expected = expected || level == extra;
+		}
+		Check(wp::NeedsObjectEntry(level) == expected, "waypoint object destination selection");
+	}
 	// record layout: number 0 = word 1 mask 1, 38 = word 3 mask 0x40, 90 = word 6 mask 0x400, 111 = word 7 mask 0x8000
 	Check(wp::WordOf(0) == 1 && wp::MaskOf(0) == 0x1, "number 0");
 	Check(wp::WordOf(15) == 1 && wp::MaskOf(15) == 0x8000, "number 15");

@@ -156,6 +156,7 @@ char g_propsReport[192] = "off: not the expected game image";
 char g_itemsExtReport[320] = "off: not the expected game image";
 char g_itemGenReport[320] = "off: not the expected game image";
 char g_waypointsReport[256] = "off: not the expected game image";
+char g_waypointArrivalReport[192] = "off: not the expected game image";
 char g_collideReport[256] = "off: not the expected game image";
 char g_skillStartsReport[256] = "off: not the expected game image";
 char g_clientMsgReport[192] = "off: not the expected game image";
@@ -444,6 +445,8 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	StashPagesStatus(line, sizeof(line));
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "waypoints %s", g_waypointsReport);
+	Say(command, line);
+	std::snprintf(line, sizeof(line), "waypoint arrival %s", g_waypointArrivalReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "collide types %s", g_collideReport);
 	Say(command, line);
@@ -969,6 +972,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				std::snprintf(g_waypointsReport + used, sizeof(g_waypointsReport) - used, "; %s", panel);
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: waypoints %s", g_waypointsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("wparrival")) {
+				std::snprintf(g_waypointArrivalReport, sizeof(g_waypointArrivalReport), "%s", OffNote);
+			} else {
+				InstallWaypointArrival(context, g_waypointArrivalReport, sizeof(g_waypointArrivalReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: waypoint arrival %s", g_waypointArrivalReport);
 			context->LogInfo(line);
 		}
 		{

@@ -723,6 +723,24 @@ auto CmdWaypoint(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (t.n < 2) {
 		return Fail(c, usage);
 	}
+	if (hcmd::LowerEq(t.tok[1], "approach")) {
+		// Test setup only: load the current level's waypoint room and stand beside
+		// its real map object. The test then operates it and sends packet 0x4b.
+		void* current = Fn<UnitRoomFn>(RvaUnitRoom)(c->player);
+		if (current == nullptr) return Fail(c, "waypoint: no room");
+		const int level = Fn<RoomLevelFn>(RvaRoomLevel)(current);
+		if (travel::WaypointNumberOfLevel(level) < 0) return Fail(c, "waypoint: none in this level");
+		const auto flag = d2r::At<uint8_t>(c->game, 0x106);
+		const auto act = Fn<uint8_t (*)(uint32_t, int)>(0x3e2b5c8)(flag, level);
+		auto** acts = d2r::At<void**>(c->game, 0x190);
+		if (act >= d2r::At<uint64_t>(c->game, 0x198)) return Fail(c, "waypoint: no act");
+		int x = 0, y = 0;
+		void* room = Fn<void* (*)(uint32_t, void*, int, int, int*, int*, int)>(0x2ef8b0)(flag, acts[act], level, 13, &x, &y, 1);
+		if (room == nullptr) return Fail(c, "waypoint: no waypoint room");
+		Fn<int64_t (*)(Game*, Unit*, void*, int, int, int, int)>(RvaMove)(c->game, c->player, room, x, y, 0, 0);
+		Out("waypoint approach level=%d at %d,%d", level, x, y);
+		return true;
+	}
 	if (hcmd::LowerEq(t.tok[1], "tabs")) {
 		void* quests = Fn<ClientQuestsFn>(RvaClientQuests)();
 		if (quests == nullptr) {

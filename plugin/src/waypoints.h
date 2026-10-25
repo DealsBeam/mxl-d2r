@@ -22,3 +22,6 @@ auto WaypointPanelStats(char* out, size_t outSize) noexcept -> void;
 
 // The plugin's button table (wp::ButtonEntry[count]); false while the panel patch is not installed.
 auto WaypointPanelTable(int* count, const void** entries) noexcept -> bool;
+
+// Select the waypoint object rather than the default entry in Median preset areas.
+auto InstallWaypointArrival(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool;

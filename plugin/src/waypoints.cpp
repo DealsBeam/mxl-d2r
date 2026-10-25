@@ -230,3 +230,47 @@ auto WaypointPanelTable(int* count, const void** entries) noexcept -> bool {
 	*entries = g_table;
 	return true;
 }
+
+namespace {
+// The town predicate called ONLY by waypoint travel (0x5933f0). A true result selects
+// entry kind 13: 0x3dad90 finds the waypoint room and its object (Objects flags +0x127,
+// bit 0x40). Kind 0 instead selects a preset entry in 0x3dac20. Leave every other
+// caller of the town predicate, including portals and NPC travel, untouched.
+auto WaypointObjectEntry(int level) noexcept -> int {
+	return wp::NeedsObjectEntry(level) ? 1 : 0;
+}
+}  // namespace
+
+auto InstallWaypointArrival(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
+	constexpr uint64_t site = 0x59347b;
+	constexpr uint8_t expected[] = {0xe8, 0x00, 0xd3, 0xd5, 0xff}; // call town predicate 0x2f0780
+	if (std::memcmp(reinterpret_cast<const void*>(context->exeBase + site), expected, sizeof(expected)) != 0) {
+		std::snprintf(report, reportSize, "off: waypoint entry selector bytes differ");
+		return false;
+	}
+	auto* stub = static_cast<uint8_t*>(AllocNear(context->exeBase, 4096));
+	if (stub == nullptr) {
+		std::snprintf(report, reportSize, "off: no memory within call reach");
+		return false;
+	}
+	// mov rax, destination; jmp rax. The call site's return address remains the engine's.
+	uint8_t code[] = {0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xe0};
+	const auto destination = reinterpret_cast<uint64_t>(&WaypointObjectEntry);
+	std::memcpy(code + 2, &destination, sizeof(destination));
+	std::memcpy(stub, code, sizeof(code));
+	DWORD previous = 0;
+	const int64_t displacement = reinterpret_cast<int64_t>(stub) - static_cast<int64_t>(context->exeBase + site + 5);
+	const int32_t relative = static_cast<int32_t>(displacement);
+	bool ok = displacement == relative && VirtualProtect(stub, 4096, PAGE_EXECUTE_READ, &previous) != 0;
+	if (ok) {
+		FlushInstructionCache(GetCurrentProcess(), stub, sizeof(code));
+		uint8_t call[5] = {0xe8};
+		std::memcpy(call + 1, &relative, sizeof(relative));
+		ok = context->PatchBytes(site, expected, sizeof(expected), call, sizeof(call));
+	}
+	if (!ok) {
+		VirtualFree(stub, 0, MEM_RELEASE);
+	}
+	std::snprintf(report, reportSize, "%s: waypoint travel selects the waypoint object for Median preset levels (entry 13)", ok ? "on" : "off");
+	return ok;
+}
