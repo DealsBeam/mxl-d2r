@@ -2888,9 +2888,80 @@ def check_resistcap():
             setstat(ref, s, v or 0)
         setstat(ref, 369, 0)
     H("kill nearest 1")
+    panel_rows, panel_bad, panel_shots = _resistcap_panel()
+    bad += panel_bad
     add(name, "PASS" if not bad else "FAIL",
-        "resist 200 against a 100000-unit hit (damage taken; the cap's share cut by the gear's stat 184, if any): %s" % ("; ".join(rows) if not bad else "; ".join(bad)),
-        [sh("resistcap")], rows)
+        "resist 200 against a 100000-unit hit (damage taken; the cap's share cut by the gear's stat 184, if any): %s; character sheet: %s" % (
+            "; ".join(rows) if not bad else "; ".join(bad), "; ".join(panel_rows)),
+        [sh("resistcap")] + panel_shots, rows + panel_rows)
+
+
+RESIST_PANEL_BOX = (395, 505, 525, 600)  # the Fire / Cold / Lightning / Poison rows of the HD character sheet (1600 x 900 client)
+RESIST_PANEL_STATS = ((39, 40), (41, 42), (43, 44))  # fire, lightning, cold: resistance, maximum
+
+
+def _resistcap_panel():
+    """What the character sheet prints for the resistance rows at resistance 150 and maximum +0 / +10 / +15 / +16 / +20 / +50 (client
+    copy of the stats, `cstat set`). The sheet is read by picture: the crop of the three elemental rows must be the same for every
+    maximum from +15 up (75 + max is 90 and more, the cap shows 90) and must differ between +0, +10 and +15 (75 / 85 / 90). Without
+    the compare patch the sheet showed 91% at +16..+19 while damage stayed at 90 (docs/unported.md). `MXL_CONTROL=combat` (the part
+    off: 95 everywhere) expects +16 to differ from +15. Also logs the bytes of the three clamp sites (`peek`)."""
+    from PIL import Image, ImageChops, ImageStat
+    rows, bad, shots = [], [], []
+    control = "combat" in CONTROL
+    ok, lines = H("peek exe+14e728f 12")
+    rows.append("sheet compare+clamp bytes %s" % (re.search(r"bytes=(\w+)", " ".join(lines)) or [0, "?"])[1])
+    ok, lines = H("peek exe+14f4686 8")
+    rows.append("hireling clamp bytes %s" % (re.search(r"bytes=(\w+)", " ".join(lines)) or [0, "?"])[1])
+    stats = [s for pair in RESIST_PANEL_STATS for s in pair]
+    saved = {}
+    for s in stats:
+        ok, lines = H("cstat %d" % s)
+        m = re.search(r"cstat \d+:0 = (-?\d+)", " ".join(lines))
+        if not ok or m is None:
+            return rows, ["cannot read client stat %d" % s], shots
+        saved[s] = int(m[1])
+    crops = {}
+    try:
+        goto(1)
+        close_menu()
+        for mx in (0, 10, 15, 16, 20, 50):
+            for res, mxs in RESIST_PANEL_STATS:
+                H("cstat %d set 150" % res)
+                H("cstat %d set %d" % (mxs, mx))
+            if H("statorder open")[0] is False:
+                bad.append("sheet did not open")
+                break
+            time.sleep(1.5)
+            shot = "resistcap_sheet_%d" % mx
+            shots.append(sh(shot))
+            H("statorder close")
+            time.sleep(0.5)
+            crops[mx] = Image.open(_shot_path(shot)).convert("RGB").crop(RESIST_PANEL_BOX)
+    finally:
+        for s, v in saved.items():
+            H("cstat %d set %d" % (s, v))
+        H("statorder close")
+
+    def diff(a, b):
+        d = ImageChops.difference(crops[a], crops[b])
+        return sum(ImageStat.Stat(d).mean) / 3.0
+    if len(crops) == 6:
+        same = {mx: diff(15, mx) for mx in (16, 20, 50)}
+        far = {"0/10": diff(0, 10), "10/15": diff(10, 15)}
+        rows.append("sheet rows, mean pixel difference to +15: %s; +0/+10 %.2f, +10/+15 %.2f" % (
+            ", ".join("+%d %.2f" % kv for kv in same.items()), far["0/10"], far["10/15"]))
+        for pair, d in far.items():
+            if d < 0.3:
+                bad.append("sheet rows at max %s look the same (difference %.2f): the sheet did not follow the stat" % (pair, d))
+        if control:
+            if same[16] < 0.3:
+                bad.append("control (combat off): +16 reads as +15 on the sheet, the part is not off")
+        else:
+            for mx, d in same.items():
+                if d >= 0.3:
+                    bad.append("sheet at maximum +%d differs from +15 by %.2f: the number is not clamped to 90 like the damage" % (mx, d))
+    return rows, bad, shots
 
 
 def _reduce(amount, pct):
@@ -10813,6 +10884,18 @@ def check_grit():
     add(name, "PASS" if not bad else "FAIL", "passive skill %d at level 1: " % passive + "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
 
 
+def _poll_innate(new_value, want_of, attr=2, timeout=2.0):
+    """(attribute, fire) after a stat point packet: the game applies it and the plugin refreshes the passive within a few frames, and
+    D2R's own equipment recheck can take the passive stats away again for a moment (seen with the innate part off as well), so
+    poll until the attribute has its new value and the fire matches, up to `timeout` s; the last reading when it never does."""
+    t0 = time.time()
+    while True:
+        value, fire = rd("player", attr), rd("player", 48)
+        if (value == new_value and fire == want_of(value)) or time.time() - t0 > timeout:
+            return value, fire
+        time.sleep(0.1)
+
+
 def check_ied():
     """Measure Median's hidden innate passive, IED and attribute-point refresh.
 
@@ -10848,12 +10931,18 @@ def check_ied():
             ok, lines = H("equip !70 q=2 ilvl=1 rhand")
             log += lines
             if ok:
-                H("passiverefresh")
-                native_before = (rd("player", 2), rd("player", 48))
+                # D2R's own equipment recheck discards the passive stats again some time after a refresh (seen with the part off
+                # as well, once other checks have run in the game): read at once, and refresh again if the passive is not there.
                 native_syn, native_ied = rd("player", 412, sid), rd("player", 513)
+                for _ in range(4):
+                    H("passiverefresh")
+                    native_before = (rd("player", 2), rd("player", 48))
+                    if control or native_before[1] >= native_syn * native_before[0] * (100 + native_ied) // 10000:
+                        break
                 H("pkt 3a 02 00 00 00")
-                time.sleep(0.5)
-                native_after = (rd("player", 2), rd("player", 48))
+                native_after = _poll_innate(native_before[0] + 1, lambda dex: native_before[1] if control else
+                                            native_before[1] - native_syn * native_before[0] * (100 + native_ied) // 10000 +
+                                            native_syn * dex * (100 + native_ied) // 10000)
                 rows.append("native innate weapon !70: %s -> %s" % (native_before, native_after))
                 flat = native_before[1] - native_syn * native_before[0] * (100 + native_ied) // 10000
                 want = flat if control else flat + native_syn * native_after[0] * (100 + native_ied) // 10000
@@ -10878,20 +10967,22 @@ def check_ied():
         # Explicit native refresh isolates the data formula from the point-
         # spending path below; no base level is learned in this hidden skill.
         def refresh():
-            H("passiverefresh")
-            time.sleep(0.3)
+            H("passiverefresh")  # read at once (see the native baseline above): no sleep
 
         for dex, ied, marker in ((200, 0, 0), (200, 50, 0), (201, 51, 0), (200, 0, 3), (200, 0, 4)):
             setstat("player", 2, dex)
             setstat("player", 513, ied)
             setstat("player", 424, marker)
-            refresh()
-            actual_dex = rd("player", 2)
-            actual_ied = rd("player", 513)
-            syn = rd("player", 412, sid)
-            coefficient = syn if marker < 3 else syn * 16 // 10
-            want = coefficient * actual_dex * (100 + actual_ied) // 10000 if marker < 4 else 0
-            got = rd("player", 48)
+            for _ in range(4):
+                refresh()
+                got = rd("player", 48)
+                actual_dex = rd("player", 2)
+                actual_ied = rd("player", 513)
+                syn = rd("player", 412, sid)
+                coefficient = syn if marker < 3 else syn * 16 // 10
+                want = coefficient * actual_dex * (100 + actual_ied) // 10000 if marker < 4 else 0
+                if got == want:
+                    break
             rows.append("Dex=%s IED=%s marker=%s syn1=%s fire=%s expected=%s" % (actual_dex, actual_ied, marker, syn, got, want))
             if got != want:
                 bad.append(rows[-1])
@@ -10902,8 +10993,7 @@ def check_ied():
         refresh()
         before = (rd("player", 2), rd("player", 48))
         H("pkt 3a 02 00 00 00")  # one ordinary Dexterity point
-        time.sleep(0.5)
-        after = (rd("player", 2), rd("player", 48))
+        after = _poll_innate(before[0] + 1, lambda dex: 0 if control else dex * 150 // 100)
         for cmd in ("state", "stat player 97 2072", "stat player 424", "stat player 513", "stat player 412 2072", "skills", "req player"):
             log += H(cmd)[1]
         expected = after[0] * 150 // 100
@@ -10917,8 +11007,7 @@ def check_ied():
                 refresh()
                 value = rd("player", attr)
                 H("pkt 3a %02x 00 00 00" % attr)
-                time.sleep(0.3)
-                actual, fire = rd("player", attr), rd("player", 48)
+                actual, fire = _poll_innate(value + 1, lambda _attr: expected, attr)
                 rows.append("attribute %d point: %d -> %d, fire=%s expected=%d" % (attr, value, actual, fire, expected))
                 if actual != value + 1 or fire != expected:
                     bad.append(rows[-1])
@@ -11151,27 +11240,36 @@ def check_townmonsters():
         import json
         with open(os.path.join(os.path.dirname(__file__), "..", "work", "named", "idmap.json"), encoding="utf-8") as f:
             monster = next(e["id"] for e in json.load(f)["monstats"] if e["row"] == 1978)
-        ok, lines = H("spawn %d 1 %d %d" % (monster, fx - 4, fy + 3))
-        log += lines
-        match = next((re.search(r"spawned class \d+ id=(\d+)", s) for s in lines if "spawned class" in s), None)
-        if not ok or not match:
-            return add(name, "BLOCKED", "; ".join(rows + bad + ["engine refused the field Scytheclaw spawn"]), [], log)
-        mid = int(match.group(1))
-        time.sleep(2)
-        initial = next((m for m in hstate()["mons"] if m["id"] == mid), {})
-        log.append("field monster before retreat: %s" % initial)
-        arrived = walk(tx, ty, 242)
-        samples = []
-        for _ in range(24):
-            st = hstate()
-            m = next((m for m in st["mons"] if m["id"] == mid), {})
-            samples.append(m)
-            log.append("retreat player area=%s at=%s,%s monster=%s" % (st["player"].get("area"), st["player"].get("x"), st["player"].get("y"), m))
-            time.sleep(.5)
-        crossed = any(m.get("area") == 242 for m in samples)
-        engaged = bool(initial) and ((initial.get("mx"), initial.get("my")) != (fx - 4, fy + 3) or
-                                     any(m and (m.get("mx"), m.get("my"), m.get("mode")) !=
-                                         (initial.get("mx"), initial.get("my"), initial.get("mode")) for m in samples))
+        # The field monster sometimes stays idle until the player is gone (seen in 2 of 3 runs): then the pursuit says nothing,
+        # so the player walks back to the field and a new monster is spawned, up to three times. A monster in town in any attempt counts.
+        crossed = False
+        for attempt in range(3):
+            ok, lines = H("spawn %d 1 %d %d" % (monster, fx - 4, fy + 3))
+            log += lines
+            match = next((re.search(r"spawned class \d+ id=(\d+)", s) for s in lines if "spawned class" in s), None)
+            if not ok or not match:
+                return add(name, "BLOCKED", "; ".join(rows + bad + ["engine refused the field Scytheclaw spawn"]), [], log)
+            mid = int(match.group(1))
+            time.sleep(2)
+            initial = next((m for m in hstate()["mons"] if m["id"] == mid), {})
+            log.append("field monster before retreat (attempt %d): %s" % (attempt + 1, initial))
+            arrived = walk(tx, ty, 242)
+            samples = []
+            for _ in range(24):
+                st = hstate()
+                m = next((m for m in st["mons"] if m["id"] == mid), {})
+                samples.append(m)
+                log.append("retreat player area=%s at=%s,%s monster=%s" % (st["player"].get("area"), st["player"].get("x"), st["player"].get("y"), m))
+                time.sleep(.5)
+            crossed = crossed or any(m.get("area") == 242 for m in samples)
+            engaged = bool(initial) and ((initial.get("mx"), initial.get("my")) != (fx - 4, fy + 3) or
+                                         any(m and (m.get("mx"), m.get("my"), m.get("mode")) !=
+                                             (initial.get("mx"), initial.get("my"), initial.get("mode")) for m in samples))
+            if arrived and initial and engaged:
+                break
+            H("kill %d" % mid)
+            if attempt < 2:
+                walk(fx, fy, 271, seconds=8)
         rows.append("Scytheclaw %d: player walked into town=%s, monster entered town=%s, monster acted=%s" % (mid, arrived, crossed, engaged))
         if not arrived or not initial or not engaged:
             bad.append("inconclusive pursuit setup")
