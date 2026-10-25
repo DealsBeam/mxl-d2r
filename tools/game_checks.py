@@ -10983,7 +10983,7 @@ def check_charmlimit():
     uniqueitems.txt (placement refuses a second copy), Median's own limits are the uniqueitems2 table (plugin part uniquelimits, tested by
     `uniquelimits`). Unique charms flagged carry1 (not in the plugin's table, so D2R alone decides) and ones with a plugin limit of one: the first
     copy is created in the backpack, the second must be refused (`item` places through the game's rules); a unique charm without either rule
-    takes two copies (the control)."""
+    takes two copies (the control). Lane carry1-fix adds the half "different carry1 uniques are carried together" (`_charmlimit_different`)."""
     nm = "Charm limit (audit IC5): one charm of a kind"
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
@@ -11028,8 +11028,136 @@ def check_charmlimit():
         twice += 1 if (ok1 and ok2 and n == 2) else 0
     if not twice:  # a control that cannot be placed twice for another reason (the harness found no second cell) is not counted against the rule
         bad.append("no unique charm without a carry rule took two copies (%d tried)" % len(free))
+    _charmlimit_different(rows_all, limits, rows, bad, log)
     H("packclear")
     add(nm, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
+
+
+def _carry_stats():
+    """(table loads, carry1 uniques, records rewritten) of the `unique carry` line of the `mxl` command, None without it."""
+    m = re.search(r"unique carry on.*\(loads (\d+), carry1 uniques (\d+), rewritten (\d+)\)", mxl_text())
+    return tuple(int(v) for v in m.groups()) if m else None
+
+
+def _charmlimit_different(rows_all, limits, rows, bad, log):
+    """Lane carry1-fix (plugin 0.66.0, part `uniquecarry`): D2R 3.3 refuses a carry1 unique when a carried one has the same carry1 NUMBER
+    (unique record +0x30), and Median gives 1 to all 89 carry1 uniques, so a second DIFFERENT carry1 unique (the Butcher's Tooth, then the
+    Laser Focus Crystal) was refused. With the part each carry1 unique has its own number: different carry1 uniques are carried together,
+    through `item ... inv` and through a pickup from the ground (packet 0x16, to-inventory flag); a second copy of the same one is still
+    refused on both paths. Control run (MXL_CONTROL=uniquecarry): the second different one is refused, as before."""
+    control = "uniquecarry" in CONTROL
+    carry1 = [r for r in rows_all if r[2] and r[5] == "1x1"]
+    picks, codes, groups = [], set(), set()
+    for r in carry1:  # three carry1 uniques on different bases that the plugin's own limit table keeps apart (distinct groups)
+        grp = limits[r[0]][1] if r[0] in limits else 0
+        if r[1] not in codes and (grp == 0 or grp not in groups) and len(picks) < 3:
+            picks.append(r)
+            codes.add(r[1])
+            groups.add(grp)
+    native = [r for r in rows_all if r[2] and not r[4] and r[1] not in codes][:1]  # one that only D2R's own rule governs (not in the plugin's table)
+    if len(picks) < 3:
+        bad.append("the data has no three carry1 uniques on different 1x1 bases (%d found)" % len(picks))
+        return
+    stats = _carry_stats()
+    if control:
+        rows.append("control (uniquecarry off): `unique carry` line %s" % next((l for l in mxl_text().splitlines() if "unique carry" in l), "-"))
+        if stats is not None:
+            bad.append("control run: the part uniquecarry should be off, the mxl command reports %s" % (stats,))
+    elif stats is None or stats[2] == 0 or stats[1] == 0:
+        bad.append("the `mxl` command has no `unique carry on` line with rewritten carry1 numbers: %s" % (stats,))
+        return
+    else:
+        rows.append("unique carry: %d table loads, %d carry1 uniques, %d numbers rewritten" % stats)
+
+    def count(row, code):
+        return len([i for i in items(hstate(), code, 0) if i.get("unique") == row and i.get("quality") == 7])
+
+    def make(row, code, where):
+        ok, lines = H("item %s %s uniq=%d" % (code, where, row))
+        d = next((kv(l) for l in lines if l.startswith("item ")), {})
+        return (d if ok and "id" in d else None), lines
+
+    def ground_pickup(row, code):
+        """A ground copy within 4 subtiles of the player, picked up with packet 0x16 (to-inventory flag 1): True when it landed in the backpack."""
+        for _ in range(10):
+            d, lines = make(row, code, "ground")
+            if d is None:
+                log.extend(lines[:1])
+                return None
+            ok, fl = H("iflags %s" % d["id"])
+            f = next((kv(l) for l in fl if l.startswith("iflags")), {})
+            ok, st = H("state")
+            m = re.search(r"player id=\d+ .*? x=(\d+) y=(\d+)", st[0] if st else "")
+            if m and ((int(f.get("x", "0")) - int(m.group(1))) ** 2 + (int(f.get("y", "0")) - int(m.group(2))) ** 2) <= 9:
+                before = count(row, code)
+                H("pkt 16 " + _le(int(d["id"]), int(f.get("x", "0")), int(f.get("y", "0")), 1))
+                time.sleep(0.6)
+                return count(row, code) > before
+        bad.append("no ground drop of unique %d landed within 4 subtiles of the player" % row)
+        return None
+
+    def fresh():
+        H("packclear")
+        drop_cursor_item(log)
+        for r in picks + native:
+            H("remove %s 9" % r[1])
+
+    want = not control  # the fix lets different carry1 uniques be carried together
+    A, B, C = picks
+    fresh()
+    # 1. `item ... inv`: A, then B, then C (three different carry1 uniques, one backpack)
+    got = []
+    for r in (A, B, C):
+        d, lines = make(r[0], r[1], "inv")
+        got.append(d is not None)
+        if d is None:
+            log.extend(lines[:1])
+    n = [count(r[0], r[1]) for r in (A, B, C)]
+    rows.append("%sitem inv: carry1 uniques %s (%s) placed %s, in the backpack %s" % ("control: " if control else "", [r[0] for r in (A, B, C)],
+                " ".join(r[1] for r in (A, B, C)), got, n))
+    if want and (got != [True, True, True] or n != [1, 1, 1]):
+        bad.append("different carry1 uniques %s were not all placed through `item inv` (placed %s, in the backpack %s)" % ([r[0] for r in (A, B, C)], got, n))
+    if not want and (got[0] is not True or got[1] or got[2] or n[0] != 1):
+        bad.append("control run: only the first carry1 unique should be placed (placed %s, in the backpack %s)" % (got, n))
+    # 2. a second copy of the same one is refused (inv and ground), the first stays
+    if want:
+        d, lines = make(A[0], A[1], "inv")
+        rows.append("item inv: second copy of unique %d %s, in the backpack %d" % (A[0], "PLACED" if d else "refused", count(A[0], A[1])))
+        if d is not None or count(A[0], A[1]) != 1:
+            bad.append("a second copy of unique %d was carried through `item inv`" % A[0])
+        landed = ground_pickup(A[0], A[1])
+        rows.append("ground pickup: second copy of unique %d %s, in the backpack %d" % (A[0], "LANDED" if landed else "refused", count(A[0], A[1])))
+        if landed is None or landed or count(A[0], A[1]) != 1:
+            bad.append("a second copy of unique %d was picked up from the ground (landed %s)" % (A[0], landed))
+    # 3. ground pickup of a different carry1 unique next to a carried one
+    fresh()
+    d, lines = make(A[0], A[1], "inv")
+    if d is None:
+        bad.append("could not place unique %d for the ground test: %s" % (A[0], lines[:1]))
+    else:
+        landed = ground_pickup(B[0], B[1])
+        rows.append("%sground pickup: carry1 unique %d next to the carried %d: %s, in the backpack %d + %d" % (
+            "control: " if control else "", B[0], A[0], "LANDED" if landed else "refused", count(A[0], A[1]), count(B[0], B[1])))
+        if landed is not None and landed != want:
+            bad.append("%s: ground pickup of a different carry1 unique %s" % ("control run (should be refused)" if control else "fix", "landed" if landed else "was refused"))
+    # 4. a carry1 unique that only D2R's own rule governs (not in the plugin's table) next to a plugin-limited one, and its second copy
+    fresh()
+    if native:
+        n0 = native[0]
+        d1, _l1 = make(A[0], A[1], "inv")
+        d2, _l2 = make(n0[0], n0[1], "inv")
+        rows.append("%sitem inv, D2R-only rule: unique %d then %d: %s / %s" % ("control: " if control else "", A[0], n0[0], "placed" if d1 else "refused", "placed" if d2 else "refused"))
+        if d1 is None or (d2 is not None) != want:
+            bad.append("carry1 uniques %d and %d: first %s, second %s (want second %s)" % (
+                A[0], n0[0], "placed" if d1 else "refused", "placed" if d2 else "refused", "placed" if want else "refused"))
+        if want and d2 is not None:
+            d3, _l3 = make(n0[0], n0[1], "inv")
+            rows.append("item inv, D2R-only rule: second copy of unique %d %s" % (n0[0], "PLACED" if d3 else "refused"))
+            if d3 is not None:
+                bad.append("D2R-only carry1 unique %d: a second copy was carried" % n0[0])
+    else:
+        rows.append("no carry1 unique outside the plugin's table to test D2R's own rule")
+    fresh()
 
 
 # --- phase 4 lane p4-verify-b: area level (MU3, engine / data part) -------------------------------------------------------------
