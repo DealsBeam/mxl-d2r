@@ -4131,6 +4131,12 @@ auto CmdTipFmt(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	char text[256];
 	PlainText(raw, text, sizeof(text));
 	Out("tipfmt stat=%lld value=%lld layer=%lld mode=%lld flag=%lld ret=%d text=[%s]", stat, value, layer, mode, flag, ret, text);
+	// Keep the existing plain-text answer stable; also expose the actual escape for colour regression checks.
+	const auto* bytes = reinterpret_cast<const unsigned char*>(raw);
+	int colour = -1;
+	if (bytes[0] == 0xee && bytes[1] == 0x81 && bytes[2] == 0xbe && bytes[3] != 0) colour = bytes[3] - '0';
+	else if (bytes[0] == 0xc3 && bytes[1] == 0xbf && bytes[2] == 'c' && bytes[3] != 0) colour = bytes[3] - '0';
+	Out("tipcolour stat=%lld layer=%lld colour=%d bytes=%zu", stat, layer, colour, std::strlen(raw));
 	return true;
 }
 

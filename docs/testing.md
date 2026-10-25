@@ -1058,6 +1058,23 @@ Final evidence (slot 2, throwaway `TwnCodexOct`, plugin 0.66.0):
   last game stopped. Only the lane-created character was selected/backed up/patched. No slot/save incidents.
 - Left: dedicated missile/skill aggression scenarios (shared classifier corrected), documented in `unported.md`.
 
+### Layered special item text (special-text, 2026-10-25, background, slot 3)
+
+`tooltiptext specialtext`: **PASS**, `checks-20261025-185239-s3`. The corrected audit reads 313 property lines
+(294 OK / 19 ITEM); the new check sends all 812 referenced Median string IDs through the real property formatter,
+checks 64 colour probes (four stats x 16 values), and reads Azure Wrath, Staff of Herding, unique 30 and Optical Detector
+through the item builder. All 778 short paragraphs match fully; 34 long paragraphs match bounded prefixes, with their
+precise IDs and remaining tail limitation in [unported.md](unported.md). `special-text-readback.txt` in the run folder
+keeps the complete text answers. The harness adds `tipcolour` after the existing plain `tipfmt` answer.
+
+Control: `MXL_CONTROL=itemtext`, off word `itemtext`, `specialtext` **PASS**, `checks-20261025-184439-s3`:
+no Median special paragraphs; Azure's missing hidden-passive name returns; descfunc 31 prints the native Random Class
+line. The final and control runs have zero crash files, zero cursor / foreground changes and no watchdog abort.
+The lane's wrapper selected/created only `SpTextThree`; the earlier baseline used only `SpecialTxt` in slot 2
+(`checks-20261025-182658-s2`). It did not use the default most-recent-character selection or back up other saves.
+The earlier failed long-colour-boundary probe and intermediate build/startup problem are recorded in
+[item-tooltips.md](item-tooltips.md). Existing startup, magic-item harness and exit pool assertions are unchanged.
+
 ### Maximum resistance is capped at 90 by design (lane maxres-cap, 2026-10-25)
 
 Median's rule is `min(75 + maximum-resistance stat, 90)`, not an uncapped maximum. See
