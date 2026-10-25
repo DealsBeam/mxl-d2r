@@ -40,7 +40,7 @@ One note per subsystem in `docs/subsystems/`, each feature bucketed:
 Covered so far (2026-10-21): quests, requirements, NPC and hirelings, ubers and events, craft flags
 (`docs/subsystems/`: quests-requirements.md, npc-hirelings.md, ubers-events.md).
 
-## Phase 4: Plugins
+## Phase 4: Plugins (done 2026-10-25, plugin 0.64.0)
 mxl-core, mxl-skills, mxl-items, mxl-monsters, mxl-npc, mxl-ui. Every hook checks expected bytes.
 
 Status (2026-10-21, mxl-core 0.42.0). All installed and switching on at boot; gameplay not yet verified by play.
@@ -172,6 +172,25 @@ model). Draft plan, edit before starting: [realm-plan.md](realm-plan.md).
 - [ ] 7e Optional: seasons, chat, death feed, trade listings, server-side save checks
 
 Rule for Phases 4-6 meanwhile: Median logic stays server-side in the plugins, and Median's state lives in the save files.
+
+## Progress estimate (2026-10-25 evening, plugin 0.64.0): Phase 4 complete
+
+Final runs after the reboot (one game at a time, slot 2, lane p4-final-runs): group 2 twice (`checks-20261025-112736-s2`,
+`-122849-s2`: 69 PASS, 0 FAIL, only `mapreveal` BLOCKED by design) and group 1 (`checks-20261025-132835-s2`: 82 PASS, 0 FAIL, 0 BLOCKED);
+no crash file, no DXGI error, translation guard 311 events / 0 skips. With p4-soak (6 group 1 runs, no crash at `0x7761DC`, one real
+event skipped by the guard) Phase 4 is counted as done. Its honest gaps stay in unported.md (Soulstealer 40% / 25% heals, natural
+Hellforge smash, hit-20 target cap effect).
+
+| Phase | Share of total work | Phase done | Adds to overall |
+|---|---|---|---|
+| 0 Setup | 2% | 100% | 2.0% |
+| 1 Tools (extract, decode, convert) | 12% | 100% | 12.0% |
+| 2 Data port (tables, strings, install, booting) | 10% | 100% | 10.0% |
+| 3 Triage of Median's engine code | 8% | 100% | 8.0% |
+| 4 Plugins (engine behaviour) | 30% | 100% | 30.0% |
+| 5 Graphics | 28% | 45% | 12.6% |
+| 6 Test and release | 10% | 50% | 5.0% |
+| **Total** | **100%** | **79.6%** | **79.6%** |
 
 ## Progress estimate (2026-10-25, plugin 0.64.0)
 
