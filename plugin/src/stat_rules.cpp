@@ -66,9 +66,16 @@ constexpr uint8_t StatClickEntry[] = {0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x55, 
 constexpr uint64_t PassiveRefreshRva = 0x33f830;
 constexpr uint8_t PassiveRefreshEntry[] = {0x88, 0x54, 0x24, 0x10, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x58};
 constexpr int32_t StatStrength = 0;
+// The item equip step 0x475140 (dataFlag, item, owner, 1; D2Game ItemMode.cpp): puts the item's stat list on the owner. D2R's equipment
+// recheck (after an attribute change, and again about a second later) takes each item off and puts it back through it, and the attribute
+// passives are worked out while the list is half back (the oskill and Dexterity are in, the synergy stat is not yet): the innate damage
+// of Dexterity then ends at 0 and nothing applies it again. The hook applies the passives again when the item is back.
+constexpr uint64_t ItemEquipRva = 0x475140;
+constexpr uint8_t ItemEquipEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x20};
 bool g_shiftClick = false;
 bool g_innate = false;
 
+using ItemEquipFn = uint64_t (*)(uint64_t dataFlag, void* item, Unit* owner, int32_t flag);
 using PacketFn = void (*)(void* game, Unit* player, uint8_t* packet, int32_t length);
 using PassiveRefreshFn = void (*)(Unit* unit, int32_t flag);
 using GetStatFn = int32_t (*)(Unit* unit, int32_t stat, int32_t layer);
@@ -77,6 +84,8 @@ using HasStateFn = uint64_t (*)(Unit* unit, int32_t state);
 using UnitModeFn = int32_t (*)(Unit* unit);
 
 PacketFn g_statClickOriginal = nullptr;
+ItemEquipFn g_itemEquipOriginal = nullptr;
+std::atomic<uint32_t> g_itemEquipRefreshes{0};
 PassiveRefreshFn g_passiveRefresh = nullptr;  // null when the entry bytes differ: Grit then follows Strength only when the passive is applied
 std::atomic<uint32_t> g_statClicksWidened{0};
 GetStatFn g_getStat = nullptr;
@@ -126,6 +135,15 @@ void StatClickHook(void* game, Unit* player, uint8_t* packet, int32_t length) no
 	}
 }
 
+uint64_t ItemEquipHook(uint64_t dataFlag, void* item, Unit* owner, int32_t flag) noexcept {
+	const uint64_t result = g_itemEquipOriginal(dataFlag, item, owner, flag);
+	if (g_passiveRefresh != nullptr && owner != nullptr && d2r::At<int32_t>(owner, d2r::UnitType) == 0) {
+		g_itemEquipRefreshes.fetch_add(1);
+		g_passiveRefresh(owner, 1);
+	}
+	return result;
+}
+
 }  // namespace
 
 auto InstallStatRules(const D2RL::PluginContext* context, const StatRulesParts& parts, char* report, size_t reportSize) noexcept -> bool {
@@ -163,6 +181,10 @@ auto InstallStatRules(const D2RL::PluginContext* context, const StatRulesParts& 
 		all = all && (!parts.innate || g_passiveRefresh != nullptr);
 		all = all && ok;
 	}
+	if (parts.innate && g_passiveRefresh != nullptr) {
+		all = all && context->InstallInlineHook(ItemEquipRva, ItemEquipEntry, sizeof(ItemEquipEntry), reinterpret_cast<void*>(&ItemEquipHook),
+		                                        reinterpret_cast<void**>(&g_itemEquipOriginal));
+	}
 	std::snprintf(report, reportSize, "%s: potion amounts %s (Potion of Life +%d life, Lam Esen %d points), stamina %s (0x42e850), shift-click %s (%d points, 0x4b3c70)",
 	              all ? "ok" : "partly failed", potions, statrules::PotionOfLifeLife >> 8, statrules::LamEsenStatPoints, stamina, click,
 	              statrules::MedianShiftClickCount + 1);
@@ -170,5 +192,5 @@ auto InstallStatRules(const D2RL::PluginContext* context, const StatRulesParts& 
 }
 
 auto InnateRefreshInstalled() noexcept -> bool {
-	return g_innate && g_statClickOriginal != nullptr && g_passiveRefresh != nullptr;
+	return g_innate && g_statClickOriginal != nullptr && g_passiveRefresh != nullptr && g_itemEquipOriginal != nullptr;
 }

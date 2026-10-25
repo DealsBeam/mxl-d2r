@@ -14,7 +14,8 @@ the data formula, spends a real Dexterity point, and applies native weapon
 hits to a zero-resistance monster at SrcDam 128 and 64. `iedtip` checks the
 client formatter with explicitly set and restored client inputs. Harness verbs `passiverefresh` and
 `weaponhit mon:<id> [SrcDam]` expose the native passive refresh and weapon
-build/hit/apply pipeline; `weaponhit` reports raw damage fields (1/256 life)
+build/hit/apply pipeline; `passivestate [arr|dump|watch|awatch]` reads the state list of the innate passive (skill 2072) and
+`passivetrace on|clear|show [n]` records every passive apply / refresh with its inputs and call chain (lane ied-vanish); `weaponhit` reports raw damage fields (1/256 life)
 and whole life lost. See [damage-ied-audit.md](damage-ied-audit.md).
 
 Use [test-sessions.md](test-sessions.md) to run these checks by character.
@@ -1186,7 +1187,7 @@ match the expected control values. This lane does not modify the towns part.
 Slot 2, background mode, one game at a time, character `MxlBarb` of the slot. A full `group1.txt` run (68 checks, `suite067-g1`) was
 stopped by the owner after about 52 minutes (`game_ctl stop` of the slot, lock released); its results are not a verdict (one FAIL seen,
 `itemevents`: thorns 50 took 52 points of monster life instead of 50; the 396 / 128 variants and the other rows of that check were
-exact; the check is outside the five PRs and was not triaged, no rerun yet). Targeted list (names as in the CHECKS list; `tooltip` and
+exact; the check is outside the five PRs; rerun in lane ied-vanish (section below): not reproduced). Targeted list (names as in the CHECKS list; `tooltip` and
 `travel` are not check names: `tooltiptext` is the tooltip audit, `iedtip` is #164's tooltip check, `wparrival` / `wppanel` are #166's
 travel checks): `mxl tooltiptext specialtext orbtips itemstatsave ied iedtip statclick grit townmonsters towncast npcheal tplock goblins
 wparrival wppanel wpauto resistcap`. Also: `py -3 tools/validate.py` (0 errors, base 61 / rotw 102 warnings as before), the nine C++ test
@@ -1213,12 +1214,53 @@ before the change, the town classifier rows and "monster entered town=False" wer
 to three times before it calls the setup inconclusive. After the change PASS (`suite067-t5`). With the `mediantowns` off word the check fails its control
 expectation as designed.
 
-**ied (not fixed, not caused by the five PRs):** the passive's data formula, IED, marker and explicit-refresh rows are exact, `iedtip` PASS. What fails
-differs from run to run: the innate fire (stat 48) is 0 a second after a refresh, or after the live refresh of an attribute packet (Dexterity point,
-Vitality point, the native `!70` weapon baseline). Isolated (a fresh game, nothing run before), the fixture never lost it (three probe runs); once other checks had run
-in the game (`townmonsters`, `statclick`) the stat fell to 0 about 0.2-1.5 s after a `passiverefresh` in 2 to 6 of every 12 refreshes and stayed 0 until
-the next refresh. The same happens with `mxl-core-off.txt` = `mediantowns` (not #165) and with `innate` (not #164's hook: the engine's own equipment recheck
-discards the passive stat list again, which is what #164's comment on `StatClickHook` describes for attribute spending). Probes: `suite067-t3.log`
-(throwaway driver, not committed). `check_ied` now reads the fire right after the refresh, retries a refresh up to four times, and polls up to 2 s for the
-attribute / fire after a packet, which fixed the explicit-refresh and native baseline rows; the live-refresh rows (Dexterity / Vitality point) still fail now and
-then, so a real loss of innate damage some time after attribute spending cannot be excluded: compare with a build before #164 (`ffd8290`) is the next step.
+**ied (open in this run, fixed in plugin 0.69.0, see "Lane ied-vanish" below):** the passive's data formula, IED, marker and explicit-refresh rows are exact,
+`iedtip` PASS. What failed differed from run to run: the innate fire (stat 48) was 0 a second after a refresh, or after the live refresh of an attribute
+packet. This was not caused by the five PRs: the engine's own equipment recheck took the stat away (details below). `check_ied` had been given a retry of the refresh (up to four times) and a 2 s poll in that run; the retry was removed again in 0.69.0, because it hid the loss.
+
+## Lane ied-vanish: the innate fire that vanishes, `itemevents` thorns 52, check names (plugin 0.69.0, 2026-10-26)
+
+Slot 2, background mode, one game at a time, throwaway character `IedVan`. The drivers are throwaway and not committed (in `%USERPROFILE%\mxl-d2r-runs`:
+`iedvan_probe.py`, `iedvan_repeat.py`, `iedvan_load.py`, logs `iedvan-*.log`). New harness verbs (kept as diagnostics): `passivestate` (state list of skill 2072:
+list pointer, stat array, inputs oskill / synergy / Dexterity / IED, fire), `passivetrace on|clear|show` (every call of the passive apply `0x337890` and refresh
+`0x33f830` with the inputs at that moment and a call chain); the write-watch chain of `evtrace watch` now scans the stack for return addresses.
+
+**1. Innate damage vanishing: root cause.** The state list of the passive (skill 2072, state 626) is never lost (`has=1`, same list pointer); its stat
+array is rebuilt without the fire / min / max entries (4 entries -> 2). `passivetrace` shows who does it: D2R's own **equipment recheck** runs the apply
+with flag 0 three times in a row and then does nothing more:
+(a) the item is taken off: oskill 97:2072 = 0, Dexterity without the item's bonus -> level 0 -> fire 307 -> 0;
+(b) the same once more;
+(c) the item is put back through the equip step `0x475140`, but the apply runs while the list is half back (oskill and Dexterity are in, the synergy
+stat 412:2072 is not yet: `osk=1 syn=0 dex=205`) -> fire stays 0. Nothing applies the passive again once the list is complete.
+The recheck is not specific to the harness: it runs at once in the handler of every attribute packet (clean game, `iedvan-clean-trace.log`: fire 310 -> 0
+inside the packet), D2R runs it again 0.4 - 2 s later (the one that took the stat "a second after a refresh"), and it runs when a character is loaded.
+Load control (`iedvan_load.py`, character saved with the cap worn, then a game restart): **fire 0** from the first frame with the part off (`iedvan-load-off.log`),
+205 with the fix (`iedvan-load.log`). So a real player loses the innate damage on every login with such gear, after spending points (the plugin's refresh
+of 0.67.0 covered the immediate run only, not the second one), and after a gear change that goes through the equip step.
+**Why only after other checks:** bisect (part `innate` off, 10 refreshes per run): nothing run before 0/10, `statclick` 0/10, `townmonsters` 3/10 -> `townmonsters`
+is the earlier check that sets it up. The deferred second recheck is the part that needs the state it leaves; which single leftover does it is **not isolated**:
+the god cheat on/off, cross-act travel (areas 271 / 242), the Teleport skill and mana stats, a move, a spawned monster, stat 328 (pierce index 35, the only stat
+difference in the stat / state dump) and a socketed helm, each set alone in a clean game, gave 0 losses. The immediate recheck in the packet handler does not
+depend on it.
+**Before #164:** the pre-#164 plugin (0.66.0 + probe verbs, `iedvan-old-run.log`) loses the fire the same way (2 of 10 refreshes after `townmonsters`
+`statclick`): the loss is the engine's, not a regression of #164, #165 or the other PRs.
+**Fix (Median way: the passives are worked out once the item's stat list is complete):** `stat_rules.cpp` hooks `0x475140` under part `innate` and calls
+`0x33f830(owner, 1)` after the original returns, for players only. `mxl` line: `innate damage on: attribute and equip refresh on`. No other behaviour changes.
+**Results:** probe with the hook (`townmonsters statclick`, `iedvan-run7.log`): refresh 0 of 12 lost, packets 0 of 10 lost (without it 5/12 and 7/10).
+`check_ied` is strict now (no retry of the refresh, a 3 s hold after each packet, and a row that reads the fire right after the equip without a refresh); with the
+checks that set it up first (`townmonsters`, `statclick`), the same game: **5 of 5 PASS** (`checks-20261026-012834-s2`). Targeted set on the 0.69.0 build
+`mxl statclick grit ied iedtip itemstatsave itemevents classlock`: all PASS (`checks-20261026-020458-s2`). `MXL_CONTROL=innate` with `innate` in
+`mxl-core-off.txt`: `ied`, `iedtip` PASS their control expectations (`checks-20261026-021018-s2`).
+
+**2. `itemevents` thorns 52: not reproduced.** Alone, three times in one game (`checks-20261026-013557-s2`): thorns 50 each time (one run had the 128 variant at
+-100 points = two events, which the check allows: the monster's own hit fires the event too). After the group1 predecessors `mxl respec heart lockout cow areacycle`
+(`checks-20261026-013854-s2`): 50 / 50 / 50. Again on the 0.69.0 build in the targeted set: PASS. A spawned class 18 monster at 700000 raw life lost nothing in
+six 0.3 s readings in ten spawns (`iedvan-drain.log`), so there is no slow drain. The earlier 52 (and the 686816 vs 687200 of the 0.61.0 notes) stay unexplained
+and rare; no leftover state was found, so the check is unchanged. (`respec` failed once in the predecessor run with "no plugin line in Akara's menu", and passed
+alone with the hook on and off and again after `mxl`: a one-off outside this lane.)
+
+**3. `group2.txt` / unknown names.** `group2.txt` (outside git) listed `tooltip`; removed (`tooltiptext` is the tooltip audit and is in the list). `game_checks.run_all`
+now refuses a check list with a name that is not in `CHECKS` (prints the names, returns 2 before the lock, the game and the run folder), and
+`tools/test_game_checks_names.py` covers it (`py -3 tools/test_game_checks_names.py`). The three group files have no unknown name.
+
+Also run: `py -3 tools/validate.py` (errors 0, rotw warnings 102 as before), the nine C++ test executables (all pass), `git diff --check`.

@@ -84,7 +84,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.68.0";
+constexpr const char* PluginVersion = "0.69.0";
 constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 
 const D2RL::PluginContext* g_context = nullptr;
@@ -1185,10 +1185,10 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		const bool linesOff = Off("itemtext");
 		if (linesOff && !harness) {
 			std::snprintf(g_itemTextReport, sizeof(g_itemTextReport), "%s", "off: left out by mxl-core-off.txt");
-			std::snprintf(g_innateReport, sizeof(g_innateReport), "attribute refresh %s; tooltip off with itemtext", InnateRefreshInstalled() ? "on" : "off");
+			std::snprintf(g_innateReport, sizeof(g_innateReport), "attribute and equip refresh %s; tooltip off with itemtext", InnateRefreshInstalled() ? "on" : "off");
 		} else {
 			const bool hooked = InstallItemText(context, !linesOff, !Off("innate"), g_itemTextReport, sizeof(g_itemTextReport));
-			std::snprintf(g_innateReport, sizeof(g_innateReport), "%s: attribute refresh %s; tooltip %s",
+			std::snprintf(g_innateReport, sizeof(g_innateReport), "%s: attribute and equip refresh %s; tooltip %s",
 			              Off("innate") ? "off" : "on", InnateRefreshInstalled() ? "on" : "off",
 			              hooked && !linesOff && !Off("innate") ? "classic max(Str,Dex), integer percent" : "previous arithmetic or disabled");
 		}

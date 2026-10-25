@@ -3112,6 +3112,78 @@ auto CmdPassiveRefresh(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	return true;
 }
 
+// `passivestate [skill id=2072] [watch <hw slot 0-3> <hex offset> [len]] [dump]`: the state stat list a passive skill applies (skill
+// record +0xb4 = passive state; 0x2f5940 finds the unit's list for it; list +0x1c flags, +0x20 state, +0x78 parent). Prints whether the
+// list exists and the player's fire minimum / maximum (stat 48 / 49); `watch` sets a hardware write breakpoint on the list (evtrace dump
+// prints the call chain of each write), `dump` prints the first 0xb0 bytes of the list.
+auto CmdPassiveState(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	long long skill = 2072;
+	int next = 1;
+	if (t.n > 1 && hcmd::ParseInt(t.tok[1], &skill)) {
+		next = 2;
+	}
+	const uint32_t dataFlag = Fn<UnitDataFlagFn>(RvaUnitDataFlag)(c->player);
+	const uint8_t* record = d2r::api.getSkillRecord(dataFlag, static_cast<int32_t>(skill));
+	if (record == nullptr) {
+		return Fail(c, "passivestate: no skills.txt row %lld", skill);
+	}
+	const int state = d2r::At<int16_t>(record, 0xb4);
+	uint8_t* list = static_cast<uint8_t*>(Fn<void* (*)(Unit*, int32_t)>(0x2f5940)(c->player, state));
+	// the list's own stat array: pointer at +0x30, entry count at +0x38; an entry is {u16 layer, u16 stat, i32 value}
+	const uint8_t* arr = list != nullptr ? d2r::At<const uint8_t*>(list, 0x30) : nullptr;
+	const uint64_t count = list != nullptr ? d2r::At<uint64_t>(list, 0x38) : 0;
+	Out("passivestate skill=%lld state=%d has=%d list=%p flags=%08x parent=%p arr=%p n=%llu fire=%d/%d frame=%u osk=%d syn=%d dex=%d ied=%d", skill, state,
+	    Fn<UnitHasStateFn>(RvaUnitHasState)(c->player, state) != 0 ? 1 : 0, static_cast<void*>(list),
+	    list != nullptr ? d2r::At<uint32_t>(list, 0x1c) : 0u, list != nullptr ? d2r::At<void*>(list, 0x78) : nullptr, static_cast<const void*>(arr),
+	    static_cast<unsigned long long>(count), Stat(c->player, 48), Stat(c->player, 49), d2r::At<uint32_t>(c->game, GameFrame), Stat(c->player, 97, 2072), Stat(c->player, 412, 2072),
+	    Stat(c->player, 2), Stat(c->player, 513));
+	for (int i = next; i < t.n; ++i) {
+		if (list == nullptr) {
+			return Fail(c, "passivestate: no list to %s", t.tok[i]);
+		}
+		if (hcmd::LowerEq(t.tok[i], "arr") && arr != nullptr) {
+			// 16-byte entries: {u16 layer, u16 0, u32 stat} {i32 value, i32 extra}
+			for (int k = 0; k < 8 && d2r::At<uint32_t>(arr, k * 16 + 4) != 0; ++k) {
+				Out("  arr+%02x layer=%u stat=%u value=%d extra=%d", k * 16, d2r::At<uint16_t>(arr, k * 16), d2r::At<uint32_t>(arr, k * 16 + 4),
+				    d2r::At<int32_t>(arr, k * 16 + 8), d2r::At<int32_t>(arr, k * 16 + 12));
+			}
+		} else if (hcmd::LowerEq(t.tok[i], "awatch") && i + 2 < t.n && arr != nullptr) {
+			// `awatch <hw slot> <hex byte offset>`: write breakpoint on 4 bytes of the list's stat array (the value of the first stat is at +8)
+			long long slot = 0;
+			if (!hcmd::ParseInt(t.tok[i + 1], &slot)) {
+				return Fail(c, "passivestate: awatch <hw slot 0-3> <hex byte offset>");
+			}
+			const unsigned long long off = std::strtoull(t.tok[i + 2], nullptr, 16);
+			i += 2;
+			if (!item_events::WatchSet(static_cast<int>(slot), reinterpret_cast<uint64_t>(arr) + off, 4, g_base)) {
+				return Fail(c, "passivestate: could not set the breakpoint");
+			}
+			Out("  watching arr+%llx at %p in slot %lld", off, static_cast<const void*>(arr + off), slot);
+		} else if (hcmd::LowerEq(t.tok[i], "dump")) {
+			for (int off = 0; off < 0xb0; off += 0x20) {
+				Out("  +%02x: %016llx %016llx %016llx %016llx", off, static_cast<unsigned long long>(d2r::At<uint64_t>(list, off)),
+				    static_cast<unsigned long long>(d2r::At<uint64_t>(list, off + 8)), static_cast<unsigned long long>(d2r::At<uint64_t>(list, off + 16)),
+				    static_cast<unsigned long long>(d2r::At<uint64_t>(list, off + 24)));
+			}
+		} else if (hcmd::LowerEq(t.tok[i], "watch") && i + 2 < t.n) {
+			long long slot = 0, len = 8;
+			if (!hcmd::ParseInt(t.tok[i + 1], &slot)) {
+				return Fail(c, "passivestate: watch slot must be a number");
+			}
+			const unsigned long long off = std::strtoull(t.tok[i + 2], nullptr, 16);
+			if (i + 3 < t.n && hcmd::ParseInt(t.tok[i + 3], &len)) {
+				++i;
+			}
+			i += 2;
+			if (!item_events::WatchSet(static_cast<int>(slot), reinterpret_cast<uint64_t>(list) + off, static_cast<int>(len), g_base)) {
+				return Fail(c, "passivestate: could not set the breakpoint");
+			}
+			Out("  watching list+%llx (%lld bytes) in slot %lld", off, len, slot);
+		}
+	}
+	return true;
+}
+
 // Build and apply actual weapon damage through the area_damage.cpp pipeline.
 auto CmdWeaponHit(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	long long src = 128;
@@ -4595,6 +4667,120 @@ void AssertReportHook(void* descriptor) noexcept {
 	}
 }
 
+// --- `passivetrace`: who applies the skill passives (lane ied-vanish) ---------------------------------------------------------------
+// `passivetrace on` hooks the passive apply step 0x337890 (unit, skill id, flag) and the passive refresh 0x33f830 (unit, flag). Every call keeps
+// the time, the skill, the flag, the inputs of the innate formula (stat 97 / 412 of the hidden skill 2072 and Dexterity), the fire minimum
+// before and after, and the call chain (RVAs found by scanning the stack for return addresses) in a ring of 256; `show` prints it.
+constexpr uint64_t RvaPassiveApply = 0x337890;
+constexpr uint8_t PassiveApplyEntry[] = {0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x60};
+constexpr uint64_t RvaPassiveRefresh = 0x33f830;
+constexpr uint8_t PassiveRefreshEntryBytes[] = {0x88, 0x54, 0x24, 0x10, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x58};
+struct PassiveEvent {
+	ULONGLONG ms;
+	int kind;  // 0 apply, 1 refresh
+	int skill, flag, osk, syn, dex, fireBefore, fireAfter;
+	uint32_t chain[8];
+};
+constexpr int PassiveRing = 256;
+PassiveEvent g_passiveEvents[PassiveRing];
+volatile LONG g_passiveCount = 0;
+bool g_passiveHooked = false;
+void (*g_passiveApplyOriginal)(Unit*, int32_t, uint8_t) = nullptr;
+void (*g_passiveRefreshOriginal)(Unit*, int32_t) = nullptr;
+
+void PassiveChain(PassiveEvent& e) noexcept {
+	int found = 0;
+	const uint64_t* sp = static_cast<const uint64_t*>(_AddressOfReturnAddress());
+	for (int k = 0; k < 200 && found < 8; ++k) {
+		const uint64_t v = sp[k];
+		if (v < g_base + 0x1000 || v >= g_base + 0x4000000) {
+			continue;
+		}
+		const uint8_t* b = reinterpret_cast<const uint8_t*>(v);
+		if (b[-5] == 0xe8 || (b[-6] == 0xff && b[-5] == 0x15) || (b[-2] == 0xff && (b[-1] & 0xf8) == 0xd0) ||
+		    (b[-3] == 0x41 && b[-2] == 0xff && (b[-1] & 0xf8) == 0xd0)) {
+			e.chain[found++] = static_cast<uint32_t>(v - g_base);
+		}
+	}
+}
+
+void PassiveBegin(PassiveEvent& e, Unit* unit, int kind, int skill, int flag) noexcept {
+	e.ms = GetTickCount64();
+	e.kind = kind;
+	e.skill = skill;
+	e.flag = flag;
+	std::memset(e.chain, 0, sizeof(e.chain));
+	PassiveChain(e);
+	__try {
+		e.osk = Stat(unit, 97, 2072);
+		e.syn = Stat(unit, 412, 2072);
+		e.dex = Stat(unit, 2);
+		e.fireBefore = Stat(unit, 48);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		e.osk = e.syn = e.dex = e.fireBefore = -1;
+	}
+}
+
+void PassiveApplyHook(Unit* unit, int32_t skill, uint8_t flag) noexcept {
+	PassiveEvent e{};
+	PassiveBegin(e, unit, 0, skill, flag);
+	g_passiveApplyOriginal(unit, skill, flag);
+	e.fireAfter = Stat(unit, 48);
+	g_passiveEvents[InterlockedIncrement(&g_passiveCount) % PassiveRing] = e;
+}
+
+void PassiveRefreshHook(Unit* unit, int32_t flag) noexcept {
+	PassiveEvent e{};
+	PassiveBegin(e, unit, 1, -1, flag);
+	g_passiveRefreshOriginal(unit, flag);
+	e.fireAfter = Stat(unit, 48);
+	g_passiveEvents[InterlockedIncrement(&g_passiveCount) % PassiveRing] = e;
+}
+
+// `passivetrace on|off-ring|clear|show [n]`
+auto CmdPassiveTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
+	if (t.n < 2) {
+		return Fail(c, "usage: passivetrace on|clear|show [last n]");
+	}
+	if (hcmd::LowerEq(t.tok[1], "on")) {
+		if (!g_passiveHooked) {
+			if (g_textContext == nullptr ||
+			    !g_textContext->InstallInlineHook(RvaPassiveApply, PassiveApplyEntry, sizeof(PassiveApplyEntry), reinterpret_cast<void*>(&PassiveApplyHook),
+			                                      reinterpret_cast<void**>(&g_passiveApplyOriginal)) ||
+			    !g_textContext->InstallInlineHook(RvaPassiveRefresh, PassiveRefreshEntryBytes, sizeof(PassiveRefreshEntryBytes),
+			                                      reinterpret_cast<void*>(&PassiveRefreshHook), reinterpret_cast<void**>(&g_passiveRefreshOriginal))) {
+				return Fail(c, "passivetrace: hook of 0x337890 / 0x33f830 failed");
+			}
+			g_passiveHooked = true;
+		}
+		Out("passivetrace on (%ld events so far)", static_cast<long>(g_passiveCount));
+		return true;
+	}
+	if (hcmd::LowerEq(t.tok[1], "clear")) {
+		InterlockedExchange(&g_passiveCount, 0);
+		Out("passivetrace cleared");
+		return true;
+	}
+	long long last = 40;
+	if (t.n > 2) {
+		hcmd::ParseInt(t.tok[2], &last);
+	}
+	const LONG total = g_passiveCount;
+	LONG first = total > PassiveRing ? total - PassiveRing + 1 : 1;
+	if (total - first + 1 > last) {
+		first = total - static_cast<LONG>(last) + 1;
+	}
+	const ULONGLONG now = GetTickCount64();
+	for (LONG i = first; i <= total; ++i) {
+		const PassiveEvent& e = g_passiveEvents[i % PassiveRing];
+		Out("pt#%ld -%llums %s skill=%d flag=%d osk=%d syn=%d dex=%d fire %d->%d | %x %x %x %x %x %x %x %x", static_cast<long>(i),
+		    static_cast<unsigned long long>(now - e.ms), e.kind == 0 ? "apply  " : "refresh", e.skill, e.flag, e.osk, e.syn, e.dex, e.fireBefore,
+		    e.fireAfter, e.chain[0], e.chain[1], e.chain[2], e.chain[3], e.chain[4], e.chain[5], e.chain[6], e.chain[7]);
+	}
+	Out("passivetrace show: %ld events", static_cast<long>(total));
+	return true;
+}
+
 auto CmdAssertTrace(Ctx* c, const hcmd::Tokens& t) noexcept -> bool {
 	if (t.n < 2) {
 		return Fail(c, "usage: asserttrace on|show|clear");
@@ -5240,7 +5426,7 @@ const Verb Verbs[] = {
     {"stat", CmdStat, false}, {"town", CmdTown, false},     {"level", CmdLevel, false}, {"spawn", CmdSpawn, false},   {"kill", CmdKill, false}, {"xp", CmdXp, false},
     {"interact", CmdInteract, false}, {"msg", CmdMsg, false}, {"pkt", CmdPkt, false}, {"enter", CmdEnter, false}, {"missile", CmdMissile, false}, {"missilescan", CmdMissileScan, false}, {"packclear", CmdPackclear, false},{"cubeclear", CmdCubeclear, false},{"cuberec", CmdCuberec, false},{"difficulty", CmdDifficulty, false},{"lockcheck", CmdLockcheck, false},{"towerprobe", CmdTowerprobe, false},{"tile", CmdTile, false},{"sysmsg", CmdSysmsg, false},{"class", CmdClass, false},{"remove", CmdRemove, false},{"item", CmdItem, false}, {"cubecraft", CmdCubecraft, false}, {"use", CmdUse, false}, {"cubeslots", CmdCubeSlots, false}, {"cubeout", CmdCubeOut, false},
     {"equip", CmdEquip, false}, {"unequip", CmdUnequip, false}, {"move", CmdMove, false}, {"moveto", CmdMoveTo, false},
-    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
+    {"skill", CmdSkill, false}, {"skills", CmdSkills, false}, {"skilldmg", CmdSkillDmg, false},  {"setskill", CmdSetSkill, false}, {"cast", CmdCast, false}, {"mcast", CmdMonsterCast, false}, {"missiles", CmdMissiles, false}, {"collide", CmdCollide, false}, {"collidetable", CmdCollideTable, false}, {"wallscan", CmdWallScan, false}, {"hasstate", CmdHasState, false}, {"passivestate", CmdPassiveState, false}, {"passivetrace", CmdPassiveTrace, false}, {"startfn", CmdStartFn, false}, {"startstats", CmdStartStats, false},
     {"hit", CmdHit, false}, {"weaponhit", CmdWeaponHit, false}, {"passiverefresh", CmdPassiveRefresh, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
     {"cstat", CmdClientStat, true}, {"cltdo", CmdCltDo, true}, {"cltst", CmdCltSt, true}, {"skillstats", CmdSkillStats, false}, {"asserttrace", CmdAssertTrace, false}, {"panelrow", CmdPanelRow, false}, {"tip", CmdTip, true}, {"tiplog", CmdTipLog, true}, {"tipfmt", CmdTipFmt, true},
     {"hit", CmdHit, false}, {"weaponhit", CmdWeaponHit, false}, {"passiverefresh", CmdPassiveRefresh, false}, {"avoid", CmdAvoid, false}, {"itemroll", CmdItemRoll, false}, {"colour", CmdColour, false}, {"req", CmdReq, false}, {"wear", CmdWear, false}, {"rewardstep", CmdRewardStep, false}, {"setstate", CmdSetState, false}, {"iflags", CmdItemFlags, false}, {"itemdesc", CmdItemDesc, false}, {"cursor", CmdCursor, false}, {"manamin", CmdManaMin, false}, {"manacharge", CmdManaCharge, false},
