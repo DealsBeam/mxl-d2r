@@ -1088,3 +1088,13 @@ auratargetstate/State1-3, misc state/cstate, states overlays), so even compacted
 arrays to a larger area (enlarge the pool element, redirect the four accessors and any inlined copies, check network
 state sync and saves for fixed 16-block assumptions).
 - Atma/Geglash sacred-item service (npcstores +40/+41, docs/vendors.md).
+
+### Median town safety (`mediantowns`)
+
+`town_rules.cpp` replaces D2R's shared five-id `IsTown` leaf (RVA `0x327850`) with the nine `IsTown` flags from Median's
+compiled levels table (already generated in `mxl_goblins.h`). This brings Caldeum (138), Silver City (139), Tur Dulra
+(242) and Frozen Sea (243) under the engine's existing monster path, population, AI, missile and skill town checks.
+Tur Dulra and Scosglen (271) both use level type 44 and connect through reciprocal Vis0 entries, Warp0 -1; a data
+change to their level type would conflate town and field. `mediantowns` in `mxl-core-off.txt` disables the replacement.
+`mxl` prints `median towns on: 9 towns from Median IsTown (0x327850)` when installed. Expected-byte mismatch reports
+FAILED and leaves the function alone. Details and the precise source ids are in `d2r-addresses.md`, "Median town classification".

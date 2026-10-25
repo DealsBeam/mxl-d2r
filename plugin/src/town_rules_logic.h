@@ -2,10 +2,22 @@
 #pragma once
 
 #include "dungeon_logic.h"
+#include "mxl_goblins.h"
 
 #include <cstdint>
 
 namespace town {
+
+// Generated from Median's levels.bin IsTown byte (+0x14b), with the port's level-id mapping.
+// The level type is not a town flag: Tur Dulra and Scosglen both use type 44.
+inline auto IsTown(int32_t level) noexcept -> bool {
+	for (const int32_t id : mxl_goblins::Towns) {
+		if (level == id) {
+			return true;
+		}
+	}
+	return false;
+}
 
 // D2R's NPC packet handler (0x4c2410) calls the heal function 0x53fc50 on every talk; the function heals only when the NPC table
 // entry's byte +6 is set, which D2R has for the act healers (Akara, Fara, Ormus, Malah, ...) alone. Median heals at every NPC
