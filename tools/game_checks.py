@@ -10634,6 +10634,196 @@ def check_grit():
     add(name, "PASS" if not bad else "FAIL", "passive skill %d at level 1: " % passive + "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
 
 
+def check_ied():
+    """Measure Median's hidden innate passive, IED and attribute-point refresh.
+
+    Synthetic item stats use the same skill/synergy combination as pr375.
+    `MXL_CONTROL=innate` expects the original dropped Dexterity passive.
+    """
+    name = "Innate elemental damage: passive formula, IED multiplier and Dexterity point refresh"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    log, rows, bad = [], [], []
+    saved = {s: rd("player", s) for s in (0, 1, 2, 3, 4, 12, 329, 424, 513)}
+    sid = 2072  # Median 2000: innate fire from Dexterity
+    control = "innate" in CONTROL
+    part = _mxl_line("innate damage")
+    log.append(part)
+    if ("innate damage off" if control else "innate damage on: attribute refresh on") not in part:
+        bad.append("unexpected innate part status: " + part)
+    try:
+        # Magic quality carries the synthetic property list to the client.
+        # A level-one Median cap keeps generated affixes/requirements low.
+        H("unequip head")
+        H("unequip rhand")
+        setstat("player", 12, 120)
+        setstat("player", 0, 100)
+        setstat("player", 2, 199)
+        setstat("player", 513, 50)
+        setstat("player", 4, 10)
+        native_class = hstate()["player"]["class"]
+        H("class 2")  # !70 is a Necromancer throwing knife
+        try:
+            ok, lines = H("equip !70 q=2 ilvl=1 rhand")
+            log += lines
+            if ok:
+                H("passiverefresh")
+                native_before = (rd("player", 2), rd("player", 48))
+                native_syn, native_ied = rd("player", 412, sid), rd("player", 513)
+                H("pkt 3a 02 00 00 00")
+                time.sleep(0.5)
+                native_after = (rd("player", 2), rd("player", 48))
+                rows.append("native innate weapon !70: %s -> %s" % (native_before, native_after))
+                flat = native_before[1] - native_syn * native_before[0] * (100 + native_ied) // 10000
+                want = flat if control else flat + native_syn * native_after[0] * (100 + native_ied) // 10000
+                if native_after[0] != native_before[0] + 1 or native_after[1] != want:
+                    bad.append("native weapon expected fire %d: %s" % (want, rows[-1]))
+                for cmd in ("stat player 97 2072", "stat player 412 2072", "req player"):
+                    log += H(cmd)[1]
+            else:
+                bad.append("cannot equip native innate weapon !70")
+        finally:
+            H("unequip rhand")
+            H("remove !70 1")
+            H("class %d" % native_class)
+            H("passiverefresh")
+        setstat("player", 2, 200)
+        setstat("player", 424, 0)
+        setstat("player", 513, 0)
+        ok, lines = H("equip 615 q=4 ilvl=1 97:2072=1 412:2072=100 head")
+        log += lines
+        if not ok:
+            return add(name, "BLOCKED", "cannot equip hidden-passive cap", [], log)
+        # Explicit native refresh isolates the data formula from the point-
+        # spending path below; no base level is learned in this hidden skill.
+        def refresh():
+            H("passiverefresh")
+            time.sleep(0.3)
+
+        for dex, ied, marker in ((200, 0, 0), (200, 50, 0), (201, 51, 0), (200, 0, 3), (200, 0, 4)):
+            setstat("player", 2, dex)
+            setstat("player", 513, ied)
+            setstat("player", 424, marker)
+            refresh()
+            actual_dex = rd("player", 2)
+            actual_ied = rd("player", 513)
+            syn = rd("player", 412, sid)
+            coefficient = syn if marker < 3 else syn * 16 // 10
+            want = coefficient * actual_dex * (100 + actual_ied) // 10000 if marker < 4 else 0
+            got = rd("player", 48)
+            rows.append("Dex=%s IED=%s marker=%s syn1=%s fire=%s expected=%s" % (actual_dex, actual_ied, marker, syn, got, want))
+            if got != want:
+                bad.append(rows[-1])
+        setstat("player", 424, 0)
+        setstat("player", 513, 50)
+        setstat("player", 2, 200)
+        setstat("player", 4, 10)
+        refresh()
+        before = (rd("player", 2), rd("player", 48))
+        H("pkt 3a 02 00 00 00")  # one ordinary Dexterity point
+        time.sleep(0.5)
+        after = (rd("player", 2), rd("player", 48))
+        for cmd in ("state", "stat player 97 2072", "stat player 424", "stat player 513", "stat player 412 2072", "skills", "req player"):
+            log += H(cmd)[1]
+        expected = after[0] * 150 // 100
+        wanted = 0 if control else expected
+        rows.append("Dexterity point: %s -> %s; damage expected=%d (%s)" % (before, after, wanted, "off control" if control else "live refresh"))
+        if after[0] != before[0] + 1 or after[1] != wanted:
+            bad.append(rows[-1])
+        if not control:
+            for attr in (0, 1, 3):
+                setstat("player", 4, 10)
+                refresh()
+                value = rd("player", attr)
+                H("pkt 3a %02x 00 00 00" % attr)
+                time.sleep(0.3)
+                actual, fire = rd("player", attr), rd("player", 48)
+                rows.append("attribute %d point: %d -> %d, fire=%s expected=%d" % (attr, value, actual, fire, expected))
+                if actual != value + 1 or fire != expected:
+                    bad.append(rows[-1])
+        refresh()  # isolate outgoing hits from the attribute-point refresh path
+        rows.append("after explicit refresh fire=%s" % rd("player", 48))
+        fight_ready()
+        refresh()
+        setstat("player", 329, 0)
+        mid = spawn_id()
+        if mid is None:
+            bad.append("cannot spawn hit target")
+        else:
+            ref = "mon:%d" % mid
+            for stat in (36, 39, 41, 43, 45, 37, 369, 373):
+                setstat(ref, stat, 0)
+            for src in (128, 64):
+                setstat(ref, 7, 2000000)
+                setstat(ref, 6, 2000000)
+                ok, lines = H("weaponhit %s %d" % (ref, src))
+                log += lines
+                text = " ".join(lines)
+                m = re.search(r"fire=(\d+).*lost=(\d+)", text)
+                want_fire = rd("player", 48) * 256 * src // 128
+                rows.append("weapon hit SrcDam=%d: %s; expected raw fire=%s" % (src, text, want_fire))
+                if not ok or not m or int(m[1]) != want_fire or int(m[2]) < want_fire // 256 or int(m[2]) <= 0:
+                    bad.append(rows[-1])
+            H("kill %d" % mid)
+        # Capture the client stat and item-format output independently.
+        for cmd in ("cstat 48", "tipfmt 444 100 512"):
+            ok, lines = H(cmd)
+            log += lines
+    finally:
+        H("unequip head")
+        H("remove 615 1")
+        for stat, value in saved.items():
+            if value is not None:
+                setstat("player", stat, value)
+        H("passiverefresh")
+    log += rows
+    add(name, "FAIL" if bad else "PASS", "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
+
+
+def check_iedtip():
+    """Sigma descfunc 35: truncate percentage before damage, max(Str,Dex).
+
+    Off control retains the previous port's floating damage / summed attributes.
+    """
+    name = "Innate tooltip: classic percentage truncation and larger Strength/Dexterity"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    saved = {s: rd("player", s) for s in (0, 2, 513)}
+    rows, bad, log = [], [], []
+    client_saved = {}
+    control = "innate" in CONTROL
+    try:
+        for stat in saved:
+            ok, lines = H("cstat %d" % stat)
+            log += lines
+            match = re.search(r"cstat \d+:0 = (-?\d+)", " ".join(lines))
+            if not ok or match is None:
+                return add(name, "BLOCKED", "cannot read client fixture stats", [], log)
+            client_saved[stat] = int(match[1])
+        for stat, value in ((0, 100), (2, 199), (513, 5)):
+            setstat("player", stat, value)
+            # This is a formatter probe, so inject its inputs in the client's
+            # unit too. Server base-stat writes do not transmit custom stats.
+            log += H("cstat %d set %d" % (stat, value))[1]
+        for layer, expected in ((512, 20 if control else 19), (1024, 31 if control else 19)):
+            ok, lines = H("tipfmt 444 10 %d" % layer)
+            log += lines
+            text = " ".join(lines)
+            rows.append(text)
+            if not ok or not re.search(r"Damage: %d \(10\.5%%" % expected, text):
+                bad.append("layer %d expected damage %d: %s" % (layer, expected, text))
+    finally:
+        for stat, value in saved.items():
+            if value is not None:
+                setstat("player", stat, value)
+        for stat, value in client_saved.items():
+            H("cstat %d set %d" % (stat, value))
+        H("passiverefresh")
+    add(name, "FAIL" if bad else "PASS", "; ".join(rows + bad), [], log)
+
+
 def check_statclick():
     name = "Stat point shift-click (audit XP6): the client's shift-click packet (0x3a, count 4) spends 25 points, a plain click 1 (Median 2.14: 25 per shift-click)"
     if not need_game():
@@ -12335,7 +12525,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # lane p4-quests-verify
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
-          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard)]
+          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard),
+          ("ied", check_ied), ("iedtip", check_iedtip)]
 
 
 def write_report(extra=""):
@@ -12371,6 +12562,16 @@ def unlock():
     g.game_slots.release(g.SLOT, g.LOCK_OWNER)
 
 
+def enter_initial_character():
+    """An explicit lane character must never fall back to the selected save."""
+    if not os.environ.get("MXL_CHAR"):
+        return enter_game()
+    card = card_of(g.CHAR_NAME)
+    if card is None:
+        return create_character("barbarian", g.CHAR_NAME)
+    return enter_game(card)
+
+
 def run_all(only=None):
     global WD
     new_run()
@@ -12394,8 +12595,7 @@ def run_all(only=None):
         g.snapshot_marks()
         if not to_menu():
             add("start game", "BLOCKED", "game did not reach the main menu")
-        elif not (create_character("barbarian", g.CHAR_NAME) if os.environ.get("MXL_CHAR") and card_of(g.CHAR_NAME) is None
-                  else enter_game((card_of(g.CHAR_NAME) or 1) if os.environ.get("MXL_CHAR") else 1)):
+        elif not enter_initial_character():
             add("enter game", "BLOCKED", "the character did not enter the game")
         else:
             try:

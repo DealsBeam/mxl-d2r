@@ -66,6 +66,8 @@ constexpr uint8_t StatClickEntry[] = {0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x55, 
 constexpr uint64_t PassiveRefreshRva = 0x33f830;
 constexpr uint8_t PassiveRefreshEntry[] = {0x88, 0x54, 0x24, 0x10, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x58};
 constexpr int32_t StatStrength = 0;
+bool g_shiftClick = false;
+bool g_innate = false;
 
 using PacketFn = void (*)(void* game, Unit* player, uint8_t* packet, int32_t length);
 using PassiveRefreshFn = void (*)(Unit* unit, int32_t flag);
@@ -101,7 +103,7 @@ void StaminaStep(void* game, Unit* unit) noexcept {
 
 void StatClickHook(void* game, Unit* player, uint8_t* packet, int32_t length) noexcept {
 	uint8_t widened[8];
-	if (packet != nullptr && length == 5 && packet[0] == 0x3a) {
+	if (g_shiftClick && packet != nullptr && length == 5 && packet[0] == 0x3a) {
 		const int32_t count = packet[3] | (packet[4] << 8);
 		const int32_t wanted = statrules::StatClickCount(count);
 		if (wanted != count) {
@@ -113,8 +115,14 @@ void StatClickHook(void* game, Unit* player, uint8_t* packet, int32_t length) no
 		}
 	}
 	g_statClickOriginal(game, player, packet, length);
-	if (g_passiveRefresh != nullptr && player != nullptr && packet != nullptr && length == 5 && packet[0] == 0x3a && (packet[1] | (packet[2] << 8)) == StatStrength) {
-		g_passiveRefresh(player, 1);
+	if (g_passiveRefresh != nullptr && player != nullptr && packet != nullptr && length == 5 && packet[0] == 0x3a) {
+		const int32_t stat = packet[1] | (packet[2] << 8);
+		// Equipment rechecks can discard the attribute-derived passive list.
+		// Strength already refreshed Grit; Dexterity must refresh innate fire,
+		// lightning and cold too. Energy/Vitality are legal formula inputs.
+		if ((g_shiftClick && stat == StatStrength) || (g_innate && stat <= 3)) {
+			g_passiveRefresh(player, 1);
+		}
 	}
 }
 
@@ -122,6 +130,8 @@ void StatClickHook(void* game, Unit* player, uint8_t* packet, int32_t length) no
 
 auto InstallStatRules(const D2RL::PluginContext* context, const StatRulesParts& parts, char* report, size_t reportSize) noexcept -> bool {
 	const uint64_t base = context->exeBase;
+	g_shiftClick = parts.shiftClick;
+	g_innate = parts.innate;
 	g_getStat = reinterpret_cast<GetStatFn>(base + GetStatRva);
 	g_setStat = reinterpret_cast<SetStatFn>(base + SetStatRva);
 	g_hasState = reinterpret_cast<HasStateFn>(base + HasStateRva);
@@ -142,18 +152,23 @@ auto InstallStatRules(const D2RL::PluginContext* context, const StatRulesParts& 
 		all = all && ok;
 	}
 	const char* click = "off";
-	if (parts.shiftClick) {
+	if (parts.shiftClick || parts.innate) {
 		const bool ok = context->InstallInlineHook(StatClickRva, StatClickEntry, sizeof(StatClickEntry), reinterpret_cast<void*>(&StatClickHook),
 		                                           reinterpret_cast<void**>(&g_statClickOriginal));
 		click = ok ? "on" : "FAILED";
 		if (ok && std::memcmp(reinterpret_cast<const void*>(base + PassiveRefreshRva), PassiveRefreshEntry, sizeof(PassiveRefreshEntry)) == 0) {
 			g_passiveRefresh = reinterpret_cast<PassiveRefreshFn>(base + PassiveRefreshRva);
-			click = "on, Grit follows Strength";
+			click = parts.shiftClick ? "on, Grit follows Strength" : "off";
 		}
+		all = all && (!parts.innate || g_passiveRefresh != nullptr);
 		all = all && ok;
 	}
 	std::snprintf(report, reportSize, "%s: potion amounts %s (Potion of Life +%d life, Lam Esen %d points), stamina %s (0x42e850), shift-click %s (%d points, 0x4b3c70)",
 	              all ? "ok" : "partly failed", potions, statrules::PotionOfLifeLife >> 8, statrules::LamEsenStatPoints, stamina, click,
 	              statrules::MedianShiftClickCount + 1);
 	return all;
+}
+
+auto InnateRefreshInstalled() noexcept -> bool {
+	return g_innate && g_statClickOriginal != nullptr && g_passiveRefresh != nullptr;
 }
