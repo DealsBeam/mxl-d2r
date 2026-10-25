@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "mxl_stat_names.h"
+
 namespace hcmd {
 
 constexpr int MaxTokens = 24;  // a 17-byte server packet through `pkt` is 18 tokens
@@ -95,7 +97,21 @@ inline auto ParseInt(const char* s, long long* out) noexcept -> bool {
 	return true;
 }
 
-// "532=3" or "532:1=3" (stat, optional layer, value). Names with a letter first are not stats.
+// Stat id of a name in the build's itemstatcost.txt (mxl_stat_names.h, written by tools/stat_names_data.py: Median's stats
+// included), case-insensitive, or -1 when there is no such name (a row whose `*ID` is not its number has none).
+inline auto StatIdByName(const char* name) noexcept -> int {
+	if (name == nullptr || *name == '\0') {
+		return -1;
+	}
+	for (int i = 0; i < mxl_stat_names::Count; ++i) {
+		if (mxl_stat_names::Names[i] != nullptr && LowerEq(name, mxl_stat_names::Names[i])) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+// "532=3", "532:1=3" or "fireresist=155" (stat id or itemstatcost name, optional layer, value). Anything else is not a stat.
 inline auto ParseStatArg(const char* s, int* stat, int* layer, long long* value) noexcept -> bool {
 	if (s == nullptr) {
 		return false;
@@ -118,7 +134,10 @@ inline auto ParseStatArg(const char* s, int* stat, int* layer, long long* value)
 			return false;
 		}
 	}
-	if (!ParseInt(left, &st) || !ParseInt(eq + 1, &v) || st < 0 || st > 0xffff || ly < 0 || ly > 0xffff) {
+	if (!ParseInt(left, &st)) {
+		st = StatIdByName(left);
+	}
+	if (st < 0 || !ParseInt(eq + 1, &v) || st > 0xffff || ly < 0 || ly > 0xffff) {
 		return false;
 	}
 	*stat = static_cast<int>(st);
