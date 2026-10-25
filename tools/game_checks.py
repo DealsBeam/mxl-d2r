@@ -11,7 +11,7 @@ Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screens
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
 Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
-classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltiptext gameend itemstatsave trophy statcols
+classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltiptext specialtext gameend itemstatsave trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
@@ -3556,7 +3556,7 @@ def check_summoner():
 
 TIP_PINS = {  # results key (stat; GROUP + stat for a group line) -> the exact text of the line (docs/item-tooltips.md)
     16: "+12% Enhanced Defense", 36: "Physical Resist 12%", 74: "+1 Life Regenerated per Second",
-    112: "Hit Causes Monster to Flee 9%", 289: "Orb Effects Applied to this Item are Doubled", 404: "", 406: "", 407: "", 414: "",
+    112: "Hit Causes Monster to Flee 9%", 289: "Orb Effects Applied to this Item are Doubled",
     456: "Activation Frequency +12", 492: "(Paladin Only)", 534: "+1 Life Regenerated per Second (Based on Character Level)",
     10000 + 0: "+12 to all Attributes",
 }
@@ -3590,6 +3590,26 @@ def _tip_item(cmd):
         return None, [], " ".join(out)[:80]
     ok, lines = _tip_lines(int(m.group(1)))
     return int(m.group(1)), lines, "" if ok else "tip failed"
+
+
+def _tip_ready():
+    """Prime the real item builder through a background inventory hover."""
+    ok, lines = H("tip", 20)
+    if not ok or not any(l.startswith("tip build") for l in lines):
+        ok, out = H("item rin q=4 inv", 20)
+        m = re.search(r"item id=\d+ .* x=(\d+) y=(\d+)", " ".join(out)) if ok else None
+        if m:
+            x, y = int(m.group(1)), int(m.group(2))
+            fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
+            g.key("i")
+            time.sleep(1.2)
+            g.click(fx, fy, move_only=True)
+            time.sleep(1.0)
+            g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
+            time.sleep(2.0)
+            g.key("esc")
+            ok, lines = H("tip", 20)
+    return ok and any(l.startswith("tip build") for l in lines)
 
 
 def check_tooltiptext():
@@ -3626,25 +3646,9 @@ def check_tooltiptext():
     notes.append("%d lines: %s" % (len(judged), ", ".join("%d %s" % (sum(1 for j in judged if j["verdict"] == v), v)
                                                          for v in sorted({j["verdict"] for j in judged}))))
 
-    # 2. real items: the game's own item text builder (0x2dc4b0) needs one hover to give the harness its arguments
-    ok, lines = H("tip", 20)
-    if not ok or not any(l.startswith("tip build") for l in lines):
-        ok, out = H("item rin q=4 inv", 20)
-        m = re.search(r"item id=\d+ .* x=(\d+) y=(\d+)", " ".join(out)) if ok else None
-        if m:
-            x, y = int(m.group(1)), int(m.group(2))
-            fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
-            g.key("i")
-            time.sleep(1.2)
-            g.click(fx, fy, move_only=True)
-            time.sleep(1.0)
-            g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
-            time.sleep(2.0)
-            g.key("esc")
-            ok, lines = H("tip", 20)
-    if not ok or not any(l.startswith("tip build") for l in lines):
-        add(name, "FAIL" if bad else "PASS", "; ".join(bad[:6]) if bad else "; ".join(notes) + "; real items not read: no hover reached the item text builder (background mouse)")
-        return
+    # 2. Real items use the game's own builder, primed with a background hover.
+    if not _tip_ready():
+        return add(name, "FAIL", "real item text builder not reached by background hover", log=bad)
     seen = 0
     for label, cmd, wants in TIP_ITEMS:
         iid, text, err = _tip_item(cmd)
@@ -3671,6 +3675,77 @@ def check_tooltiptext():
                     bad.append("%s q=%d: [%s] %s" % (code, q, ta.norm(line), why))
     notes.append("%d lines of %d named items and %d bases" % (seen, len(TIP_ITEMS), len(TIP_BASES)))
     add(name, "PASS" if not bad else "FAIL", "; ".join(bad[:6]) if bad else "; ".join(notes), log=bad)
+
+
+def check_specialtext():
+    name = "Layered special item text (Sigma descfunc 31/34), colours and hidden passive names"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    import item_special_data as sd
+    import tbl2json
+    import tooltip_audit as ta
+    control = "itemtext" in CONTROL
+    goto(1)
+    close_menu()
+    original, _ = tbl2json.load_median()
+    refs = sd.references()
+    ids = sorted({r[3] for r in refs})
+    bad, notes = [], []
+    answers = []
+    # Every layered string referenced by uniques, sets, runewords, affixes and cube recipes goes through the engine.
+    # Long paragraphs exceed the native 256-byte property buffer; their complete list is documented separately.
+    sweep = [11278] if control else ids
+    long_ids = []
+    for sid in sweep:
+        want = ta.norm(original[sid][1])
+        ok, lines = H("tipfmt 404 9 %d 4" % sid, 20)
+        answers += lines
+        result = ta.parse_results(lines).get(404)
+        got = ta.norm(result[3]) if result else ""
+        if control:
+            if not ok or not result or got == want:
+                bad.append("off control did not reproduce the missing Median text: %r" % got)
+        elif len(original[sid][1].encode("utf-8")) > 251:
+            long_ids.append(sid)
+            if not ok or not got or not want.startswith(got):
+                bad.append("long string %d: expected a bounded prefix, got %r" % (sid, got))
+        elif not ok or got != want:
+            bad.append("string %d: want %r got %r" % (sid, want, got))
+    # All four stats, colour values 1..13, and Sigma's out-of-range fallback; func34 is always colour 8.
+    for stat in (404, 406, 407, 414):
+        for value in (-1, 0, *range(1, 15)):
+            ok, lines = H("tipfmt %d %d 11278 4" % (stat, value), 20)
+            answers += lines
+            m = re.search(r"tipcolour .* colour=(-?\d+)", " ".join(lines))
+            want = -1 if control else (8 if stat == 414 else value - 1 if 1 <= value <= 13 else 3)
+            if not ok or not m or int(m.group(1)) != want:
+                bad.append("stat %d colour value %d: expected %d, got %s" % (stat, value, want, lines))
+    if not _tip_ready():
+        return add(name, "FAIL", "real item builder not reached by background hover", log=bad)
+    for label, cmd, string_ids in (
+        ("Azure Wrath", "item 14@ uniq=1485 ground", (11278,)),
+        ("Staff of Herding", "item wd02 uniq=72 ground", (11646,)),
+        ("unique 30 (two special lines)", "item 0u1 uniq=30 ground", (12376, 12377)),
+        ("Optical Detector", "item a55 uniq=21 ground", (11861, 12185)),
+    ):
+        iid, lines, err = _tip_item(cmd)
+        got = ta.norm(" ".join(lines))
+        notes.append("%s item=%s: %s" % (label, iid, got))
+        if iid is None or not lines:
+            bad.append("%s: no tooltip (%s)" % (label, err))
+            continue
+        for sid in string_ids:
+            present = ta.norm(original[sid][1]) in got
+            if present == control:
+                bad.append("%s: string %d %s" % (label, sid, "unexpectedly present in off control" if control else "missing"))
+        if label == "Azure Wrath" and (("FLYING POLAR BUFFALO ERROR" in got) != control):
+            bad.append("Azure Wrath hidden passive suppression differs from control=%s" % control)
+    run = os.path.join(g.current_run(), "special-text-readback.txt")
+    with open(run, "w", encoding="utf-8") as f:
+        f.write("\n".join(answers + notes + bad) + "\n")
+    add(name + (" CONTROL itemtext off" if control else ""), "FAIL" if bad else "PASS",
+        "; ".join(bad[:6]) if bad else "%d string IDs (%d property references); four real uniques; all four stats / 16 colour values; %d long paragraphs bounded (docs/unported.md)" % (len(sweep), len(refs), len(long_ids)),
+        log=notes + bad)
 
 
 def check_gameend():
@@ -12141,7 +12216,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
-          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltiptext", check_tooltiptext), ("gameend", check_gameend), ("itemstatsave", check_itemstatsave),
+          ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltiptext", check_tooltiptext), ("specialtext", check_specialtext), ("gameend", check_gameend), ("itemstatsave", check_itemstatsave),
           ("trophy", check_trophy), ("statcols", check_statcols),
           # the old "fix to test" rows of docs/bugs.md
           ("skilltree", check_skilltree), ("keybinds", check_keybinds), ("npcstrings", check_npcstrings), ("automap", check_automap),

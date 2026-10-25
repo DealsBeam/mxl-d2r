@@ -1011,7 +1011,8 @@ writes Median's line for the stats whose Median descfunc D2R lacks and otherwise
 | 33 (309) | `<skill> Cooldown Reduced by %.1g` seconds, frames / 25 (25 fps is an assumption, unported.md) |
 | 35 (444) | `Innate <Element> Damage: N (P% of <Attribute>)`; P = value + value * stat 513 / 100; element = layer low byte, attribute = the second byte |
 | 36 (289 at value 2), 37 (478), 38 (456) | the Median wording ("Orb Effects Applied to this Item are Doubled", "<skill> Maximum Skill Level Increased by N", "Activation Frequency +N") |
-| 31, 34 | nothing (no strings) |
+| 31 (404 / 406 / 407), 34 (414) | text at the Median string ID in the layer, resolved by key through `mxl_special_text.h`; 31 uses colour value minus one (1..13, otherwise 3), 34 always orange 8 |
+| 27 / 28 with skills2 `AltTooltip` | omit the ordinary +skill line, as Sigma does; the special paragraph describes the hidden passive |
 
 Descfuncs 22 / 23 / 24 (reanimate, charged skill) keep D2R's own text and placeholders. The data side (`tools/txt_migrate.py`
 `median_stat_wording`) gives the text of 296 kept strings that carry other placeholders under a `<key>_mxl` alias key

@@ -3,13 +3,14 @@
 //   0x2d6520 (viewer, itemstatcost record, value, layer, flag, char out[256], mode) -> al: one property line, the descfunc
 //            switch of D2Client\src\UI\mods.cpp. al = 1 when it wrote text.
 //
-// D2R ends the line without text for the descfuncs 32-38 and prints a Chronicle text for 31, which are Median's own (D2Sigma
-// D2ItemDesc.cpp 0x10077720 ... 0x10078180). The hook writes Median's lines for 5 (a string without a conversion), 32, 33 and 35-38, nothing for 31 / 34 (no
-// strings in Median either) and the class lock line of stat 492. Every other call passes through untouched.
+// D2R's descfunc 31 means Chronicle text, while 32-38 produce no line. Sigma assigns these functions its own meanings.
+// The hook implements those meanings, resolves layered Median string IDs, skips AltTooltip passive skill names, and
+// supplies the class lock line. Other descriptions pass through to D2R.
 #include "item_text.h"
 
 #include "d2r.h"
 #include "item_text_logic.h"
+#include "mxl_special_text.h"
 #include "strings.h"
 
 #define NOMINMAX
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 
 namespace {
 
@@ -114,7 +116,13 @@ auto OwnLine(void* viewer, const int16_t* record, int32_t value, uint32_t layer,
 	char text[LineSize];
 	text[0] = '\0';
 
-	if (stat == StatClassLock && func != 0) {
+	if (func == 27 || func == 28) {
+		// Sigma 0x100774c0 skips skills2 AltTooltip skills before looking up a name. Azure Wrath's hidden
+		// passive (Median skill 1651) has no skilldesc: D2R would print "+2 to FLYING POLAR BUFFALO ERROR".
+		bool alternate = false;
+		for (int32_t skill : mxl_special_text::AltTooltipSkills) alternate |= skill == static_cast<int32_t>(layer);
+		if (!alternate) return false;
+	} else if (stat == StatClassLock && func != 0) {
 		static const char* const Keys[] = {"d2r:strAmazonOnly",    "d2r:strSorceressOnly", "d2r:strNecromanerOnly", "d2r:strPaladinOnly",
 		                                   "d2r:strBarbarianOnly", "d2r:strDruidOnly",     "d2r:strAssassinOnly"};
 		static const char* const Fallbacks[] = {"(Amazon Only)",    "(Sorceress Only)", "(Necromancer Only)", "(Paladin Only)",
@@ -127,7 +135,34 @@ auto OwnLine(void* viewer, const int16_t* record, int32_t value, uint32_t layer,
 		// Median's string has no conversion for the value (Hit Causes Monster to Flee); D2R's own text has one and D2R's function formats it
 		item_text::PercentText(text, sizeof(text), item_text::PercentOf128(value), descval, RecordText(record, value));
 	} else if (func == 31 || func == 34) {
-		// Median has no strings for these (stats 404, 406, 407, 414); D2R's 31 would print a Chronicle text
+		// Sigma 0x10077720 / 0x10077cb0: the low layer word is a Median string ID. The value is a colour,
+		// not a number to interpolate. Numeric D2R lookup would name an unrelated string after namespacing.
+		const uint16_t id = static_cast<uint16_t>(layer);
+		const auto* first = std::begin(mxl_special_text::Entries);
+		const auto* last = std::end(mxl_special_text::Entries);
+		while (first < last) {
+			const auto* mid = first + (last - first) / 2;
+			if (mid->id < id) first = mid + 1;
+			else last = mid;
+		}
+		if (first != std::end(mxl_special_text::Entries) && first->id == id) {
+			char label[1024];
+			if (StringLookup(first->key, label, sizeof(label))) {
+				const int colour = func == 34 ? 8 : (value >= 1 && value <= 13 ? value - 1 : 3);
+				// D2R's UTF-8 text colour escape (the equivalent of Sigma's wide "ÿc" + ('0' + colour)).
+				std::snprintf(text, sizeof(text), "\xee\x81\xbe%c%s", '0' + colour, label);
+				// Do not leave an incomplete UTF-8 character when a long Median paragraph reaches D2R's 256-byte line limit.
+				if (std::strlen(label) + 4 >= sizeof(text)) {
+					size_t end = sizeof(text) - 1;
+					while (end > 4 && (static_cast<unsigned char>(label[end - 4]) & 0xc0) == 0x80) --end;
+					// A complete UTF-8 colour introducer without its following selector is still an incomplete escape.
+					if (end >= 3 && (std::memcmp(text + end - 3, "\xee\x81\xbe", 3) == 0 ||
+					                 std::memcmp(text + end - 3, "\xc3\xbf" "c", 3) == 0)) end -= 3;
+					else if (end >= 2 && std::memcmp(text + end - 2, "\xc3\xbf", 2) == 0) end -= 2;
+					text[end] = '\0';
+				}
+			}
+		}
 	} else if (func == 32 || func == 38) {
 		const char* label = RecordText(record, value);
 		if (label != nullptr) {
@@ -227,7 +262,7 @@ auto InstallItemText(const D2RL::PluginContext* context, bool lines, char* repor
 		std::snprintf(report, reportSize, "off: the hook of 0x2d6520 was refused");
 		return false;
 	}
-	std::snprintf(report, reportSize, "%s: item property lines (0x2d6520: descfunc 5 without a conversion, 32 / 33 / 35-38 lines, none for 31 / 34, class lock stat 492)",
+	std::snprintf(report, reportSize, "%s: item property lines (0x2d6520: descfunc 5 without a conversion, 31 / 34 layered text and colours, 32 / 33 / 35-38 lines, class lock stat 492)",
 	              lines ? "on" : "hooked for the harness readback only");
 	return true;
 }

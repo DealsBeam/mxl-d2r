@@ -1016,3 +1016,20 @@ start at 04:37 worked; the following ones (single or in parallel) did not, over 
 `checks-20261025-032845-s1` (`cainsub levelcap dropilvl wwproc monhover` alone, before these fixes): 6 PASS.
 **Left:** `group2.txt` in full twice (both pairs died with the machine's GPU, above; the first 13-14 checks PASS on both slots each time, no `transguard` skip read because the counters are only written at the end of a run); the three
 check fixes (`morphdeath`, `monhover`, `wwproc`, `dropilvl`) and the start-state life repair are compiled and read, but were not run in a full group after the edit (a game could not be started for more than an hour).
+
+### Layered special item text (special-text, 2026-10-25, background, slot 3)
+
+`tooltiptext specialtext`: **PASS**, `checks-20261025-185239-s3`. The corrected audit reads 313 property lines
+(294 OK / 19 ITEM); the new check sends all 812 referenced Median string IDs through the real property formatter,
+checks 64 colour probes (four stats x 16 values), and reads Azure Wrath, Staff of Herding, unique 30 and Optical Detector
+through the item builder. All 778 short paragraphs match fully; 34 long paragraphs match bounded prefixes, with their
+precise IDs and remaining tail limitation in [unported.md](unported.md). `special-text-readback.txt` in the run folder
+keeps the complete text answers. The harness adds `tipcolour` after the existing plain `tipfmt` answer.
+
+Control: `MXL_CONTROL=itemtext`, off word `itemtext`, `specialtext` **PASS**, `checks-20261025-184439-s3`:
+no Median special paragraphs; Azure's missing hidden-passive name returns; descfunc 31 prints the native Random Class
+line. The final and control runs have zero crash files, zero cursor / foreground changes and no watchdog abort.
+The lane's wrapper selected/created only `SpTextThree`; the earlier baseline used only `SpecialTxt` in slot 2
+(`checks-20261025-182658-s2`). It did not use the default most-recent-character selection or back up other saves.
+The earlier failed long-colour-boundary probe and intermediate build/startup problem are recorded in
+[item-tooltips.md](item-tooltips.md). Existing startup, magic-item harness and exit pool assertions are unchanged.
