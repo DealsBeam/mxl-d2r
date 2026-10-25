@@ -1124,3 +1124,28 @@ game destroy / create, client menu composition, quest handlers 13 / 14 / 25 / 38
    cosmetic. The monster death drop caller `0x5930b0` (the other caller of `0x4404f0`) was not read.
 6. Client: the string ids for new menu lines (tbl lookup `0x143e2b730`) and the layout / frame of a longer menu are untested; records hold only 5 lines.
 7. Everything above is static analysis: none of the hooks has been run in the game yet.
+
+
+## Waypoint arrival selection (lane waypoints, build 93847)
+
+`0x5933f0(game, player, destinationLevel)` is called after packet 0x4b validates
+an activated destination and a nearby operated waypoint (`0x4b6f10`). At
+`0x59347b`, `e8 00 d3 d5 ff` calls the town predicate `0x2f0780` (thunk of
+`0x327850`: levels 1/40/75/103/109). Towns, levels 46/74 and 133-137 select
+entry kind 13; every other level selects 0. That is wrong for Median's added
+preset waypoint levels 138/139/141/147/155/169/242. Duncraig (153) is a maze
+level: its native waypoint search already succeeds with kind 0 (control verified).
+
+`0x488180` performs the move (including act changes); `0x2ef8b0` calls
+`0x3da650` and finds a free stand position with `0x362f90` (collision mask
+0x1c09). In a preset level, kind 13 calls `0x3dad90`: first room flagged
+`room+0x50 & 0x30000`, then preset objects (`room+0x98` list, next +0x10),
+type 2 at +0x20, Objects row id +4. The object qualifies by record
+`+0x127 & 0x40`; its coordinates (+8/+0x24), divided by 5, are added to the
+room tile origin (+0x60/+0x64). Other kinds use `0x3dac20`'s preset entry list
+(level+0x34, triples x/y/kind, count +0x200), explaining the portal/entrance
+fallback. Maze levels already try the waypoint finder first.
+
+`wparrival` changes only the predicate call in waypoint travel, preserving the
+five town results and adding the generated Median waypoint levels. It does not
+change the generic entry finder or ordinary portal/NPC/level travel.

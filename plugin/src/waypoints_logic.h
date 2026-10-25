@@ -20,6 +20,20 @@ constexpr int PanelSlots = 9;      // waypoint1..waypoint9 per actinfo row (the 
 constexpr int MaxRows = 3;         // synthetic rows the tab fill is run over (9 levels each)
 constexpr int MaxButtons = MaxRows * PanelSlots;  // levels one tab can list (the plugin's button table holds these)
 
+// Replacement for the town predicate at the waypoint travel call site only.
+// Preserve its five true results; add every Median-only waypoint from levels.txt.
+constexpr auto NeedsObjectEntry(int level) noexcept -> bool {
+	if (level == 1 || level == 40 || level == 75 || level == 103 || level == 109) {
+		return true;
+	}
+	for (const auto& entry : mxl_wp::Levels) {
+		if (entry.level == level && entry.level >= 138) {
+			return true;
+		}
+	}
+	return false;
+}
+
 constexpr int WordOf(int number) noexcept { return 1 + number / 16; }
 constexpr uint16_t MaskOf(int number) noexcept { return static_cast<uint16_t>(1u << (number % 16)); }
 
