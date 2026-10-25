@@ -37,8 +37,11 @@ int main() {
 	Check(ParseStatArg("fireresist=155", &stat, &layer, &v) && stat == 39 && layer == 0 && v == 155, "stat name");
 	Check(ParseStatArg("PoisonResist:1=-5", &stat, &layer, &v) && stat == 45 && layer == 1 && v == -5, "stat name, case, layer");
 	Check(StatIdByName("lightresist") == 41 && StatIdByName("coldresist") == 43 && StatIdByName("strength") == 0 &&
-	          StatIdByName("monster_playercount") == 100 && StatIdByName("item_throw_maxdamage") == 160,
-	      "stat name ids");
+	          StatIdByName("monster_playercount") == 100 && StatIdByName("item_throw_maxdamage") == 160 &&
+	          StatIdByName("Item_NumSockets") == 194 && StatIdByName("itemstatcost_503") == 532 && StatIdByName("amazing_grace") == 400,
+	      "stat name ids (D2R rows and Median's)");
+	Check(StatIdByName("passive_mastery_gethit_rate") == -1 && !ParseStatArg("passive_mastery_gethit_rate=1", &stat, &layer, &v),
+	      "a row whose *ID is not its number has no name");
 	Check(!ParseStatArg("nosuchstat=3", &stat, &layer, &v) && StatIdByName("") == -1, "unknown stat name");
 	Check(!ParseStatArg("inv", &stat, &layer, &v) && !ParseStatArg("=3", &stat, &layer, &v) && !ParseStatArg("5=x", &stat, &layer, &v),
 	      "not a stat argument");

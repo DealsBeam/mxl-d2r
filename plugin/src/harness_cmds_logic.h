@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "mxl_stat_names.h"
+
 namespace hcmd {
 
 constexpr int MaxTokens = 24;  // a 17-byte server packet through `pkt` is 18 tokens
@@ -95,42 +97,15 @@ inline auto ParseInt(const char* s, long long* out) noexcept -> bool {
 	return true;
 }
 
-// D2's itemstatcost names for rows 0-160 (D2R keeps the numbering; the index is the stat id), so `item <code> fireresist=155` works.
-// Rows above are reached by number. Median's own stats have no names here.
-inline constexpr const char* StatNames[] = {
-	"strength", "energy", "dexterity", "vitality", "statpts", "newskills", "hitpoints", "maxhp", "mana", "maxmana", "stamina",
-	"maxstamina", "level", "experience", "gold", "goldbank", "item_armor_percent", "item_maxdamage_percent",
-	"item_mindamage_percent", "tohit", "toblock", "mindamage", "maxdamage", "secondary_mindamage", "secondary_maxdamage",
-	"damagepercent", "manarecoverybonus", "manarecovery", "staminarecoverybonus", "staminarecovery", "lastexp", "nextexp",
-	"armorclass", "armorclass_vs_missile", "armorclass_vs_hth", "normal_damage_reduction", "magic_damage_reduction",
-	"damageresist", "magicresist", "fireresist", "maxfireresist", "lightresist", "maxlightresist", "coldresist", "maxcoldresist",
-	"poisonresist", "maxpoisonresist", "damageaura", "firemindam", "firemaxdam", "lightmindam", "lightmaxdam", "magicmindam",
-	"magicmaxdam", "coldmindam", "coldmaxdam", "coldlength", "poisonmindam", "poisonmaxdam", "poisonlength", "lifedrainmindam",
-	"lifedrainmaxdam", "manadrainmindam", "manadrainmaxdam", "stamdrainmindam", "stamdrainmaxdam", "stunlength",
-	"velocitypercent", "attackrate", "other_animrate", "quantity", "value", "durability", "maxdurability", "hpregen",
-	"item_maxdurability_percent", "item_maxhp_percent", "item_maxmana_percent", "item_attackertakesdamage", "item_goldbonus",
-	"item_magicbonus", "item_knockback", "item_timeduration", "item_addclassskills", "unsenddamage", "item_addexperience",
-	"item_healafterkill", "item_reducedprices", "item_doubleherbduration", "item_lightradius", "item_lightcolor",
-	"item_req_percent", "item_levelreq", "item_fasterattackrate", "item_levelreqpct", "lastblockframe", "item_fastermovevelocity",
-	"item_nonclassskill", "state", "item_fastergethitrate", "monster_playercount", "skill_poison_override_length",
-	"item_fasterblockrate", "skill_bypass_undead", "skill_bypass_demons", "item_fastercastrate", "skill_bypass_beasts",
-	"item_singleskill", "item_restinpeace", "curse_resistance", "item_poisonlengthresist", "item_normaldamage", "item_howl",
-	"item_stupidity", "item_damagetomana", "item_ignoretargetac", "item_fractionaltargetac", "item_preventheal",
-	"item_halffreezeduration", "item_tohit_percent", "item_damagetargetac", "item_demondamage_percent",
-	"item_undeaddamage_percent", "item_demon_tohit", "item_undead_tohit", "item_throwable", "item_elemskill", "item_allskills",
-	"item_attackertakeslightdamage", "ironmaiden_level", "lifetap_level", "thorns_percent", "bonearmor", "bonearmormax",
-	"item_freeze", "item_openwounds", "item_crushingblow", "item_kickdamage", "item_manaafterkill", "item_healafterdemonkill",
-	"item_extrablood", "item_deadlystrike", "item_absorbfire_percent", "item_absorbfire", "item_absorblight_percent",
-	"item_absorblight", "item_absorbmagic_percent", "item_absorbmagic", "item_absorbcold_percent", "item_absorbcold", "item_slow",
-	"item_aura", "item_indesctructible", "item_cannotbefrozen", "item_staminadrainpct", "item_reanimate", "item_pierce",
-	"item_magicarrow", "item_explosivearrow", "item_throw_mindamage", "item_throw_maxdamage",
-};
-
-// Stat id of an itemstatcost name (case-insensitive), or -1.
+// Stat id of a name in the build's itemstatcost.txt (mxl_stat_names.h, written by tools/stat_names_data.py: Median's stats
+// included), case-insensitive, or -1 when there is no such name (a row whose `*ID` is not its number has none).
 inline auto StatIdByName(const char* name) noexcept -> int {
-	for (size_t i = 0; i < sizeof(StatNames) / sizeof(StatNames[0]); ++i) {
-		if (LowerEq(name, StatNames[i])) {
-			return static_cast<int>(i);
+	if (name == nullptr || *name == '\0') {
+		return -1;
+	}
+	for (int i = 0; i < mxl_stat_names::Count; ++i) {
+		if (mxl_stat_names::Names[i] != nullptr && LowerEq(name, mxl_stat_names::Names[i])) {
+			return i;
 		}
 	}
 	return -1;
