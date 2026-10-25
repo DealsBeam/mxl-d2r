@@ -150,10 +150,24 @@ LONG CALLBACK WatchHandler(PEXCEPTION_POINTERS info) {
 	h.rip = ctx->Rip;
 	h.tid = GetCurrentThreadId();
 	h.slot = (dr6 & 1) ? 0 : (dr6 & 2) ? 1 : (dr6 & 4) ? 2 : 3;
-	void* frames[10] = {};
-	const USHORT n = RtlCaptureStackBackTrace(0, 10, frames, nullptr);
-	for (int k = 0; k < 8; ++k) {
-		h.chain[k] = 2 + k < n ? reinterpret_cast<uint64_t>(frames[2 + k]) : 0;
+	// The interrupted thread's callers: RtlCaptureStackBackTrace inside the handler cannot unwind the leaf frames of D2R, so scan the
+	// stack from the interrupted rsp for return addresses (a value in the image that follows a call: E8 rel32, FF 15, FF /2 or 41 FF /2).
+	int found = 0;
+	const uint64_t* sp = reinterpret_cast<const uint64_t*>(ctx->Rsp);
+	for (int k = 0; k < 160 && found < 8; ++k) {
+		const uint64_t v = sp[k];
+		if (v < g_exeBase + 0x1000 || v >= g_exeBase + 0x4000000) {
+			continue;
+		}
+		const uint8_t* b = reinterpret_cast<const uint8_t*>(v);
+		const bool call = b[-5] == 0xe8 || (b[-6] == 0xff && b[-5] == 0x15) || (b[-2] == 0xff && (b[-1] & 0xf8) == 0xd0) ||
+		                  (b[-3] == 0x41 && b[-2] == 0xff && (b[-1] & 0xf8) == 0xd0);
+		if (call) {
+			h.chain[found++] = v;
+		}
+	}
+	for (int k = found; k < 8; ++k) {
+		h.chain[k] = 0;
 	}
 	ctx->Dr6 = 0;
 	ctx->EFlags |= 0x10000;  // resume flag: continue past the breakpoint instruction

@@ -10884,16 +10884,27 @@ def check_grit():
     add(name, "PASS" if not bad else "FAIL", "passive skill %d at level 1: " % passive + "; ".join(rows) + ("; WRONG: " + "; ".join(bad) if bad else ""), [], log)
 
 
-def _poll_innate(new_value, want_of, attr=2, timeout=2.0):
-    """(attribute, fire) after a stat point packet: the game applies it and the plugin refreshes the passive within a few frames, and
-    D2R's own equipment recheck can take the passive stats away again for a moment (seen with the innate part off as well), so
-    poll until the attribute has its new value and the fire matches, up to `timeout` s; the last reading when it never does."""
+def _poll_innate(new_value, want_of, attr=2, timeout=2.0, hold=3.0):
+    """(attribute, fire) after a stat point packet: the game applies it and the plugin refreshes the passive within a few frames.
+    D2R's equipment recheck takes each item off and puts it back after a point (at once, and again up to about two seconds later), and
+    the passive stats are worked out while the item is half back; the plugin applies the passives again when the item is back (lane
+    ied-vanish). Poll up to `timeout` s until the attribute has its new value and the fire matches, then keep reading for `hold` s:
+    the first reading that differs is returned (the vanishing is a later reading), else the last one."""
     t0 = time.time()
     while True:
         value, fire = rd("player", attr), rd("player", 48)
-        if (value == new_value and fire == want_of(value)) or time.time() - t0 > timeout:
+        if value == new_value and fire == want_of(value):
+            break
+        if time.time() - t0 > timeout:
             return value, fire
         time.sleep(0.1)
+    t1 = time.time()
+    while time.time() - t1 < hold:
+        time.sleep(0.2)
+        value, fire = rd("player", attr), rd("player", 48)
+        if value != new_value or fire != want_of(value):
+            return value, fire
+    return value, fire
 
 
 def check_ied():
@@ -10913,7 +10924,7 @@ def check_ied():
     control = "innate" in CONTROL
     part = _mxl_line("innate damage")
     log.append(part)
-    if ("innate damage off" if control else "innate damage on: attribute refresh on") not in part:
+    if ("innate damage off" if control else "innate damage on: attribute and equip refresh on") not in part:
         bad.append("unexpected innate part status: " + part)
     try:
         # Magic quality carries the synthetic property list to the client.
@@ -10931,14 +10942,9 @@ def check_ied():
             ok, lines = H("equip !70 q=2 ilvl=1 rhand")
             log += lines
             if ok:
-                # D2R's own equipment recheck discards the passive stats again some time after a refresh (seen with the part off
-                # as well, once other checks have run in the game): read at once, and refresh again if the passive is not there.
                 native_syn, native_ied = rd("player", 412, sid), rd("player", 513)
-                for _ in range(4):
-                    H("passiverefresh")
-                    native_before = (rd("player", 2), rd("player", 48))
-                    if control or native_before[1] >= native_syn * native_before[0] * (100 + native_ied) // 10000:
-                        break
+                H("passiverefresh")
+                native_before = (rd("player", 2), rd("player", 48))
                 H("pkt 3a 02 00 00 00")
                 native_after = _poll_innate(native_before[0] + 1, lambda dex: native_before[1] if control else
                                             native_before[1] - native_syn * native_before[0] * (100 + native_ied) // 10000 +
@@ -10964,25 +10970,38 @@ def check_ied():
         log += lines
         if not ok:
             return add(name, "BLOCKED", "cannot equip hidden-passive cap", [], log)
+        # The item went on through the equip step: the plugin applies the passives when it is back, no explicit refresh here
+        # (the part off, the original drops the passive on an equip as well, so there is nothing to compare in the control run).
+        if not control:
+            equip_dex, equip_syn, equip_ied = rd("player", 2), rd("player", 412, sid), rd("player", 513)
+            equip_want = equip_syn * equip_dex * (100 + equip_ied) // 10000
+            t0 = time.time()
+            while True:
+                equip_fire = rd("player", 48)
+                if equip_fire == equip_want or time.time() - t0 > 2:
+                    break
+                time.sleep(0.1)
+            rows.append("fire right after the equip, no refresh call: %s (expected %d = syn1 %d x Dex %d x (100 + IED %d) / 10000)" % (
+                equip_fire, equip_want, equip_syn, equip_dex, equip_ied))
+            if equip_fire != equip_want or equip_want <= 0:
+                bad.append(rows[-1])
+
         # Explicit native refresh isolates the data formula from the point-
         # spending path below; no base level is learned in this hidden skill.
         def refresh():
-            H("passiverefresh")  # read at once (see the native baseline above): no sleep
+            H("passiverefresh")
 
         for dex, ied, marker in ((200, 0, 0), (200, 50, 0), (201, 51, 0), (200, 0, 3), (200, 0, 4)):
             setstat("player", 2, dex)
             setstat("player", 513, ied)
             setstat("player", 424, marker)
-            for _ in range(4):
-                refresh()
-                got = rd("player", 48)
-                actual_dex = rd("player", 2)
-                actual_ied = rd("player", 513)
-                syn = rd("player", 412, sid)
-                coefficient = syn if marker < 3 else syn * 16 // 10
-                want = coefficient * actual_dex * (100 + actual_ied) // 10000 if marker < 4 else 0
-                if got == want:
-                    break
+            refresh()
+            got = rd("player", 48)
+            actual_dex = rd("player", 2)
+            actual_ied = rd("player", 513)
+            syn = rd("player", 412, sid)
+            coefficient = syn if marker < 3 else syn * 16 // 10
+            want = coefficient * actual_dex * (100 + actual_ied) // 10000 if marker < 4 else 0
             rows.append("Dex=%s IED=%s marker=%s syn1=%s fire=%s expected=%s" % (actual_dex, actual_ied, marker, syn, got, want))
             if got != want:
                 bad.append(rows[-1])
@@ -12849,8 +12868,18 @@ def enter_initial_character():
     return enter_game(card)
 
 
+def unknown_checks(only):
+    """Names in a check list that are not in CHECKS ('-' is the internal 'run nothing' marker)."""
+    known = {name for name, _ in CHECKS}
+    return [n for n in only or [] if n != "-" and n not in known]
+
+
 def run_all(only=None):
     global WD
+    bad_names = unknown_checks(only)
+    if bad_names:  # before the lock, the game and the run folder: a misspelt name used to be skipped without a word
+        print("unknown check name(s): %s (not in the CHECKS list at the end of tools/game_checks.py)" % ", ".join(bad_names))
+        return 2
     new_run()
     if not lock():
         print("game lock held for 30 min, giving up")

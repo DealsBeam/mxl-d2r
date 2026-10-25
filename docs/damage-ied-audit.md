@@ -138,12 +138,21 @@ at 10.5%. This isolates the `innate` part as the cause of the correction.
 
 Independent-part run `checks-20261025-191004-s3`, `MXL_CONTROL=statclick`:
 `ied` and `iedtip` PASS with Shift-click widening disabled. The `mxl` line
-reports `innate damage on: attribute refresh on`. Native weapon fire still
+reports `innate damage on: attribute and equip refresh on`. Native weapon fire still
 moves 34→35; synthetic fire moves 300→301 after Dexterity and remains 301
 after Strength, Energy and Vitality points. This checks all four packet
 attributes and confirms the refresh does not depend on enabling `statclick`.
 Release build, all nine C++ test executables, Python compileall, and
 `git diff --check` pass. PluginVersion remains 0.66.0.
+
+## Lane ied-vanish: the equipment recheck and the equip hook (plugin 0.69.0)
+
+The refresh after attribute spending (above) was not enough. D2R's equipment recheck takes every item off and puts it back through the item equip step
+`0x475140`; the passives are applied (flag 0) at each step, and the last apply runs while the item's stat list is half back (oskill and Dexterity in, the
+synergy stat 412:2072 not yet), so the innate fire ends at 0. The recheck runs in the handler of each attribute packet, again 0.4 - 2 s later, on gear changes
+and when a character is loaded with such gear (fire 0 from the first frame with the part off, 205 with the fix). The `innate` part now hooks `0x475140` and applies
+the passives again (`0x33f830(owner, 1)`) after it returns for a player. Evidence and checks: [testing.md](testing.md) "Lane ied-vanish". The formulas are not
+changed; the control run (`MXL_CONTROL=innate`) still shows the original drop (`ied` expects the loss with the part off).
 
 ## Remaining scope and test limits
 
