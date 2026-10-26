@@ -117,7 +117,9 @@ manifest's `launcher` as a self-update). `package_release.py` writes the fields 
 
 Owner decision 2026-10-26: the release files live on our own server, not on GitHub (the forge needs a sign-in for
 everything). A static HTTPS host serves one folder; the root URL is `https://dl.werdegames.com/mxl/` ("the site root"
-below; the launcher takes it as its one setting). Setting it up: docs/hosting.md.
+below; the launcher takes it as its one setting). Setting it up: docs/hosting.md. Players get the same layout from the DigitalOcean Space
+mirror behind Cloudflare, `https://files.werdegames.com/mxl/`: the server copies the site there after every ingest,
+promote and gc (tools/dl_sync.py, channel files last; docs/hosting.md section 7).
 
 ```
 channels/<channel>.json                   what a channel (stable, test) points to; the only file the launcher polls

@@ -10,7 +10,7 @@ Usage:
 Prints `path:line: [rule] text` and exits 1 on hits. In history mode the location is `<commit>:<path>:<line in diff>`.
 Intentional hits go in tools/check_public.allow: `path-glob | regex matched against the line`, one per line, `#` comments.
 The rules cover: the CI server address, user-home paths, the names of the owner's machines, e-mail addresses other than
-noreply addresses (personal e-mail included), internal host names (the public forge git.werdegames.com and the download host dl.werdegames.com are fine), and credentials.
+noreply addresses (personal e-mail included), internal host names (the public forge git.werdegames.com, the download host dl.werdegames.com and its CDN mirror files.werdegames.com are fine), and credentials.
 """
 import argparse
 import fnmatch
@@ -30,8 +30,8 @@ ALLOWED_EMAIL = re.compile(r"^(noreply@anthropic\.com|noreply@openai\.com|t3code
 # Placeholder user names that are fine in a home path.
 HOME_OK = {"public", "default", "all", "username", "user", "you", "me", "name", "yourname", "<user>", "%username%",
            "$user", "${user}", "{user}", "runner", "<name>", "x"}
-# Public hosts under our own domain: the forge and the download host (docs/hosting.md).
-HOST_OK = {"git.werdegames.com", "dl.werdegames.com"}
+# Public hosts under our own domain: the forge, the download host and its Spaces/Cloudflare mirror (docs/hosting.md).
+HOST_OK = {"git.werdegames.com", "dl.werdegames.com", "files.werdegames.com"}
 
 RULES = [
     ("ci-ip", re.compile(r"\b77\.42\.114\.124\b")),

@@ -494,7 +494,7 @@ class SftpTests(Base):
         a, b = tree(ref / "mxl"), tree(self.site)
         self.assertEqual(set(a), set(b))
         for k in a:
-            if k != "channels/stable.json":
+            if k not in ("channels/stable.json", ".sync/wanted"):  # both hold a time stamp
                 self.assertEqual(a[k], b[k], k)
 
     def test_resume_after_connection_reset(self):

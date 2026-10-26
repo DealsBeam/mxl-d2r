@@ -226,6 +226,8 @@ class IngestTests(Base):
 
         with mock.patch.object(ing, "write_atomic", side_effect=spy):
             self.ingest()
+        self.assertEqual(writes[-1], ".sync/wanted", "after everything: the trigger of the Space mirror (dl_sync.py)")
+        writes.pop()
         self.assertEqual(writes[-1], "channels/stable.json")
         objects = [w for w in writes if w.startswith("objects/")]
         self.assertEqual(writes[:len(objects)], objects, "objects first")

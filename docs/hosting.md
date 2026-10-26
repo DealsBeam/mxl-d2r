@@ -14,6 +14,10 @@ sends only the objects the host lacks, packed into one 7z, and the server unpack
 7z itself (355 MB that never cross the slow line) and switches the channel last. (The Caddy proxy in front of the forge
 drops long HTTP uploads, which is why we upload over SSH and not HTTP.)
 
+Players download from a mirror of that folder on a DigitalOcean Space behind Cloudflare,
+`https://files.werdegames.com/mxl/` (section 7); the server keeps it in step after every change, and `dl.werdegames.com`
+stays the origin and backup.
+
 Everything below is for the server's owner. `HOST` is the server (the one behind git.werdegames.com). Names used: user
 `mxlup`, folders `/srv/dl/mxl` (served) and `/srv/dl/incoming` (not served), URL `https://dl.werdegames.com/mxl/`;
 change them as you like, keep them consistent.
@@ -295,3 +299,194 @@ Maintenance:
 6. Run section 5 once with a `--no-data` package or the first real release on `test`; `verify` must end with
    `N of N objects verified`, `Range requests: ok (206)` and the 7z's `sha256 ok`.
 7. Tell the coordinator the root URL, and whether sshd is on port 22 (the launcher lane takes the root URL as its setting).
+8. DigitalOcean Spaces + Cloudflare (section 7): console steps, then on the server rclone, `rclone.conf`, `dl_sync.py`
+   and the new `dl_ingest.py`, the three `mxl-dl-sync` units, the first sync and `--check`; from the PC the `curl.exe -sI`
+   checks and `verify --url https://files.werdegames.com/mxl/`.
+
+## 7. DigitalOcean Spaces + Cloudflare (files.werdegames.com)
+
+Owner decision 2026-10-27: players download from a DigitalOcean Space behind Cloudflare. The pipeline above stays as it
+is (SFTP to `incoming/`, `dl_ingest.py` checks and builds, `/srv/dl/mxl/` is the origin and backup at
+`https://dl.werdegames.com/mxl/`); after every change the server mirrors `/srv/dl/mxl/` to the Space under the prefix
+`mxl/`, so `https://files.werdegames.com/mxl/` has the identical layout (channels/, releases/, objects/, launcher/,
+assets/).
+
+```
+dl_ingest.py / promote / gc --write--> /srv/dl/mxl/.sync/wanted --mxl-dl-sync.path--> dl_sync.py (rclone, as mxlup)
+    --> Space d2r-xl, prefix mxl/ --Spaces CDN--> Cloudflare (files.werdegames.com) --> launcher
+```
+
+`tools/dl_sync.py` uploads in a safe order: objects first, then releases (7z, notes, sums), launcher, assets, the
+release manifests, **the channel files last**, and deletions (what `gc` removed on the server) only after all of that
+went through, never an object a release on the server still uses, and never more than half the Space at once without
+`--allow-mass-delete`. Only new or changed files go up (objects: by name and size; other files: by sha256 against the
+manifest of the last upload, `/var/lib/mxl-dl-sync/uploaded.json`). Every file gets the public-read ACL and these
+headers (the same as Caddy's):
+
+| Prefix | Cache-Control | Content-Type |
+|---|---|---|
+| `objects/` | `public, max-age=31536000, immutable` | `application/octet-stream` |
+| `channels/` | `no-cache` | `application/json` |
+| `releases/`, `launcher/`, `assets/` | `public, max-age=3600` | by extension: `.json` application/json, `.7z` application/x-7z-compressed, `.exe` application/octet-stream, `.md` text/markdown, `SHA256SUMS` / `.sha256` text/plain |
+
+Never uploaded: dot files and folders (`.sync/`), temp files (`*.part-*`), anything outside those five folders. The
+ingest unit keeps `PrivateNetwork=yes`: it only writes the trigger file; the network belongs to the sync unit.
+
+### Console steps (owner)
+
+1. DigitalOcean: Space `d2r-xl`, region fra1, **File listing: Restricted**; Spaces CDN on, custom subdomain
+   `files.werdegames.com` with the Cloudflare Origin CA certificate uploaded to DigitalOcean. CDN edge cache TTL: the
+   lowest value offered (see "Stale channels" below).
+2. DigitalOcean: a Spaces access key limited to bucket `d2r-xl` (read/write/delete). Shown once; it goes straight into
+   the server's rclone.conf below, nowhere else.
+3. Cloudflare: DNS `CNAME files -> d2r-xl.fra1.cdn.digitaloceanspaces.com`, proxied; a configuration rule for
+   `files.werdegames.com`: SSL **Full (strict)**; a cache rule for the same host: **Eligible for cache**, edge TTL
+   **use the origin's Cache-Control**. If `verify` below gets HTTP 403 from Cloudflare, turn off Browser Integrity Check
+   for this host in the configuration rule (the launcher is not a browser).
+
+### Server steps (as root)
+
+```sh
+apt install rclone                 # Debian 12: 1.60 (--check reads headers with 1.59 or newer; older: the .deb from rclone.org)
+install -d -m 0750 -o root -g mxlup /etc/mxl-dl
+install -m 0640 -o root -g mxlup /dev/null /etc/mxl-dl/rclone.conf
+cat > /etc/mxl-dl/rclone.conf <<'CONF'
+[spaces]
+type = s3
+provider = DigitalOcean
+env_auth = false
+access_key_id = PUT_ACCESS_KEY_ID_HERE
+secret_access_key = PUT_SECRET_KEY_HERE
+endpoint = fra1.digitaloceanspaces.com
+acl = public-read
+CONF
+nano /etc/mxl-dl/rclone.conf       # replace the two PUT_..._HERE values with the key (paste in nano, never on a command line)
+ls -l /etc/mxl-dl/rclone.conf      # -rw-r----- root mxlup
+sudo -u mxlup rclone --config /etc/mxl-dl/rclone.conf --s3-no-check-bucket lsf spaces:d2r-xl   # no error (empty at first)
+install -d -m 0755 -o mxlup -g mxlup /srv/dl/mxl/.sync     # trigger + status; a dot folder: Caddy answers 404 for it
+```
+
+Copy the script from the PC (as for `dl_ingest.py`): `scp tools/dl_sync.py root@HOST:/opt/mxl-dl/dl_sync.py`, and the
+updated `tools/dl_ingest.py` the same way (it writes the trigger). Then:
+
+```sh
+chown root:root /opt/mxl-dl/dl_sync.py /opt/mxl-dl/dl_ingest.py && chmod 0755 /opt/mxl-dl/dl_sync.py /opt/mxl-dl/dl_ingest.py
+
+cat > /etc/systemd/system/mxl-dl-sync.service <<'EOF'
+[Unit]
+Description=D2R-XL downloads: mirror /srv/dl/mxl to the DigitalOcean Space (dl_sync.py)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=mxlup
+Group=mxlup
+UMask=0022
+StateDirectory=mxl-dl-sync
+StateDirectoryMode=0750
+ExecStart=/usr/bin/python3 -I /opt/mxl-dl/dl_sync.py --site /srv/dl/mxl --remote spaces:d2r-xl/mxl --config /etc/mxl-dl/rclone.conf
+Nice=5
+IOSchedulingClass=idle
+TimeoutStartSec=6h
+ProtectSystem=strict
+ReadOnlyPaths=/srv/dl/mxl
+ReadWritePaths=/srv/dl/mxl/.sync
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+EOF
+
+cat > /etc/systemd/system/mxl-dl-sync.path <<'EOF'
+[Unit]
+Description=D2R-XL downloads: mirror to the Space when /srv/dl/mxl/.sync/wanted changes (ingest, promote, gc)
+
+[Path]
+PathChanged=/srv/dl/mxl/.sync/wanted
+Unit=mxl-dl-sync.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/mxl-dl-sync.timer <<'EOF'
+[Unit]
+Description=D2R-XL downloads: mirror to the Space every 30 minutes too (safety net)
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=30min
+Unit=mxl-dl-sync.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+install -d -m 0750 -o mxlup -g mxlup /var/lib/mxl-dl-sync              # systemd would make it too; needed for the dry run
+sudo -u mxlup python3 -I /opt/mxl-dl/dl_sync.py --dry-run               # what the first sync will upload
+systemctl enable --now mxl-dl-sync.path mxl-dl-sync.timer
+systemctl start mxl-dl-sync.service          # the first full sync (objects + 7z of every kept release; minutes from the server)
+journalctl -u mxl-dl-sync -n 30 --no-pager   # ends with "done: N uploaded (... MB), 0 deleted"
+sudo -u mxlup python3 -I /opt/mxl-dl/dl_sync.py --check          # every file there with its size; 50 files + channels by sha256 and headers
+sudo -u mxlup python3 -I /opt/mxl-dl/dl_sync.py --check --full   # every file by sha256 (downloads everything once)
+```
+
+Who triggers a sync: `dl_ingest.py` after it published a version (it has no network; it only writes
+`/srv/dl/mxl/.sync/wanted`), and `publish_release.py promote`, `gc` and an `--assets` upload, which write the same file
+over SFTP; the path unit starts the service. A change during a run makes it run once more; the timer catches anything
+else. The lock `/var/lib/mxl-dl-sync/lock` keeps a manual run and the service apart. A failed run exits 1 (an error in
+the journal) and is retried by the next trigger or the timer; every run writes `/srv/dl/mxl/.sync/status.json`, which
+`publish_release.py list` shows as `Space sync: ok at ...` or `Space sync: FAILED at ...: <error>`. Updating the script:
+copy it again, nothing to restart.
+
+### Checks (from the PC)
+
+```powershell
+curl.exe -sI https://files.werdegames.com/mxl/channels/stable.json | findstr /i "HTTP cache-control content-type cf-cache-status"
+#   200, cache-control: no-cache, content-type: application/json, cf-cache-status: REVALIDATED / EXPIRED / MISS / DYNAMIC (never a stale HIT)
+curl.exe -sI https://files.werdegames.com/mxl/objects/ab/<some sha256> | findstr /i "HTTP cache-control cf-cache-status accept-ranges"
+#   cache-control: public, max-age=31536000, immutable; cf-cache-status: HIT from the second request on
+curl.exe -sI https://files.werdegames.com/mxl/releases/0.70.0/D2R-XL-0.70.0.7z | findstr /i "HTTP content-type cache-control"
+#   content-type: application/x-7z-compressed, cache-control: public, max-age=3600
+curl.exe -sI https://files.werdegames.com/mxl/.sync/status.json    # 403 or 404: dot files are never uploaded
+py -3 tools/publish_release.py verify --url https://files.werdegames.com/mxl/ --channel test   # as for dl.werdegames.com
+py -3 tools/publish_release.py list --target $t --identity $k      # last line: Space sync: ok at ...
+```
+
+### Stale channels, purging by hand
+
+Cloudflare follows the origin's `Cache-Control` with the cache rule above: objects are cached for a year (they never
+change), releases / launcher / assets for an hour, and `channels/*.json` (`no-cache`) are revalidated on every request,
+so a new channel version shows at once, and the launcher's sha256 check of the manifest catches anything half-updated.
+The Spaces CDN in between has its own edge TTL. If a channel ever shows an old version after `list` says the sync is done
+(compare `curl.exe -s https://files.werdegames.com/mxl/channels/stable.json` with the same path on dl.werdegames.com),
+purge by hand:
+- DigitalOcean: Spaces, `d2r-xl`, Settings, CDN, Purge cache: `mxl/channels/*`.
+- Cloudflare: Caching, Configuration, Purge Cache, Custom purge, URLs `https://files.werdegames.com/mxl/channels/stable.json`
+  and `https://files.werdegames.com/mxl/channels/test.json`.
+
+A `publish --force` of an existing version rewrites files under `releases/<v>/`: purge `mxl/releases/<v>/*` the same way
+(or wait an hour).
+
+### dl.werdegames.com stays
+
+`/srv/dl/mxl` on the server is the origin of everything; Caddy keeps serving it at `https://dl.werdegames.com/mxl/`
+(section 4) as the backup and for checks. If the Space or Cloudflare has a problem, a launcher can be pointed back at it
+with `--site https://dl.werdegames.com/mxl/`; the Space can always be rebuilt from the server with
+`systemctl start mxl-dl-sync` (after a big cleanup: `dl_sync.py --allow-mass-delete` once by hand). The launcher's default
+site becomes `https://files.werdegames.com/mxl/` in its own change (`launcher/src/win/app.h`, `DefaultSite`).

@@ -34,6 +34,10 @@ Targets (the site root; <incoming> is "../incoming" from it):
   py -3 tools/publish_release.py list --target ...
   py -3 tools/publish_release.py gc --keep 3 [--dry-run] --target ...
   py -3 tools/publish_release.py verify --url https://dl.werdegames.com/mxl/ [--channel stable] [--sample 200]
+  py -3 tools/publish_release.py verify --url https://files.werdegames.com/mxl/      (the Space mirror behind Cloudflare)
+
+promote, gc and an --assets upload write <site>/.sync/wanted last: the server then mirrors the site to the DigitalOcean
+Space (tools/dl_sync.py; the ingest does the same after a publish). `list` shows the last mirror run.
 """
 import argparse
 import datetime
@@ -65,11 +69,14 @@ MANIFEST_NAME = "release-manifest.json"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 PACK_RE = re.compile(r"^objects-[0-9a-f]{16}\.7z$")
+SYNC_WANTED = ".sync/wanted"  # touched after promote / gc / assets: the server mirrors the site to the Space (dl_sync.py)
+SYNC_STATUS = ".sync/status.json"  # the server's last mirror run; dot files are not served
 PART = ".part-"  # temp-name marker: <final name>.part-<random>
 RESUME = ".part-0"  # the temp name of a resumable upload (fixed, so the next run finds it)
 BATCH_FILES = 200
 RETRIES = 5
 RETRY_WAIT = 20  # seconds, times the attempt number
+USER_AGENT = "D2R-XL-publish-verify/1"  # not "Python-urllib": Cloudflare's Browser Integrity Check refuses that one
 PACK_ARGS = ["a", "-t7z", "-m0=lzma2", "-mx=7", "-ms=on", "-mmt=on", "-mtm=off", "-mtc=off", "-mta=off", "-bd", "-y"]
 
 
@@ -719,9 +726,9 @@ def publish(target: Target, dist: Path, version: str, channel, source=None, laun
         + (f" on channel {channel}" if channel else "") + " (tools/dl_ingest.py, journalctl -u mxl-dl-ingest); "
         "`list` shows it once done")
     if assets:
-        for p in sorted(Path(assets).iterdir()):
-            if p.is_file():
-                put_if_needed(target, p, f"assets/{p.name}", force, log)
+        sent = [put_if_needed(target, p, f"assets/{p.name}", force, log) for p in sorted(Path(assets).iterdir()) if p.is_file()]
+        if any(sent):
+            request_sync(target, "assets", log)
     return info
 
 
@@ -750,6 +757,33 @@ def promote(target: Target, version: str, channel: str, log=print):
     if miss:
         raise PublishError(f"{version} is missing {len(miss)} objects on the host; publish it again before promoting")
     write_channel(target, channel, version, sha256_bytes(raw), log)
+    request_sync(target, f"promote {version} {channel}", log)
+
+
+def request_sync(target: Target, reason: str, log=print):
+    """Tell the server to mirror the site to the Space (tools/dl_sync.py): <site>/.sync/wanted is watched by a systemd path
+    unit. The ingest does this itself; promote, gc and asset uploads change the site directly. Best effort: the server's
+    timer syncs every 30 minutes anyway."""
+    try:
+        target.put_bytes(f"{now_utc()} {reason}\n".encode(), SYNC_WANTED)
+    except (PublishError, OSError) as e:
+        log(f"warning: could not ask for a Space sync ({str(e)[-200:]}); the server's timer does it within 30 minutes")
+
+
+def sync_status(target: Target):
+    """The server's last Space sync (tools/dl_sync.py writes <site>/.sync/status.json) -> one line, or None."""
+    try:
+        raw = target.read(SYNC_STATUS)
+        st = json.loads(raw) if raw else None
+    except (PublishError, ValueError):
+        return "Space sync: status unreadable"
+    if not st:
+        return None
+    if st.get("result") == "ok":
+        return (f"Space sync: ok at {st.get('finishedAt')} ({st.get('uploaded', 0)} uploaded, {st.get('deleted', 0)} deleted; "
+                f"{st.get('remote')})")
+    return (f"Space sync: FAILED at {st.get('finishedAt')}: {st.get('error', '?')} (last ok {st.get('lastSuccessAt') or 'never'}; "
+            "journalctl -u mxl-dl-sync)")
 
 
 def release_versions(target: Target):
@@ -788,6 +822,9 @@ def list_cmd(target: Target, log=print):
     for name in sorted(incoming):
         if incoming[name][1] and not name.startswith("."):
             log(f"incoming {name} (waiting for the server, or refused: see journalctl -u mxl-dl-ingest)")
+    line = sync_status(target)
+    if line:
+        log(line)
     return versions, chans
 
 
@@ -835,13 +872,14 @@ def gc(target: Target, keep: int, dry_run=False, log=print):
     for lv in doomed_launchers:
         target.delete_dir(f"launcher/{lv}")
     target.delete_files(rel for rel, _ in orphans + stale)
+    request_sync(target, f"gc --keep {keep}", log)
     log("done")
     return doomed, orphans
 
 
 # ------------------------------------------------------------------------------------------------------------------ verify
 def http_get(url, headers=None, timeout=60):
-    req = urllib.request.Request(url, headers=headers or {})
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, dict(r.headers), r.read()
 
@@ -849,7 +887,7 @@ def http_get(url, headers=None, timeout=60):
 def verify_file(url, size, sha, hash_it=True):
     """Download `url` in chunks and compare size (and sha256 when hash_it). A manual-download archive: too big to hold in memory."""
     h, n = hashlib.sha256(), 0
-    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept-Encoding": "identity"}), timeout=60) as r:
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept-Encoding": "identity", "User-Agent": USER_AGENT}), timeout=60) as r:
         if not hash_it:
             got = r.headers.get("Content-Length")
             if got is None or int(got) != size:
@@ -896,7 +934,7 @@ def verify_url(base, channel="stable", sample=0, log=print):
         n = objs[big][0]
         url = base + man.get("objectsBase", OBJECTS_BASE) + f"{big[:2]}/{big}"
         st, h, body = http_get(url, {"Range": "bytes=1-2", "Accept-Encoding": "identity"})
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"Range": f"bytes={n - 1}-"})) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Range": f"bytes={n - 1}-", "User-Agent": USER_AGENT})) as r:
             tail = r.read()
         if st != 206 or len(body) != 2 or len(tail) != 1:
             raise PublishError(f"{url}: Range requests are not served (status {st})")

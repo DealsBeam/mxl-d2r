@@ -25,6 +25,8 @@ For every such folder, in version order:
   5. releases/<v>/ gets the 7z, the notes, release-manifest.json, SHA256SUMS; launcher/<lv>/ the exe and its .sha256.
   6. channels/<channel>.json is written LAST (when READY names a channel).
   7. The incoming folder and the work folder are deleted; *.part-* leftovers older than an hour under the site go too.
+  8. When anything was published: <site>/.sync/wanted is rewritten, which starts the mirror to the DigitalOcean Space
+     (tools/dl_sync.py, a systemd path unit; this script itself has no network).
 
 Every file is written under a temp name and renamed. A failed check writes the reason to incoming/<v>/REFUSED, leaves
 the folder for inspection and skips it from then on (exit status 1); `--retry <v>` removes REFUSED and tries again.
@@ -57,6 +59,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 PACK_RE = re.compile(r"^objects-[0-9a-f]{16}\.7z$")
 NOTES_RE = re.compile(r"^RELEASE_NOTES-[0-9A-Za-z.+-]+\.md$")
 PART_RE = re.compile(r"\.part-[0-9a-z]+$")
+SYNC_DIR = ".sync"  # in the site, not served: `wanted` starts tools/dl_sync.py (the Space mirror)
 WORK = ".work"  # the ingest's scratch folder inside incoming/<v>/
 PART_AGE = 3600  # a temp file younger than this may belong to an upload that is still running
 # the player 7z: the same switches as tools/package_release.py
@@ -283,7 +286,7 @@ class Ingest:
         return sorted(out, key=version_key)
 
     def run(self) -> int:
-        failed, done = 0, set()
+        failed, done, published = 0, set(), []
         while True:  # again after each pass: an upload may have finished while the last one ran
             todo = [v for v in self.pending() if v not in done]
             if not todo:
@@ -292,6 +295,7 @@ class Ingest:
                 done.add(v)
                 try:
                     self.ingest(v)
+                    published.append(v)
                 except Refused as e:
                     failed += 1
                     log(f"{v}: REFUSED: {e}", error=True)
@@ -301,7 +305,16 @@ class Ingest:
                         pass
                     shutil.rmtree(self.incoming / v / WORK, ignore_errors=True)
         self.clean_parts()
+        if published:
+            self.request_sync(f"ingest {', '.join(published)}")
         return 1 if failed else 0
+
+    def request_sync(self, reason):
+        """<site>/.sync/wanted: the trigger of mxl-dl-sync.path (the mirror to the Space, tools/dl_sync.py)."""
+        try:
+            write_atomic(self.site / SYNC_DIR / "wanted", data=f"{now_utc()} {reason}\n".encode())
+        except OSError as e:
+            log(f"cannot write {SYNC_DIR}/wanted ({e}); the Space sync timer picks the release up", error=True)
 
     def ingest(self, v: str):
         inc = self.incoming / v
