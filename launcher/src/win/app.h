@@ -13,7 +13,7 @@
 namespace mxl {
 
 #ifndef MXL_LAUNCHER_VERSION
-#define MXL_LAUNCHER_VERSION "0.1.0"  // cmake -DMXL_LAUNCHER_VERSION=x.y.z (tests of the self-update)
+#define MXL_LAUNCHER_VERSION "0.1.1"  // cmake -DMXL_LAUNCHER_VERSION=x.y.z (tests of the self-update)
 #endif
 constexpr const char* LauncherVersion = MXL_LAUNCHER_VERSION;
 // the download host (docs/release.md "Hosting layout"): channels/<channel>.json, releases/<v>/, objects/

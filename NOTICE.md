@@ -28,7 +28,8 @@ The launcher window uses the art of the official Median XL launcher (<https://la
 
 | File | What | By | License |
 |---|---|---|---|
-| `background.png`, `logo.gif`, `popup-window.png`, `icon.ico` | background, animated logo, panel, icon | the Median XL team | theirs, not ours to license; the team approved the port (docs/PLAN.md, Phase 0) |
+| `background.png`, `popup-window.png`, `icon.ico` | background, panel, icon | the Median XL team | theirs, not ours to license; the team approved the port (docs/PLAN.md, Phase 0) |
+| `logo.gif` | the animated "D2R XL" logo (55 frames): the X and L traced from the official Median XL logo, D, 2 and R drawn to match, fire generated | derived from the Median XL team's logo | as the row above |
 | `exocet.ttf` | Exocet Heavy | Jonathan Barnbrook, Emigre Graphics (1992) | commercial typeface, as shipped by the official launcher; see docs/launcher.md, open question 9 |
 | `RobotoCondensed.ttf` | Roboto Condensed | Google | [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) |
 | `comment.svg` | "comment" icon | [Font Awesome Free](https://fontawesome.com) 6.6.0, Fonticons, Inc. | [CC BY 4.0](https://fontawesome.com/license/free) (attribution kept in the file) |
