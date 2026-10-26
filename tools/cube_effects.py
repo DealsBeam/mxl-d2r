@@ -18,7 +18,7 @@ KINDS = {6, 7, 8, 9, 10}
 def main() -> int:
     src = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT
     if not src.exists():  # a worktree keeps no extract/: fall back to the main checkout's
-        alt = Path(r"%USERPROFILE%\mxl-d2r") / DEFAULT.relative_to(ROOT)
+        alt = Path.home() / "mxl-d2r" / DEFAULT.relative_to(ROOT)
         src = alt if alt.exists() else src
     data = src.read_bytes()
     count = struct.unpack_from("<I", data, 0)[0]

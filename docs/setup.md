@@ -107,10 +107,10 @@ made them, into `Saved Games\Diablo II Resurrected\mods\MedianXL` (the mod's `sa
 
 ## CI
 
-CI runs on the CI server (`ci-image`, `<ci-server>`), shared with other projects. Runner `ci-runner` is scoped to `WerdeGames/mxl-d2r`, with label `mxl-cross`, image `ci-image:latest`, capacity 1, and a cap of 6 CPUs / 8 GB. Its config is `/opt/forgejo-runner/ci-runner/config.yml`, and its systemd unit is `forgejo-runner@ci-runner`.
+CI runs on a private CI server (`<ci-server>`; its address is deliberately not published) with a Forgejo runner scoped to `WerdeGames/mxl-d2r`, label `mxl-cross`, a Docker image with clang-cl, lld, xwin and g++, capacity 1, and a cap of 6 CPUs / 8 GB. The runner is not exposed to GitHub: pull requests on GitHub are applied to the forge by maintainers and then run there.
 
-`.forgejo/workflows/ci.yml` runs on every PR and push to `main`. `plugin` cross-builds `mxl-core.dll` with clang-cl + lld-link and the xwin MSVC CRT/SDK (`/opt/xwin/xwin`) via `plugin/cmake/xwin-toolchain.cmake` (pass it as an absolute path). `tests` builds `plugin/tests` (a standalone CMake project) with g++ and runs `mxl_tests`, `craft_tests`, and `goblin_tests`. `tools` runs `python3 -m compileall -q tools`.
+`.forgejo/workflows/ci.yml` runs on every PR and push to `main`. `plugin` cross-builds `mxl-core.dll` with clang-cl + lld-link and the xwin MSVC CRT/SDK (`/opt/xwin/xwin`) via `plugin/cmake/xwin-toolchain.cmake` (pass it as an absolute path). `tests` builds `plugin/tests` (a standalone CMake project) with g++ and runs the unit test binaries listed in the workflow. `tools` runs `python3 -m compileall -q tools`, checks that the build reads Median's files from `assets/median`, and runs `tools/check_public.py` (no private paths, host names, addresses or credentials in tracked text).
 
 No game files go to the server. The boot check and the in-game smoke run (`py -3 tools/game_ctl.py smoke`) need the game and run on the game PC.
 
-Job logs are not exposed by API v1; reproduce a failing job with `docker run ci-image:latest` on the server.
+Job logs are not exposed by API v1; reproduce a failing job on the CI server with `docker run` of the CI image.

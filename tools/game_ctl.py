@@ -47,7 +47,7 @@ LOADER = os.path.join(GAME_DIR, LOADER_NAME)
 LOADER_LOG = os.path.join(GAME_DIR, r"d2rloader\logs\d2rloader.log")
 MXL_LOG = os.path.join(GAME_DIR, r"mods\MedianXL\d2rloader\logs\mxl-core.log")
 CRASH_DIR = os.path.join(GAME_DIR, r"d2rloader\crashes")
-RUNS = r"%USERPROFILE%\mxl-d2r-runs"
+RUNS = os.environ.get("MXL_RUNS") or os.path.join(os.path.expanduser("~"), "mxl-d2r-runs")
 
 
 def _savepath():

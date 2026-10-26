@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 
-RUNS = r"%USERPROFILE%\mxl-d2r-runs"
+RUNS = os.environ.get("MXL_RUNS") or os.path.join(os.path.expanduser("~"), "mxl-d2r-runs")
 DEFAULTS = {1: r"C:\Program Files (x86)\Diablo II Resurrected", 2: r"D:\D2R-93847", 3: r"D:\D2R-93847-s3"}
 SAVE_ROOT = os.path.join(os.environ.get("USERPROFILE", ""), r"Saved Games\Diablo II Resurrected\mods")
 MOD = "MedianXL"

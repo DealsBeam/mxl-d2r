@@ -5437,7 +5437,7 @@ def _main_checkout(path):
     """A worktree keeps no extract/: fall back to the main checkout's copy."""
     if os.path.exists(path):
         return path
-    alt = os.path.join(r"%USERPROFILE%\mxl-d2r", os.path.relpath(path, REPO))
+    alt = os.path.join(os.path.expanduser("~"), "mxl-d2r", os.path.relpath(path, REPO))
     return alt if os.path.exists(alt) else path
 
 

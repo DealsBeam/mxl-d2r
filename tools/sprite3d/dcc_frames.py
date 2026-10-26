@@ -16,7 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import dcc  # noqa: E402
 
-DEFAULT_ROOT = Path(r"%USERPROFILE%\mxl-d2r")
+DEFAULT_ROOT = Path.home() / "mxl-d2r"
 
 
 def palette(root: Path):
