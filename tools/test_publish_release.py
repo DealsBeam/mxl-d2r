@@ -51,8 +51,9 @@ class Base(unittest.TestCase):
         self.site = self.tmp / "site"
         self.site.mkdir()
 
-    def make_dist(self, version, files=None, complete=True):
-        """A real package_release output (stage, zip, manifest, notes) from a tiny fake data folder."""
+    def make_dist(self, version, files=None, complete=True, archive=False):
+        """A real package_release output (stage, zip, manifest, notes) from a tiny fake data folder. archive: also a .7z
+        (opaque bytes here: publish_release never opens it) named in the manifest."""
         data = self.tmp / f"data-{version}"
         shutil.rmtree(data, ignore_errors=True)
         base = {"global/excel/armor.txt": b"Median armor\n", "global/excel/weapons.txt": b"Median weapons\n",
@@ -65,15 +66,18 @@ class Base(unittest.TestCase):
         pr.stage(mod, version, self.dll, self.tmp, data_from=data)
         zip_path = out / f"MedianXL-D2R-{version}.zip"
         pr.write_zip(mod, zip_path)
-        man = pr.manifest(version, pr.file_list(mod), zip_path, complete)
+        seven = out / f"MedianXL-D2R-{version}.7z"
+        if archive:
+            seven.write_bytes(b"7z\xbc\xaf\x27\x1c fake archive " + version.encode() * 50)
+        man = pr.manifest(version, pr.file_list(mod), zip_path, complete, seven if archive else None)
         (out / "release-manifest.json").write_text(json.dumps(man, indent=1) + "\n", encoding="utf-8")
         (out / f"RELEASE_NOTES-{version}.md").write_text(f"notes {version}\n", encoding="utf-8")
         shutil.rmtree(out / "stage")
         return out
 
-    def publish(self, version, channel="test", target=None, files=None, **kw):
+    def publish(self, version, channel="test", target=None, files=None, archive=False, **kw):
         target = target or pub.DirTarget(self.site)
-        return pub.publish(target, self.make_dist(version, files), version, channel, log=lambda *_: None, **kw)
+        return pub.publish(target, self.make_dist(version, files, archive=archive), version, channel, log=lambda *_: None, **kw)
 
     def channel(self, name):
         return json.loads((self.site / "channels" / f"{name}.json").read_text("utf-8"))
@@ -170,6 +174,42 @@ class PublishTests(Base):
         man = json.loads((dist / "release-manifest.json").read_text())
         man["files"][0]["sha256"] = "0" * 64
         (dist / "release-manifest.json").write_text(json.dumps(man))
+        with self.assertRaises(pub.PublishError):
+            pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", log=lambda *_: None)
+        self.assertFalse((self.site / "channels").exists())
+
+    def test_7z_is_uploaded_next_to_the_zip(self):
+        t = Recorder(self.site)
+        self.publish("1.0.0", "stable", target=t, archive=True)
+        body = (self.tmp / "dist-1.0.0" / "MedianXL-D2R-1.0.0.7z").read_bytes()
+        files = tree(self.site)
+        self.assertEqual(files["releases/1.0.0/MedianXL-D2R-1.0.0.7z"], body)
+        man = json.loads(files["releases/1.0.0/release-manifest.json"])
+        self.assertEqual(man["archive"], {"format": "7z", "name": "MedianXL-D2R-1.0.0.7z", "size": len(body),
+                                          "sha256": pub.sha256_bytes(body), "path": "releases/1.0.0/MedianXL-D2R-1.0.0.7z"})
+        self.assertEqual(man["zip"]["path"], "releases/1.0.0/MedianXL-D2R-1.0.0.zip")
+        sums = files["releases/1.0.0/SHA256SUMS"].decode().splitlines()
+        self.assertIn(f"{pub.sha256_bytes(body)}  MedianXL-D2R-1.0.0.7z", sums)
+        self.assertTrue(all(pub.PART not in k for k in files), "no temp files left")
+        self.assertLess(t.puts.index("releases/1.0.0/MedianXL-D2R-1.0.0.7z"), t.puts.index("releases/1.0.0/release-manifest.json"))
+        self.assertEqual(t.puts[-1], "channels/stable.json")
+        r = Recorder(self.site)  # a second run does not send it again
+        pub.publish(r, self.tmp / "dist-1.0.0", "1.0.0", "stable", log=lambda *_: None)
+        self.assertNotIn("releases/1.0.0/MedianXL-D2R-1.0.0.7z", r.puts)
+
+    def test_release_without_7z_has_no_archive(self):
+        self.publish("1.0.0", "stable")
+        man = json.loads((self.site / "releases/1.0.0/release-manifest.json").read_text())
+        self.assertNotIn("archive", man)
+        self.assertFalse(list(self.site.glob("releases/1.0.0/*.7z")))
+
+    def test_7z_named_by_the_manifest_must_be_there_and_match(self):
+        dist = self.make_dist("1.0.0", archive=True)
+        seven = dist / "MedianXL-D2R-1.0.0.7z"
+        seven.write_bytes(seven.read_bytes() + b"!")
+        with self.assertRaises(pub.PublishError):
+            pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", log=lambda *_: None)
+        seven.unlink()
         with self.assertRaises(pub.PublishError):
             pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", log=lambda *_: None)
         self.assertFalse((self.site / "channels").exists())
@@ -465,6 +505,22 @@ class ServeAndVerifyTests(Base):
             obj.write_bytes(obj.read_bytes() + b"!")
             with self.assertRaises(pub.PublishError):
                 pub.verify_url(base, "stable", log=lambda *_: None)
+
+    def test_verify_checks_the_7z(self):
+        self.publish("1.0.0", "stable", archive=True)
+        with serve_dir.running(self.site) as base:
+            pub.verify_url(base, "stable", log=lambda *_: None)
+            pub.verify_url(base, "stable", sample=1, log=lambda *_: None)
+            seven = self.site / "releases/1.0.0/MedianXL-D2R-1.0.0.7z"
+            good = seven.read_bytes()
+            seven.write_bytes(good[:-1] + b"?")  # same size, other bytes: only the hash notices
+            with self.assertRaises(pub.PublishError):
+                pub.verify_url(base, "stable", log=lambda *_: None)
+            pub.verify_url(base, "stable", sample=1, log=lambda *_: None)
+            seven.write_bytes(good[:-1])
+            for kw in ({}, {"sample": 1}):
+                with self.assertRaises(pub.PublishError):
+                    pub.verify_url(base, "stable", log=lambda *_: None, **kw)
 
     def test_end_to_end_with_a_real_package_release_run(self):
         """package_release.py --no-data (what CI does) -> publish --allow-incomplete -> serve -> verify."""

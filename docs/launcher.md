@@ -3,7 +3,7 @@
 Goal (owner, 2026-10-26): "people should be able to use this mod without having to change anything else". The
 launcher, `MedianXL-Launcher.exe` (source in `launcher/`), is the only supported install path. D2RMM, other mod
 managers and Nexus are neither used nor supported (docs/release.md); the launcher's job toward them is never to
-disturb them. The release zip remains a manual fallback.
+disturb them. The release's `.7z` is the manual-install fallback (the zip is only this launcher's per-file fallback).
 
 What the player does: download one exe, run it, press **Play**. The first start makes a **private copy** of their
 D2R install. The pinned D2RLoader and the Median XL release go into that copy only. Their own D2R folder, their other

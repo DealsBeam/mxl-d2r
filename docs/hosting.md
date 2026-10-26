@@ -152,16 +152,16 @@ py -3 tools/publish_release.py promote 0.70.0 --channel stable --target $t --ide
 ```
 
 `MXL_PUBLISH_TARGET` in the environment replaces `--target`. The first publish sends the whole mod (about 1.2 GB of objects at a
-full build, plus the zip, about 0.5 GB); later releases send only objects the host does not have (a release that changes a
-few tables sends a few MB, plus the zip). A publish that dies half-way shows nothing to players and is resumed by running the
-same command again.
+full build, plus the zip, about 0.5 GB, and the 7z, about 0.36 GB); later releases send only objects the host does not have
+(a release that changes a few tables sends a few MB, plus the zip and the 7z, which are whole files every time). A publish
+that dies half-way shows nothing to players and is resumed by running the same command again.
 
 Maintenance:
-- `list` shows channels and releases. `gc --keep 3 --dry-run`, then `gc --keep 3`: removes the older releases (their zip too)
+- `list` shows channels and releases. `gc --keep 3 --dry-run`, then `gc --keep 3`: removes the older releases (their zip and 7z too)
   and the objects nothing else uses; releases a channel points to are never removed. Do not run `gc` while a publish runs
   (it would delete the objects the publish just uploaded and no manifest names yet).
-- Disk: about one full zip (0.5 GB) per kept release plus the objects of all kept releases (shared).
-- Backup: the folder is rebuildable from `dist/` of each release (zip + manifest); keep those.
+- Disk: about one full zip (0.5 GB) and one 7z (0.36 GB) per kept release plus the objects of all kept releases (shared).
+- Backup: the folder is rebuildable from `dist/` of each release (zip, 7z, manifest); keep those.
 - Rolling back: `promote <older version> --channel stable` (the older release must still be on the host).
 - Offline test of the same layout, no server: `py -3 tools/serve_dir.py <folder>` serves a `dir:` target with Range support and the
   same `Cache-Control` rules (`publish --target dir:<folder>`, then `verify --url http://127.0.0.1:<port>/`).

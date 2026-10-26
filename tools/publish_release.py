@@ -5,12 +5,14 @@ target root:
 
   channels/<channel>.json                   {"schemaVersion":1,"version","manifest","manifestSha256","publishedAt"}
   releases/<v>/release-manifest.json        the packager's manifest + "objectsBase":"objects/" (+ zip.path, launcher)
-  releases/<v>/MedianXL-D2R-<v>.zip, SHA256SUMS, RELEASE_NOTES-<v>.md    manual / offline fallback
+  releases/<v>/MedianXL-D2R-<v>.zip         the launcher's per-file fallback (HTTP ranges into the zip)
+  releases/<v>/MedianXL-D2R-<v>.7z          the manual download for players (when the packager wrote one; manifest "archive")
+  releases/<v>/SHA256SUMS, RELEASE_NOTES-<v>.md
   objects/<sha256[0:2]>/<sha256>            raw file bytes, content-addressed, shared by every version
   launcher/<v>/MedianXL-Launcher.exe, .sha256    (--launcher)
   assets/<files>                            the asset pack (--assets)
 
-Order of a publish: missing objects, zip + sums, launcher, assets, the release manifest, and the channel file LAST, so a
+Order of a publish: missing objects, zip + 7z + sums, launcher, assets, the release manifest, and the channel file LAST, so a
 half-finished publish is never visible to players. Every file is written under a temp name and renamed. Re-running is safe:
 what is there (right size) is not uploaded again; a version whose manifest differs from the published one is refused.
 
@@ -468,6 +470,16 @@ def publish(target: Target, dist: Path, version: str, channel, source=None, laun
     log(f"checking {zip_path.name} against the manifest")
     if zip_path.stat().st_size != man["zip"]["size"] or sha256_file(zip_path) != man["zip"]["sha256"]:
         raise PublishError(f"{zip_path.name} does not match zip.size / zip.sha256 of the manifest")
+    arch = man.get("archive")  # optional: the .7z for manual installs
+    arch_path = dist / arch["name"] if arch else None
+    if arch:
+        if arch.get("format") != "7z" or "/" in arch["name"] or "\\" in arch["name"] or not SHA_RE.match(arch["sha256"]):
+            raise PublishError(f"bad archive entry in the manifest: {arch}")
+        if not arch_path.is_file():
+            raise PublishError(f"{arch_path} not found, but the manifest names it (package again, or remove \"archive\")")
+        log(f"checking {arch_path.name} against the manifest")
+        if arch_path.stat().st_size != arch["size"] or sha256_file(arch_path) != arch["sha256"]:
+            raise PublishError(f"{arch_path.name} does not match archive.size / archive.sha256 of the manifest")
     own_source = source is None
     source = source or ZipSource(zip_path, man.get("modFolder", "MedianXL"))
     try:
@@ -475,6 +487,8 @@ def publish(target: Target, dist: Path, version: str, channel, source=None, laun
         pub = dict(man)
         pub["objectsBase"] = OBJECTS_BASE
         pub["zip"] = dict(man["zip"], path=f"releases/{version}/{man['zip']['name']}")
+        if arch:
+            pub["archive"] = dict(arch, path=f"releases/{version}/{arch['name']}")
         if launcher:
             lv = check_version(launcher_version or version)
             pub["launcher"] = {"version": lv, "path": f"launcher/{lv}/{LAUNCHER_NAME}", "size": Path(launcher).stat().st_size,
@@ -499,8 +513,12 @@ def publish(target: Target, dist: Path, version: str, channel, source=None, laun
         upload_objects(target, source, miss, log)
 
         put_if_needed(target, zip_path, f"releases/{version}/{zip_path.name}", force, log)
+        sums = [(zip_path.name, man["zip"]["sha256"])]
+        if arch:
+            put_if_needed(target, arch_path, pub["archive"]["path"], force, log)
+            sums.append((arch_path.name, arch["sha256"]))
         notes = dist / f"RELEASE_NOTES-{version}.md"
-        sums = [(zip_path.name, man["zip"]["sha256"]), ("release-manifest.json", sha256_bytes(man_bytes))]
+        sums.append(("release-manifest.json", sha256_bytes(man_bytes)))
         if notes.is_file():
             target.put_files([(notes, f"releases/{version}/{notes.name}")])
             sums.append((notes.name, sha256_file(notes)))
@@ -584,7 +602,8 @@ def list_cmd(target: Target, log=print):
         m = got[0]
         flags = ([f"<- {','.join(pointed[v])}"] if v in pointed else []) + ([] if m.get("complete") else ["incomplete"]) \
             + (["launcher " + m["launcher"]["version"]] if m.get("launcher") else [])
-        log(f"release {v:12s} {m['fileCount']} files  {m['totalSize'] / 1e6:.0f} MB  zip {m['zip']['size'] / 1e6:.0f} MB  "
+        arch = f"7z {m['archive']['size'] / 1e6:.0f} MB  " if m.get("archive") else ""
+        log(f"release {v:12s} {m['fileCount']} files  {m['totalSize'] / 1e6:.0f} MB  zip {m['zip']['size'] / 1e6:.0f} MB  {arch}"
             f"{m.get('released', '')}  {' '.join(flags)}")
     return versions, chans
 
@@ -644,6 +663,22 @@ def http_get(url, headers=None, timeout=60):
         return r.status, dict(r.headers), r.read()
 
 
+def verify_file(url, size, sha, hash_it=True):
+    """Download `url` in chunks and compare size (and sha256 when hash_it). A manual-download archive: too big to hold in memory."""
+    h, n = hashlib.sha256(), 0
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept-Encoding": "identity"}), timeout=60) as r:
+        if not hash_it:
+            got = r.headers.get("Content-Length")
+            if got is None or int(got) != size:
+                raise PublishError(f"{url}: Content-Length {got}, manifest says {size}")
+            return
+        for chunk in iter(lambda: r.read(1 << 20), b""):
+            h.update(chunk)
+            n += len(chunk)
+    if n != size or h.hexdigest() != sha:
+        raise PublishError(f"{url}: bad content (size {n}, manifest says {size}; sha256 {h.hexdigest()[:12]}...)")
+
+
 def verify_url(base, channel="stable", sample=0, log=print):
     """Fetch channel -> manifest -> objects over HTTP and check every hash (and Range support on one object). Returns the
     number of objects checked. This is what a client does; the owner runs it against the public URL after setup."""
@@ -682,6 +717,10 @@ def verify_url(base, channel="stable", sample=0, log=print):
             raise PublishError(f"{url}: Range requests are not served (status {st})")
         log("Range requests: ok (206)")
     log(f"{len(shas)} of {len(objs)} objects verified")
+    arch = man.get("archive")
+    if arch:  # the manual download: sha256 of the whole file (with --sample only its Content-Length: it is the biggest file)
+        verify_file(base + arch.get("path", f"releases/{man['version']}/{arch['name']}"), arch["size"], arch["sha256"], not sample)
+        log(f"{arch['name']}: " + ("sha256 ok" if not sample else "size ok (--sample: not hashed)"))
     return len(shas)
 
 

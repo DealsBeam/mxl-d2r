@@ -54,10 +54,12 @@ Two things the launcher needs from your existing D2R:
 - **A recent online sign-in.** D2R wants to have been online in the last 30 days. If the launcher says the sign-in is
   missing or too old, start the normal D2R once from Battle.net, then use the launcher again.
 
-Advanced fallback: each release also has a plain zip with a `MedianXL/` folder (`MedianXL.mpq/` and `d2rloader/`). It
-is unpacked into the `mods` folder of a D2R + D2RLoader 1.3.1 install at build 93847 that you maintain yourself. Steps
-and the file layout are in [docs/release.md](docs/release.md). Use it only if you know why you need it; it does change
-that install.
+Advanced fallback (manual install): each release also has a `.7z` file (`MedianXL-D2R-<version>.7z`, about 355 MB) with a
+`MedianXL/` folder (`MedianXL.mpq/` and `d2rloader/`). Windows 11 opens .7z files; otherwise use
+[7-Zip](https://www.7-zip.org). It is unpacked into the `mods` folder of a D2R + D2RLoader 1.3.1 install at build 93847
+that you maintain yourself. Steps and the file layout are in [docs/release.md](docs/release.md). Use it only if you know
+why you need it; it does change that install. (The release also holds a zip of the same files; that one is the launcher's
+own fallback, not something to download.)
 
 ## Reporting bugs
 
