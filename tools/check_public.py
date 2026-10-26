@@ -10,7 +10,7 @@ Usage:
 Prints `path:line: [rule] text` and exits 1 on hits. In history mode the location is `<commit>:<path>:<line in diff>`.
 Intentional hits go in tools/check_public.allow: `path-glob | regex matched against the line`, one per line, `#` comments.
 The rules cover: the CI server address, user-home paths, the names of the owner's machines, e-mail addresses other than
-the commit identity, internal host names (the public forge git.werdegames.com is fine), and credentials.
+noreply addresses (personal e-mail included), internal host names (the public forge git.werdegames.com is fine), and credentials.
 """
 import argparse
 import fnmatch
@@ -24,8 +24,8 @@ ALLOW_FILE = Path(__file__).with_name("check_public.allow")
 SELF = {"tools/check_public.py", "tools/check_public.allow"}
 MAX_BYTES = 5_000_000
 
-# E-mail addresses that may appear: the commit identity and noreply bots.
-ALLOWED_EMAIL = re.compile(r"^(zf\.fitzgerald@gmail\.com|noreply@anthropic\.com|noreply@openai\.com|t3code@users\.noreply\.github\.com|"
+# E-mail addresses that may appear: noreply addresses only (the commit identity is Nugwa628's GitHub noreply address).
+ALLOWED_EMAIL = re.compile(r"^(noreply@anthropic\.com|noreply@openai\.com|t3code@users\.noreply\.github\.com|"
                            r"[\w.+-]+@users\.noreply\.github\.com|noreply@github\.com)$", re.I)
 # Placeholder user names that are fine in a home path.
 HOME_OK = {"public", "default", "all", "username", "user", "you", "me", "name", "yourname", "<user>", "%username%",
