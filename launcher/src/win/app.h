@@ -12,7 +12,10 @@
 
 namespace mxl {
 
-constexpr const char* LauncherVersion = "0.1.0";
+#ifndef MXL_LAUNCHER_VERSION
+#define MXL_LAUNCHER_VERSION "0.1.0"  // cmake -DMXL_LAUNCHER_VERSION=x.y.z (tests of the self-update)
+#endif
+constexpr const char* LauncherVersion = MXL_LAUNCHER_VERSION;
 // the download host (docs/release.md "Hosting layout"): channels/<channel>.json, releases/<v>/, objects/
 constexpr const char* DefaultSite = "https://dl.werdegames.com/mxl/";
 constexpr const char* DefaultChannel = "stable";
@@ -57,6 +60,16 @@ public:
 	bool Uninstall(std::string& error);        // the copy, the cache and our state; never saves, never the real D2R
 	bool CheckFeed(std::string& error);        // read the manifest only
 
+	// Self-update (docs/launcher.md "Self-update"): the manifest's `launcher` entry, newer than this one, after a
+	// CheckFeed (also one that refused the release because it needs a newer launcher).
+	bool LauncherUpdateAvailable() const;
+	std::string LauncherUpdateVersion() const { return offer_.version; }
+	// Downloads it next to this exe, checks size and sha256 against the manifest (whether or not it is signed), then
+	// swaps the files: this exe becomes <exe>.old, the new one takes its name. The caller starts it.
+	bool SelfUpdate(std::string& error);
+	static std::wstring ExePath();
+	static void RemoveOldExe();  // <exe>.old of an earlier update, once that process has ended
+
 	std::wstring SavesDir();
 	std::wstring GameDir() const { return gameDir_; }
 	const Options& options() const { return opt_; }
@@ -89,6 +102,7 @@ private:
 	std::wstring gameDir_;
 	bool feedChecked_ = false;
 	Manifest feed_;            // the channel's release manifest
+	decltype(Manifest::launcher) offer_;  // its launcher entry (set even when the release itself is refused)
 	std::string siteRoot_;     // SiteRoot(opt_.site)
 	std::string manifestUrl_;
 };

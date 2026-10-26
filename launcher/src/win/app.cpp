@@ -475,6 +475,7 @@ bool Launcher::CheckFeed(std::string& error) {
 		error = "The channel names Median XL " + ch.version + " but its manifest is " + m.version + ".";
 		return false;
 	}
+	offer_ = m.launcher;  // a launcher update is possible even when this launcher cannot install the release
 	if (m.d2rBuild != RequiredBuild) {
 		feed_ = m;
 		error = "Median XL " + m.version + " needs D2R build " + std::to_string(m.d2rBuild) + "; this launcher knows build " +
@@ -505,6 +506,92 @@ bool Launcher::CheckFeed(std::string& error) {
 	feedChecked_ = true;
 	if (!feed_.launcher.version.empty() && CompareVersions(feed_.launcher.version, LauncherVersion) > 0)
 		Report("A newer launcher (" + feed_.launcher.version + ") is available: " + NewLauncherUrl());
+	return true;
+}
+
+bool Launcher::LauncherUpdateAvailable() const {
+	return !offer_.version.empty() && !offer_.path.empty() && offer_.size > 0 && offer_.sha256.size() == 64 &&
+	       CompareVersions(offer_.version, LauncherVersion) > 0;
+}
+
+std::wstring Launcher::ExePath() {
+	std::wstring buf(32768, L'\0');
+	buf.resize(GetModuleFileNameW(nullptr, buf.data(), DWORD(buf.size())));
+	return buf;
+}
+
+void Launcher::RemoveOldExe() {
+	std::wstring old = ExePath() + L".old";
+	if (!FileExists(old))
+		return;
+	std::thread([old] {  // the old process may still be ending
+		for (int i = 0; i < 20 && !DeleteFileW(LongPath(old).c_str()) && FileExists(old); ++i)
+			Sleep(500);
+	}).detach();
+}
+
+// The sha256 of the published launcher is what makes it trusted: it comes from the release manifest, which is checked
+// against the channel file's manifestSha256 and read over HTTPS. A signature is logged, never required, so a new
+// signing certificate (or none) does not block an update.
+bool Launcher::SelfUpdate(std::string& error) {
+	if (!LauncherUpdateAvailable()) {
+		error = "No newer launcher is published.";
+		return false;
+	}
+	std::wstring exe = ExePath(), part = exe + L".download", old = exe + L".old";
+	std::string url = ResolveUrl(siteRoot_, offer_.path);
+	std::string manual = " Get it yourself: " + url;
+	DeleteFileW(LongPath(part).c_str());
+	HANDLE h = CreateFileW(LongPath(part).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (h == INVALID_HANDLE_VALUE) {
+		error = "Cannot write next to the launcher (" + Utf8(ParentDir(exe)) + "): " + Utf8(LastErrorText(GetLastError())) + "." + manual;
+		return false;
+	}
+	Report("Downloading launcher " + offer_.version + " from " + url);
+	uint64_t got = 0;
+	bool writeOk = true;
+	FetchResult r = Fetch(url, 0, 0, [&](const uint8_t* p, size_t n) {
+		DWORD w = 0;
+		if (got + n > offer_.size || !WriteFile(h, p, DWORD(n), &w, nullptr) || w != n) {
+			writeOk = false;
+			return false;
+		}
+		got += n;
+		if (onProgress)
+			onProgress({"Downloading launcher " + offer_.version + ": " + Mb(got) + " of " + Mb(offer_.size), double(got) / double(offer_.size)});
+		return !cancel.load();
+	});
+	CloseHandle(h);
+	std::string sha = r.ok && writeOk && got == offer_.size ? FileSha256(part) : "";
+	if (sha != offer_.sha256) {
+		DeleteFileW(LongPath(part).c_str());
+		if (!r.ok)
+			error = "Launcher download failed: " + r.error + "." + manual;
+		else
+			error = "The downloaded launcher does not match the release manifest (" + std::to_string(got) + " bytes, sha256 " +
+			        (sha.empty() ? std::string("not checked") : sha) + "; expected " + std::to_string(offer_.size) + " bytes, " +
+			        offer_.sha256 + "). Nothing was changed.";
+		return false;
+	}
+	std::string thumb;
+	bool intact = false;
+	if (SignerThumbprint(part, thumb, intact))
+		Log("launcher " + offer_.version + ": signed by " + thumb + (intact ? "" : " (signature not intact)"));
+	else
+		Log("launcher " + offer_.version + ": not signed");
+	DeleteFileW(LongPath(old).c_str());
+	if (!MoveFileExW(LongPath(exe).c_str(), LongPath(old).c_str(), MOVEFILE_REPLACE_EXISTING)) {  // a running exe can be renamed
+		error = "Cannot replace the launcher: " + Utf8(LastErrorText(GetLastError())) + "." + manual;
+		DeleteFileW(LongPath(part).c_str());
+		return false;
+	}
+	if (!MoveFileExW(LongPath(part).c_str(), LongPath(exe).c_str(), MOVEFILE_WRITE_THROUGH)) {
+		error = "Cannot replace the launcher: " + Utf8(LastErrorText(GetLastError())) + "." + manual;
+		MoveFileExW(LongPath(old).c_str(), LongPath(exe).c_str(), 0);
+		DeleteFileW(LongPath(part).c_str());
+		return false;
+	}
+	Report("Launcher updated to " + offer_.version + " (sha256 checked against the release manifest)");
 	return true;
 }
 

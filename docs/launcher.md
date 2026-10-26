@@ -187,8 +187,26 @@ forge needs a sign-in for everything). The layout is lane pub-publish's (docs/re
    each wanted offset are skipped.
 5. The state file `launcher.json` gets the installed manifest and size / mtime / sha256 of every installed file
    (saved every 5 s during a download, so an interrupted install continues where it stopped).
-6. `launcher` in the manifest (when published with one): a newer version is reported with its URL; the launcher does
-   not replace itself yet.
+6. `launcher` in the manifest (when published with one): a newer launcher is offered as a self-update (below).
+
+### Self-update
+
+`publish_release.py --launcher EXE` puts the exe under `launcher/<v>/` and its `version`, `path`, `size` and `sha256`
+into the release manifest. After reading the channel the window asks "Launcher X is available. Update now?" (CLI:
+`--cli self-update`). The offer is also made when the release itself is refused because it needs a newer launcher
+(build, D2RLoader pin, `launcherMin`).
+
+- The exe is downloaded next to the running one (`MedianXL-Launcher.exe.download`), then its size and **sha256 must
+  equal the manifest's**. That is the trust chain: HTTPS, the channel file's `manifestSha256`, the manifest's sha256 of
+  the exe. A mismatch deletes the download and changes nothing.
+- Authenticode plays no part in the decision: a signature is logged (signer thumbprint) but never required or pinned,
+  so a new certificate (Azure's renew every few days), another signing service or an unsigned build all update the
+  same way.
+- Swap: the running exe is renamed to `MedianXL-Launcher.exe.old` (Windows allows renaming a running exe), the
+  download takes its name, the window starts it with the same arguments and closes. The next start deletes `.old`.
+  If the folder is not writable, the message gives the download URL instead.
+- The new exe is written by the launcher itself, so it carries no "downloaded from the internet" mark and SmartScreen
+  does not ask again; signing matters for the first download from the website.
 
 D2RLoader still comes from d2rloader.net (pinned URL, size, sha256, signer), not from our host: its site publishes no
 licence, so we do not redistribute it (Research, "Redistribute or download?").
@@ -244,7 +262,7 @@ from the background).
 Work runs on a worker thread. At start the launcher reads the channel and says whether an update is available.
 
 ```
-MedianXL-Launcher.exe --cli status|detect|install|update|repair|play|uninstall
+MedianXL-Launcher.exe --cli status|detect|install|update|repair|play|uninstall|self-update
     [--data-dir DIR] [--site URL|DIR] [--channel stable|test] [--source D2R_DIR] [--game-dir DIR] [--any-drive]
     [--args "-w"] [--background] [--loader-url file:///...]
 ```
@@ -267,6 +285,12 @@ TOML, SVG paths) has no Windows headers. `launcher/res/launcher.rc` includes no 
   plan (fetch / remove unlisted / preserve / D2RLoader output kept), versions and URLs, `.build.info` / vdf / acf
   parsing and the build verdict, zip / inflate / range planning, the copy filter, TOML edits, SVG path data (relative
   commands, numbers run together, S / Q to cubics, refusals) and every embedded icon.
+- Self-update (2026-10-26): a 0.1.1 build (`-DMXL_LAUNCHER_VERSION=0.1.1`) signed with a throw-away certificate
+  through `sign_launcher.py`, published with `publish_release.py --launcher` next to a `--no-data` package on the
+  `test` channel, served by `serve_dir.py`. A 0.1.0 exe in its own folder, `--cli self-update`: three requests
+  (channel, manifest, exe), the exe replaced (sha256 = the manifest's), the next start reports 0.1.1 and removed
+  `.old`, a second run says nothing newer is published. The same site with one byte of the exe changed: refused with
+  both hashes in the message, the old exe unchanged, no `.download` left.
 - Window (2026-10-26, nothing shown in front, no focus or cursor use): `--snapshot` at rest and with a progress bar
   (a test build), and the live window started with `SW_SHOWNOACTIVATE` and captured with `PrintWindow`: same picture
   as the snapshot, the logo animates, the foreground window never changed. Hover needs the real cursor and was not
@@ -338,21 +362,64 @@ writes savepath `MedianXL/`, the player's real save folder, so a test release ne
 --savepath MedianXL-lt/` (it sets `MedianXL.mpq\modinfo.json`, the one D2R reads, and the manifest's `saveFolder`).
 game_ctl reads the save folder from that same file.
 
+## Release and signing
+
+Signing is a separate, last step, so any service can be added later without touching the build:
+
+1. **Build** (CMake, CI job `launcher`): the unsigned `MedianXL-Launcher.exe` and `MedianXL-Launcher.exe.sha256`
+   next to it (`launcher/cmake/sha256.cmake`, sha256sum format; CI checks it with `sha256sum -c`).
+2. **Sign or not**: `tools/sign_launcher.py --exe <build>/MedianXL-Launcher.exe --out dist-launcher` plus one of
+   - nothing: an unsigned release (copied, sha256 written);
+   - `--command "signtool sign /fd SHA256 /tr <timestamp url> /td SHA256 <service options> {file}"`: a local signer
+     (Azure's `/dlib Azure.CodeSigning.Dlib.dll /dmdf metadata.json`, SSL.com eSigner's CodeSignTool, a token);
+   - `--signed FILE`: an exe signed elsewhere (SignPath returns the signed artifact).
+
+   It checks that the input still matches the build's sha256, that a signed exe is the **same program** (equal to the
+   unsigned build except the PE checksum, the security directory entry, the padding and the appended signature, i.e.
+   what Authenticode leaves out; `tools/test_sign_launcher.py`), and on Windows that `Get-AuthenticodeSignature` says
+   Valid with a timestamp. It writes `MedianXL-Launcher.exe`, its `.sha256` and `signing.json` (unsigned and final
+   sha256, signer, timestamp).
+3. **Publish**: `tools/publish_release.py publish ... --launcher dist-launcher/MedianXL-Launcher.exe`: the manifest gets
+   the sha256 of the file players download, signed or not; the self-update checks exactly that.
+
+Tested 2026-10-26 with a throw-away certificate (a .pfx file made with openssl, nothing added to a certificate store)
+and signtool: unsigned copy; signed by `--command`, refused as untrusted without `--allow-untrusted`; the same file
+adopted with `--signed`; one flipped byte in a signed exe refused ("differs from the unsigned build beyond the
+signature"); a different build refused against the `.sha256`.
+
 ## Code signing (not bought; options for the owner)
 
-An unsigned exe downloaded from the web gets SmartScreen's "Windows protected your PC" screen; the player has to click
-"More info", then "Run anyway". A signed exe still needs download reputation, but it builds up per certificate instead
-of per file hash.
+An unsigned exe downloaded from the web gets SmartScreen's "Windows protected your PC" (More info, Run anyway), and
+on Windows 11 Smart App Control may block it outright. A signature alone does not remove the warning: reputation
+builds per certificate (or per file hash when unsigned) over weeks and downloads. Since 2024 EV certificates no longer
+bypass SmartScreen (Microsoft: "Paying a premium for EV solely to avoid SmartScreen warnings is no longer justified",
+learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation, 2026-05-04).
 
-| Option | Cost | Notes |
-|---|---|---|
-| Unsigned | free | SmartScreen prompt on every new version until it gets reputation by hash; some antivirus tools flag unsigned downloaders |
-| SignPath Foundation | free for OSI-licensed open source | the certificate is issued to SignPath Foundation, not to us; needs a public repo with an OSI licence, builds on CI (an origin it can verify) and a code-signing policy page; the mod's licence status (Median XL content) may be a problem |
-| Azure Trusted Signing (now "Artifact Signing") | Basic $9.99/month (5,000 signatures), Premium $99.99/month | cheapest real option; identity validation of an individual or company; signs from CI; short-lived certificates, reputation follows the validated identity |
-| OV certificate (Sectigo, SSL.com, ...) | about $69–440/year | hardware token or cloud HSM required since 2023; reputation builds over time |
-| EV certificate | about $249–600/year | since 2024 no longer gives instant SmartScreen reputation (Microsoft changed it), so little gain over OV for us |
+**How the official Median XL launcher does it** (coordinator, 2026-10-26): its MSI and launcher.exe (version 2.0.0, build 38) are
+Authenticode-signed with an OV certificate (policy 2.23.140.1.4.1) issued to "VGP Ltd., Sofia, BG" by SSL.com Code
+Signing Intermediate CA RSA R1, valid 2024-09-12 to 2027-09-12, with an SSL.com timestamp: reputation built on an OV
+certificate, no EV.
 
-Recommendation: Azure Trusted Signing Basic when the repo goes public, or SignPath if the licence question allows it.
+Checked 2026-10-26 on the vendors' pages (prices in USD):
+
+| | SignPath Foundation | Azure Artifact Signing (was Trusted Signing) | SSL.com IV / OV certificate |
+|---|---|---|---|
+| Price | free for OSS | Basic $9.99/month (5,000 signatures), Premium $99.99/month (100,000); $0.01 per extra signature; no free / trial subscriptions | $129/year (1 year; less per year for multi-year terms); key storage extra: eSigner cloud signing from $20/month or $180/year (20 signings/month), or a YubiKey $379 (no CI) |
+| Who | OSS projects; SignPath decides, no appeal | organisations in US, CA, EU, UK, AU, NZ, JP, KR, SG, CH, NO, IL; **individuals only in the US or Canada** | individuals (IV: ID + phone check) or companies (OV); EU individuals: no restriction found, not confirmed |
+| Certificate shows | **"SignPath Foundation"**, not us | the validated legal name (no EV); 3-day certificates, so a timestamp is required | our name (IV) or company (OV) |
+| CI | GitHub-hosted runners only for OSS on GitHub (all jobs up to the signing request), artifact uploaded to the workflow; Forgejo not supported | GitHub Action or signtool + dlib, anywhere | eSigner from CI (CodeSignTool / GitHub Action, TOTP secret) |
+| Our problem | terms: an OSI licence "for all components" and "no proprietary, non open-source component"; the exe embeds the Median XL art and the commercial Exocet font, and the program needs proprietary game data: likely refused. Also: released already, policy page with roles, MFA, every signing approved | an individual outside US / CA cannot get it; an EU organisation needs a legal entity, its domain and e-mail | none known; multi-year terms are re-issued yearly (CA/B Forum CSC-31: certificates at most 460 days since 2026-03-01) |
+
+Sources: signpath.org/terms, docs.signpath.io/trusted-build-systems/github; azure.microsoft.com/pricing/details/artifact-signing,
+learn.microsoft.com/azure/artifact-signing (quickstart 2026-05-21, FAQ 2026-05-14); ssl.com code-signing buy page,
+ssl.com/guide/esigner-pricing-for-code-signing (2026-03-25); cabforum.org ballot CSC-31.
+
+**Recommendation.** The coordinator's order is SignPath, then Azure, then SSL.com. But SignPath's terms very likely
+exclude us (the embedded art and font), and Azure excludes individuals outside the US and Canada. So unless the owner
+signs as a US/CA individual or through a company, the realistic choice is the one the official launcher made: an
+**SSL.com IV (or OV with a company) certificate with eSigner**, about $129 + $180 a year, signing from CI. If the art
+and font ever leave the exe (downloaded at run time instead) and the repo is public, SignPath becomes worth an
+application. Nothing in the build has to change for any of them (above).
 
 ## Open questions for the owner
 
@@ -360,13 +427,13 @@ Recommendation: Azure Trusted Signing Basic when the repo goes public, or SignPa
 2. Steam installs are untested on a real Steam D2R (none on the game PC).
 3. The cookie / volume-serial behaviour is D2RLoader's. A future D2RLoader or D2R build could change it; the pin
    makes that our choice, not a surprise.
-4. Signing (above).
+4. Signing (above): which certificate, and in whose name (an individual in the US / Canada, a company, or SSL.com IV).
 5. With lane pub-release:
    - the `imageTimestamp` wording;
    - `d2rloader/crashes/` kept like `logs/`;
    - the optional `launcherMin`.
 6. `preserve` semantics for `d2rloader.toml` (an edited file also misses new keys from a release).
-7. The launcher reports a newer launcher from the manifest's `launcher` entry but does not replace itself yet.
+7. Self-update: tested from the CLI; the window's question and restart were not run here (a dialog would take focus).
 8. D2RLoader is downloaded from d2rloader.net (no licence to mirror it); if that site goes away, new installs stop
    until we get permission to mirror it or pin a new source.
 9. Fonts of the window: `exocet.ttf` says "Copyright (C) 1992 Emigre Graphics, Designed by Jonathan Barnbrook";

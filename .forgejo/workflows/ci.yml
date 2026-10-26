@@ -48,6 +48,9 @@ jobs:
           cmake -S launcher -B build-launcher -DCMAKE_TOOLCHAIN_FILE="$PWD/plugin/cmake/xwin-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release
           cmake --build build-launcher -j6 --target mxl_launcher
           ls -la build-launcher/MedianXL-Launcher.exe
+          # unsigned build + its sha256; signing is a later step (tools/sign_launcher.py, docs/launcher.md)
+          cat build-launcher/MedianXL-Launcher.exe.sha256
+          (cd build-launcher && sha256sum -c MedianXL-Launcher.exe.sha256)
 
   launcher-tests:
     runs-on: mxl-cross
@@ -80,6 +83,8 @@ jobs:
         run: python3 -m compileall -q tools
       - name: Publisher and download-host server unit tests (tools/publish_release.py, serve_dir.py)
         run: cd tools && python3 -m unittest test_publish_release
+      - name: Launcher signing step unit tests (tools/sign_launcher.py)
+        run: cd tools && python3 -m unittest test_sign_launcher
       - name: No private details in tracked text (tools/check_public.py; allowlist tools/check_public.allow)
         run: python3 tools/check_public.py
       - name: Median inputs come from assets/median (D2R-only release, docs/setup.md)

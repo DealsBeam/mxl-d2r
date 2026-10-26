@@ -15,7 +15,7 @@ using namespace mxl;
 namespace {
 
 const wchar_t* Usage =
-	L"MedianXL-Launcher.exe [--cli status|detect|install|update|repair|play|uninstall] [options]\n"
+	L"MedianXL-Launcher.exe [--cli status|detect|install|update|repair|play|uninstall|self-update] [options]\n"
 	L"  --data-dir DIR   state, cache and log (default %LOCALAPPDATA%\\MedianXL)\n"
 	L"  --site URL|DIR   download site root (default https://dl.werdegames.com/mxl/; http://, file:// or a folder for tests)\n"
 	L"  --channel NAME   release channel: stable (default) or test\n"
@@ -105,6 +105,12 @@ int RunCli(Cli& c) {
 	else if (c.command == L"repair") ok = l.Repair(err);
 	else if (c.command == L"play") ok = l.Play(err);
 	else if (c.command == L"uninstall") ok = l.Uninstall(err);
+	else if (c.command == L"self-update") {
+		std::string feedErr;
+		if (!l.CheckFeed(feedErr) && !l.LauncherUpdateAvailable())
+			Log("feed: " + feedErr);
+		ok = l.SelfUpdate(err);
+	}
 	else {
 		Log(Utf8(Usage));
 		return 2;
@@ -117,6 +123,7 @@ int RunCli(Cli& c) {
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
 	SetUserAgent(L"MedianXL-Launcher/" + Wide(LauncherVersion));
+	Launcher::RemoveOldExe();
 	Cli c = ParseArgs();
 	if (c.bad) {
 		MessageBoxW(nullptr, Usage, L"Median XL launcher", MB_ICONINFORMATION);

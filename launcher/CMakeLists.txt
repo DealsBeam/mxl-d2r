@@ -11,6 +11,15 @@ add_executable(mxl_launcher WIN32 src/win/main.cpp src/win/window.cpp src/win/ap
 set_target_properties(mxl_launcher PROPERTIES OUTPUT_NAME "MedianXL-Launcher")
 target_compile_features(mxl_launcher PRIVATE cxx_std_20)
 target_compile_definitions(mxl_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+set(MXL_LAUNCHER_VERSION "" CACHE STRING "override the launcher version (tests of the self-update); empty: app.h's")
+if(MXL_LAUNCHER_VERSION)
+	target_compile_definitions(mxl_launcher PRIVATE MXL_LAUNCHER_VERSION="${MXL_LAUNCHER_VERSION}")
+endif()
+# Signing is a separate, later step (docs/launcher.md "Release and signing"): the build leaves the unsigned exe and its
+# sha256 side by side.
+add_custom_command(TARGET mxl_launcher POST_BUILD
+                   COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:mxl_launcher> -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sha256.cmake
+                   VERBATIM)
 target_link_libraries(mxl_launcher PRIVATE winhttp comctl32 shell32 ole32 version advapi32 user32 gdi32 wintrust crypt32
                       gdiplus shlwapi dwmapi)
 if(MSVC)

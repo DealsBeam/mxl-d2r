@@ -51,7 +51,7 @@ const gp::RectF BarRect(242, 285, 416, 9);
 const gp::Color Gold(255, 232, 196, 128), GoldBright(255, 255, 228, 168), Body(255, 222, 212, 192), Dim(255, 150, 136, 112),
 	ErrorText(255, 240, 128, 104);
 
-enum : int { IdPlay = 101, IdUpdate, IdRepair, IdUninstall, IdSaves, IdIssues, IdChoose, IdCancel };
+enum : int { IdPlay = 101, IdUpdate, IdRepair, IdUninstall, IdSaves, IdIssues, IdChoose, IdCancel, IdSelfUpdate };
 enum Kind { Big, Small, Icon };
 struct Button {
 	int id;
@@ -78,6 +78,7 @@ constexpr UINT_PTR AnimTimer = 1;
 struct ProgressMsg {
 	std::string text;
 	double fraction;
+	int action = 0;  // WmDone: the finished action (0: the start-up check)
 };
 
 struct Art {
@@ -447,8 +448,9 @@ void RunAction(int id) {
 		case IdUpdate: ok = l.InstallOrUpdate(err); break;
 		case IdRepair: ok = l.Repair(err); break;
 		case IdUninstall: ok = l.Uninstall(err); break;
+		case IdSelfUpdate: ok = l.SelfUpdate(err); break;
 		}
-		auto* msg = new ProgressMsg{ok ? std::string(id == IdPlay ? "Have fun." : "Done.") : err, ok ? 1.0 : -2.0};
+		auto* msg = new ProgressMsg{ok ? std::string(id == IdPlay ? "Have fun." : "Done.") : err, ok ? 1.0 : -2.0, id};
 		PostMessageW(g.wnd, WmDone, WPARAM(ok ? 1 : 0), reinterpret_cast<LPARAM>(msg));
 	});
 }
@@ -481,6 +483,29 @@ void ChooseSource() {
 		}
 	}
 	dlg->Release();
+}
+
+// The new launcher after a self-update: the same exe path and arguments.
+bool Restart() {
+	std::wstring exe = Launcher::ExePath(), cmd = GetCommandLineW();
+	STARTUPINFOW si{sizeof(si)};
+	PROCESS_INFORMATION pi{};
+	if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi))
+		return false;
+	CloseHandle(pi.hThread);
+	CloseHandle(pi.hProcess);
+	return true;
+}
+
+void OfferSelfUpdate() {
+	Launcher& l = *g.launcher;
+	if (!l.LauncherUpdateAvailable())
+		return;
+	std::wstring q = L"Launcher " + Wide(l.LauncherUpdateVersion()) + L" is available (this is " + Wide(LauncherVersion) +
+	                 L").\n\nUpdate now? The download is checked against the release's sha256 before it replaces this launcher, "
+	                 L"which then restarts.";
+	if (MessageBoxW(g.wnd, q.c_str(), L"Median XL launcher update", MB_YESNO | MB_ICONQUESTION) == IDYES)
+		RunAction(IdSelfUpdate);
 }
 
 // ---------------------------------------------------------------- window procedures
@@ -605,8 +630,20 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM lp) {
 				DestroyWindow(h);
 				return 0;
 			}
+			if (msg->action == IdSelfUpdate && w == 1) {
+				if (Restart()) {
+					DestroyWindow(h);
+					return 0;
+				}
+				MessageBoxW(h, L"The launcher was updated. Start it again.", L"Median XL", MB_ICONINFORMATION);
+			}
 			if (w == 0)
 				MessageBoxW(h, Wide(msg->text).c_str(), L"Median XL", MB_ICONWARNING);
+			if (msg->action == 0) {
+				InvalidatePanel();
+				OfferSelfUpdate();
+				return 0;
+			}
 		}
 		InvalidatePanel();
 		return 0;
