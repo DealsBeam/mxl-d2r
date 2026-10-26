@@ -80,6 +80,12 @@ bool ParseManifest(const std::string& text, Manifest& out, std::string& error) {
 	m.modFolder = j["modFolder"].Str(m.name);
 	m.saveFolder = j["saveFolder"].Str();
 	m.zipName = j["zip"]["name"].Str();
+	m.zipPath = j["zip"]["path"].Str();
+	m.objectsBase = j["objectsBase"].Str();
+	m.launcher.version = j["launcher"]["version"].Str();
+	m.launcher.path = j["launcher"]["path"].Str();
+	m.launcher.size = uint64_t(j["launcher"]["size"].Int());
+	m.launcher.sha256 = Lower(j["launcher"]["sha256"].Str());
 	m.zipSize = uint64_t(j["zip"]["size"].Int());
 	m.zipSha256 = Lower(j["zip"]["sha256"].Str());
 	m.launcherMin = j["launcherMin"].Str();
@@ -89,6 +95,15 @@ bool ParseManifest(const std::string& text, Manifest& out, std::string& error) {
 	}
 	if (m.launchDefaultMod.empty())
 		m.launchDefaultMod = m.modFolder;
+	auto relOk = [](const std::string& p, bool dir) {
+		std::string q = dir && !p.empty() && p.back() == '/' ? p.substr(0, p.size() - 1) : p;
+		return q.empty() ? false : SafeRelativePath(q);
+	};
+	if ((!m.objectsBase.empty() && (m.objectsBase.back() != '/' || !relOk(m.objectsBase, true))) ||
+	    (!m.zipPath.empty() && !relOk(m.zipPath, false)) || (!m.launcher.path.empty() && !relOk(m.launcher.path, false))) {
+		error = "bad objectsBase, zip.path or launcher.path";
+		return false;
+	}
 	if (m.version.empty() || m.d2rBuild <= 0 || m.zipName.empty()) {
 		error = "the manifest lacks version, d2r.build or zip.name";
 		return false;
@@ -161,7 +176,16 @@ Json ManifestToJson(const Manifest& m) {
 	j.Set("preserve", keep);
 	Json zip = Json::Object();
 	zip.Set("name", m.zipName).Set("size", m.zipSize).Set("sha256", m.zipSha256);
+	if (!m.zipPath.empty())
+		zip.Set("path", m.zipPath);
 	j.Set("zip", zip);
+	if (!m.objectsBase.empty())
+		j.Set("objectsBase", m.objectsBase);
+	if (!m.launcher.version.empty()) {
+		Json l = Json::Object();
+		l.Set("version", m.launcher.version).Set("path", m.launcher.path).Set("size", m.launcher.size).Set("sha256", m.launcher.sha256);
+		j.Set("launcher", l);
+	}
 	if (!m.launcherMin.empty())
 		j.Set("launcherMin", m.launcherMin);
 	Json files = Json::Array();
@@ -174,6 +198,69 @@ Json ManifestToJson(const Manifest& m) {
 	}
 	j.Set("files", files);
 	return j;
+}
+
+bool ParseChannel(const std::string& text, Channel& out, std::string& error) {
+	Json j;
+	if (!Json::Parse(text, j, error))
+		return false;
+	Channel c;
+	c.schemaVersion = int(j["schemaVersion"].Int());
+	if (c.schemaVersion != 1) {
+		error = "unsupported channel schemaVersion " + std::to_string(c.schemaVersion);
+		return false;
+	}
+	c.version = j["version"].Str();
+	c.manifest = j["manifest"].Str();
+	c.manifestSha256 = Lower(j["manifestSha256"].Str());
+	c.publishedAt = j["publishedAt"].Str();
+	if (c.version.empty() || !SafeRelativePath(c.manifest) || !IsHex64(c.manifestSha256)) {
+		error = "the channel file lacks version, manifest or manifestSha256";
+		return false;
+	}
+	out = std::move(c);
+	return true;
+}
+
+std::string SiteRoot(const std::string& setting) {
+	const char bs = char(92);  // backslash
+	std::string s = setting;
+	while (!s.empty() && (s.back() == ' ' || s.back() == bs))
+		s.pop_back();
+	if (s.rfind("http://", 0) == 0 || s.rfind("https://", 0) == 0 || s.rfind("file://", 0) == 0)
+		return s.empty() || s.back() == '/' ? s : s + "/";
+	std::string u = "file:///";
+	if (s.size() > 2 && s[0] == bs && s[1] == bs) {  // UNC share -> file://server/share
+		u = "file://";
+		s = s.substr(2);
+	}
+	for (char c : s) {
+		if (c == bs)
+			u += '/';
+		else if (c == '%' || c == ' ' || c == '#' || c == '?') {
+			char buf[4];
+			std::snprintf(buf, sizeof buf, "%%%02X", unsigned(uint8_t(c)));
+			u += buf;
+		} else
+			u += c;
+	}
+	return u.back() == '/' ? u : u + "/";
+}
+
+std::string ObjectPath(const std::string& objectsBase, const std::string& sha256) {
+	return objectsBase + sha256.substr(0, 2) + "/" + sha256;
+}
+
+std::vector<ObjectFetch> GroupObjects(const std::vector<ManifestFile>& files) {
+	std::vector<ObjectFetch> out;
+	std::map<std::string, size_t> at;
+	for (const auto& f : files) {
+		auto [it, fresh] = at.emplace(f.sha256, out.size());
+		if (fresh)
+			out.push_back({f.sha256, f.size, {}});
+		out[it->second].paths.push_back(f.path);
+	}
+	return out;
 }
 
 bool RuntimeOutput(const std::string& path) {

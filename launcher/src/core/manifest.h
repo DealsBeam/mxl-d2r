@@ -1,5 +1,5 @@
-// The release manifest (docs/launcher.md "Release feed") and the install plan: which files of a release to fetch,
-// which to leave alone and which to remove, given what is installed now.
+// The download host's channel file and release manifest (docs/release.md "Release manifest", "Hosting layout") and the
+// install plan: which files of a release to fetch, which to leave alone and which to remove, given what is installed now.
 #pragma once
 
 #include "json.h"
@@ -38,12 +38,43 @@ struct Manifest {
 	std::string modFolder;         // the files live in <game>\mods\<modFolder>; the zip's top folder
 	std::string saveFolder;        // modinfo savepath ("MedianXL/"); the launcher never writes there
 	std::set<std::string> preserve;  // player-editable: written only when missing
-	std::string zipName;           // the release zip, relative to the manifest URL (or absolute)
+	std::string zipName;           // the release zip's file name
+	std::string zipPath;           // zip.path (published manifests): the zip relative to the site root
 	uint64_t zipSize = 0;
 	std::string zipSha256;
+	std::string objectsBase;       // published manifests: files[i] is at <root><objectsBase><sha[0:2]>/<sha> ("objects/")
+	struct LauncherRef {           // launcher (published manifests, optional): the launcher published with the release
+		std::string version, path, sha256;
+		uint64_t size = 0;
+	} launcher;
 	std::string launcherMin;       // optional (launcher lane extension): oldest launcher that can install it
 	std::vector<ManifestFile> files;
 };
+
+// channels/<channel>.json on the download host: which release a channel (stable, test) points to.
+struct Channel {
+	int schemaVersion = 0;
+	std::string version;
+	std::string manifest;        // relative to the site root: releases/<v>/release-manifest.json
+	std::string manifestSha256;  // the manifest's bytes must hash to this
+	std::string publishedAt;
+};
+bool ParseChannel(const std::string& text, Channel& out, std::string& error);
+
+// The launcher's one setting as a URL ending in '/': http(s):// and file:// stay (a '/' is added), a local folder
+// ("D:\site", "\\server\share\mxl") becomes file:///D:/site/.
+std::string SiteRoot(const std::string& setting);
+
+// <objectsBase><sha[0:2]>/<sha>
+std::string ObjectPath(const std::string& objectsBase, const std::string& sha256);
+
+// The files to fetch grouped by content: several entries with the same sha256 are one download.
+struct ObjectFetch {
+	std::string sha256;
+	uint64_t size = 0;
+	std::vector<std::string> paths;
+};
+std::vector<ObjectFetch> GroupObjects(const std::vector<ManifestFile>& files);
 
 // Parse and check a manifest. Every path must pass SafeRelativePath, sha256 must be 64 hex digits, fileCount /
 // totalSize (when given) must match the list.

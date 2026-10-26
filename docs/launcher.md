@@ -133,8 +133,8 @@ its `d2r_build`, and the launcher refuses a release whose build does not match t
 
 ### Files
 
-- `%LOCALAPPDATA%\MedianXL\launcher.json`: state (game folder, feed URL, installed release, size / mtime / sha256 of
-  every installed file).
+- `%LOCALAPPDATA%\MedianXL\launcher.json`: state (game folder, site and channel, the installed release's manifest,
+  size / mtime / sha256 of every installed file).
 - `%LOCALAPPDATA%\MedianXL\launcher.log`: log.
 - `%LOCALAPPDATA%\MedianXL\cache\D2RLoader-1.3.1-beta.zip`: the loader download.
 - `%LOCALAPPDATA%\MedianXL\backup\Settings.json`: the settings backup.
@@ -151,7 +151,7 @@ its `d2r_build`, and the launcher refuses a release whose build does not match t
    build is checked again.
 3. **D2RLoader**: download (or use the cached zip), check sha256, extract the pinned files, check the signer of the two
    binaries. The copy's `d2rloader.toml` comes from the zip's template only when missing.
-4. **Median XL** from the release feed (below): only new or changed files, with resume and verification. Then the
+4. **Median XL** from the download site (below): only new or changed files, with resume and verification. Then the
    copy's `d2rloader.toml` gets the release's `launch` keys (`default_mod = "MedianXL"`, `launch_arguments = "-txt"`)
    and `check_for_updates = false`.
 5. **Play**: rewrite those keys (extra test arguments such as `-w` are appended to `launch_arguments`), then start
@@ -163,16 +163,37 @@ its `d2r_build`, and the launcher refuses a release whose build does not match t
 size and mtime. Its copy check uses size and mtime. **Uninstall** removes the copy, the cache and the state. It keeps
 saves, the settings backup and the log, and never touches the real D2R.
 
-### Release feed
+### Download site
 
-The format is lane pub-release's `release-manifest.json`, schemaVersion 1 (docs/release.md "Release manifest"):
-`tools/package_release.py` writes it, and the launcher reads it as defined there. The default URL is the GitHub
-release of Nugwa628/mxl-d2r (`https://github.com/Nugwa628/mxl-d2r/releases/latest/download/release-manifest.json`).
-The repo is private for now, so the URL can be changed (`--feed`, saved in the state; file:// works).
-`tools/launcher_feed.py build` writes a manifest in the same format for test feeds; `serve` is a local HTTP server
-with byte ranges.
+Owner decision 2026-10-26: releases are served from our own static HTTPS host, not from GitHub or the forge (the
+forge needs a sign-in for everything). The layout is lane pub-publish's (docs/release.md "Hosting layout",
+`tools/publish_release.py`); the launcher's one setting is the site root, default `https://dl.werdegames.com/mxl/`
+(`--site`, saved in the state; `http://`, `file://` or a plain local folder work for tests). `--channel` picks
+`stable` (default) or `test`.
 
-How the launcher uses the fields:
+1. `GET channels/<channel>.json`: schemaVersion 1, `version`, `manifest`, `manifestSha256`. A login page or other
+   HTML is "not usable", not a crash.
+2. `GET <manifest>`; its sha256 must equal `manifestSha256` ("the site may be in the middle of an update"), and its
+   `version` must be the channel's.
+3. The install plan (below). For each missing or different file: `GET <objectsBase><sha[0:2]>/<sha>`. Files with the
+   same content are one download. Eight workers, each with its own WinHTTP session (keep-alive). Every object goes
+   to `<game>\medianxl-download\<sha>.part`, is resumed with a Range request when a part is already there, is checked
+   (size, sha256; a bad one is deleted and fetched again, up to three tries), and is then renamed into place
+   (`MoveFileEx` with replace; for a second path with the same content a copy goes through `.mxlpart`). The download
+   folder is removed when everything is in place.
+4. Objects that fail (404, three bad tries) fall back to the release zip at `zip.path`: its central directory and the
+   wanted entries are fetched by byte range (entries less than 1 MB apart are merged), inflated, checked (CRC,
+   sha256) and written through `.mxlpart`. A server that ignores Range (answers 200) still works: the bytes before
+   each wanted offset are skipped.
+5. The state file `launcher.json` gets the installed manifest and size / mtime / sha256 of every installed file
+   (saved every 5 s during a download, so an interrupted install continues where it stopped).
+6. `launcher` in the manifest (when published with one): a newer version is reported with its URL; the launcher does
+   not replace itself yet.
+
+D2RLoader still comes from d2rloader.net (pinned URL, size, sha256, signer), not from our host: its site publishes no
+licence, so we do not redistribute it (Research, "Redistribute or download?").
+
+How the launcher uses the manifest's fields:
 
 - `schemaVersion` other than 1 is refused; unknown fields are ignored (a unit test has one).
 - `complete: false` (a CI package without data) is refused.
@@ -190,14 +211,8 @@ How the launcher uses the fields:
 - Update rule, as docs/release.md says: fetch every entry whose file is missing or whose size / sha256 differ, then
   delete every file under the mod folder that the release does not list, except `preserve` entries,
   `d2rloader/logs/` and `d2rloader/crashes/`. Crash reports are also D2RLoader output; proposed for docs/release.md.
-- **Where single files come from** (docs/release.md's open point): from the release zip itself. The launcher reads
-  the zip's central directory with an HTTP Range request, then fetches only the byte ranges of the entries it needs.
-  Entries less than 1 MB apart are merged into one request. A one-file fix downloads that file, not the 483 MB zip.
-  Each entry is inflated, checked against its CRC and the manifest sha256, and written through `.mxlpart`. GitHub
-  release downloads support Range; no `filesBaseUrl` is needed.
-- A server that ignores Range (answers 200) still works: the launcher skips the bytes before each wanted offset.
-- **Resume**: the state is saved every 5 s, so an interrupted install continues file by file. Tested: killed after
-  4,109 of 10,494 files; the rerun fetched the other 6,385.
+- `objectsBase`, `zip.path`, `launcher.path` must be safe relative paths under the site root (`objectsBase` ends in
+  `/`); an absolute URL is refused.
 - `launcherMin` (optional, a launcher-lane addition within schemaVersion 1): the oldest launcher that may install
   the release; an older one says "download the new launcher".
 
@@ -210,11 +225,11 @@ The window has:
   step);
 - a credits line.
 
-Work runs on a worker thread. At start the launcher reads the feed and says whether an update is available.
+Work runs on a worker thread. At start the launcher reads the channel and says whether an update is available.
 
 ```
 MedianXL-Launcher.exe --cli status|detect|install|update|repair|play|uninstall
-    [--data-dir DIR] [--feed URL] [--source D2R_DIR] [--game-dir DIR] [--any-drive]
+    [--data-dir DIR] [--site URL|DIR] [--channel stable|test] [--source D2R_DIR] [--game-dir DIR] [--any-drive]
     [--args "-w"] [--background] [--loader-url file:///...]
 ```
 
@@ -230,8 +245,9 @@ TOML) has no Windows headers. `launcher/res/launcher.rc` includes no SDK header 
 
 ## Testing
 
-- Unit tests: `launcher/tests/core_tests.cpp`, 91 checks: release-manifest parsing (docs/release.md format, unknown
-  fields, count checks), the install plan (fetch / remove unlisted / preserve / D2RLoader output kept), versions and
+- Unit tests: `launcher/tests/core_tests.cpp`, 109 checks: release-manifest parsing (docs/release.md format, unknown
+  fields, count checks, the published fields `objectsBase` / `zip.path` / `launcher` and their refusals), channel files
+  (schema, unsafe paths, an HTML login page), site roots and object paths, grouping of same-content files, the install plan (fetch / remove unlisted / preserve / D2RLoader output kept), versions and
   URLs, `.build.info` / vdf / acf parsing and the build verdict, zip / inflate / range planning, the copy filter, TOML
   edits.
 - Scratch tests (D:, no slot): fresh install; update over HTTP fetching only 3 changed files; repair against a server
@@ -240,7 +256,8 @@ TOML) has no Windows headers. `launcher/res/launcher.rc` includes no SDK header 
 - End-to-end, 2026-10-26, slot 2 locked:
   - Source `D:\D2R-93847`, copy to a new folder on C: (`--any-drive`, since the source is on D: but Battle.net's
     install and its cookie are on C:).
-  - Feed: `launcher_feed.py build --mod D:\D2R-93847\mods\MedianXL`, served on localhost.
+  - Release: a manifest of slot 2's mod folder, served on localhost (before the download site; superseded by the
+    test below).
   - Install with a kill mid-copy and a resume. D2RLoader downloaded from d2rloader.net and verified. Mod install with
     a kill and a resume, then repair.
   - `play --background --args -w` started the game from the C: copy without the `volserial` word (dev plugin,
@@ -268,6 +285,24 @@ TOML) has no Windows headers. `launcher/res/launcher.rc` includes no SDK header 
   - `compare` after play and again after Uninstall: **all 370 + 1,211 files unchanged** (sha256, size and mtime).
     D2RLoader wrote no backups during the run.
   - Cleanup: the stand-in folder, the test save folder and the D2RMM save were deleted.
+- **Download site** (owner, 2026-10-26), slot 2 locked, a new copy on C: (`--any-drive`, source on D:):
+  - Releases: `tools/package_release.py` of slot 2's data with the release DLL, then `tools/launcher_testsite.py
+    derive` (savepath `MedianXL-lt/`, the dev `mxl-core.dll` for the harness, two dummy files) as `0.70.0-lt1`. From
+    that, `0.70.0-lt2`: two files changed, two added with the same content, the two dummies removed. Both published
+    with `tools/publish_release.py --target dir:<site>` (lt1 on `stable`, lt2 with `--no-channel`) and served by
+    `tools/serve_dir.py` on localhost (`--site http://127.0.0.1:<port>/`).
+  - **Empty state → full install**: 8,521 objects (1,053 MB) in about 50 s; all 10,496 files match the manifest
+    (sha256), nothing else in the mod folder; the server log has exactly 8,521 object requests. **Play → `game_checks
+    all mxl` PASS** (20 feature lines, image match, 0 cursor or focus changes, no crash files).
+  - **`promote 0.70.0-lt2` → Update**: channel, manifest and 3 object requests (6 MB) for the 4 new or changed files;
+    the 2 dropped files removed (and two harness logs, which no release lists); a before/after hash of the mod folder
+    shows only those changes. **`mxl` PASS.**
+  - **One byte of `median.json` changed → Repair**: one object request; the file is back to the manifest's sha256;
+    nothing else touched.
+  - Also: a half-downloaded `.part` resumed with one `206` request; an object missing on the site (404) fell back to the
+    zip (HEAD plus 3 ranged requests); a channel with a wrong `manifestSha256` was refused with a clear message; a local
+    folder as `--site` works.
+  - Cleanup: uninstall, the test save folder (own character only), the site, the server and the copy removed.
 
 To run a check on a launcher-started game:
 
@@ -277,9 +312,10 @@ MedianXL-Launcher.exe --cli play --data-dir <test data> --background --args -w
 MXL_SLOT=2 MXL_D2R_GAME=<copy> MXL_RUN=<lock> MXL_CHAR=<own character> MXL_ATTACH=1 py -3 tools/game_checks.py all mxl
 ```
 
-`MXL_ATTACH=1` makes the first start of game_checks use the running game instead of restarting it. A feed built from a
-slot's mod has that slot's `savepath`. For the isolation test the mod was copied first and its `MedianXL.mpq\modinfo.json`
-`savepath` (the one D2R reads, not the top-level `modinfo.json`) set to `MedianXL-lt/`, so nothing was written into a real save folder.
+`MXL_ATTACH=1` makes the first start of game_checks use the running game instead of restarting it. `package_release`
+writes savepath `MedianXL/`, the player's real save folder, so a test release needs `launcher_testsite.py derive
+--savepath MedianXL-lt/` (it sets `MedianXL.mpq\modinfo.json`, the one D2R reads, and the manifest's `saveFolder`).
+game_ctl reads the save folder from that same file.
 
 ## Code signing (not bought; options for the owner)
 
@@ -307,6 +343,8 @@ Recommendation: Azure Trusted Signing Basic when the repo goes public, or SignPa
 5. With lane pub-release:
    - the `imageTimestamp` wording;
    - `d2rloader/crashes/` kept like `logs/`;
-   - single files come from the zip by byte range, so no `filesBaseUrl` is needed;
    - the optional `launcherMin`.
 6. `preserve` semantics for `d2rloader.toml` (an edited file also misses new keys from a release).
+7. The launcher reports a newer launcher from the manifest's `launcher` entry but does not replace itself yet.
+8. D2RLoader is downloaded from d2rloader.net (no licence to mirror it); if that site goes away, new installs stop
+   until we get permission to mirror it or pin a new source.

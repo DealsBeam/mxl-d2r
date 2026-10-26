@@ -13,9 +13,10 @@
 namespace mxl {
 
 constexpr const char* LauncherVersion = "0.1.0";
-constexpr const char* DefaultFeed = "https://github.com/Nugwa628/mxl-d2r/releases/latest/download/release-manifest.json";
+// the download host (docs/release.md "Hosting layout"): channels/<channel>.json, releases/<v>/, objects/
+constexpr const char* DefaultSite = "https://dl.werdegames.com/mxl/";
+constexpr const char* DefaultChannel = "stable";
 constexpr const char* IssuesUrl = "https://github.com/Nugwa628/mxl-d2r/issues";
-constexpr const char* ReleasesUrl = "https://github.com/Nugwa628/mxl-d2r/releases";
 
 // D2RLoader 1.3.1-beta, pinned (never "latest"): the zip as published on d2rloader.net and the files inside it.
 constexpr const char* LoaderVersion = "1.3.1-beta";
@@ -26,7 +27,8 @@ constexpr const char* LoaderSigner = "8001082E968FADAA58BF2F73EFA1810A11D0C28F";
 
 struct Options {
 	std::wstring dataDir;    // state, cache, log (default %LOCALAPPDATA%\MedianXL)
-	std::string feed;        // release manifest URL (default DefaultFeed, or the one saved in the state)
+	std::string site;        // download site root: https://, http://, file:// or a local folder (default DefaultSite, or the saved one)
+	std::string channel;     // "stable" (default) or "test"
 	std::wstring source;     // the player's D2R folder (default: detected)
 	std::wstring gameDir;    // the private copy (default: <data>\game when on the D2R drive, else <D2R drive>\MedianXL\game)
 	bool anyDrive = false;   // allow a copy on another drive than the D2R install (docs/launcher.md "Drive rule")
@@ -76,6 +78,9 @@ private:
 	std::string ModFolder() const;
 	bool WriteLaunchConfig(std::string& error);
 	bool CheckLoaderSignatures(std::string& error);
+	bool InstallObjects(const std::wstring& mod, std::vector<ManifestFile>& fetch, Json& files, std::string& error);
+	bool InstallFromZip(const std::wstring& mod, const std::vector<ManifestFile>& fetch, Json& files, std::string& error);
+	std::string NewLauncherUrl() const;
 
 	Options opt_;
 	std::wstring statePath_;
@@ -83,7 +88,9 @@ private:
 	D2RInstall source_;
 	std::wstring gameDir_;
 	bool feedChecked_ = false;
-	Manifest feed_;
+	Manifest feed_;            // the channel's release manifest
+	std::string siteRoot_;     // SiteRoot(opt_.site)
+	std::string manifestUrl_;
 };
 
 }  // namespace mxl

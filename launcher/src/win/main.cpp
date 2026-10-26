@@ -20,7 +20,8 @@ namespace {
 const wchar_t* Usage =
 	L"MedianXL-Launcher.exe [--cli status|detect|install|update|repair|play|uninstall] [options]\n"
 	L"  --data-dir DIR   state, cache and log (default %LOCALAPPDATA%\\MedianXL)\n"
-	L"  --feed URL       release manifest (https://, http:// or file://)\n"
+	L"  --site URL|DIR   download site root (default https://dl.werdegames.com/mxl/; http://, file:// or a folder for tests)\n"
+	L"  --channel NAME   release channel: stable (default) or test\n"
 	L"  --source DIR     the D2R folder to copy (default: found via Battle.net / Steam)\n"
 	L"  --game-dir DIR   the Median XL game copy (default: on the D2R drive)\n"
 	L"  --any-drive      allow a game copy on another drive than D2R\n"
@@ -48,7 +49,8 @@ Cli ParseArgs() {
 		};
 		if (a == L"--cli") c.command = next();
 		else if (a == L"--data-dir") c.opt.dataDir = next();
-		else if (a == L"--feed") c.opt.feed = Utf8(next());
+		else if (a == L"--site") c.opt.site = Utf8(next());
+		else if (a == L"--channel") c.opt.channel = Utf8(next());
 		else if (a == L"--source") c.opt.source = next();
 		else if (a == L"--game-dir") c.opt.gameDir = next();
 		else if (a == L"--any-drive") c.opt.anyDrive = true;

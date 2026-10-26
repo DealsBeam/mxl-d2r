@@ -52,11 +52,15 @@ RUNS = os.environ.get("MXL_RUNS") or os.path.join(os.path.expanduser("~"), "mxl-
 
 
 def _savepath():
-    """This game folder's save folder (modinfo.json savepath; the slot 2 and 3 copies use MedianXL-sN)."""
-    try:
-        sp = json.load(open(os.path.join(GAME_DIR, "mods", "MedianXL", "modinfo.json")))["savepath"]
-    except Exception:
-        sp = "MedianXL/"
+    """This game folder's save folder (modinfo.json savepath; the slot 2 and 3 copies use MedianXL-sN). D2R reads
+    MedianXL.mpq/modinfo.json; a release / launcher install has only that one, so it comes first."""
+    sp = "MedianXL/"
+    for rel in (("MedianXL.mpq", "modinfo.json"), ("modinfo.json",)):
+        try:
+            sp = json.load(open(os.path.join(GAME_DIR, "mods", "MedianXL", *rel)))["savepath"]
+            break
+        except Exception:
+            pass
     return os.path.join(game_slots.SAVE_ROOT, sp.strip("/\\").replace("/", "\\"))
 
 

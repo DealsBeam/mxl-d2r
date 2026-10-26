@@ -119,7 +119,21 @@ std::string WinHttpError(const char* what) {
 	return s;
 }
 
-FetchResult FetchHttp(const std::string& url, uint64_t offset, uint64_t length, bool head,
+HINTERNET OpenSession() {
+	HINTERNET s = WinHttpOpen(g_ua.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+	if (!s)
+		return nullptr;
+	DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+	if (!WinHttpSetOption(s, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols))) {
+		protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;  // TLS 1.3 needs Windows 11 / Server 2022
+		WinHttpSetOption(s, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
+	}
+	WinHttpSetTimeouts(s, 15000, 15000, 30000, 60000);
+	return s;
+}
+
+// `shared`: a session kept by the caller (its keep-alive connections are reused), or nullptr for a one-off session
+FetchResult FetchHttp(HINTERNET shared, const std::string& url, uint64_t offset, uint64_t length, bool head,
                       const std::function<bool(const uint8_t*, size_t)>& sink) {
 	FetchResult r;
 	std::wstring host, path;
@@ -129,19 +143,16 @@ FetchResult FetchHttp(const std::string& url, uint64_t offset, uint64_t length, 
 		r.error = "bad URL " + url;
 		return r;
 	}
-	Handle session, conn, req;
-	session.h = WinHttpOpen(g_ua.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-	if (!session.h) {
-		r.error = WinHttpError("WinHttpOpen");
-		return r;
+	Handle own, conn, req;
+	HINTERNET session = shared;
+	if (!session) {
+		session = own.h = OpenSession();
+		if (!session) {
+			r.error = WinHttpError("WinHttpOpen");
+			return r;
+		}
 	}
-	DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
-	if (!WinHttpSetOption(session.h, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols))) {
-		protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;  // TLS 1.3 needs Windows 11 / Server 2022
-		WinHttpSetOption(session.h, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
-	}
-	WinHttpSetTimeouts(session.h, 15000, 15000, 30000, 60000);
-	conn.h = WinHttpConnect(session.h, host.c_str(), port, 0);
+	conn.h = WinHttpConnect(session, host.c_str(), port, 0);
 	if (!conn.h) {
 		r.error = WinHttpError("connect");
 		return r;
@@ -230,7 +241,19 @@ void SetUserAgent(const std::wstring& ua) { g_ua = ua; }
 FetchResult Fetch(const std::string& url, uint64_t offset, uint64_t length, const std::function<bool(const uint8_t*, size_t)>& sink) {
 	if (IsFileUrl(url))
 		return FetchFile(url, offset, length, sink);
-	return FetchHttp(url, offset, length, false, sink);
+	return FetchHttp(nullptr, url, offset, length, false, sink);
+}
+
+HttpSession::HttpSession() : h_(OpenSession()) {}
+HttpSession::~HttpSession() {
+	if (h_)
+		WinHttpCloseHandle(h_);
+}
+FetchResult HttpSession::Fetch(const std::string& url, uint64_t offset, uint64_t length,
+                               const std::function<bool(const uint8_t*, size_t)>& sink) {
+	if (IsFileUrl(url))
+		return FetchFile(url, offset, length, sink);
+	return FetchHttp(h_, url, offset, length, false, sink);
 }
 
 bool FetchSize(const std::string& url, uint64_t& size, std::string& error) {
@@ -241,12 +264,12 @@ bool FetchSize(const std::string& url, uint64_t& size, std::string& error) {
 		}
 		return true;
 	}
-	FetchResult r = FetchHttp(url, 0, 0, true, nullptr);
+	FetchResult r = FetchHttp(nullptr, url, 0, 0, true, nullptr);
 	if (r.ok && r.totalSize) {
 		size = r.totalSize;
 		return true;
 	}
-	r = FetchHttp(url, 0, 1, false, [](const uint8_t*, size_t) { return true; });
+	r = FetchHttp(nullptr, url, 0, 1, false, [](const uint8_t*, size_t) { return true; });
 	if (r.ok && r.totalSize) {
 		size = r.totalSize;
 		return true;

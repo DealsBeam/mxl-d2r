@@ -1,5 +1,5 @@
-// Downloads over WinHTTP (http/https, redirects followed, byte ranges) and the same calls for file:// feeds, so a
-// local test feed behaves like a GitHub release.
+// Downloads over WinHTTP (http/https, redirects followed, byte ranges) and the same calls for file:// sites, so a
+// local test folder behaves like the download host.
 #pragma once
 
 #include <cstdint>
@@ -20,6 +20,20 @@ struct FetchResult {
 // the Range header is detected (rangeHonoured false) and its body is skipped up to `offset`.
 FetchResult Fetch(const std::string& url, uint64_t offset, uint64_t length,
                   const std::function<bool(const uint8_t*, size_t)>& sink);
+
+// One WinHTTP session kept for many requests (a download worker): its keep-alive connections are reused. Use one per
+// thread.
+class HttpSession {
+public:
+	HttpSession();
+	~HttpSession();
+	HttpSession(const HttpSession&) = delete;
+	HttpSession& operator=(const HttpSession&) = delete;
+	FetchResult Fetch(const std::string& url, uint64_t offset, uint64_t length, const std::function<bool(const uint8_t*, size_t)>& sink);
+
+private:
+	void* h_;
+};
 
 // Size of a resource (HEAD, or a 1-byte range when HEAD gives none).
 bool FetchSize(const std::string& url, uint64_t& size, std::string& error);

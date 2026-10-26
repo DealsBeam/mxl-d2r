@@ -110,6 +110,49 @@ void TestManifest() {
 	      "manifest round trip (state file)");
 }
 
+void TestHosting() {
+	mxl::Manifest m;
+	std::string err;
+	std::string pub = R"(, "objectsBase": "objects/", "launcher": {"version": "0.2.0", "path": "launcher/0.2.0/MedianXL-Launcher.exe", "size": 5, "sha256": ")" + H3 + R"("})";
+	std::string text = ManifestText(F("a.txt", H1) + "," + F("b/copy.txt", H1) + "," + F("c.txt", H2), pub);
+	text.replace(text.find(R"("name": "MedianXL-D2R)"), 0, R"("path": "releases/0.70.0/MedianXL-D2R-0.70.0.zip", )");
+	Check(mxl::ParseManifest(text, m, err), "published manifest parses");
+	Check(m.objectsBase == "objects/" && m.zipPath == "releases/0.70.0/MedianXL-D2R-0.70.0.zip" && m.launcher.version == "0.2.0" &&
+	          m.launcher.sha256 == H3 && m.launcher.size == 5,
+	      "objectsBase, zip.path, launcher");
+	mxl::Manifest back;
+	Check(mxl::ParseManifest(mxl::ManifestToJson(m).Dump(), back, err) && back.objectsBase == "objects/" && back.zipPath == m.zipPath &&
+	          back.launcher.path == m.launcher.path,
+	      "published fields round trip");
+	Check(!mxl::ParseManifest(ManifestText(F("a.txt", H1), R"(, "objectsBase": "../x/")"), m, err), "unsafe objectsBase refused");
+	Check(!mxl::ParseManifest(ManifestText(F("a.txt", H1), R"(, "objectsBase": "objects")"), m, err), "objectsBase without '/' refused");
+	Check(!mxl::ParseManifest(ManifestText(F("a.txt", H1), R"(, "objectsBase": "https://evil/")"), m, err), "absolute objectsBase refused");
+	Check(mxl::ObjectPath("objects/", H2) == "objects/bb/" + H2, "object path");
+	auto groups = mxl::GroupObjects({{"a.txt", 10, H1}, {"b/copy.txt", 10, H1}, {"c.txt", 7, H2}});
+	Check(groups.size() == 2 && groups[0].sha256 == H1 && groups[0].paths.size() == 2 && groups[0].paths[1] == "b/copy.txt" &&
+	          groups[1].size == 7 && groups[1].paths.size() == 1,
+	      "same content is one download");
+
+	mxl::Channel c;
+	Check(mxl::ParseChannel(R"({"schemaVersion": 1, "version": "0.70.0", "manifest": "releases/0.70.0/release-manifest.json",
+	    "manifestSha256": ")" + std::string(64, 'E') + R"(", "publishedAt": "2026-10-26T12:00:00Z", "later": 1})", c, err) &&
+	          c.version == "0.70.0" && c.manifest == "releases/0.70.0/release-manifest.json" && c.manifestSha256 == std::string(64, 'e'),
+	      "channel parses");
+	Check(!mxl::ParseChannel(R"({"schemaVersion": 2, "version": "1", "manifest": "m.json", "manifestSha256": ")" + H1 + R"("})", c, err),
+	      "unknown channel schemaVersion refused");
+	Check(!mxl::ParseChannel(R"({"schemaVersion": 1, "version": "1", "manifest": "../m.json", "manifestSha256": ")" + H1 + R"("})", c, err),
+	      "unsafe channel manifest path refused");
+	Check(!mxl::ParseChannel(R"({"schemaVersion": 1, "version": "1", "manifest": "m.json"})", c, err), "channel without sha refused");
+	Check(!mxl::ParseChannel("<html>sign in</html>", c, err), "a login page is not a channel");
+
+	Check(mxl::SiteRoot("https://dl.werdegames.com/mxl") == "https://dl.werdegames.com/mxl/", "site root gets a '/'");
+	Check(mxl::SiteRoot("http://127.0.0.1:8765/") == "http://127.0.0.1:8765/", "site root kept");
+	const std::string bs(1, char(92));
+	Check(mxl::SiteRoot("D:" + bs + "test site" + bs) == "file:///D:/test%20site/", "local folder becomes a file URL");
+	Check(mxl::SiteRoot(bs + bs + "srv" + bs + "mxl") == "file://srv/mxl/", "UNC share becomes a file URL");
+	Check(mxl::ResolveUrl(mxl::SiteRoot("http://h/mxl"), "objects/aa/x") == "http://h/mxl/objects/aa/x", "object URL under the root");
+}
+
 void TestPlan() {
 	std::string err;
 	mxl::Manifest next;
@@ -312,6 +355,7 @@ int main() {
 	TestJson();
 	TestSafePath();
 	TestManifest();
+	TestHosting();
 	TestPlan();
 	TestVersions();
 	TestDetect();
