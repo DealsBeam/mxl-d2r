@@ -1,5 +1,5 @@
 import sys, json, glob, os
-sys.path.insert(0, r'%USERPROFILE%\.t3\worktrees\mxl-d2r\t3-7128fd6d\tools')
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 import d2r_model as dm
 root = 'D:/mxl-3d/anims/data/hd/character/enemy/'
 res = {}

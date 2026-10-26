@@ -1,6 +1,6 @@
 # Cross-build mxl-core.dll on Linux with clang-cl + lld-link and the MSVC CRT / Windows SDK from xwin (CI: .forgejo/workflows/ci.yml).
 #   cmake -S plugin -B build -DCMAKE_TOOLCHAIN_FILE=plugin/cmake/xwin-toolchain.cmake -DCMAKE_BUILD_TYPE=Release
-# XWIN: the xwin splat in the ci-image image.
+# XWIN: the xwin splat in the CI image.
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR AMD64)
 set(CMAKE_C_COMPILER clang-cl)

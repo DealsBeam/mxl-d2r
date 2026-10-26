@@ -1,4 +1,4 @@
-# CI on the CI server (CI server, runner ci-runner, label mxl-cross; image ci-image). Code only: no game files are
+# CI on the private CI server (Forgejo runner, label mxl-cross). Code only: no game files are
 # needed or present. What runs:
 #   plugin  cross-build of mxl-core.dll (clang-cl + lld-link + xwin MSVC CRT/SDK; same ABI as the MSVC build on the game PC)
 #   tests   the pure unit tests (plugin/tests) built natively with g++ and run
@@ -47,6 +47,8 @@ jobs:
       - uses: https://git.werdegames.com/actions-mirror/checkout@v4
       - name: Python syntax
         run: python3 -m compileall -q tools
+      - name: No private details in tracked text (tools/check_public.py; allowlist tools/check_public.allow)
+        run: python3 tools/check_public.py
       - name: Median inputs come from assets/median (D2R-only release, docs/setup.md)
         run: |
           if grep -rnE '"extract" / "mxl"|mxl_extracted"? / "2_txt"|DEFAULT_MXL = SUGMA' tools --include=*.py; then

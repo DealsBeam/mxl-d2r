@@ -22,7 +22,7 @@ import struct
 
 import numpy as np
 
-DUMP = os.environ.get("D2R_DUMP", r"%USERPROFILE%\ghidra\D2RLoader_6ab3782c_dump.exe")
+DUMP = os.environ.get("D2R_DUMP", os.path.join(os.path.expanduser("~"), "ghidra", "D2RLoader_6ab3782c_dump.exe"))
 BASE = 0x140000000
 TEXT = (0x1000, 0x1000 + 0x1caf000)
 PDATA = 0x3bff000
