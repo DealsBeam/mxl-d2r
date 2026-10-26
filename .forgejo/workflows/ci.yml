@@ -3,7 +3,18 @@
 #   plugin  cross-build of mxl-core.dll (clang-cl + lld-link + xwin MSVC CRT/SDK; same ABI as the MSVC build on the game PC)
 #   tests   the pure unit tests (plugin/tests) built natively with g++ and run
 #   tools   Python syntax check of tools/
+#   assets  asset pack tool tests; assets.lock against the pack in the runner cache (below)
 # The boot check and the in-game smoke run (tools/game_ctl.py) need the game and stay on the game PC.
+#
+# Assets (Median XL's files, HD art; not in git, docs/setup.md step 4) come from a cache on the runner, never a download:
+#   /var/cache/mxl-assets/assets-<version>.zip      the pack named in assets.lock (sha256 checked)
+#   /var/cache/mxl-assets/<version>/assets/         the same, unpacked once (jobs link it, no copy)
+# Seed it once per assets.lock version, on the runner, with the zip built by `tools/asset_pack.py build` on the game PC (or the
+# release asset of tag assets-<version>):
+#   mkdir -p /var/cache/mxl-assets/<version> && cp assets-<version>.zip /var/cache/mxl-assets/
+#   python3 tools/asset_pack.py fetch --from /var/cache/mxl-assets --dest /var/cache/mxl-assets/<version>/assets
+# A PR that bumps assets.lock shows the `assets` job's warning until the cache has the new pack. Set
+# MXL_ASSETS_REQUIRED=1 in that job's env to make a missing or different cache fail the job.
 name: CI
 
 on:
@@ -53,4 +64,23 @@ jobs:
         run: |
           if grep -rnE '"extract" / "mxl"|mxl_extracted"? / "2_txt"|DEFAULT_MXL = SUGMA' tools --include=*.py; then
             echo "tools must read Median's files from assets/median, not extract/mxl or ..\mxl_extracted"; exit 1
+          fi
+
+  assets:
+    runs-on: mxl-cross
+    env:
+      MXL_ASSETS: /var/cache/mxl-assets
+    steps:
+      - uses: https://git.werdegames.com/actions-mirror/checkout@v4
+      - name: Asset pack tool tests
+        run: python3 tools/test_asset_pack.py
+      - name: assets.lock matches the pack in the runner cache
+        run: |
+          if python3 tools/asset_pack.py check-pack "$MXL_ASSETS"; then
+            python3 tools/asset_pack.py fetch --link --force
+            python3 tools/asset_pack.py verify --full
+          elif [ "${MXL_ASSETS_REQUIRED:-}" = 1 ]; then
+            echo "runner cache $MXL_ASSETS lacks the pack pinned in assets.lock (seed it: comment at the top of this file)"; exit 1
+          else
+            echo "::warning::runner cache $MXL_ASSETS lacks the pack pinned in assets.lock; not verified"
           fi

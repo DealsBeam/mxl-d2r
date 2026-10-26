@@ -11,7 +11,7 @@ weights, meshes) lives under `D:\mxl-3d\` and is never committed.
 | `render_glb.py` | `blender -b -P` 4-angle Workbench render strip of GLBs |
 | `donor_info.py`, `extract_anims.py`, `ai/clip_survey.py` | skeleton bone counts and real clip names of the D2R enemy units |
 | `rig_fit.py` | Wereowl mesh -> skinned to a D2R skeleton (profiles `wolf`, `goatman1`): capsule weights, per-role unposing; used by `tools/wereowl_models.py` |
-| `owl_hi.py`, `owl_retopo.py`, `owl_bake.py`, `owl_maps.py`, `owl_lods.py`, `owl_pose.py`, `bl_common.py`, `render_npz.py` | lane wereowl-mesh: high-poly clean-up, QuadriFlow retopology, normal / AO bake and albedo re-projection (Blender), maps to PNG, LOD collapse (pymeshlab), fit to the bear skeleton, Blender helpers, static Blender renders; commands in `assets/hd/wereowl/README.md` |
+| `owl_hi.py`, `owl_retopo.py`, `owl_bake.py`, `owl_maps.py`, `owl_lods.py`, `owl_pose.py`, `bl_common.py`, `render_npz.py` | lane wereowl-mesh: high-poly clean-up, QuadriFlow retopology, normal / AO bake and albedo re-projection (Blender), maps to PNG, LOD collapse (pymeshlab), fit to the bear skeleton, Blender helpers, static Blender renders; commands in `docs/hd-wereowl-assets.md` |
 | `morph_shots.py` | in game: a Druid casts Wereowl (`cast 1364 self`) and the form is screenshot (neutral / walk / run / attack / cast / get hit; `MXL_MORPH_DIRS=1` adds eight walk directions), background input, slot lock held by the caller |
 | `ai/run_hunyuan.py`, `ai/run_triposg.py`, `ai/diso_stub.py` | Hunyuan3D-2 (mv / mini) and TripoSG shape generation on local weights (copies of what ran from `D:\mxl-3d\scripts`) |
 

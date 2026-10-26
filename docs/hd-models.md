@@ -201,16 +201,20 @@ still builds the Wereowl that way.
 
 Build step `tools/wereowl_models.py` (in `tools/build.py` after `hd_monsters.py`; rigging in `tools/sprite3d/rig_fit.py`; in game
 test scripts `tools/sprite3d/morph_shots.py` for the Druid and `ingame_shots.py` for the enemy). The assets are in the repo
-(Git LFS, see "Assets in the repo" below): `assets/hd/wereowl/` holds `mesh_lods.npz` and `albedo.png` (`MXL_3D_DIR` overrides).
+(the asset pack, see "Assets in the pack" below): `assets/hd/wereowl/` holds `mesh_lods.npz` and `albedo.png` (`MXL_3D_DIR` overrides).
 
-### Assets in the repo (rule from 2026-10-23)
-Every HD model, texture and other custom art the port uses is committed, so any PC can build the full mod from a clone:
-- one folder per asset, `assets/hd/<name>/`: the build inputs the build step reads, `source/` with the generation sources
-  (meshes, `.glb`, references), and a `README.md` (what it is, which build step uses it, how it was made, known flaws);
-- everything under `assets/` is stored with **Git LFS** (`.gitattributes`); `.md` / `.json` there stay plain text;
-- build steps default to the repo folder; an environment variable may point elsewhere for work in progress;
-- on another PC: `git lfs install` once, then `git pull` (or `git lfs pull` in a clone made without LFS), then `tools/build.py`.
-  Without LFS the files are small pointer texts and the 3D steps fall back to their stand-ins.
+### Assets in the pack (rule from 2026-10-23; Git LFS replaced by the asset pack 2026-10-26)
+Every HD model, texture and other custom art the port uses is in the **asset pack** (`assets-<version>.zip`, pinned in
+`assets.lock`, not in git), so any PC can build the full mod from a clone plus `tools/asset_pack.py fetch`:
+- one folder per asset, `assets/hd/<name>/`: the build inputs the build step reads and `source/` with the generation sources
+  (meshes, `.glb`, references). Its `README.md` (what it is, which build step uses it, how it was made, known flaws) and
+  small hand-made data files (the camera fit `cams.json`) are **tracked in git**, not in `assets/`: the README as
+  `docs/hd-<name>-assets.md`, data under `tools/sprite3d/data/<name>/`;
+- build steps default to `assets/hd/<name>/`; an environment variable may point elsewhere for work in progress;
+- on another PC: `py -3 tools/asset_pack.py fetch` once (docs/setup.md step 4), then `tools/build.py`. `build.py` refuses to run
+  when `assets/` is missing or is not the pinned pack, so the 3D steps never silently fall back to their stand-ins;
+- a new or changed asset: put it under `assets/hd/<name>/`, `asset_pack.py build --version <N+1> --write-lock`, and give the
+  zip to the coordinator (release tag `assets-<N+1>`); the PR carries the new `assets.lock` and the docs/tools that use it.
 
 **Off switch:** `MXL_NO_3D=1` in the environment of the build (or `py -3 tools/wereowl_models.py --off`, or no assets in
 `MXL_3D_DIR`): the step does nothing and both uses keep the goatman1 stand-ins of `hd_monsters.py`. Nothing else in the build
@@ -401,7 +405,7 @@ several build steps can add their own. Choose a template model with the same num
 
 Goal: the in-game Druid Wereowl (rigged to the vanilla werebear skeleton at `data/hd/character/mxl/wereowl/`) as close as possible to
 the static generated model. Steps in order, each checked in game on slot 3 (`tools/sprite3d/morph_shots.py`, background input; sheets
-in the PR description). The build inputs and the exact commands are in `assets/hd/wereowl/README.md`; tools in `tools/sprite3d/`
+in the PR description). The build inputs and the exact commands are in [hd-wereowl-assets.md](hd-wereowl-assets.md); tools in `tools/sprite3d/`
 (`owl_hi`, `owl_retopo`, `owl_bake`, `owl_maps`, `owl_lods`, `owl_pose`, `bl_common`, `render_npz`).
 
 ### Vanilla werebear budget and texture conventions (measured)
@@ -527,6 +531,5 @@ mesh's values, compare a normal-mapped result against a vanilla part).
 3. Blender exporter that calls that builder; exporter test on a simple artist test rig (stick figure, 3 clips) end to end
    through `hd_monsters.py`.
 4. Only then commission real art (project rule: custom HD art comes last).
-- Size limit: the forge's proxy drops an LFS upload that takes more than about two minutes (~20 MB from the game PC). Store a larger
-  file xz-compressed (`<name>.xz`) and decompress it in the build step that reads it; push big batches with
-  `git -c lfs.concurrenttransfers=1 push`.
+- Size: no per-file limit any more (the asset pack replaced Git LFS and its ~20 MB forge-proxy upload limit). The existing
+  `<name>.xz` files stay as they are (the build step that reads one decompresses it).

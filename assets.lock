@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "tag": "assets-1",
+  "file": "assets-1.zip",
+  "format": "zip",
+  "size": 540065103,
+  "sha256": "389efe68caac81c08bb0fc3ab5d990610ee32e925041490c4173f0bebc3e8127",
+  "manifest_sha256": "3e97a84e74a93b2cb068a1bf5b39696435105855d6656098054c7decf32860f7",
+  "files": 8721,
+  "bytes": 868193046,
+  "urls": [
+    "https://github.com/Nugwa628/mxl-d2r/releases/download/assets-1/assets-1.zip",
+    "https://git.werdegames.com/WerdeGames/mxl-d2r/releases/download/assets-1/assets-1.zip"
+  ]
+}

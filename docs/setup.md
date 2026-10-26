@@ -6,14 +6,15 @@ build). Every command runs from the repo root.
 ## External inputs
 
 Release rule (2026-10-23): the port is for players who own **only D2R**. Everything from Median XL and all custom art is
-in the repo (`assets/`, Git LFS); only Blizzard's base game files are taken from the D2R install and are never committed.
+in the **asset pack** (`assets/` after `tools/asset_pack.py fetch`; not in git, pinned by `assets.lock`); only Blizzard's
+base game files are taken from the D2R install and are never committed or packed.
 
 | Input | Where | Notes |
 |---|---|---|
 | Diablo II: Resurrected 3.3, build 93847 | `C:\Program Files (x86)\Diablo II Resurrected` | read through CascLib; game must be installed (not running) |
-| Median XL (classic) 2.14.4 | not needed | Median's own files are in the repo (`assets/median/`, Git LFS); the install (`C:\Games\median-xl`) is only needed to re-extract with `tools/mpq_extract.py` |
-| Git LFS | comes with Git for Windows | `git lfs install` once per PC before cloning (or `git lfs pull` afterwards) |
-| `..\mxl_extracted` | not needed to build | the decoded tables the build reads are in the repo (`assets/median/2_txt`, `item_names.txt`, `skill_names.txt`). The Ghidra output (`3_ghidra`, `4_sigma_source`, ...) is still only here, for the research tools `sigma_fn.py`, `sigma_patches.py` and `sigma_evidence.py`; NOT in git. On the game PC it lives in `Desktop\sugma\mxl_extracted`, so a junction points to it: `mklink /J %USERPROFILE%\mxl_extracted %USERPROFILE%\Desktop\sugma\mxl_extracted` |
+| Median XL (classic) 2.14.4 | not needed | Median's own files are in the asset pack (`assets/median/`); the install (`C:\Games\median-xl`) is only needed to re-extract with `tools/mpq_extract.py` |
+| Asset pack | `assets-<version>.zip`, about 540 MB (868 MB unpacked), pinned in `assets.lock` | downloaded by `tools/asset_pack.py fetch` (step 4); no Git LFS needed |
+| `..\mxl_extracted` | not needed to build | the decoded tables the build reads are in the asset pack (`assets/median/2_txt`, `item_names.txt`, `skill_names.txt`). The Ghidra output (`3_ghidra`, `4_sigma_source`, ...) is still only here, for the research tools `sigma_fn.py`, `sigma_patches.py` and `sigma_evidence.py`; NOT in git. On the game PC it lives in `Desktop\sugma\mxl_extracted`, so a junction points to it: `mklink /J %USERPROFILE%\mxl_extracted %USERPROFILE%\Desktop\sugma\mxl_extracted` |
 | Python 3.12 | `py -3` | `python` is the Store stub |
 | CMake | `C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin` | not on PATH; add it for the build shells |
 | MSVC | Visual Studio 18 Community, "Desktop development with C++" | |
@@ -24,8 +25,24 @@ in the repo (`assets/`, Git LFS); only Blizzard's base game files are taken from
 1. `git clone --recurse-submodules` the repo (or `git submodule update --init`).
 2. `py -3 -m pip install --user -r tools/requirements.txt` (pillow, capstone).
 3. Native libraries: `tools\build_native.ps1` (with CMake on PATH) -> `build\StormLib`, `build\CascLib`.
-4. Median's files: nothing to do, they come with the clone (`assets/median/`, 864 MB through Git LFS; `git lfs ls-files`
-   lists them). Without LFS they are small pointer files and the build fails.
+4. Median's files and the HD art (`assets/`, the asset pack): `py -3 tools/asset_pack.py fetch`. It downloads the pack that
+   `assets.lock` pins (version, sha256, size, URLs), checks the sha256, unpacks into `assets/` and checks every file against
+   the pack's manifest; run again, it only says "already the pinned pack". `tools/build.py` does the same check first and
+   stops (exit 2) with this instruction when `assets/` is missing or differs; it never builds without it.
+   - Offline / local copy: `py -3 tools/asset_pack.py fetch --from <pack file | folder holding it | unpacked tree>`, or set
+     `MXL_ASSETS` to that path (then `tools/build.py` fetches a missing `assets/` by itself). With `--link` and an unpacked
+     tree, `assets/` becomes a junction/symlink to the tree (no copy; CI and the game PC use this).
+   - Download cache: `~/.cache/mxl-d2r/assets` (`MXL_ASSETS_CACHE` moves it). A release of a private repo needs a token in
+     `MXL_ASSETS_TOKEN` (or `GITHUB_TOKEN`); it is only sent to github.com.
+   - A checkout from before the pack with `assets/` already there (Git LFS): `py -3 tools/asset_pack.py adopt` hashes it and,
+     if it equals the pinned pack, writes the manifest (no download). `verify` re-checks (`--full` hashes everything;
+     the default trusts an unchanged stat snapshot of the last full check; `--strict` also fails on extra files).
+   - Changing assets: edit `assets/`, then `MXL_SKIP_ASSET_CHECK=1 tools/build.py` builds with a warning. A new pack:
+     `py -3 tools/asset_pack.py build --version <N> --write-lock` (writes `build/asset-pack/assets-<N>.zip` + manifest and
+     `assets.lock`; `build` first scans the text files with `tools/check_public.py`'s rules and refuses on a hit, `asset_pack.py scan` runs only that); the coordinator uploads the zip as the asset of release tag `assets-<N>` (GitHub `Nugwa628/mxl-d2r`; the
+     forge release is the second URL) and commits `assets.lock`. Same tree, same bytes (sorted entries, fixed timestamps).
+   - Our own files that used to sit in `assets/` are tracked now: [assets-median.md](assets-median.md) (what the Median tree
+     is), [hd-wereowl-assets.md](hd-wereowl-assets.md) (the Wereowl model README), `tools/sprite3d/data/wereowl/cams.json`.
 5. Extract the D2R baseline, all sets the build reads:
    ```
    py -3 tools/casc_extract.py --set excel --set strings --set layouts --set dataguide --set meta --set legacy-ui --set legacy-art --set legacy-maps --set hd-ui
@@ -39,11 +56,11 @@ in the repo (`assets/`, Git LFS); only Blizzard's base game files are taken from
    `..\D2R Modding Tools` folder are read. Against the build that read the classic tables `work/mod` is byte-identical
    except 214 comment cells that carry D2R's wording instead of 1.13c's (misc.txt `name`, 63 rows; cubemain.txt
    `description`, 151 rows; both columns are typed "comment" in D2R's data guide) and the lines of validate_report.md that quote them.
-7. Nothing to do (already in the repo): `assets/median/data/global/excel/` holds the pre-hotfix `skills.bin`,
+7. Nothing to do (already in the asset pack): `assets/median/data/global/excel/` holds the pre-hotfix `skills.bin`,
    `skillscode.bin` and `states.bin` that match `assets/median/2_txt` (the installed `medianxl-YmludGJsdHh0.mpq`,
    dated 2026-10-03, has hotfixed ones with which `formula.py` finds no formula columns in skills; those are kept in
    `%USERPROFILE%\tmp-ext\mxl-hotfix-bins`). Re-running `tools/mpq_extract.py` writes the hotfixed ones over them:
-   restore the three from git afterwards. Regenerating `2_txt` from the hotfix needs the patched d2bin2txt (not in this repo).
+   restore the three from the pack afterwards (`asset_pack.py fetch --force`). Regenerating `2_txt` from the hotfix needs the patched d2bin2txt (not in this repo).
 8. `py -3 tools/build.py` -> `work/mod/`. Result: validate.py **0 errors** (both banks), 3,994 plugin items,
    48 (base) / 89 (rotw) warnings. The 2 errors in `validation.md` were fixed by an earlier commit.
 9. Plugin (CMake on PATH): `tools\build_plugin.ps1` -> `build\plugin\Release\mxl-core.dll`, **mxl-core 0.36.0**.
