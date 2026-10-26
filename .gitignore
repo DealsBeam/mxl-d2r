@@ -28,6 +28,7 @@
 # Build output
 /build/
 /out/
+/dist/
 CMakeUserPresets.json
 .vs/
 

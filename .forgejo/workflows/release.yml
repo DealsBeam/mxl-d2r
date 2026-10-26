@@ -1,0 +1,43 @@
+# Release packaging on the CI server (runner ci-runner, label mxl-cross; docs/release.md). Manual dispatch or a v* tag.
+# The server has no game files (docs/setup.md "CI"), so tools/build.py cannot run here: this job cross-builds the release
+# plugin (-DMXL_RELEASE=ON, no test harness), checks it, and packages it without MedianXL.mpq/data
+# (tools/package_release.py --no-data: MedianXL-D2R-<version>-nodata.zip, release-manifest.json with "complete": false,
+# release notes skeleton, SHA256SUMS). The full player zip is packaged on the game PC (docs/release.md "Making a release").
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (default: PluginVersion of plugin/src/mxl_core.cpp)"
+        required: false
+  push:
+    tags: ["v*"]
+
+jobs:
+  package:
+    runs-on: mxl-cross
+    steps:
+      - uses: https://git.werdegames.com/actions-mirror/checkout@v4
+      - name: PluginSDK submodule
+        run: git submodule update --init --depth 1 third_party/PluginSDK
+      - name: Build release mxl-core.dll (no test harness)
+        run: |
+          cmake -S plugin -B build-release -DCMAKE_TOOLCHAIN_FILE="$PWD/plugin/cmake/xwin-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release -DMXL_RELEASE=ON
+          cmake --build build-release -j6 --target mxl_core
+          ls -la build-release/mxl-core.dll
+      - name: Packager unit tests
+        run: cd tools && python3 -m unittest test_package_release
+      - name: Package
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+          v="$INPUT_VERSION"
+          case "$GITHUB_REF" in refs/tags/v*) [ -n "$v" ] || v="${GITHUB_REF#refs/tags/v}" ;; esac
+          python3 tools/package_release.py --no-data --plugin build-release/mxl-core.dll ${v:+--version "$v"} --out dist
+          cat dist/SHA256SUMS
+      - uses: https://git.werdegames.com/actions-mirror/forgejo-upload-artifact@v4
+        with:
+          name: mxl-d2r-release
+          path: dist/

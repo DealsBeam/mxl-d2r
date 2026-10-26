@@ -11,6 +11,7 @@
                                     + Median's classic tiles/maps (global/tiles)
 
 Only MedianXL.mpq/data is replaced on reinstall; saves live elsewhere (Saved Games) and are never touched.
+tools/package_release.py builds the same folder for a player release (build_data + write_mod_files).
 Usage: python tools/install_mod.py [--game "C:\\Program Files (x86)\\Diablo II Resurrected"] [--name MedianXL]
 """
 import argparse
@@ -24,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "work" / "mod" / "data"
 NAMESPACE = "medianxl"  # tbl2json.py writes the namespaced strings under lng/strings/<NAMESPACE>/
 DEFAULT_GAME = os.environ.get("MXL_D2R_GAME", r"C:\Program Files (x86)\Diablo II Resurrected")  # see game_ctl.py
-BUILD = ROOT / "extract" / "d2r" / "93847" / "data" / "global" / "dataversionbuild.txt"
+D2R_BUILD = "93847"  # the game build the data and the plugin are made for; data/global/dataversionbuild.txt holds it
 MXL_GLOBAL = ROOT / "assets" / "median" / "data" / "global"
 MXL_TILES = MXL_GLOBAL / "tiles"
 PLUGIN = ROOT / "build" / "plugin" / "Release" / "mxl-core.dll"
@@ -138,9 +139,16 @@ def install_one(game: Path, name: str, savepath: str, copy_data_from: Path = Non
         shutil.rmtree(data)
     if copy_data_from is not None:
         shutil.copytree(copy_data_from, data)
-        return finish_install(game, name, savepath, mod, mpq, data)
+    else:
+        build_data(data, game)
+    return finish_install(game, name, savepath, mod, mpq, data)
+
+
+def build_data(data: Path, game: Path) -> None:
+    """Write the mod's data folder (`data` must not exist yet): work/mod/data plus what is merged at install time.
+    Reads D2R's own files from the game folder `game` (CASC, for maps_hd) but copies none of them."""
     shutil.copytree(SRC, data)
-    shutil.copy2(BUILD, data / "global" / "dataversionbuild.txt")
+    (data / "global" / "dataversionbuild.txt").write_text(D2R_BUILD, encoding="ascii")
     # Classic map tiles and presets (.dt1/.ds1): D2R loads them for map layout even in HD mode, and Median's
     # level types point at its own (e.g. tiles/mxl/quest/yshari/basewall.dt1). Note: Median's .ds1 maps still use
     # Median's object numbers; objects 573+ were renumbered (docs/txt-migrate.md) and need remapping later.
@@ -166,10 +174,16 @@ def install_one(game: Path, name: str, savepath: str, copy_data_from: Path = Non
                 dest = data / "global" / p.relative_to(MXL_GLOBAL)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(p, dest)
-    return finish_install(game, name, savepath, mod, mpq, data)
 
 
-def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, data: Path) -> int:
+DEV_METADATA = {"modVersion": "0.1.0-dev", "description": "Work-in-progress port of Median XL to D2R.", "website": ""}
+
+
+def write_mod_files(mod: Path, name: str, savepath: str, plugin: Path = PLUGIN, metadata: dict = None) -> None:
+    """Everything of the mod folder except <name>.mpq/data: modinfo.json, d2rloader/{metadata.json, plugins, config, patches}.
+    metadata: modVersion / description / website for d2rloader/metadata.json (default: the dev install's)."""
+    mpq = mod / f"{name}.mpq"
+    mpq.mkdir(parents=True, exist_ok=True)
     # D2R (and D2RLoader's mod detection) read modinfo.json inside the folder-style MPQ; the copy at the mod
     # root follows the D2RLoader guide's layout and is harmless.
     modinfo = json.dumps({"name": name, "savepath": savepath}, indent=2)
@@ -180,16 +194,14 @@ def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, d
     (d2rl / "plugins").mkdir(exist_ok=True)
     (d2rl / "patches").mkdir(exist_ok=True)
     meta = {"schemaVersion": 1, "namespace": NAMESPACE,
-            "metadata": {"name": "Median XL (D2R port)", "modVersion": "0.1.0-dev", "author": "mxl-d2r",
-                         "description": "Work-in-progress port of Median XL to D2R.",
-                         "website": ""}}
+            "metadata": {"name": "Median XL (D2R port)", "author": "mxl-d2r", **DEV_METADATA, **(metadata or {})}}
     (d2rl / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     # The mxl-core plugin (plugin/, built by tools/build_plugin.ps1) loads only with this mod (mod-scoped)
-    if PLUGIN.exists():
-        shutil.copy2(PLUGIN, d2rl / "plugins" / PLUGIN.name)
-        print(f"plugin {PLUGIN.name} ({PLUGIN.stat().st_size // 1024} KB)")
+    if plugin.exists():
+        shutil.copy2(plugin, d2rl / "plugins" / "mxl-core.dll")
+        print(f"plugin {plugin.name} ({plugin.stat().st_size // 1024} KB)")
     else:
-        print(f"no plugin at {PLUGIN} (run tools/build_plugin.ps1); installing data only")
+        print(f"no plugin at {plugin} (run tools/build_plugin.ps1); installing data only")
     toml = d2rl / "config" / "d2rloader.toml"
     if not toml.exists():  # never overwrite a config someone edited
         toml.write_text('[d2rcore.save_format]\nmode = "extended"\n', encoding="utf-8")
@@ -200,6 +212,9 @@ def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, d
         toml.write_text(added, encoding="utf-8")
         print(f"d2rloader.toml: add_shared_tabs = {STASH_PAGES - VANILLA_SHARED_TABS} (Median's {STASH_PAGES} stash pages)")
 
+
+def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, data: Path) -> int:
+    write_mod_files(mod, name, savepath)
     bindings = game / "d2rloader" / "config" / "input-bindings.toml"
     if bindings.exists():
         old = bindings.read_text(encoding="utf-8")
