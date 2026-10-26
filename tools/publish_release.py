@@ -7,8 +7,8 @@ The host serves one folder over HTTPS (Caddy file_server on dl.werdegames.com/mx
                                             "archive" entry
   releases/<v>/D2R-XL-<v>.7z          the manual download for players, built ON THE SERVER from the objects
   releases/<v>/SHA256SUMS, RELEASE_NOTES-<v>.md
-  objects/<sha256[0:2]>/<sha256>            raw file bytes, content-addressed, shared by every version (the launcher's source)
-  launcher/<v>/D2R-XL-Launcher.exe, .sha256    (--launcher)
+  objects/<sha256[0:2]>/<sha256>            raw file bytes, content-addressed, shared by every version (the downloader's source)
+  launcher/<v>/D2R-XL-Downloader.exe, .sha256  (--launcher)
   assets/<files>                            the asset pack (--assets)
 
 `publish` sends only what the host lacks, in ONE compressed file, and lets the server do the rest (tools/dl_ingest.py,
@@ -64,7 +64,7 @@ READY_SCHEMA = 1
 CHANNELS = ("stable", "test")
 OBJECTS_BASE = "objects/"
 INCOMING = "../incoming"  # relative to the site root: /srv/dl/incoming next to /srv/dl/mxl, not served
-LAUNCHER_NAME = "D2R-XL-Launcher.exe"
+LAUNCHER_NAME = "D2R-XL-Downloader.exe"
 MANIFEST_NAME = "release-manifest.json"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -966,7 +966,7 @@ def main(argv=None) -> int:
     p.add_argument("--dist", type=Path, default=ROOT / "dist", help="package_release.py output folder (default: dist)")
     p.add_argument("--stage", type=Path, help="read file bytes from this D2R-XL/ folder instead of the 7z")
     p.add_argument("--work", type=Path, help="where the objects 7z is built and kept (default: <dist>/upload/<version>)")
-    p.add_argument("--launcher", type=Path, help="D2R-XL-Launcher.exe to publish with this release")
+    p.add_argument("--launcher", type=Path, help="D2R-XL-Downloader.exe to publish with this release")
     p.add_argument("--launcher-version", help="default: the exe's own version resource (must agree when given)")
     p.add_argument("--assets", type=Path, help="folder of asset-pack files for assets/ (uploaded directly)")
     p.add_argument("--allow-incomplete", action="store_true", help="accept a --no-data package (test channel / --no-channel only)")

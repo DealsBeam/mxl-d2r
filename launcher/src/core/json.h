@@ -1,4 +1,4 @@
-// Minimal JSON reader / writer for the release manifest and the launcher's own state file. UTF-8 in, UTF-8 out.
+// Minimal JSON reader / writer for the release manifest and the downloader's own state file. UTF-8 in, UTF-8 out.
 #pragma once
 
 #include <cstdint>

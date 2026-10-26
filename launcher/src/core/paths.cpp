@@ -1,4 +1,7 @@
-#include "gamecopy.h"
+#include "paths.h"
+
+#include "json.h"
+#include "manifest.h"
 
 #include <cctype>
 #include <cstdint>
@@ -6,15 +9,6 @@
 
 namespace mxl {
 namespace {
-
-std::string Norm(const std::string& rel) {
-	std::string s;
-	for (char c : rel)
-		s += c == '\\' ? '/' : char(std::tolower(uint8_t(c)));
-	while (!s.empty() && s[0] == '/')
-		s.erase(0, 1);
-	return s;
-}
 
 std::string NormPath(const std::string& p) {  // lower case, '/' separators, no trailing '/'
 	std::string s;
@@ -25,20 +19,10 @@ std::string NormPath(const std::string& p) {  // lower case, '/' separators, no 
 	return s;
 }
 
-bool PathIsOrUnder(const std::string& path, const std::string& dir) {
-	std::string p = NormPath(path), d = NormPath(dir);
-	return !d.empty() && (p == d || p.rfind(d + "/", 0) == 0);
-}
-
 std::string Join(const std::string& a, const std::string& b) {
 	if (a.empty())
 		return b;
 	return a.back() == char(92) || a.back() == '/' ? a + b : a + char(92) + b;
-}
-
-bool Under(const std::string& s, const char* dir) {
-	std::string d = dir;
-	return s == d || s.rfind(d + "/", 0) == 0;
 }
 
 std::vector<std::string> Lines(const std::string& text) {
@@ -106,28 +90,6 @@ bool KeyLine(const std::string& line, const std::string& key, std::string* value
 }
 
 }  // namespace
-
-bool ExcludedFromCopy(const std::string& rel) {
-	std::string s = Norm(rel);
-	if (s.empty())
-		return false;
-	if (Under(s, "mods") || Under(s, "d2rloader") || Under(s, "logs") || Under(s, "crashes"))
-		return true;
-	if (s.find('/') == std::string::npos) {  // top-level files
-		if (s.rfind("d2rloader", 0) == 0)  // D2RLoader.exe, D2RLoader-s2.exe, d2rloader.mpq
-			return true;
-		if (s == "d2rcore.dll" || s == "blz-log.txt" || s == "dxdiag.txt" || s == "d2r-xl-copy.json" || s == "medianxl-copy.json")
-			return true;
-		size_t dot = s.rfind('.');
-		std::string ext = dot == std::string::npos ? "" : s.substr(dot);
-		if (ext == ".log" || ext == ".dmp" || ext == ".mxlpart")
-			return true;
-	}
-	// D2RLoader writes this proxy into the game's data at every start; the copy's loader makes its own.
-	if (s == "data/hd/objects/dummy/d2rloader_stash_proxy.json")
-		return true;
-	return s.size() > 8 && s.compare(s.size() - 8, 8, ".mxlpart") == 0;
-}
 
 std::string SetTomlKey(const std::string& text, const std::string& section, const std::string& key, const std::string& value) {
 	auto lines = Lines(text);
@@ -199,10 +161,69 @@ std::string GetTomlKey(const std::string& text, const std::string& section, cons
 	return "";
 }
 
+bool PathIsOrUnder(const std::string& path, const std::string& dir) {
+	std::string p = NormPath(path), d = NormPath(dir);
+	if (d.empty() || (p + "/").find("/../") != std::string::npos || p.rfind("../", 0) == 0)
+		return false;
+	return p == d || p.rfind(d + "/", 0) == 0;
+}
+
 std::string DefaultDataDir(const std::string& localAppData) { return Join(localAppData, ProductFolder); }
 
-std::string DefaultGameDir(const std::string& dataDir, bool dataDirOnD2RDrive, const std::string& d2rDriveRoot) {
-	return dataDirOnD2RDrive ? Join(dataDir, "game") : Join(Join(d2rDriveRoot, ProductFolder), "game");
+bool SafeModFolderName(const std::string& name) {
+	if (name.empty() || name.size() > 64 || name == "." || name == ".." || name.back() == '.' || name.back() == ' ' || name[0] == ' ')
+		return false;
+	for (char c : name)
+		if (!(std::isalnum(uint8_t(c)) || c == '-' || c == '_' || c == '.' || c == ' '))
+			return false;
+	return SafeRelativePath(name);  // device names (CON, NUL, ...)
+}
+
+std::string ModTargetDir(const std::string& d2rDir, const std::string& modFolder) {
+	if (d2rDir.empty() || !SafeModFolderName(modFolder))
+		return "";
+	std::string d = d2rDir;
+	while (d.size() > 3 && (d.back() == char(92) || d.back() == '/'))
+		d.pop_back();
+	return Join(Join(d, "mods"), modFolder);
+}
+
+MarkerVerdict CheckMarker(const std::string& text, const std::string& stateId) {
+	if (text.empty())
+		return MarkerVerdict::None;
+	Json j;
+	std::string err;
+	if (!Json::Parse(text, j, err) || !j.IsObject() || j["made_by"].Str() != MarkerMadeBy || j["id"].Str().empty())
+		return MarkerVerdict::Unreadable;
+	return stateId.empty() || j["id"].Str() == stateId ? MarkerVerdict::Ours : MarkerVerdict::OtherId;
+}
+
+std::string MakeMarker(const std::string& id, const std::string& version) {
+	Json m = Json::Object();
+	m.Set("made_by", MarkerMadeBy).Set("id", id).Set("version", version);
+	return m.Dump();
+}
+
+bool LoaderVersionMatches(const std::string& found, const std::string& required) {
+	auto nums = [](const std::string& v) {
+		std::vector<long> n;
+		size_t i = 0;
+		while (i < v.size() && std::isdigit(uint8_t(v[i]))) {
+			long x = 0;
+			while (i < v.size() && std::isdigit(uint8_t(v[i])))
+				x = x * 10 + (v[i++] - '0');
+			n.push_back(x);
+			if (i < v.size() && v[i] == '.')
+				++i;
+			else
+				break;
+		}
+		while (n.size() > 3 && n.back() == 0)  // "1.3.1.0" is 1.3.1
+			n.pop_back();
+		return n;
+	};
+	std::vector<long> f = nums(found), r = nums(required);
+	return !f.empty() && f == r;
 }
 
 bool OfficialMedianXLPath(const std::string& path, const std::string& localAppData, const std::string& roamingAppData) {

@@ -1,15 +1,14 @@
-// Unit tests of the launcher's portable core (no Windows headers): manifest parsing and the install plan, path
-// safety, D2R detection parsers and the build check, zip directory + inflate, TOML edits, the copy filter, the SVG
-// path reader for the window's icons.
+// Unit tests of the downloader's portable core (no Windows headers): manifest parsing and the install plan, path
+// safety, the mod folder and its marker, the D2RLoader version check, D2R detection parsers and the build check, the
+// 7z decoder, TOML edits, the SVG path reader for the window's icons.
 // Built and run by CI on Linux (g++) and locally with MSVC: cmake -S launcher/tests -B build/launcher-tests.
 #include "../src/core/detect.h"
-#include "../src/core/gamecopy.h"
-#include "../src/core/inflate.h"
 #include "../src/core/json.h"
 #include "../src/core/manifest.h"
+#include "../src/core/paths.h"
+#include "../src/core/sevenzip.h"
 #include "../src/core/sha256.h"
 #include "../src/core/svgpath.h"
-#include "../src/core/zip.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -116,14 +115,14 @@ void TestManifest() {
 	v1.replace(v1.find(R"("schemaVersion": 2)"), 18, R"("schemaVersion": 1)");
 	Check(!mxl::ParseManifest(v1, m, err) && m.schemaVersion == 1 && m.version == "0.70.0" && m.files.empty(),
 	      "schemaVersion 1 (zip releases) refused");
-	std::string v3 = ManifestText(F("a.txt", H1), R"(, "launcher": {"version": "0.9.0", "path": "launcher/0.9.0/D2R-XL-Launcher.exe", "size": 5, "sha256": ")" + H3 + R"("})");
+	std::string v3 = ManifestText(F("a.txt", H1), R"(, "launcher": {"version": "0.9.0", "path": "launcher/0.9.0/D2R-XL-Downloader.exe", "size": 5, "sha256": ")" + H3 + R"("})");
 	v3.replace(v3.find(R"("schemaVersion": 2)"), 18, R"("schemaVersion": 3)");
 	Check(!mxl::ParseManifest(v3, m, err) && m.schemaVersion == 3 && m.launcher.version == "0.9.0" && m.launcher.sha256 == H3,
 	      "schemaVersion 3 refused, its launcher still offered");
 	Check(!mxl::ParseManifest(R"({"schemaVersion": 3})", m, err) && m.schemaVersion == 3 && m.launcher.path.empty(), "bare future schema refused");
 	std::string noObjects = ManifestText(F("a.txt", H1));
 	noObjects.replace(noObjects.find(R"("objectsBase": "objects/", )"), 27, "");
-	Check(!mxl::ParseManifest(noObjects, m, err), "manifest without objectsBase refused (objects are the only install path)");
+	Check(!mxl::ParseManifest(noObjects, m, err), "manifest without objectsBase refused (small updates and Repair use the objects)");
 	std::string dirs = ManifestText(F("a.txt", H1));
 	dirs.replace(dirs.find("d2rloader/patches"), 17, "../x");
 	Check(!mxl::ParseManifest(dirs, m, err) && err.find("emptyDirs") != std::string::npos, "unsafe emptyDirs refused");
@@ -139,7 +138,7 @@ void TestManifest() {
 void TestHosting() {
 	mxl::Manifest m;
 	std::string err;
-	std::string pub = R"(, "launcher": {"version": "0.2.0", "path": "launcher/0.2.0/D2R-XL-Launcher.exe", "size": 5, "sha256": ")" + H3 + R"("})";
+	std::string pub = R"(, "launcher": {"version": "0.2.0", "path": "launcher/0.2.0/D2R-XL-Downloader.exe", "size": 5, "sha256": ")" + H3 + R"("})";
 	std::string text = ManifestText(F("a.txt", H1) + "," + F("b/copy.txt", H1) + "," + F("c.txt", H2), pub);
 	text.replace(text.find(R"("name": "D2R-XL-0)"), 0, R"("path": "releases/0.70.0/D2R-XL-0.70.0.7z", )");
 	Check(mxl::ParseManifest(text, m, err), "published manifest parses");
@@ -292,67 +291,174 @@ void TestDetect() {
 	Check(!mxl::AcfIsD2R(R"("AppState" { "name" "Diablo IV" "installdir" "Diablo IV" })"), "Diablo IV is not D2R");
 }
 
-// A zip built in memory: one stored and one deflated (fixed Huffman, hand-made) entry.
-void TestZip() {
-	// "hello hello hello" deflated with fixed codes by zlib (raw)
-	const uint8_t deflated[] = {0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0xc8, 0x40, 0x90, 0x00};
-	std::vector<uint8_t> out;
-	Check(mxl::Inflate(deflated, sizeof(deflated), out, 17) && std::string(out.begin(), out.end()) == "hello hello hello",
-	      "inflate fixed-Huffman block with a back reference");
-	Check(!mxl::Inflate(deflated, sizeof(deflated), out, 16), "inflate refuses a wrong size");
-	// 600 bytes of shuffled class names, one dynamic-Huffman block (zlib level 9, raw)
-	const uint8_t dyn[] = {0xed, 0xcc, 0x81, 0x09, 0xc3, 0x30, 0x0c, 0x04, 0xc0, 0x55, 0x7e, 0xb5, 0xb7, 0xad, 0x06, 0x41, 0x2c, 0x95, 0xff, 0x84, 0x42, 0xa7, 0xcf, 0x20, 0xed, 0x0d, 0x70, 0x64, 0xe9, 0x96, 0x32, 0xf2, 0xa3, 0x15, 0x5f, 0xb2, 0x40, 0xda, 0x44, 0x35, 0x90, 0xd4, 0x8c, 0x35, 0xdd, 0x41, 0xd1, 0x83, 0x6b, 0xbf, 0x11, 0x5b, 0xf1, 0x72, 0x79, 0xac, 0x98, 0x14, 0xae, 0x11, 0xd7, 0x36, 0x32, 0x1b, 0xa5, 0x23, 0x00, 0xb7, 0x85, 0xaa, 0xb3, 0x8d, 0xbb, 0xc4, 0x7f, 0xff, 0x9b, 0xfd, 0x03};
-	const char* w = "amazon assassin barbarian druid necromancer paladin sorceress sigma tower uber ennead fortress ";
-	std::string want;
-	for (size_t i = 0; i < 600; ++i)
-		want += w[(i * 7) % std::strlen(w)];
-	Check(mxl::Inflate(dyn, sizeof(dyn), out, 600) && std::string(out.begin(), out.end()) == want, "inflate dynamic-Huffman block");
-	Check(mxl::Crc32(want.data(), want.size()) == 0xb54563acu, "crc32 of the dynamic block text");
-	const uint8_t stored[] = {0x01, 0x03, 0x00, 0xfc, 0xff, 'a', 'b', 'c'};
-	Check(mxl::Inflate(stored, sizeof(stored), out, 3) && std::string(out.begin(), out.end()) == "abc", "inflate stored block");
-	const uint8_t junk[] = {0xff, 0xff, 0xff};
-	Check(!mxl::Inflate(junk, sizeof(junk), out, 3), "inflate refuses junk");
-	Check(mxl::Crc32("123456789", 9) == 0xcbf43926u, "crc32 check value");
+// docs/launcher.md "Where it writes": only <D2R>\mods\<modFolder>, proven ours by the marker.
+void TestPaths() {
+	const std::string bs(1, char(92));
+	const std::string d2r = "C:" + bs + "Program Files (x86)" + bs + "Diablo II Resurrected";
+	Check(mxl::ModTargetDir(d2r, "D2R-XL") == d2r + bs + "mods" + bs + "D2R-XL", "mod folder <D2R>\\mods\\D2R-XL");
+	Check(mxl::ModTargetDir(d2r + bs, "D2R-XL") == d2r + bs + "mods" + bs + "D2R-XL", "trailing separator");
+	for (const char* bad : {"", ".", "..", "../x", "a/b", "a\\b", "C:", "CON", "x ", "x.", "D2R-XL/.."})
+		Check(!mxl::SafeModFolderName(bad) && mxl::ModTargetDir(d2r, bad).empty(), bad);
+	Check(mxl::SafeModFolderName("D2R-XL") && mxl::SafeModFolderName("D2R-XL-lt"), "plain names allowed");
+	const std::string mod = mxl::ModTargetDir(d2r, "D2R-XL");
+	Check(mxl::PathIsOrUnder(mod, mod) && mxl::PathIsOrUnder(mod + bs + "D2R-XL.mpq" + bs + "x.txt", mod) &&
+	          mxl::PathIsOrUnder(mod + "/a/b", mod),
+	      "files inside the mod folder");
+	Check(!mxl::PathIsOrUnder(mod + "-old", mod) && !mxl::PathIsOrUnder(d2r + bs + "D2R.exe", mod) &&
+	          !mxl::PathIsOrUnder(d2r + bs + "mods" + bs + "MedianXL", mod) && !mxl::PathIsOrUnder(d2r, mod),
+	      "the rest of the D2R folder is outside");
+	Check(!mxl::PathIsOrUnder(mod + bs + ".." + bs + "MedianXL", mod) && !mxl::PathIsOrUnder(mod + "/../../D2R.exe", mod),
+	      "a '..' segment never counts as inside");
+	Check(mxl::PathIsOrUnder("c:/program files (x86)/diablo ii resurrected/MODS/d2r-xl/x", mod), "case and separators");
 
-	// zip: entry "a.txt" stored "abc", entry "d/" dir; central directory; end record
-	std::vector<uint8_t> z;
-	auto u16 = [&](unsigned v) { z.push_back(uint8_t(v)); z.push_back(uint8_t(v >> 8)); };
-	auto u32 = [&](uint32_t v) { u16(v & 0xffff); u16(v >> 16); };
-	auto str = [&](const char* s) { z.insert(z.end(), s, s + std::strlen(s)); };
-	uint32_t crc = mxl::Crc32("abc", 3);
-	u32(0x04034b50); u16(20); u16(0); u16(0); u16(0); u16(0); u32(crc); u32(3); u32(3); u16(5); u16(0); str("a.txt"); str("abc");
-	uint32_t off2 = uint32_t(z.size());
-	u32(0x04034b50); u16(20); u16(0); u16(0); u16(0); u16(0); u32(0); u32(0); u32(0); u16(2); u16(0); str("d/");
-	uint32_t cd = uint32_t(z.size());
-	u32(0x02014b50); u16(20); u16(20); u16(0); u16(0); u16(0); u16(0); u32(crc); u32(3); u32(3); u16(5); u16(0); u16(0); u16(0); u16(0); u32(0); u32(0); str("a.txt");
-	u32(0x02014b50); u16(20); u16(20); u16(0); u16(0); u16(0); u16(0); u32(0); u32(0); u32(0); u16(2); u16(0); u16(0); u16(0); u16(0); u32(0x10); u32(off2); str("d/");
-	uint32_t cdSize = uint32_t(z.size()) - cd;
-	u32(0x06054b50); u16(0); u16(0); u16(2); u16(2); u32(cdSize); u32(cd); u16(0);
-	mxl::ZipTail tail;
+	// the marker
+	std::string m = mxl::MakeMarker("id1", "0.70.0");
+	Check(mxl::CheckMarker(m, "id1") == mxl::MarkerVerdict::Ours, "our marker, our id");
+	Check(mxl::CheckMarker(m, "") == mxl::MarkerVerdict::Ours, "our marker, no id in the state yet");
+	Check(mxl::CheckMarker(m, "id2") == mxl::MarkerVerdict::OtherId, "our marker, another state");
+	Check(mxl::CheckMarker("", "id1") == mxl::MarkerVerdict::None, "no marker: not ours");
+	Check(mxl::CheckMarker("{nope", "id1") == mxl::MarkerVerdict::Unreadable, "damaged marker");
+	Check(mxl::CheckMarker(R"({"made_by": "D2R-XL launcher", "id": "id1"})", "id1") == mxl::MarkerVerdict::Unreadable,
+	      "another program's marker (the 0.1.x copy marker) is not ours");
+	Check(mxl::CheckMarker(R"({"made_by": "D2R-XL Downloader"})", "id1") == mxl::MarkerVerdict::Unreadable, "marker without id");
+	mxl::Json j;
 	std::string err;
-	Check(mxl::FindZipTail(z, z.size(), tail, err) && tail.entries == 2 && tail.cdOffset == cd && tail.cdSize == cdSize, "zip end record");
-	std::vector<mxl::ZipEntry> entries;
-	Check(mxl::ParseCentralDirectory(z.data() + cd, cdSize, 2, entries, err) && entries.size() == 2 && entries[0].name == "a.txt" &&
-	          entries[0].size == 3 && !entries[0].dir && entries[1].dir && entries[1].offset == off2,
-	      "zip central directory");
-	Check(mxl::LocalHeaderSize(z.data(), z.size()) == 35, "local header size");
-	std::vector<uint8_t> notZip(30, 0);
-	Check(!mxl::FindZipTail(notZip, notZip.size(), tail, err), "no end record in junk");
+	Check(mxl::Json::Parse(m, j, err) && j["made_by"].Str() == mxl::MarkerMadeBy && j["version"].Str() == "0.70.0", "marker content");
+
+	// the plan never deletes the marker or the downloads in progress
+	mxl::Manifest next;
+	mxl::ParseManifest(ManifestText(F("a.txt", H1)), next, err);
+	std::vector<std::string> local = {"a.txt", mxl::InstallMarkerName, std::string(mxl::DownloadFolderName) + "/" + H2 + ".part",
+	                                  std::string(mxl::DownloadFolderName) + "/7z/a.txt", "old.txt"};
+	mxl::InstallPlan plan = mxl::PlanInstall(next, local, [](const std::string& p) { return p == "a.txt" ? H1 : std::string(); });
+	Check(plan.remove.size() == 1 && plan.remove[0] == "old.txt" && plan.fetch.empty(), "marker and d2r-xl-download/ kept, old.txt removed");
+
+	// D2RLoader's version
+	Check(mxl::LoaderVersionMatches("1.3.1-beta", "1.3.1-beta") && mxl::LoaderVersionMatches("1.3.1", "1.3.1-beta") &&
+	          mxl::LoaderVersionMatches("1.3.1.0", "1.3.1-beta"),
+	      "D2RLoader 1.3.1 matches");
+	Check(!mxl::LoaderVersionMatches("1.3.0", "1.3.1-beta") && !mxl::LoaderVersionMatches("1.4.0", "1.3.1-beta") &&
+	          !mxl::LoaderVersionMatches("", "1.3.1-beta") && !mxl::LoaderVersionMatches("1.3.1.2", "1.3.1-beta") &&
+	          !mxl::LoaderVersionMatches("unknown version", "1.3.1-beta"),
+	      "other D2RLoader versions do not");
 }
 
-void TestCopyFilter() {
-	Check(!mxl::ExcludedFromCopy("D2R.exe") && !mxl::ExcludedFromCopy("Data\\data\\data.024") && !mxl::ExcludedFromCopy(".build.info"),
-	      "game files are copied");
-	Check(mxl::ExcludedFromCopy("mods\\RMD-MP\\x.json") && mxl::ExcludedFromCopy("Mods"), "other mods stay out");
-	Check(mxl::ExcludedFromCopy("D2RLoader.exe") && mxl::ExcludedFromCopy("D2RLoader-s2.exe") && mxl::ExcludedFromCopy("D2RCore.dll") &&
-	          mxl::ExcludedFromCopy("d2rloader.mpq") && mxl::ExcludedFromCopy("d2rloader\\config\\d2rloader.toml"),
-	      "every D2RLoader file stays out");
-	Check(mxl::ExcludedFromCopy("blz-log.txt") && mxl::ExcludedFromCopy("mxl-itempkt.log") && mxl::ExcludedFromCopy("x.mxlpart") &&
-	          mxl::ExcludedFromCopy("Data\\data\\data.000.mxlpart"),
-	      "logs and partial copies stay out");
-	Check(mxl::ExcludedFromCopy("Data/hd/objects/dummy/d2rloader_stash_proxy.json"), "D2RLoader's stash proxy stays out");
-	Check(!mxl::ExcludedFromCopy("Data\\hd\\objects\\dummy\\other.json") && !mxl::ExcludedFromCopy("D2R_loader.dll"),
-	      "Blizzard's own D2R_loader.dll is copied");
+// A ByteSource over memory, for the damaged-archive cases.
+class MemSource : public mxl::ByteSource {
+public:
+	explicit MemSource(std::string d) : d_(std::move(d)) {}
+	bool Read(void* buf, size_t& size) override {
+		size = std::min(size, d_.size() - size_t(pos_));
+		std::memcpy(buf, d_.data() + pos_, size);
+		pos_ += int64_t(size);
+		return true;
+	}
+	bool Seek(int64_t& pos, int origin) override {
+		int64_t base = origin == 0 ? 0 : origin == 1 ? pos_ : int64_t(d_.size());
+		if (base + pos < 0 || base + pos > int64_t(d_.size()))
+			return false;
+		pos_ = pos = base + pos;
+		return true;
+	}
+
+private:
+	std::string d_;
+	int64_t pos_ = 0;
+};
+
+std::string ReadAll(const std::string& path) {
+	std::ifstream f(path, std::ios::binary);
+	std::stringstream ss;
+	ss << f.rdbuf();
+	return ss.str();
+}
+
+// Extract everything; out: path -> sha256 (directories: "dir").
+bool Unpack(mxl::ByteSource& src, std::map<std::string, std::string>& out, std::string& err, mxl::SevenZipStats* stats = nullptr,
+            size_t skip = SIZE_MAX) {
+	mxl::SevenZipArchive a;
+	if (!a.Open(src, err))
+		return false;
+	mxl::Sha256 h;
+	std::string cur;
+	mxl::SevenZipArchive::Sink s;
+	s.begin = [&](size_t i) {
+		const auto& e = a.entries()[i];
+		if (e.dir) {
+			out[e.path] = "dir";
+			return false;
+		}
+		if (i == skip)
+			return false;
+		h = mxl::Sha256();
+		cur = e.path;
+		return true;
+	};
+	s.data = [&](const uint8_t* p, size_t n) {
+		h.Update(p, n);
+		return true;
+	};
+	s.end = [&](size_t i) {
+		if (i != skip && !a.entries()[i].dir)
+			out[cur] = h.HexDigest();
+		return true;
+	};
+	s.progress = [](uint64_t) { return true; };
+	return a.Extract(s, err, stats);
+}
+
+// tests/data/sample.7z: made by tests/data/make_sample_7z.py with the release's 7-Zip switches (solid LZMA2, and a BCJ
+// block for the .dll); sample.json lists its files with their sha256.
+void TestSevenZip() {
+	const std::string dir = MXL_TEST_DATA;
+	std::string archive = ReadAll(dir + "/sample.7z"), listing = ReadAll(dir + "/sample.json"), err;
+	mxl::Json want;
+	Check(!archive.empty() && mxl::Json::Parse(listing, want, err) && want["files"].size() >= 7, "sample.7z and sample.json present");
+	MemSource src(archive);
+	std::map<std::string, std::string> got;
+	mxl::SevenZipStats stats;
+	Check(Unpack(src, got, err, &stats), ("sample.7z extracts: " + err).c_str());
+	size_t same = 0;
+	for (const auto& f : want["files"].items())
+		same += got["D2R-XL/" + f["path"].Str()] == f["sha256"].Str();
+	Check(same == want["files"].size(), "every file's sha256 matches sample.json");
+	Check(got["D2R-XL/d2rloader/patches"] == "dir", "the empty folder is listed");
+	Check(got.count("D2R-XL/D2R-XL.mpq/data/empty.txt") && got["D2R-XL/D2R-XL.mpq/data/empty.txt"] == mxl::Sha256Hex("", 0), "empty file");
+	Check(got.count("D2R-XL/modinfo.json"), "UTF-8 content, plain name");
+	Check(stats.streamedBlocks >= 1 && stats.memoryBlocks >= 1, "a streamed LZMA2 block and an in-memory BCJ block");
+	Check(stats.peakBuffer > 0 && stats.peakBuffer <= (64u << 20), "decode buffers stay small for a small dictionary");
+
+	{  // a skipped file's bytes are decoded but not handed out; the rest still checks
+		MemSource s2(archive);
+		std::map<std::string, std::string> part;
+		mxl::SevenZipArchive probe;
+		MemSource s3(archive);
+		probe.Open(s3, err);
+		size_t big = 0;
+		for (size_t i = 0; i < probe.entries().size(); ++i)
+			if (probe.entries()[i].path.find("big.txt") != std::string::npos)
+				big = i;
+		Check(Unpack(s2, part, err, nullptr, big) && !part.count("D2R-XL/D2R-XL.mpq/data/global/excel/big.txt") &&
+		          part["D2R-XL/modinfo.json"] == got["D2R-XL/modinfo.json"],
+		      "skipping a file");
+	}
+	{  // one flipped byte in the packed data: refused (CRC or LZMA error)
+		std::string bad = archive;
+		bad[64] = char(bad[64] ^ 0x5a);
+		MemSource s2(bad);
+		std::map<std::string, std::string> x;
+		Check(!Unpack(s2, x, err), "a damaged archive is refused");
+	}
+	{  // cut short: the header at the end is missing
+		MemSource s2(archive.substr(0, archive.size() / 2));
+		std::map<std::string, std::string> x;
+		Check(!Unpack(s2, x, err), "a truncated archive is refused");
+	}
+	{
+		MemSource s2("not a 7z archive at all");
+		std::map<std::string, std::string> x;
+		Check(!Unpack(s2, x, err), "junk is refused");
+	}
 }
 
 // docs/launcher.md "Coexisting with the official Median XL": the default folders never land in the official one's.
@@ -362,11 +468,9 @@ void TestCoexist() {
 	const std::string roaming = "C:" + bs + "Users" + bs + "p" + bs + "AppData" + bs + "Roaming";
 	std::string data = mxl::DefaultDataDir(local);
 	Check(data == local + bs + "D2R-XL", "data folder %LOCALAPPDATA%\\D2R-XL");
-	Check(mxl::DefaultGameDir(data, true, "C:" + bs) == data + bs + "game", "game copy under the data folder on D2R's drive");
-	Check(mxl::DefaultGameDir(data, false, "D:" + bs) == "D:" + bs + "D2R-XL" + bs + "game", "game copy <drive>\\D2R-XL\\game elsewhere");
-	for (const std::string& p : {data, mxl::DefaultGameDir(data, true, "C:" + bs), mxl::DefaultGameDir(data, false, "D:" + bs),
-	                             mxl::DefaultGameDir(data, false, "E:/")})
-		Check(!mxl::OfficialMedianXLPath(p, local, roaming), "a default folder is not the official Median XL's");
+	const std::string mod = mxl::ModTargetDir("C:" + bs + "Program Files (x86)" + bs + "Diablo II Resurrected", "D2R-XL");
+	for (const std::string& p : {data, mod, data + bs + "download"})
+		Check(!mxl::OfficialMedianXLPath(p, local, roaming), "the downloader's folders are not the official Median XL's");
 	Check(mxl::OfficialMedianXLPath(local + bs + "mxl-launcher", local, roaming) &&
 	          mxl::OfficialMedianXLPath(local + bs + "MXL-Launcher" + bs + "game", local, roaming),
 	      "the official launcher folder is refused");
@@ -446,8 +550,8 @@ int main() {
 	TestPlan();
 	TestVersions();
 	TestDetect();
-	TestZip();
-	TestCopyFilter();
+	TestPaths();
+	TestSevenZip();
 	TestCoexist();
 	TestToml();
 	TestSvg();

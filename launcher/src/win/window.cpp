@@ -1,6 +1,7 @@
-// The window, modelled on the official Median XL launcher (launcher.median-xl.com) with its art (launcher/res, credited
-// in NOTICE.md): the temple background, the burning logo (an animated GIF), a stone panel for status and progress, a
-// big Play button and the smaller actions in Exocet, body text in Roboto Condensed, a link icon.
+// The downloader's window, modelled on the official Median XL launcher (launcher.median-xl.com) with its art
+// (launcher/res, credited in NOTICE.md): the temple background, the burning logo (an animated GIF), a stone panel for
+// status and progress, a big Install / Update button and the smaller actions in Exocet, body text in Roboto Condensed,
+// the "How to play" line, a link icon. There is no Play button: the player starts D2RLoader.exe.
 //
 // Plain Win32 + GDI+ (part of Windows): GDI+ decodes the PNGs and every GIF frame, loads the two fonts from the exe's
 // resources (PrivateFontCollection) and draws anti-aliased text and paths. The buttons are real BUTTON windows
@@ -46,29 +47,30 @@ const gp::RectF LogoRect(256, 12, 388, 134);
 const gp::RectF PanelRect(200, 158, 500, 170);
 const gp::RectF StatusRect(240, 182, 420, 76);  // four lines
 const gp::RectF LineRect(240, 259, 420, 20);
+const gp::RectF HowToPlayRect(110, 512, 680, 40);  // two lines
 const gp::RectF BarRect(242, 285, 416, 9);
 
 const gp::Color Gold(255, 232, 196, 128), GoldBright(255, 255, 228, 168), Body(255, 222, 212, 192), Dim(255, 150, 136, 112),
 	ErrorText(255, 240, 128, 104);
 
-enum : int { IdPlay = 101, IdUpdate, IdRepair, IdUninstall, IdSaves, IdIssues, IdChoose, IdCancel, IdSelfUpdate };
+enum : int { IdInstall = 101, IdRepair, IdUninstall, IdMods, IdIssues, IdChoose, IdCancel, IdLoader, IdSelfUpdate, IdRemoveLegacy };
 enum Kind { Big, Small, Icon };
 struct Button {
 	int id;
-	const wchar_t* label;  // also the window text (screen readers, tooltips)
+	std::wstring label;  // also the window text (screen readers, tooltips)
 	Kind kind;
 	gp::RectF r;
 	HWND h = nullptr;
 	bool hot = false;
 };
 Button buttons[] = {
-	{IdPlay, L"Play", Big, gp::RectF(330, 346, 240, 66)},
+	{IdInstall, L"Install", Big, gp::RectF(330, 346, 240, 66)},
 	{IdCancel, L"Stop", Big, gp::RectF(330, 346, 240, 66)},
-	{IdUpdate, L"Update", Small, gp::RectF(228, 430, 140, 34)},
-	{IdRepair, L"Repair", Small, gp::RectF(380, 430, 140, 34)},
-	{IdUninstall, L"Uninstall", Small, gp::RectF(532, 430, 140, 34)},
-	{IdSaves, L"Saves folder", Small, gp::RectF(278, 474, 168, 34)},
-	{IdChoose, L"D2R folder", Small, gp::RectF(456, 474, 168, 34)},
+	{IdRepair, L"Repair", Small, gp::RectF(305, 426, 140, 34)},  // x moves with Get D2RLoader (RefreshStatus)
+	{IdUninstall, L"Uninstall", Small, gp::RectF(455, 426, 140, 34)},
+	{IdLoader, L"Get D2RLoader", Small, gp::RectF(504, 426, 192, 34)},  // shown when D2RLoader is missing or another version
+	{IdChoose, L"D2R folder", Small, gp::RectF(278, 468, 168, 34)},
+	{IdMods, L"Mods folder", Small, gp::RectF(456, 468, 168, 34)},
 	{IdIssues, L"Report a problem", Icon, gp::RectF(858, 556, 28, 28)},
 };
 
@@ -106,6 +108,7 @@ struct Ui {
 	double fraction = -2;  // 0..1, -1 busy (moving bar), < -1 no bar
 	int marquee = 0;
 	std::unique_ptr<Launcher> launcher;
+	Launcher::View view;
 	Options opt;
 	std::wstring snapshot;
 	bool busy = false;
@@ -225,14 +228,15 @@ void AddRoundRect(gp::GraphicsPath& p, const gp::RectF& r, float rad) {
 	p.CloseFigure();
 }
 
-enum Trim { TrimEnd, TrimPath };
+enum Trim { TrimEnd, TrimPath, Wrap };
 void Text(gp::Graphics& gr, const std::wstring& t, const gp::FontFamily& fam, float px, const gp::Color& c, const gp::RectF& r,
           gp::StringAlignment align = gp::StringAlignmentNear, Trim trim = TrimEnd, bool shadow = true) {
 	gp::Font font(&fam, px, gp::FontStyleRegular, gp::UnitPixel);
 	gp::StringFormat f;
 	f.SetAlignment(align);
 	f.SetLineAlignment(gp::StringAlignmentCenter);
-	f.SetFormatFlags(gp::StringFormatFlagsNoWrap);
+	if (trim != Wrap)
+		f.SetFormatFlags(gp::StringFormatFlagsNoWrap);
 	f.SetTrimming(trim == TrimPath ? gp::StringTrimmingEllipsisPath : gp::StringTrimmingEllipsisCharacter);
 	if (shadow) {  // keeps light text readable on the brighter parts of the art
 		gp::SolidBrush sb(gp::Color(170, 0, 0, 0));
@@ -243,7 +247,7 @@ void Text(gp::Graphics& gr, const std::wstring& t, const gp::FontFamily& fam, fl
 	gr.DrawString(t.c_str(), INT(t.size()), &font, r, &f, &b);
 }
 
-// The part that never changes: background, the panel, the footer.
+// The part that never changes: background, the panel, how to play, the footer.
 void DrawScene(gp::Graphics& gr) {
 	if (g.art->background)
 		gr.DrawImage(g.art->background.get(), 0, 0);
@@ -252,7 +256,8 @@ void DrawScene(gp::Graphics& gr) {
 	if (g.art->panel)
 		gr.DrawImage(g.art->panel.get(), Px(PanelRect.X), Px(PanelRect.Y));
 	gr.ScaleTransform(g.s, g.s);
-	std::wstring footer = L"Launcher " + Wide(LauncherVersion) +
+	Text(gr, Wide(HowToPlay), *g.art->body, 14, Gold, HowToPlayRect, gp::StringAlignmentCenter, Wrap);
+	std::wstring footer = L"Downloader " + Wide(LauncherVersion) +
 	                      L"  ·  D2R-XL, a port of Median XL by the Median XL team. Diablo II by Blizzard Entertainment. Not affiliated with Blizzard.";
 	Text(gr, footer, *g.art->body, 12, Dim, gp::RectF(14, 560, 830, 24));
 	gr.ResetTransform();
@@ -281,7 +286,8 @@ void DrawDynamic(gp::Graphics& gr, bool cached = true) {
 		size_t nl = st.find(L'\n', start);
 		std::wstring l = st.substr(start, nl == std::wstring::npos ? std::wstring::npos : nl - start);
 		gp::RectF r(StatusRect.X, StatusRect.Y + row * 19.f, StatusRect.Width, 19);
-		Text(gr, l, *g.art->body, 14, Body, r, gp::StringAlignmentNear, TrimPath);
+		bool warn = !l.empty() && l[0] == L'!';  // StatusText marks warnings with "!"
+		Text(gr, warn ? l.substr(1) : l, *g.art->body, 14, warn ? ErrorText : Body, r, gp::StringAlignmentNear, warn ? TrimEnd : TrimPath);
 		++row;
 		if (nl == std::wstring::npos)
 			break;
@@ -407,8 +413,8 @@ void SetBusy(bool busy) {
 	for (auto& b : buttons) {
 		if (b.id == IdIssues)
 			continue;
-		if (b.id == IdPlay || b.id == IdCancel) {
-			ShowWindow(b.h, (b.id == IdCancel) == busy ? SW_SHOWNA : SW_HIDE);  // Stop takes Play's place
+		if (b.id == IdInstall || b.id == IdCancel) {
+			ShowWindow(b.h, (b.id == IdCancel) == busy ? SW_SHOWNA : SW_HIDE);  // Stop takes Install's place
 			continue;
 		}
 		EnableWindow(b.h, !busy);
@@ -420,21 +426,47 @@ void InvalidatePanel() {
 	InvalidateRect(g.wnd, &r, FALSE);
 }
 
+void MoveButtonX(int id, float x) {
+	Button* b = FindButton(id);
+	b->r.X = x;
+	SetWindowPos(b->h, nullptr, Px(b->r.X), Px(b->r.Y), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// The window's state from Launcher::Inspect: the status lines, the big button's label, Get D2RLoader.
 void RefreshStatus() {
-	std::string why;
-	g.status = g.launcher->StatusText();
-	EnableWindow(FindButton(IdPlay)->h, !g.busy && g.launcher->CanPlay(&why));
-	InvalidateRect(FindButton(IdPlay)->h, nullptr, FALSE);
+	g.view = g.launcher->Inspect();
+	const Launcher::View& v = g.view;
+	g.status = g.launcher->StatusText(v);
+	Button* b = FindButton(IdInstall);
+	b->label = v.foreignMod || v.installed.empty() ? L"Install" : v.updateAvailable || !v.feedOk ? L"Update" : L"Up to date";
+	SetWindowTextW(b->h, b->label.c_str());
+	EnableWindow(b->h, !g.busy && v.d2rFound && b->label != L"Up to date");
+	EnableWindow(FindButton(IdUninstall)->h, !g.busy && !v.installed.empty());
+	EnableWindow(FindButton(IdRepair)->h, !g.busy && !v.installed.empty());
+	bool loader = v.d2rFound && !v.loaderOk;
+	MoveButtonX(IdRepair, loader ? 204.f : 305.f);  // the row stays centred with or without Get D2RLoader
+	MoveButtonX(IdUninstall, loader ? 354.f : 455.f);
+	ShowWindow(FindButton(IdLoader)->h, loader ? SW_SHOWNA : SW_HIDE);
+	InvalidateRect(b->h, nullptr, FALSE);
 	InvalidatePanel();
 }
 
 void RunAction(int id) {
 	if (g.busy)
 		return;
-	if (id == IdUninstall &&
-	    MessageBoxW(g.wnd, L"Remove the D2R-XL game copy and the launcher's downloads?\n\nYour characters and your D2R install are not touched.",
-	                L"Uninstall D2R-XL", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
-		return;
+	if (id == IdUninstall) {
+		std::wstring q = L"Remove D2R-XL (" + g.launcher->ModDir() +
+		                 L")?\n\nOnly that folder is removed. Your characters, D2R, D2RLoader and other mods are not touched.";
+		if (MessageBoxW(g.wnd, q.c_str(), L"Uninstall D2R-XL", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+			return;
+	}
+	if (id == IdInstall && g.view.build.verdict != BuildVerdict::Ok) {  // allowed, after a clear warning
+		std::wstring q = L"Your D2R is " + (g.view.build.build ? L"build " + std::to_wstring(g.view.build.build) : std::wstring(L"of an unknown build")) +
+		                 L", but D2R-XL works only on build " + std::to_wstring(g.view.requiredBuild) +
+		                 L". It will not start until D2R is at that build.\n\nInstall D2R-XL anyway?";
+		if (MessageBoxW(g.wnd, q.c_str(), L"D2R-XL Downloader", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+			return;
+	}
 	g.launcher->cancel = false;
 	SetBusy(true);
 	if (g.worker.joinable())
@@ -444,15 +476,38 @@ void RunAction(int id) {
 		bool ok = false;
 		Launcher& l = *g.launcher;
 		switch (id) {
-		case IdPlay: ok = (l.CanPlay() || l.InstallOrUpdate(err)) && l.Play(err); break;  // Play works offline once installed
-		case IdUpdate: ok = l.InstallOrUpdate(err); break;
+		case IdInstall: ok = l.InstallOrUpdate(err); break;
 		case IdRepair: ok = l.Repair(err); break;
 		case IdUninstall: ok = l.Uninstall(err); break;
 		case IdSelfUpdate: ok = l.SelfUpdate(err); break;
+		case IdRemoveLegacy: ok = l.RemoveLegacyCopy(err); break;
 		}
-		auto* msg = new ProgressMsg{ok ? std::string(id == IdPlay ? "Have fun." : "Done.") : err, ok ? 1.0 : -2.0, id};
+		std::string done = id == IdInstall || id == IdRepair ? "Done. " + std::string(HowToPlay) : "Done.";
+		auto* msg = new ProgressMsg{ok ? done : err, ok ? 1.0 : -2.0, id};
 		PostMessageW(g.wnd, WmDone, WPARAM(ok ? 1 : 0), reinterpret_cast<LPARAM>(msg));
 	});
+}
+
+// mods\D2R-XL exists without the downloader's marker: replace it only when the player says so.
+void AskReplace(const std::string& text) {
+	if (MessageBoxW(g.wnd, Wide(text).c_str(), L"D2R-XL Downloader", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+		return;
+	g.launcher->SetReplace(true);
+	RunAction(IdInstall);
+}
+
+// Once: the 0.1.x launcher's private game copy (its own marker, matching the state) can go.
+void OfferLegacyRemoval() {
+	const Launcher::View& v = g.view;
+	if (!v.legacyCopy || v.legacyOffered || !g.snapshot.empty())
+		return;
+	std::wstring q = L"The old D2R-XL launcher (0.1.x) left its own copy of D2R in " + v.legacyDir +
+	                 L". The downloader installs into your D2R's mods folder instead, so that copy is no longer used.\n\n"
+	                 L"Delete it? Your characters and your D2R install are not touched.";
+	if (MessageBoxW(g.wnd, q.c_str(), L"D2R-XL Downloader", MB_YESNO | MB_ICONQUESTION) == IDYES)
+		RunAction(IdRemoveLegacy);
+	else
+		g.launcher->DeclineLegacyCopy();
 }
 
 void ChooseSource() {
@@ -468,15 +523,10 @@ void ChooseSource() {
 		if (SUCCEEDED(dlg->GetResult(&item))) {
 			PWSTR path = nullptr;
 			if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
-				if (!LooksLikeD2R(path)) {
-					MessageBoxW(g.wnd, L"That folder has no D2R.exe and Data folder.", L"D2R-XL", MB_ICONWARNING);
-				} else {
-					g.opt.source = path;
-					auto progress = std::move(g.launcher->onProgress);
-					g.launcher = std::make_unique<Launcher>(g.opt);
-					g.launcher->onProgress = std::move(progress);
-					RefreshStatus();
-				}
+				std::string err;
+				if (!g.launcher->SetD2RDir(path, err))
+					MessageBoxW(g.wnd, Wide(err).c_str(), L"D2R-XL Downloader", MB_ICONWARNING);
+				RefreshStatus();
 				CoTaskMemFree(path);
 			}
 			item->Release();
@@ -485,7 +535,7 @@ void ChooseSource() {
 	dlg->Release();
 }
 
-// The new launcher after a self-update: the same exe path and arguments.
+// The new downloader after a self-update: the same exe path and arguments.
 bool Restart() {
 	std::wstring exe = Launcher::ExePath(), cmd = GetCommandLineW();
 	STARTUPINFOW si{sizeof(si)};
@@ -501,10 +551,10 @@ void OfferSelfUpdate() {
 	Launcher& l = *g.launcher;
 	if (!l.LauncherUpdateAvailable())
 		return;
-	std::wstring q = L"Launcher " + Wide(l.LauncherUpdateVersion()) + L" is available (this is " + Wide(LauncherVersion) +
-	                 L").\n\nUpdate now? The download is checked against the release's sha256 before it replaces this launcher, "
-	                 L"which then restarts.";
-	if (MessageBoxW(g.wnd, q.c_str(), L"D2R-XL launcher update", MB_YESNO | MB_ICONQUESTION) == IDYES)
+	std::wstring q = L"A newer downloader is available: " + Wide(l.LauncherUpdateVersion()) + L" (this is " + Wide(LauncherVersion) +
+	                 L").\n\nUpdate now? The downloader updates itself: the download is checked against the release's sha256 "
+	                 L"before it replaces this one, which then restarts.";
+	if (MessageBoxW(g.wnd, q.c_str(), L"D2R-XL Downloader update", MB_YESNO | MB_ICONQUESTION) == IDYES)
 		RunAction(IdSelfUpdate);
 }
 
@@ -592,13 +642,18 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM lp) {
 	switch (m) {
 	case WM_COMMAND:
 		switch (LOWORD(w)) {
-		case IdPlay: case IdUpdate: case IdRepair: case IdUninstall: RunAction(LOWORD(w)); return 0;
-		case IdSaves: {
-			std::wstring d = g.launcher->SavesDir();
-			MakeDirs(d);
-			ShellExecuteW(h, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+		case IdInstall: case IdRepair: case IdUninstall: RunAction(LOWORD(w)); return 0;
+		case IdMods: {  // opened, never created: the downloader writes only mods\D2R-XL
+			std::wstring d = g.launcher->ModDir();
+			if (!d.empty() && !DirExists(d))
+				d = ParentDir(d);
+			if (!d.empty() && !DirExists(d))
+				d = g.launcher->D2RDir();
+			if (!d.empty())
+				ShellExecuteW(h, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 			return 0;
 		}
+		case IdLoader: ShellExecuteW(h, L"open", Wide(LoaderSite).c_str(), nullptr, nullptr, SW_SHOWNORMAL); return 0;
 		case IdIssues: ShellExecuteW(h, L"open", Wide(IssuesUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL); return 0;
 		case IdChoose: if (!g.busy) ChooseSource(); return 0;
 		case IdCancel: g.launcher->cancel = true; return 0;
@@ -635,13 +690,18 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM lp) {
 					DestroyWindow(h);
 					return 0;
 				}
-				MessageBoxW(h, L"The launcher was updated. Start it again.", L"D2R-XL", MB_ICONINFORMATION);
+				MessageBoxW(h, L"The downloader was updated. Start it again.", L"D2R-XL Downloader", MB_ICONINFORMATION);
+			}
+			if (w == 0 && msg->action == IdInstall && g.launcher->ForeignModFolder()) {
+				AskReplace(msg->text);
+				return 0;
 			}
 			if (w == 0)
-				MessageBoxW(h, Wide(msg->text).c_str(), L"D2R-XL", MB_ICONWARNING);
+				MessageBoxW(h, Wide(msg->text).c_str(), L"D2R-XL Downloader", MB_ICONWARNING);
 			if (msg->action == 0) {
 				InvalidatePanel();
 				OfferSelfUpdate();
+				OfferLegacyRemoval();
 				return 0;
 			}
 		}
@@ -649,7 +709,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM lp) {
 		return 0;
 	}
 	case WM_CLOSE:
-		if (g.busy && MessageBoxW(h, L"An installation is running. Stop it and quit? It continues where it stopped next time.", L"D2R-XL",
+		if (g.busy && MessageBoxW(h, L"An installation is running. Stop it and quit? It continues where it stopped next time.", L"D2R-XL Downloader",
 		                          MB_YESNO | MB_ICONQUESTION) != IDYES)
 			return 0;
 		g.launcher->cancel = true;
@@ -712,7 +772,7 @@ int RunWindow(HINSTANCE inst, const Options& opt, const std::wstring& snapshot) 
 	gp::GdiplusStartupInput gsi;
 	ULONG_PTR gdiplus = 0;
 	if (gp::GdiplusStartup(&gdiplus, &gsi, nullptr) != gp::Ok) {
-		MessageBoxW(nullptr, L"GDI+ could not be started.", L"D2R-XL", MB_ICONERROR);
+		MessageBoxW(nullptr, L"GDI+ could not be started.", L"D2R-XL Downloader", MB_ICONERROR);
 		return 1;
 	}
 
@@ -721,7 +781,7 @@ int RunWindow(HINSTANCE inst, const Options& opt, const std::wstring& snapshot) 
 	wc.hInstance = inst;
 	wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
 	wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
-	wc.lpszClassName = L"D2RXLLauncher";
+	wc.lpszClassName = L"D2RXLDownloader";
 	RegisterClassExW(&wc);
 
 	const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
@@ -730,7 +790,7 @@ int RunWindow(HINSTANCE inst, const Options& opt, const std::wstring& snapshot) 
 	g.h = Px(CanvasH);
 	RECT r{0, 0, g.w, g.h};
 	AdjustWindowRectEx(&r, style, FALSE, 0);
-	std::wstring title = L"D2R-XL Launcher " + Wide(LauncherVersion);
+	std::wstring title = Wide(ProductTitle) + L" " + Wide(LauncherVersion);
 	g.wnd = CreateWindowExW(0, wc.lpszClassName, title.c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top,
 	                        nullptr, nullptr, inst, nullptr);
 	BOOL dark = TRUE;  // a dark title bar to match the art (Windows 10 2004+; ignored elsewhere)
@@ -740,8 +800,8 @@ int RunWindow(HINSTANCE inst, const Options& opt, const std::wstring& snapshot) 
 	LoadArt();
 	MakeLayers();
 	for (auto& b : buttons) {
-		DWORD bs = WS_CHILD | WS_TABSTOP | BS_OWNERDRAW | (b.id == IdCancel ? 0 : WS_VISIBLE);
-		b.h = CreateWindowExW(0, L"BUTTON", b.label, bs, Px(b.r.X), Px(b.r.Y), Px(b.r.Width), Px(b.r.Height), g.wnd,
+		DWORD bs = WS_CHILD | WS_TABSTOP | BS_OWNERDRAW | (b.id == IdCancel || b.id == IdLoader ? 0 : WS_VISIBLE);
+		b.h = CreateWindowExW(0, L"BUTTON", b.label.c_str(), bs, Px(b.r.X), Px(b.r.Y), Px(b.r.Width), Px(b.r.Height), g.wnd,
 		                      HMENU(INT_PTR(b.id)), inst, nullptr);
 		SetWindowSubclass(b.h, ButtonProc, 0, reinterpret_cast<DWORD_PTR>(&b));
 	}

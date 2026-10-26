@@ -33,32 +33,31 @@ Expect bugs. Please report them (below).
 ## Requirements
 
 - Your own copy of **Diablo II: Resurrected** (PC, Battle.net), build **93847**. Nothing from Blizzard is distributed here.
-- **D2RLoader 1.3.1** (the launcher sets it up for you).
-- Windows 10 or 11, and about **28 GB of free disk space** for the launcher's own copy of the game.
+- **D2RLoader 1.3.1** from [d2rloader.net](https://d2rloader.net/), installed in your D2R folder.
+- Windows 10 or 11, and about **1.6 GB of free disk space** (1.2 GB for the mod, plus the 355 MB download while it
+  installs).
 
 ## Install
 
-Use the **D2R-XL Launcher** (`D2R-XL-Launcher.exe`) ([docs/launcher.md](docs/launcher.md)):
+1. Install **D2RLoader 1.3.1** from https://d2rloader.net/ into your D2R folder (it puts `D2RLoader.exe` next to
+   `D2R.exe`).
+2. Download the **D2R-XL Downloader** (`D2R-XL-Downloader.exe`) from https://dl.werdegames.com/mxl/ (the link is also
+   on the [Releases](https://github.com/Nugwa628/mxl-d2r/releases) page), run it and press **Install**. It finds your
+   D2R folder (or use **D2R folder** to pick it) and puts the mod in `<D2R folder>\mods\D2R-XL`. Run it again later
+   and press **Update** for a new version, or **Repair** if a file got damaged.
+3. **How to play:** start `D2RLoader.exe` in your D2R folder. The first time, click the gear on the character screen,
+   set **Default Mod** to **D2R-XL**, Apply, and start D2RLoader again. From then on D2RLoader starts D2R-XL directly.
 
-1. Download the launcher from https://dl.werdegames.com/mxl/ (the link is also on the [Releases](https://github.com/Nugwa628/mxl-d2r/releases) page).
-2. Run it, then press **Play**.
+The downloader writes only `mods\D2R-XL` (and its own settings and log in `%LOCALAPPDATA%\D2R-XL`); it does not
+download or change D2RLoader, D2R or other mods. D2R-XL characters are saved in their own folder
+(`Saved Games\Diablo II Resurrected\mods\D2R-XL`). **Uninstall** removes `mods\D2R-XL` and nothing else. If D2R is
+in `Program Files` and Windows refuses the write, the downloader says so: run it as administrator. Details:
+[docs/launcher.md](docs/launcher.md).
 
-The launcher copies your D2R into its own private folder at build 93847 and puts D2RLoader and the mod inside that copy.
-It does **not** modify your existing D2R install or any other mods, and your Battle.net install keeps updating as usual.
-It needs about 28 GB of free space for its copy.
-
-Two things the launcher needs from your existing D2R:
-
-- **The same drive.** The copy goes on the drive D2R is installed on. D2R's saved Battle.net sign-in only works from
-  that drive, so the launcher refuses other drives.
-- **A recent online sign-in.** D2R wants to have been online in the last 30 days. If the launcher says the sign-in is
-  missing or too old, start the normal D2R once from Battle.net, then use the launcher again.
-
-Advanced fallback (manual install): each release also has a `.7z` file (`D2R-XL-<version>.7z`, about 355 MB) with a
-`D2R-XL/` folder (`D2R-XL.mpq/` and `d2rloader/`). Windows 11 opens .7z files; otherwise use
-[7-Zip](https://www.7-zip.org). It is unpacked into the `mods` folder of a D2R + D2RLoader 1.3.1 install at build 93847
-that you maintain yourself. Steps and the file layout are in [docs/release.md](docs/release.md). Use it only if you know
-why you need it; it does change that install.
+Manual install: each release also has a `.7z` file (`D2R-XL-<version>.7z`, about 355 MB) with a `D2R-XL/` folder
+(`D2R-XL.mpq/` and `d2rloader/`). Windows 11 opens .7z files; otherwise use [7-Zip](https://www.7-zip.org). Unpack it
+into the `mods` folder of your D2R install and follow step 3. Steps and the file layout are in
+[docs/release.md](docs/release.md).
 
 ## Reporting bugs
 
@@ -68,7 +67,7 @@ Open an issue on [GitHub](https://github.com/Nugwa628/mxl-d2r/issues/new/choose)
 - **Crash**: the game closed or froze. Attach the D2RLoader log.
 - **Balance or Median difference**: a number, drop, skill or monster behaves differently from Median XL 2.14.4.
 
-Include the mod version (`mxl` in the in-game console prints it), the D2R build, the launcher version, and the D2RLoader
+Include the mod version (`mxl` in the in-game console prints it), the D2R build, the downloader version, and the D2RLoader
 log (`d2rloader/logs/d2rloader.log`). Never attach Blizzard game files. How labels are used: [docs/labels.md](docs/labels.md).
 
 ## Building from source
@@ -83,7 +82,7 @@ The short version: `git clone --recurse-submodules`, get the asset pack, `py -3 
 |---|---|
 | `tools/` | Python CLI tools (MPQ/CASC extraction, bin2txt, formula codec, txt migration, validation) |
 | `plugin/` | D2RLoader plugin (C++20, CMake) that reimplements D2Sigma.dll |
-| `launcher/` | `D2R-XL-Launcher.exe` (C++20, CMake): private game copy, D2RLoader, install and update ([docs/launcher.md](docs/launcher.md)) |
+| `launcher/` | `D2R-XL-Downloader.exe` (C++20, CMake): installs and updates `mods\D2R-XL` ([docs/launcher.md](docs/launcher.md)) |
 | `work/mod/` | Generated D2R mod sources: migrated tables, strings, layouts |
 | `docs/` | Plan and one note per D2Sigma subsystem (`docs/subsystems/`) |
 | `research/` | D2R address registry and RE notes (no game binaries) |

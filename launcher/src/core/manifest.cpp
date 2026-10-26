@@ -64,7 +64,7 @@ bool ParseManifest(const std::string& text, Manifest& out, std::string& error) {
 	if (!m.launcher.path.empty() && !SafeRelativePath(m.launcher.path))
 		m.launcher = {};
 	if (m.schemaVersion != ManifestSchema) {
-		error = "release manifest schemaVersion " + std::to_string(m.schemaVersion) + ", this launcher reads " +
+		error = "release manifest schemaVersion " + std::to_string(m.schemaVersion) + ", this downloader reads " +
 		        std::to_string(ManifestSchema);
 		out = Manifest{};
 		out.schemaVersion = m.schemaVersion;
@@ -292,7 +292,8 @@ std::vector<ObjectFetch> GroupObjects(const std::vector<ManifestFile>& files) {
 
 bool RuntimeOutput(const std::string& path) {
 	std::string p = Lower(path);
-	return p.rfind("d2rloader/logs/", 0) == 0 || p.rfind("d2rloader/crashes/", 0) == 0;
+	return p.rfind("d2rloader/logs/", 0) == 0 || p.rfind("d2rloader/crashes/", 0) == 0 || p == "d2r-xl-install.json" ||
+	       p.rfind("d2r-xl-download/", 0) == 0;
 }
 
 InstallPlan PlanInstall(const Manifest& next, const std::vector<std::string>& local,

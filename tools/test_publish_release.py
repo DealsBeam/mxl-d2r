@@ -299,11 +299,11 @@ class PublishTests(Base):
         (assets / "pack-1.zip").write_bytes(b"pack")
         self.publish("1.0.0", launcher=exe, launcher_version="0.3.0", assets=assets)
         t = tree(self.site)
-        self.assertEqual(t["launcher/0.3.0/D2R-XL-Launcher.exe"], b"MZ launcher")
-        self.assertEqual(t["launcher/0.3.0/D2R-XL-Launcher.exe.sha256"].decode().split()[0], pub.sha256_file(exe))
+        self.assertEqual(t["launcher/0.3.0/D2R-XL-Downloader.exe"], b"MZ launcher")
+        self.assertEqual(t["launcher/0.3.0/D2R-XL-Downloader.exe.sha256"].decode().split()[0], pub.sha256_file(exe))
         self.assertEqual(t["assets/pack-1.zip"], b"pack")
         man = json.loads(t["releases/1.0.0/release-manifest.json"])
-        self.assertEqual(man["launcher"]["path"], "launcher/0.3.0/D2R-XL-Launcher.exe")
+        self.assertEqual(man["launcher"]["path"], "launcher/0.3.0/D2R-XL-Downloader.exe")
         self.assertEqual(man["launcher"]["sha256"], pub.sha256_file(exe))
 
     def test_publish_from_a_stage_folder(self):
@@ -418,7 +418,7 @@ class PromoteListGcTests(Base):
         self.publish("1.4.0", files={"global/excel/armor.txt": b"x\n"}, launcher=exe, launcher_version="0.9.0")
         self.publish("1.5.0", files={"global/excel/armor.txt": b"y\n"}, launcher=exe, launcher_version="0.9.0")
         pub.gc(self.t, 1, log=lambda *_: None)
-        self.assertTrue((self.site / "launcher/0.9.0/D2R-XL-Launcher.exe").exists())
+        self.assertTrue((self.site / "launcher/0.9.0/D2R-XL-Downloader.exe").exists())
 
 
 class VersionTests(unittest.TestCase):

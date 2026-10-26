@@ -1,12 +1,12 @@
 # Download host (dl.werdegames.com/mxl)
 
-Where players' launchers get the mod from (owner decision 2026-10-26: our own server, not GitHub; the forge needs a sign-in
+Where players' downloaders get the mod from (owner decision 2026-10-26: our own server, not GitHub; the forge needs a sign-in
 for everything). The host is **a folder served by Caddy `file_server`**, plus one small script that runs there when an
 upload arrives. We upload over SFTP with `tools/publish_release.py`; players read the folder over HTTPS. What is in the
-folder and how the launcher uses it: [release.md](release.md) "Hosting layout".
+folder and how the downloader uses it: [release.md](release.md) "Hosting layout".
 
 ```
-Developer PC --sftp (key, chroot)--> /srv/dl/incoming/<v>/ --dl_ingest.py (systemd, as mxlup)--> /srv/dl/mxl/ <--Caddy--HTTPS-- launcher
+Developer PC --sftp (key, chroot)--> /srv/dl/incoming/<v>/ --dl_ingest.py (systemd, as mxlup)--> /srv/dl/mxl/ <--Caddy--HTTPS-- downloader
 ```
 
 Why the extra step: the uploader's line is slow (about 160 KB/s up) and each SSH login takes seconds, so the publisher
@@ -99,7 +99,7 @@ ssh  -i $HOME\.ssh\mxl_publish mxlup@HOST         # must be refused ("This servi
 
 `tools/dl_ingest.py` (one file, Python standard library and 7-Zip only) checks an upload in `/srv/dl/incoming/<v>/`, moves
 its objects into `/srv/dl/mxl/objects/`, builds `releases/<v>/D2R-XL-<v>.7z` from the objects, writes the release,
-the launcher and the channel file (last), then deletes the upload. Anything that fails a check is refused and left in
+the downloader and the channel file (last), then deletes the upload. Anything that fails a check is refused and left in
 place with a `REFUSED` file (the reason). Details: release.md "Publishing". It writes nothing outside `/srv/dl`.
 
 Copy it from the repository to the server with your own admin login (not `mxlup`), for example from the PC:
@@ -210,7 +210,7 @@ In the server's Caddyfile (Caddy 2). The host serves `/srv/dl`, and only the `/m
 dl.werdegames.com {
 	root * /srv/dl
 
-	# Caddy compresses what is worth it; the launcher checks sha256 of the decoded bytes.
+	# Caddy compresses what is worth it; the downloader checks sha256 of the decoded bytes.
 	encode zstd gzip {
 		match {
 			header Content-Type application/json*
@@ -220,7 +220,7 @@ dl.werdegames.com {
 
 	# objects/<sha256[0:2]>/<sha256> never change: cache forever
 	header /mxl/objects/* Cache-Control "public, max-age=31536000, immutable"
-	# the channel files are what the launcher polls: always revalidate
+	# the channel files are what the downloader polls: always revalidate
 	header /mxl/channels/* Cache-Control "no-cache"
 	# a published version does not change either, but allow a rare --force: one hour
 	header /mxl/releases/* Cache-Control "public, max-age=3600"
@@ -240,7 +240,7 @@ dl.werdegames.com {
 ```
 
 Notes:
-- **CORS is not needed**: the launcher is a program, not a web page. No `Access-Control-*` headers.
+- **CORS is not needed**: the downloader is a program, not a web page. No `Access-Control-*` headers.
 - Objects have no file extension, so Caddy sniffs their type: text tables come out as `text/*` and are compressed, binaries
   (dds, models, the dll) are not. If `publish_release.py verify` (below) shows `Range requests` failing, or a
   `Content-Encoding` on a 206 answer, drop the `text/*` line from `match`: resumable downloads win over a few MB.
@@ -250,7 +250,7 @@ Notes:
 - Serve nothing else from this site name: the last `handle` answers 404 for every other path (also `/incoming/`); the forge
   keeps its own name.
 - `header` also stamps error answers, so a request for an object that is not uploaded yet gets `immutable` on its 404. The
-  launcher only asks for objects a published manifest names, which are all there, so this only matters for a browser or a CDN.
+  downloader only asks for objects a published manifest names, which are all there, so this only matters for a browser or a CDN.
 
 ## 5. Publishing, checks
 
@@ -270,7 +270,7 @@ py -3 tools/publish_release.py promote 0.70.0 --channel stable --target $t --ide
 
 `MXL_PUBLISH_TARGET` in the environment replaces `--target`. `publish` needs two SFTP logins: one to see what the host has,
 one to upload. It sends one 7z of the objects the host lacks (a first full release: about 1.2 GB of files, a few hundred
-MB packed; a release that changes a few tables: a few MB), the manifest, the notes and the launcher if given. A dropped
+MB packed; a release that changes a few tables: a few MB), the manifest, the notes and the downloader if given. A dropped
 connection is retried and the 7z resumed where it stopped; when it gives up, running the same command again resumes too.
 Nothing is visible to players until the server has checked everything and written the channel file.
 
@@ -298,7 +298,7 @@ Maintenance:
    host key).
 6. Run section 5 once with a `--no-data` package or the first real release on `test`; `verify` must end with
    `N of N objects verified`, `Range requests: ok (206)` and the 7z's `sha256 ok`.
-7. Tell the coordinator the root URL, and whether sshd is on port 22 (the launcher lane takes the root URL as its setting).
+7. Tell the coordinator the root URL, and whether sshd is on port 22 (the downloader takes the root URL as its setting).
 8. DigitalOcean Spaces + Cloudflare (section 7): console steps, then on the server rclone, `rclone.conf`, `dl_sync.py`
    and the new `dl_ingest.py`, the three `mxl-dl-sync` units, the first sync and `--check`; from the PC the `curl.exe -sI`
    checks and `verify --url https://files.werdegames.com/mxl/`.
@@ -313,7 +313,7 @@ assets/).
 
 ```
 dl_ingest.py / promote / gc --write--> /srv/dl/mxl/.sync/wanted --mxl-dl-sync.path--> dl_sync.py (rclone, as mxlup)
-    --> Space d2r-xl, prefix mxl/ --Spaces CDN--> Cloudflare (files.werdegames.com) --> launcher
+    --> Space d2r-xl, prefix mxl/ --Spaces CDN--> Cloudflare (files.werdegames.com) --> downloader
 ```
 
 `tools/dl_sync.py` uploads in a safe order: objects first, then releases (7z, notes, sums), launcher, assets, the
@@ -342,7 +342,7 @@ ingest unit keeps `PrivateNetwork=yes`: it only writes the trigger file; the net
 3. Cloudflare: DNS `CNAME files -> d2r-xl.fra1.cdn.digitaloceanspaces.com`, proxied; a configuration rule for
    `files.werdegames.com`: SSL **Full (strict)**; a cache rule for the same host: **Eligible for cache**, edge TTL
    **use the origin's Cache-Control**. If `verify` below gets HTTP 403 from Cloudflare, turn off Browser Integrity Check
-   for this host in the configuration rule (the launcher is not a browser).
+   for this host in the configuration rule (the downloader is not a browser).
 
 ### Server steps (as root)
 
@@ -472,7 +472,7 @@ py -3 tools/publish_release.py list --target $t --identity $k      # last line: 
 
 Cloudflare follows the origin's `Cache-Control` with the cache rule above: objects are cached for a year (they never
 change), releases / launcher / assets for an hour, and `channels/*.json` (`no-cache`) are revalidated on every request,
-so a new channel version shows at once, and the launcher's sha256 check of the manifest catches anything half-updated.
+so a new channel version shows at once, and the downloader's sha256 check of the manifest catches anything half-updated.
 The Spaces CDN in between has its own edge TTL. If a channel ever shows an old version after `list` says the sync is done
 (compare `curl.exe -s https://files.werdegames.com/mxl/channels/stable.json` with the same path on dl.werdegames.com),
 purge by hand:
@@ -486,7 +486,7 @@ A `publish --force` of an existing version rewrites files under `releases/<v>/`:
 ### dl.werdegames.com stays
 
 `/srv/dl/mxl` on the server is the origin of everything; Caddy keeps serving it at `https://dl.werdegames.com/mxl/`
-(section 4) as the backup and for checks. If the Space or Cloudflare has a problem, a launcher can be pointed back at it
+(section 4) as the backup and for checks. If the Space or Cloudflare has a problem, a downloader can be pointed back at it
 with `--site https://dl.werdegames.com/mxl/`; the Space can always be rebuilt from the server with
-`systemctl start mxl-dl-sync` (after a big cleanup: `dl_sync.py --allow-mass-delete` once by hand). The launcher's default
+`systemctl start mxl-dl-sync` (after a big cleanup: `dl_sync.py --allow-mass-delete` once by hand). The downloader's default
 site becomes `https://files.werdegames.com/mxl/` in its own change (`launcher/src/win/app.h`, `DefaultSite`).

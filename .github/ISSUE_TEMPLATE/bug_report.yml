@@ -33,14 +33,14 @@ body:
   - type: input
     id: launcher_version
     attributes:
-      label: Launcher version
-      description: Leave empty if you did not use the launcher.
+      label: Downloader version
+      description: Leave empty if you did not use the downloader (or the old launcher).
   - type: dropdown
     id: install_method
     attributes:
       label: Install method
       options:
-        - D2R-XL Launcher
+        - D2R-XL Downloader
         - Manual 7z
     validations:
       required: true
@@ -71,7 +71,7 @@ body:
     id: log
     attributes:
       label: D2RLoader log
-      description: Drag in `d2rloader/logs/d2rloader.log` (and `mods/D2R-XL/d2rloader/logs/mxl-core.log` if it exists) from the game folder the launcher or your install uses.
+      description: Drag in `d2rloader/logs/d2rloader.log` (and `mods/D2R-XL/d2rloader/logs/mxl-core.log` if it exists) from your D2R folder.
   - type: textarea
     id: save
     attributes:

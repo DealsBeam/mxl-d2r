@@ -43,20 +43,20 @@ jobs:
     runs-on: mxl-cross
     steps:
       - uses: https://git.werdegames.com/actions-mirror/checkout@v4
-      - name: Build D2R-XL-Launcher.exe (docs/launcher.md)
+      - name: Build D2R-XL-Downloader.exe (docs/launcher.md)
         run: |
           cmake -S launcher -B build-launcher -DCMAKE_TOOLCHAIN_FILE="$PWD/plugin/cmake/xwin-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release
           cmake --build build-launcher -j6 --target mxl_launcher
-          ls -la build-launcher/D2R-XL-Launcher.exe
+          ls -la build-launcher/D2R-XL-Downloader.exe
           # unsigned build + its sha256; signing is a later step (tools/sign_launcher.py, docs/launcher.md)
-          cat build-launcher/D2R-XL-Launcher.exe.sha256
-          (cd build-launcher && sha256sum -c D2R-XL-Launcher.exe.sha256)
+          cat build-launcher/D2R-XL-Downloader.exe.sha256
+          (cd build-launcher && sha256sum -c D2R-XL-Downloader.exe.sha256)
 
   launcher-tests:
     runs-on: mxl-cross
     steps:
       - uses: https://git.werdegames.com/actions-mirror/checkout@v4
-      - name: Launcher unit tests (portable core, g++)
+      - name: Downloader unit tests (portable core, 7z decoder, g++)
         run: |
           cmake -S launcher/tests -B build-launcher-tests -DCMAKE_BUILD_TYPE=Release
           cmake --build build-launcher-tests -j6

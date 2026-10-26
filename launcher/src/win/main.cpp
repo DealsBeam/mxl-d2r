@@ -1,7 +1,7 @@
-// D2R-XL launcher: the window (window.cpp: status, progress, Play / Update / Repair / Uninstall, saves folder, bug
-// reports) or, with --cli, the same actions from a terminal (used by the tests, docs/launcher.md "Command line").
+// D2R-XL Downloader: the window (window.cpp: D2R folder, D2RLoader check, Install / Update / Repair / Uninstall) or,
+// with --cli, the same actions from a terminal (used by the tests, docs/launcher.md "Command line").
 #include "app.h"
-#include "../core/gamecopy.h"
+#include "../core/paths.h"
 #include "game.h"
 #include "http.h"
 #include "util.h"
@@ -16,18 +16,14 @@ using namespace mxl;
 namespace {
 
 const wchar_t* Usage =
-	L"D2R-XL-Launcher.exe [--cli status|detect|install|update|repair|play|uninstall|self-update] [options]\n"
-	L"  --data-dir DIR   state, cache and log (default %LOCALAPPDATA%\\D2R-XL)\n"
+	L"D2R-XL-Downloader.exe [--cli status|detect|install|update|repair|uninstall|self-update|remove-old-copy] [options]\n"
+	L"  --data-dir DIR   state, download and log (default %LOCALAPPDATA%\\D2R-XL)\n"
 	L"  --site URL|DIR   download site root (default https://dl.werdegames.com/mxl/; http://, file:// or a folder for tests)\n"
 	L"  --channel NAME   release channel: stable (default) or test\n"
-	L"  --source DIR     the D2R folder to copy (default: found via Battle.net / Steam)\n"
-	L"  --game-dir DIR   the D2R-XL game copy (default: on the D2R drive)\n"
-#ifdef MXL_LAUNCHER_TEST_OPTIONS
-	L"  --any-drive      test builds only: allow a game copy on another drive than D2R\n"
-#endif
-	L"  --args \"...\"     more game arguments, e.g. -w\n"
-	L"  --background     start the game without taking the foreground (tests)\n"
-	L"  --loader-url URL another source of the pinned D2RLoader zip (its sha256 is still checked)\n";
+	L"  --game-dir DIR   your D2R folder (default: found via Battle.net / Steam); D2R-XL goes into DIR\\mods\\D2R-XL\n"
+	L"  --replace        replace a mods\\D2R-XL that the downloader did not install\n"
+	L"  --via auto|7z|objects  how files are fetched (default auto: the 7z for a fresh install, objects for an update)\n"
+	L"  --snapshot FILE  write the window as a PNG and exit\n";
 
 struct Cli {
 	std::wstring command;
@@ -52,14 +48,15 @@ Cli ParseArgs() {
 		else if (a == L"--data-dir") c.opt.dataDir = next();
 		else if (a == L"--site") c.opt.site = Utf8(next());
 		else if (a == L"--channel") c.opt.channel = Utf8(next());
-		else if (a == L"--source") c.opt.source = next();
-		else if (a == L"--game-dir") c.opt.gameDir = next();
-#ifdef MXL_LAUNCHER_TEST_OPTIONS
-		else if (a == L"--any-drive") c.opt.anyDrive = true;  // never in a player build (cmake -DMXL_LAUNCHER_TEST_OPTIONS=ON)
-#endif
-		else if (a == L"--args") c.opt.extraArgs = next();
-		else if (a == L"--background") c.opt.background = true;
-		else if (a == L"--loader-url") c.opt.loaderUrl = Utf8(next());
+		else if (a == L"--game-dir" || a == L"--source") c.opt.gameDir = next();  // --source: the 0.1.x name
+		else if (a == L"--replace") c.opt.replace = true;
+		else if (a == L"--via") {
+			std::wstring v = next();
+			if (v == L"auto") c.opt.via = Via::Auto;
+			else if (v == L"7z") c.opt.via = Via::SevenZip;
+			else if (v == L"objects") c.opt.via = Via::Objects;
+			else c.bad = true;
+		}
 		else if (a == L"--snapshot") c.snapshot = next();
 		else c.bad = true;
 	}
@@ -69,7 +66,7 @@ Cli ParseArgs() {
 
 void SetupLog(const Options& o, bool console) {
 	std::wstring data = o.dataDir.empty() ? Wide(DefaultDataDir(Utf8(KnownFolder(0)))) : o.dataDir;
-	if (OfficialMedianXLFolder(data))  // never write into the official Median XL's folders (the launcher refuses them)
+	if (OfficialMedianXLFolder(data))  // never write into the official Median XL's folders (the downloader refuses them)
 		data = Wide(DefaultDataDir(Utf8(KnownFolder(0))));
 	LogInit(JoinPath(data, L"launcher.log"), console);
 }
@@ -78,7 +75,7 @@ int RunCli(Cli& c) {
 	if (!AttachConsole(ATTACH_PARENT_PROCESS))
 		AllocConsole();
 	SetupLog(c.opt, true);
-	Log(std::string("D2R-XL launcher ") + LauncherVersion + " --cli " + Utf8(c.command));
+	Log(std::string("D2R-XL Downloader ") + LauncherVersion + " --cli " + Utf8(c.command));
 	if (c.command == L"detect") {
 		auto found = FindD2RInstalls();
 		if (found.empty())
@@ -103,15 +100,18 @@ int RunCli(Cli& c) {
 	bool ok = true;
 	if (c.command == L"status") {
 		l.CheckFeed(err);
-		Log(l.StatusText());
+		Launcher::View v = l.Inspect();
+		Log(l.StatusText(v));
+		if (v.legacyCopy)
+			Log("old 0.1.x game copy: " + Utf8(v.legacyDir) + " (--cli remove-old-copy deletes it)");
 		if (!err.empty())
 			Log("feed: " + err);
 		return 0;
 	}
 	if (c.command == L"install" || c.command == L"update") ok = l.InstallOrUpdate(err);
 	else if (c.command == L"repair") ok = l.Repair(err);
-	else if (c.command == L"play") ok = l.Play(err);
 	else if (c.command == L"uninstall") ok = l.Uninstall(err);
+	else if (c.command == L"remove-old-copy") ok = l.RemoveLegacyCopy(err);
 	else if (c.command == L"self-update") {
 		std::string feedErr;
 		if (!l.CheckFeed(feedErr) && !l.LauncherUpdateAvailable())
@@ -129,16 +129,16 @@ int RunCli(Cli& c) {
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
-	SetUserAgent(L"D2R-XL-Launcher/" + Wide(LauncherVersion));
+	SetUserAgent(L"D2R-XL-Downloader/" + Wide(LauncherVersion));
 	Launcher::RemoveOldExe();
 	Cli c = ParseArgs();
 	if (c.bad) {
-		MessageBoxW(nullptr, Usage, L"D2R-XL launcher", MB_ICONINFORMATION);
+		MessageBoxW(nullptr, Usage, L"D2R-XL Downloader", MB_ICONINFORMATION);
 		return 2;
 	}
 	if (!c.command.empty())
 		return RunCli(c);
 	SetupLog(c.opt, false);
-	Log(std::string("D2R-XL launcher ") + LauncherVersion + " (window)");
+	Log(std::string("D2R-XL Downloader ") + LauncherVersion + " (window)");
 	return RunWindow(inst, c.opt, c.snapshot);
 }

@@ -1,9 +1,8 @@
 #include "app.h"
 
-#include "../core/gamecopy.h"
-#include "../core/inflate.h"
+#include "../core/paths.h"
+#include "../core/sevenzip.h"
 #include "../core/sha256.h"
-#include "../core/zip.h"
 #include "http.h"
 #include "util.h"
 
@@ -11,35 +10,22 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <map>
 #include <mutex>
+#include <set>
 #include <thread>
 
 namespace mxl {
 namespace {
 
-struct LoaderFile {
-	const char* path;  // inside the zip and inside the game folder
-	const char* sha256;
-	bool config;  // the player may edit it: written once, then only our keys are set
-};
-const LoaderFile LoaderFiles[] = {
-	{"D2RLoader.exe", "93021dad48533bcfca8a95c69a0cc00cdb9008a3ce6ceba1d04c7aca71985a10", false},
-	{"D2RCore.dll", "2a868d013d2e0830bd2d9e04b918b19e46a73cf726c833e70d089b948fdeb5a2", false},
-	{"d2rloader.mpq", "1f02aa4e3179cb8a8417125160aa3ef18003ea81ee1a4f54e0a76fd3f22d933b", false},
-	{"d2rloader/config/d2rloader.toml", "86be762edb678386ef109589df85cb234cf13d992c548607a44f072d77655e42", true},
-};
-const char* LoaderDirs[] = {"mods", "d2rloader/config", "d2rloader/data", "d2rloader/plugins", "d2rloader/logs", "d2rloader/crashes"};
-
-constexpr uint64_t SpareBytes = 3ull << 30;  // the release (about 1.5 GB) plus room for logs and saves
-constexpr const char* MarkerName = "d2r-xl-copy.json";
+constexpr const char* LegacyMarkerName = "d2r-xl-copy.json";  // the 0.1.x launcher's private game copy
+constexpr const char* LegacyMadeBy = "D2R-XL launcher";
 
 std::string Mb(uint64_t b) { return std::to_string((b + (1 << 19)) >> 20) + " MB"; }
-std::string Gb(uint64_t b) {
-	char s[32];
-	std::snprintf(s, sizeof(s), "%.1f GB", double(b) / double(1ull << 30));
-	return s;
-}
+
+// "1 file", "3 files"
+std::string Count(size_t n, const char* noun) { return std::to_string(n) + " " + noun + (n == 1 ? "" : "s"); }
 
 std::string RandomId() {
 	LARGE_INTEGER c;
@@ -49,50 +35,65 @@ std::string RandomId() {
 	return s;
 }
 
-// Read a zip entry out of a whole-file buffer (the D2RLoader zip is read from the cache in one piece).
-bool ZipEntryData(const std::string& zip, const ZipEntry& e, std::vector<uint8_t>& out, std::string& error) {
-	auto p = reinterpret_cast<const uint8_t*>(zip.data());
-	if (e.offset + 30 > zip.size()) {
-		error = "zip entry outside the file";
-		return false;
-	}
-	size_t hs = LocalHeaderSize(p + e.offset, zip.size() - size_t(e.offset));
-	if (!hs || e.offset + hs + e.compSize > zip.size()) {
-		error = "bad zip entry " + e.name;
-		return false;
-	}
-	const uint8_t* d = p + e.offset + hs;
-	if (e.method == 0)
-		out.assign(d, d + e.compSize);
-	else if (e.method != 8 || !Inflate(d, size_t(e.compSize), out, size_t(e.size))) {
-		error = "cannot unpack " + e.name;
-		return false;
-	}
-	if (Crc32(out.data(), out.size()) != e.crc) {
-		error = "CRC mismatch in " + e.name;
-		return false;
-	}
-	return true;
+std::string Lower(std::string s) {
+	for (char& c : s)
+		c = char(std::tolower(uint8_t(c)));
+	return s;
 }
 
-bool ReadZipDirectory(const std::string& zip, std::vector<ZipEntry>& entries, std::string& error) {
-	size_t tailSize = zip.size() < 70000 ? zip.size() : 70000;
-	std::vector<uint8_t> tail(zip.end() - std::ptrdiff_t(tailSize), zip.end());
-	ZipTail t;
-	if (!FindZipTail(tail, zip.size(), t, error))
-		return false;
-	return ParseCentralDirectory(reinterpret_cast<const uint8_t*>(zip.data()) + t.cdOffset, size_t(t.cdSize), t.entries, entries, error);
+bool DirEmpty(const std::wstring& dir) {
+	WIN32_FIND_DATAW fd;
+	HANDLE h = FindFirstFileW(LongPath(JoinPath(dir, L"*")).c_str(), &fd);
+	if (h == INVALID_HANDLE_VALUE)
+		return true;
+	bool empty = true;
+	do {
+		std::wstring n = fd.cFileName;
+		empty = n == L"." || n == L"..";
+	} while (empty && FindNextFileW(h, &fd));
+	FindClose(h);
+	return empty;
 }
 
-std::wstring Quote(const std::wstring& s) { return L"\"" + s + L"\""; }
+void RecordFile(Json& files, const std::wstring& dst, const std::string& path, const std::string& sha) {
+	uint64_t size = 0, mtime = 0;
+	FileSize(dst, size, &mtime);
+	Json rec = Json::Object();
+	rec.Set("size", size).Set("mtime", std::to_string(mtime)).Set("sha256", sha);
+	files.Set(path, rec);
+}
+
+// Move `from` onto `to` (same volume): the old file stays in place until the new one is complete.
+bool MoveInto(const std::wstring& from, const std::wstring& to) {
+	MakeDirs(ParentDir(to));
+	return MoveFileExW(LongPath(from).c_str(), LongPath(to).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+}
+
+std::string NotWritable(const std::wstring& dir, DWORD code) {
+	std::string s = "Cannot write into " + Utf8(dir) + ": " + Utf8(LastErrorText(code));
+	if (code == ERROR_ACCESS_DENIED)
+		s += " Run the D2R-XL Downloader as administrator (right-click it, Run as administrator), or give your Windows "
+		     "user write access to the D2R folder.";
+	return s;
+}
+
+void Pause(int attempt, const std::atomic<bool>& cancel) {
+	for (int waited = 0; attempt && waited < (1000 << attempt) && !cancel.load(); waited += 100)
+		Sleep(100);  // 2, 4, 8, 16 s between attempts: a dropped line often comes back
+}
 
 }  // namespace
 
+bool OfficialMedianXLFolder(const std::wstring& dir) {
+	return OfficialMedianXLPath(Utf8(dir), Utf8(KnownFolder(0)), Utf8(KnownFolder(3)));
+}
+
 Launcher::Launcher(Options o) : opt_(std::move(o)) {
-	if (opt_.dataDir.empty())
+	if (opt_.dataDir.empty() || OfficialMedianXLFolder(opt_.dataDir))
 		opt_.dataDir = Wide(DefaultDataDir(Utf8(KnownFolder(0))));
 	statePath_ = JoinPath(opt_.dataDir, L"launcher.json");
 	LoadState();
+	MigrateState();
 	if (opt_.site.empty())
 		opt_.site = state_["site"].Str(DefaultSite);
 	if (opt_.channel.empty())
@@ -122,111 +123,93 @@ bool Launcher::LoadState() {
 
 bool Launcher::SaveState() {
 	state_.Set("launcher", LauncherVersion);
-	state_.Set("site", opt_.site);
-	state_.Set("channel", opt_.channel);
+	state_.Set("site", opt_.site.empty() ? state_["site"].Str(DefaultSite) : opt_.site);
+	state_.Set("channel", opt_.channel.empty() ? state_["channel"].Str(DefaultChannel) : opt_.channel);
+	MakeDirs(opt_.dataDir);
 	return WriteFileAtomic(statePath_, state_.Dump());
 }
 
+// The 0.1.x launcher kept a private copy of D2R (game_dir, copy_id) with the mod inside. Its records say nothing about
+// <D2R>\mods\D2R-XL, so they are dropped; the copy itself is remembered under "legacy" until the player answers the
+// offer to delete it (docs/launcher.md "From launcher 0.1.x").
+void Launcher::MigrateState() {
+	if (!state_.Has("copy_id") && !state_.Has("game_dir"))
+		return;
+	Json next = Json::Object();
+	for (const char* k : {"site", "channel"})
+		if (state_[k].IsString())
+			next.Set(k, state_[k]);
+	if (!state_["source"].Str().empty())
+		next.Set("d2r_dir", state_["source"].Str());
+	if (!state_["game_dir"].Str().empty()) {
+		Json legacy = Json::Object();
+		legacy.Set("dir", state_["game_dir"].Str()).Set("id", state_["copy_id"].Str()).Set("declined", false);
+		next.Set("legacy", legacy);
+	}
+	Log("state of launcher " + state_["launcher"].Str("0.1.x") + " converted; its game copy: " + state_["game_dir"].Str("none"));
+	state_ = next;
+	SaveState();
+}
+
 std::string Launcher::ModFolder() const {
-	return !feed_.modFolder.empty() ? feed_.modFolder : state_["mod"]["modFolder"].Str("D2R-XL");
-}
-std::wstring Launcher::ModDir() const { return JoinPath(gameDir_, L"mods\\" + Wide(ModFolder())); }
-
-// The copy's own d2rloader.toml gets the release's launch keys (docs/release.md "launch"); D2RLoader started without
-// arguments builds the D2R command line from them ("<launch_arguments> -mod <default_mod>").
-bool Launcher::WriteLaunchConfig(std::string& error) {
-	std::wstring toml = JoinPath(gameDir_, L"d2rloader\\config\\d2rloader.toml");
-	std::string text;
-	if (!ReadWholeFile(toml, text)) {
-		error = "Cannot read " + Utf8(toml) + ". Press Repair.";
-		return false;
-	}
-	const Json& launch = state_["mod"]["launch"];
-	std::string mod = !feed_.launchDefaultMod.empty() ? feed_.launchDefaultMod : launch["default_mod"].Str(ModFolder());
-	std::string args = feed_.version.empty() ? launch["launch_arguments"].Str("-txt") : feed_.launchArguments;
-	if (!opt_.extraArgs.empty())
-		args += (args.empty() ? "" : " ") + Utf8(opt_.extraArgs);
-	std::string quoted;
-	for (char c : args)
-		if (c != '"' && uint8_t(c) >= 0x20)
-			quoted += c;
-	std::string fixed = SetTomlKey(text, "d2rloader", "default_mod", "\"" + mod + "\"");
-	fixed = SetTomlKey(fixed, "d2rloader", "launch_arguments", "\"" + quoted + "\"");
-	fixed = SetTomlKey(fixed, "d2rloader", "check_for_updates", "false");
-	if (fixed != text && !WriteFileAtomic(toml, fixed)) {
-		error = "Cannot write " + Utf8(toml);
-		return false;
-	}
-	return true;
+	std::string m = !feed_.modFolder.empty() ? feed_.modFolder : state_["mod"]["modFolder"].Str("D2R-XL");
+	return SafeModFolderName(m) ? m : "D2R-XL";
 }
 
-bool OfficialMedianXLFolder(const std::wstring& dir) {
-	return OfficialMedianXLPath(Utf8(dir), Utf8(KnownFolder(0)), Utf8(KnownFolder(3)));
+std::wstring Launcher::ModDir() const {
+	return d2rDir_.empty() ? L"" : Wide(ModTargetDir(Utf8(d2rDir_), ModFolder()));
 }
 
-std::wstring Launcher::DefaultGameDir(const std::wstring& source) {
-	std::wstring root;
-	uint32_t src = VolumeSerial(source, &root);  // same drive as D2R (docs/launcher.md "Drive rule")
-	return Wide(mxl::DefaultGameDir(Utf8(opt_.dataDir), !src || VolumeSerial(opt_.dataDir) == src, Utf8(root)));
-}
-
-bool Launcher::LocationOk(const std::wstring& source, const std::wstring& dir, std::string& error) {
-	if (OfficialMedianXLFolder(dir)) {
-		error = "The D2R-XL folder cannot be inside the official Median XL's folders or a Diablo II folder (" + Utf8(dir) +
-		        "). Pick another folder.";
-		return false;
-	}
-	if (PathUnder(dir, source) || PathUnder(source, dir)) {
-		error = "The D2R-XL folder must be outside the D2R folder (" + Utf8(source) + ").";
-		return false;
-	}
-	if (dir.size() <= 3) {
-		error = "Pick a folder, not a whole drive.";
-		return false;
-	}
-	if (!opt_.anyDrive && VolumeSerial(dir) != VolumeSerial(source)) {
-		std::wstring root;
-		VolumeSerial(source, &root);
-		error = "The D2R-XL folder must be on the same drive as D2R (" + Utf8(root) +
-		        "): D2R's Battle.net login file only opens from that drive. Pick a folder on " + Utf8(root) + ".";
-		return false;
-	}
-	return true;
-}
-
-bool Launcher::Prepare(std::string& error) {
-	// the source: from the command line, the state, or detection
-	std::wstring src = opt_.source.empty() ? Wide(state_["source"].Str()) : opt_.source;
-	if (src.empty() || !LooksLikeD2R(src)) {
-		auto found = FindD2RInstalls();
-		if (found.empty()) {
-			error = "D2R was not found. Install Diablo II: Resurrected from Battle.net or Steam, or choose its folder.";
+bool Launcher::FindD2R(std::string& error) {
+	std::wstring dir = !opt_.gameDir.empty() ? opt_.gameDir : Wide(state_["d2r_dir"].Str());
+	std::string source = !opt_.gameDir.empty() ? "chosen" : state_["d2r_source"].Str("saved");
+	if (dir.empty() || !LooksLikeD2R(dir)) {
+		if (!opt_.gameDir.empty()) {
+			error = Utf8(opt_.gameDir) + " has no D2R.exe and Data folder. Choose the Diablo II Resurrected folder.";
 			return false;
 		}
-		source_ = found.front();
-	} else {
-		source_ = InspectD2R(src, opt_.source.empty() ? state_["source_kind"].Str("saved") : "chosen");
+		auto found = FindD2RInstalls();
+		if (found.empty()) {
+			error = "D2R was not found. Press D2R folder and choose the Diablo II Resurrected folder (the one with D2R.exe).";
+			return false;
+		}
+		dir = found.front().dir;
+		source = found.front().source;
 	}
-	if (FileExists(JoinPath(source_.dir, Wide(MarkerName)))) {
-		error = "That folder is a D2R-XL game copy, not the D2R install. Choose the D2R folder from Battle.net or Steam.";
+	while (dir.size() > 3 && (dir.back() == L'\\' || dir.back() == L'/'))
+		dir.pop_back();
+	if (FileExists(JoinPath(dir, Wide(LegacyMarkerName)))) {
+		error = Utf8(dir) + " is the old D2R-XL launcher's game copy, not your D2R. Choose the Diablo II Resurrected folder that "
+		        "Battle.net or Steam installed.";
 		return false;
 	}
-	gameDir_ = !opt_.gameDir.empty() ? opt_.gameDir : !state_["game_dir"].Str().empty() ? Wide(state_["game_dir"].Str()) : DefaultGameDir(source_.dir);
-	if (OfficialMedianXLFolder(opt_.dataDir) || OfficialMedianXLFolder(gameDir_)) {  // docs/launcher.md "Coexisting with the official Median XL"
-		error = "D2R-XL never uses the official Median XL's folders or a Diablo II folder (" +
-		        Utf8(OfficialMedianXLFolder(opt_.dataDir) ? opt_.dataDir : gameDir_) + "). Choose other folders.";
+	if (OfficialMedianXLFolder(dir)) {
+		error = "D2R-XL never writes into the official Median XL's folders or a Diablo II folder (" + Utf8(dir) + ").";
 		return false;
 	}
-	state_.Set("source", Utf8(source_.dir));
-	state_.Set("source_kind", source_.source);
-	state_.Set("game_dir", Utf8(gameDir_));
+	d2rDir_ = dir;
+	d2rSource_ = source;
+	return true;
+}
+
+bool Launcher::SetD2RDir(const std::wstring& dir, std::string& error) {
+	Options o = opt_;
+	opt_.gameDir = dir;
+	if (!FindD2R(error)) {
+		opt_ = o;
+		return false;
+	}
+	state_.Set("d2r_dir", Utf8(d2rDir_));
+	state_.Set("d2r_source", "chosen");
+	SaveState();
 	return true;
 }
 
 std::wstring Launcher::SavesDir() {
 	std::string savepath = "D2R-XL/", text, err;
 	Json j;
-	if (!gameDir_.empty() && ReadWholeFile(JoinPath(ModDir(), Wide(ModFolder()) + L".mpq\\modinfo.json"), text) && Json::Parse(text, j, err))
+	std::wstring mod = ModDir();
+	if (!mod.empty() && ReadWholeFile(JoinPath(mod, Wide(ModFolder()) + L".mpq\\modinfo.json"), text) && Json::Parse(text, j, err))
 		savepath = j["savepath"].Str(savepath);
 	std::wstring w = Wide(savepath);
 	while (!w.empty() && (w.back() == L'/' || w.back() == L'\\'))
@@ -234,215 +217,138 @@ std::wstring Launcher::SavesDir() {
 	return JoinPath(KnownFolder(1), L"Diablo II Resurrected\\mods\\" + w);
 }
 
-// ---------------------------------------------------------------- the copy
+// ---------------------------------------------------------------- what the window shows
 
-bool Launcher::EnsureCopy(bool verify, std::string& error) {
-	bool complete = state_["copy_complete"].Bool() && FileExists(JoinPath(gameDir_, Wide(MarkerName))) && LooksLikeD2R(gameDir_);
-	if (complete && !verify) {
-		D2RInstall copy = InspectD2R(gameDir_, "copy");
-		if (copy.build.verdict != BuildVerdict::Ok) {
-			error = "The D2R-XL game copy is not build " + std::to_string(RequiredBuild) + " (" + copy.build.message + "). Use Repair.";
-			return false;
-		}
-		return true;
+Launcher::View Launcher::Inspect() {
+	View v;
+	std::string e;
+	v.feedOk = feedChecked_;
+	v.latest = feed_.version;
+	v.requiredBuild = feed_.d2rBuild ? feed_.d2rBuild : RequiredBuild;
+	v.loaderNeeded = !feed_.d2rloader.version.empty() ? feed_.d2rloader.version : LoaderVersionDefault;
+	const Json& legacy = state_["legacy"];
+	if (legacy.IsObject() && !legacy["dir"].Str().empty()) {
+		std::wstring dir = Wide(legacy["dir"].Str());
+		std::string text, err;
+		Json m;
+		v.legacyCopy = ReadWholeFile(JoinPath(dir, Wide(LegacyMarkerName)), text) && Json::Parse(text, m, err) &&
+		               m["made_by"].Str() == LegacyMadeBy && !legacy["id"].Str().empty() && m["id"].Str() == legacy["id"].Str();
+		v.legacyDir = dir;
+		v.legacyOffered = legacy["declined"].Bool();
 	}
-	if (source_.build.verdict != BuildVerdict::Ok) {
-		if (complete) {  // a newer D2R cannot repair the frozen copy, but the copy itself still works
-			Report("D2R is now build " + std::to_string(source_.build.build) + "; the D2R-XL copy stays at build " +
-			       std::to_string(RequiredBuild) + " and is not compared with it.");
-			return true;
-		}
-		error = source_.build.message;
+	if (!FindD2R(e))
+		return v;
+	v.d2rFound = true;
+	v.d2rDir = d2rDir_;
+	v.d2rSource = d2rSource_;
+	D2RInstall d = InspectD2R(d2rDir_, d2rSource_);
+	v.build = CheckBuild(d.infoVersion, d.exeVersion, v.requiredBuild);
+	std::wstring loader = JoinPath(d2rDir_, L"D2RLoader.exe");
+	if (FileExists(loader))
+		v.loaderFound = ExeFileVersion(loader);
+	if (FileExists(loader) && v.loaderFound.empty())
+		v.loaderFound = "unknown version";
+	v.loaderOk = LoaderVersionMatches(v.loaderFound, v.loaderNeeded);
+	std::wstring mod = ModDir();
+	std::string marker;
+	ReadWholeFile(JoinPath(mod, Wide(InstallMarkerName)), marker);
+	MarkerVerdict mv = CheckMarker(marker, state_["install_id"].Str());
+	bool ours = mv == MarkerVerdict::Ours || mv == MarkerVerdict::OtherId;
+	if (ours && state_["mod"].IsObject() && SamePath(Wide(state_["mod_dir"].Str()), mod))
+		v.installed = state_["mod"]["version"].Str();
+	else if (ours) {  // our folder, another state (e.g. the state was deleted): the marker knows the version
+		Json m;
+		std::string err;
+		if (Json::Parse(marker, m, err))
+			v.installed = m["version"].Str();
+	}
+	v.foreignMod = !ours && DirExists(mod) && !DirEmpty(mod);
+	v.updateAvailable = v.feedOk && v.latest != v.installed;
+	return v;
+}
+
+std::string Launcher::StatusText(const View& v) const {
+	// "!" at the start of a line: drawn as a warning
+	std::string out;
+	if (!v.d2rFound)
+		return "!D2R not found: press D2R folder and choose the Diablo II Resurrected folder.";
+	std::string build = v.build.build ? "build " + std::to_string(v.build.build) : "build unknown";
+	if (v.build.verdict == BuildVerdict::Ok)
+		out += "D2R: " + Utf8(v.d2rDir) + " (" + build + ")\n";
+	else
+		out += "!D2R " + build + ": D2R-XL needs " + std::to_string(v.requiredBuild) +
+		       (v.build.verdict == BuildVerdict::Newer ? ". Wait for a D2R-XL update." : ". Update D2R in Battle.net.") + "\n";
+	if (v.loaderOk)
+		out += "D2RLoader: " + v.loaderFound + " (OK)\n";
+	else if (v.loaderFound.empty())
+		out += "!D2RLoader missing: D2R-XL needs D2RLoader " + v.loaderNeeded + ".\n";
+	else
+		out += "!D2RLoader " + v.loaderFound + ": D2R-XL needs D2RLoader " + v.loaderNeeded + ".\n";
+	if (v.foreignMod)
+		out += "!D2R-XL: mods\\" + ModFolder() + " was not installed by this downloader (Install asks before replacing it)";
+	else if (v.installed.empty())
+		out += "D2R-XL: not installed" + (v.feedOk ? " (" + v.latest + " available)" : std::string());
+	else if (v.updateAvailable)
+		out += "D2R-XL: " + v.installed + " installed, update " + v.latest + " available";
+	else
+		out += "D2R-XL: " + v.installed + " installed" + (v.feedOk ? " (latest)" : std::string());
+	out += "\nMod folder: " + Utf8(ModDir());
+	return out;
+}
+
+// ---------------------------------------------------------------- the 0.1.x game copy
+
+bool Launcher::RemoveLegacyCopy(std::string& error) {
+	cancel = false;
+	const Json& legacy = state_["legacy"];
+	std::wstring dir = Wide(legacy["dir"].Str());
+	std::string text, err;
+	Json m;
+	if (dir.empty() || !ReadWholeFile(JoinPath(dir, Wide(LegacyMarkerName)), text) || !Json::Parse(text, m, err) ||
+	    m["made_by"].Str() != LegacyMadeBy || legacy["id"].Str().empty() || m["id"].Str() != legacy["id"].Str()) {
+		error = "Not removing " + Utf8(dir) + ": its d2r-xl-copy.json marker is missing or belongs to another installation.";
 		return false;
 	}
-	if (!complete && !LocationOk(source_.dir, gameDir_, error))
-		return false;
-	std::wstring marker = JoinPath(gameDir_, Wide(MarkerName));
-	if (DirExists(gameDir_) && !FileExists(marker)) {
-		WIN32_FIND_DATAW fd;  // an existing folder must be empty: we only ever delete what we made
-		HANDLE h = FindFirstFileW(JoinPath(gameDir_, L"*").c_str(), &fd);
-		bool empty = true;
-		if (h != INVALID_HANDLE_VALUE) {
-			do {
-				std::wstring n = fd.cFileName;
-				empty = empty && (n == L"." || n == L"..");
-			} while (empty && FindNextFileW(h, &fd));
-			FindClose(h);
-		}
-		if (!empty) {
-			error = "The folder " + Utf8(gameDir_) + " is not empty and was not made by this launcher. Choose an empty or new folder.";
-			return false;
-		}
-	}
-	Report("Listing the files of D2R in " + Utf8(source_.dir) + " ...");
-	CopyList list;
-	if (!ListGameFiles(source_.dir, list, error))
-		return false;
-	uint64_t present = 0;
-	for (const auto& f : list.files) {
-		uint64_t size = 0, mtime = 0;
-		if (FileSize(JoinPath(gameDir_, f.rel), size, &mtime) && size == f.size && mtime == f.mtime)
-			present += f.size;
-	}
-	uint64_t free = 0;
-	if (FreeBytes(gameDir_, free) && free < list.bytes - present + SpareBytes) {
-		error = "Not enough disk space for the D2R-XL game copy: it needs " + Gb(list.bytes - present + SpareBytes) + ", " + Gb(free) +
-		        " are free on that drive.";
+	std::string d2r;
+	if (FindD2R(d2r) && (PathUnder(dir, d2rDir_) || PathUnder(d2rDir_, dir))) {
+		error = "Not removing " + Utf8(dir) + ": it overlaps your D2R install.";
 		return false;
 	}
-	if (!FileExists(marker)) {
-		MakeDirs(gameDir_);
-		Json m = Json::Object();
-		m.Set("made_by", "D2R-XL launcher").Set("id", RandomId()).Set("source", Utf8(source_.dir)).Set("build", RequiredBuild);
-		if (!WriteFileAtomic(marker, m.Dump())) {
-			error = "Cannot write into " + Utf8(gameDir_) + ": " + Utf8(LastErrorText(GetLastError()));
-			return false;
-		}
+	if (!ProcessesUnder(dir).empty()) {
+		error = "The old D2R-XL game copy is running. Close the game first.";
+		return false;
 	}
-	std::string marktext, err;
-	Json mj;
-	if (ReadWholeFile(marker, marktext) && Json::Parse(marktext, mj, err))
-		state_.Set("copy_id", mj["id"].Str());
-	state_.Set("copy_complete", false);
+	Report("Removing the old D2R-XL game copy " + Utf8(dir) + " ...");
+	if (!RemoveTree(dir, error))
+		return false;
+	std::wstring parent = ParentDir(dir);
+	if (!SamePath(parent, opt_.dataDir) && JoinPath(ParentDir(parent), L"D2R-XL") == parent)
+		RemoveDirectoryW(parent.c_str());  // <drive>\D2R-XL when empty
+	std::wstring cache = JoinPath(opt_.dataDir, L"cache");  // the old D2RLoader download
+	std::string e2;
+	if (DirExists(cache))
+		RemoveTree(cache, e2);
+	state_.Set("legacy", Json());
+	Json clean = Json::Object();
+	for (const auto& [k, val] : state_.members())
+		if (!val.IsNull())
+			clean.Set(k, val);
+	state_ = clean;
 	SaveState();
-	Report("Copying D2R (" + Gb(list.bytes) + (present ? ", " + Gb(present) + " already copied" : "") + ") to " + Utf8(gameDir_) +
-	       " (" + FileSystemName(gameDir_) + ")");
-	ULONGLONG t0 = GetTickCount64();
-	bool ok = CopyGameFiles(source_.dir, gameDir_, list, cancel, [&](const CopyProgress& p) {
-		double secs = double(GetTickCount64() - t0) / 1000.0;
-		double rate = secs > 1 ? double(p.doneBytes - p.skippedBytes) / secs : 0;
-		std::string eta = rate > 0 && p.totalBytes > p.doneBytes ? ", " + std::to_string(int(double(p.totalBytes - p.doneBytes) / rate / 60.0 + 0.5)) + " min left" : "";
-		if (onProgress)
-			onProgress({"Copying D2R: " + Gb(p.doneBytes) + " of " + Gb(p.totalBytes) + eta,
-			             p.totalBytes ? double(p.doneBytes) / double(p.totalBytes) : -1});
-	}, error);
-	if (!ok)
-		return false;
-	D2RInstall copy = InspectD2R(gameDir_, "copy");
-	if (copy.build.verdict != BuildVerdict::Ok) {
-		error = "The copy does not read as build " + std::to_string(RequiredBuild) + ": " + copy.build.message;
-		return false;
-	}
-	state_.Set("copy_complete", true);
-	state_.Set("copy_build", copy.build.build);
-	state_.Set("copy_bytes", list.bytes);
-	SaveState();
-	Report("Game copy ready: " + Utf8(gameDir_) + " (" + Gb(list.bytes) + ", " + std::to_string(list.files.size()) + " files, " +
-	       std::to_string(int(double(GetTickCount64() - t0) / 1000.0)) + " s)");
+	Report("The old game copy is removed. Your characters and your D2R settings were not touched.");
 	return true;
 }
 
-// ---------------------------------------------------------------- D2RLoader
-
-// On top of the pinned sha256: the Authenticode signer of the two binaries (docs/release.md "d2rloader").
-bool Launcher::CheckLoaderSignatures(std::string& error) {
-	for (const wchar_t* name : {L"D2RLoader.exe", L"D2RCore.dll"}) {
-		std::string thumb;
-		bool intact = false;
-		if (!SignerThumbprint(JoinPath(gameDir_, name), thumb, intact) || !intact || thumb != LoaderSigner) {
-			error = "The D2RLoader file " + Utf8(name) + " does not carry the expected signature (signer " + (thumb.empty() ? "none" : thumb) +
-			        (intact ? "" : ", signature not intact") + "). Press Repair.";
-			return false;
-		}
-	}
-	return true;
-}
-
-bool Launcher::EnsureLoader(bool verify, std::string& error) {
-	bool allOk = true;
-	for (const auto& f : LoaderFiles) {
-		std::wstring p = JoinPath(gameDir_, Wide(f.path));
-		if (f.config) {
-			allOk = allOk && FileExists(p);
-			continue;
-		}
-		uint64_t size = 0, mtime = 0;
-		auto rec = state_["loader_files"][f.path];
-		bool quick = !verify && FileSize(p, size, &mtime) && rec["mtime"].Str() == std::to_string(mtime) && rec["size"].Int() == int64_t(size);
-		allOk = allOk && (quick || FileSha256(p) == f.sha256);
-	}
-	if (allOk && (!verify || CheckLoaderSignatures(error))) {
-		state_.Set("loader", LoaderVersion);
-		return true;
-	}
-	error.clear();
-	std::wstring cache = JoinPath(opt_.dataDir, L"cache\\D2RLoader-" + Wide(LoaderVersion) + L".zip");
-	MakeDirs(ParentDir(cache));
-	std::string zip;
-	if (!ReadWholeFile(cache, zip) || Sha256Hex(zip.data(), zip.size()) != LoaderZipSha256) {
-		std::string url = opt_.loaderUrl.empty() ? LoaderUrl : opt_.loaderUrl;
-		Report("Downloading D2RLoader " + std::string(LoaderVersion) + " from " + url);
-		zip.clear();
-		FetchResult r = Fetch(url, 0, 0, [&](const uint8_t* p, size_t n) {
-			if (zip.size() + n > LoaderZipSize + 1024)
-				return false;
-			zip.append(reinterpret_cast<const char*>(p), n);
-			if (onProgress)
-				onProgress({"Downloading D2RLoader: " + Mb(zip.size()) + " of " + Mb(LoaderZipSize), double(zip.size()) / double(LoaderZipSize)});
-			return !cancel.load();
-		});
-		if (!r.ok) {
-			error = "D2RLoader download failed: " + r.error;
-			return false;
-		}
-		std::string got = Sha256Hex(zip.data(), zip.size());
-		if (got != LoaderZipSha256) {
-			error = "The D2RLoader download does not match the pinned " + std::string(LoaderVersion) + " (sha256 " + got +
-			        "). Nothing was installed.";
-			return false;
-		}
-		WriteFileAtomic(cache, zip);
-	}
-	std::vector<ZipEntry> entries;
-	if (!ReadZipDirectory(zip, entries, error))
-		return false;
-	for (const char* d : LoaderDirs)
-		MakeDirs(JoinPath(gameDir_, Wide(d)));
-	Json rec = Json::Object();
-	for (const auto& f : LoaderFiles) {
-		auto it = std::find_if(entries.begin(), entries.end(), [&](const ZipEntry& e) { return e.name == f.path; });
-		if (it == entries.end()) {
-			error = std::string("D2RLoader zip lacks ") + f.path;
-			return false;
-		}
-		std::wstring p = JoinPath(gameDir_, Wide(f.path));
-		std::vector<uint8_t> data;
-		if (!ZipEntryData(zip, *it, data, error))
-			return false;
-		if (Sha256Hex(data.data(), data.size()) != f.sha256) {
-			error = std::string("D2RLoader file ") + f.path + " does not match the pinned version";
-			return false;
-		}
-		if (f.config) {  // the template, only when missing; the launch keys are set by WriteLaunchConfig
-			if (!FileExists(p) && !WriteFileAtomic(p, data.data(), data.size())) {
-				error = "Cannot write " + Utf8(p);
-				return false;
-			}
-			continue;
-		}
-		if (FileSha256(p) != f.sha256) {
-			Report(std::string("Installing D2RLoader file ") + f.path);
-			if (!WriteFileAtomic(p, data.data(), data.size())) {
-				error = "Cannot write " + Utf8(p) + ": " + Utf8(LastErrorText(GetLastError()));
-				return false;
-			}
-		}
-		uint64_t size = 0, mtime = 0;
-		FileSize(p, size, &mtime);
-		Json r = Json::Object();
-		r.Set("size", size).Set("mtime", std::to_string(mtime));
-		rec.Set(f.path, r);
-	}
-	if (!CheckLoaderSignatures(error))
-		return false;
-	state_.Set("loader_files", rec);
-	state_.Set("loader", LoaderVersion);
+void Launcher::DeclineLegacyCopy() {
+	Json legacy = state_["legacy"];
+	if (!legacy.IsObject())
+		return;
+	legacy.Set("declined", true);
+	state_.Set("legacy", legacy);
 	SaveState();
-	Report(std::string("D2RLoader ") + LoaderVersion + " ready in the game copy");
-	return true;
 }
 
-// ---------------------------------------------------------------- the release
+// ---------------------------------------------------------------- the release feed
 
 std::string Launcher::NewLauncherUrl() const {
 	return feed_.launcher.path.empty() ? siteRoot_ : ResolveUrl(siteRoot_, feed_.launcher.path);
@@ -483,14 +389,14 @@ bool Launcher::CheckFeed(std::string& error) {
 	Manifest m;
 	if (!ParseManifest(text, m, error)) {
 		if (m.schemaVersion > ManifestSchema) {
-			offer_ = m.launcher;  // the release's own launcher can read it: self-update
+			offer_ = m.launcher;  // the release's own downloader can read it: self-update
 			feed_.launcher = m.launcher;
-			error = "This launcher is too old for D2R-XL " + m.version + " (its release manifest has format " +
-			        std::to_string(m.schemaVersion) + ", this launcher reads " + std::to_string(ManifestSchema) +
-			        "). Update the launcher: " + NewLauncherUrl();
+			error = "This downloader is too old for D2R-XL " + m.version + " (its release manifest has format " +
+			        std::to_string(m.schemaVersion) + ", this downloader reads " + std::to_string(ManifestSchema) +
+			        "). Update the downloader: " + NewLauncherUrl();
 		} else if (m.schemaVersion > 0 && m.schemaVersion < ManifestSchema) {
-			error = "This launcher is too new for the release on the download site (D2R-XL " + m.version +
-			        ", release manifest format " + std::to_string(m.schemaVersion) + "; this launcher reads " +
+			error = "This downloader is too new for the release on the download site (D2R-XL " + m.version +
+			        ", release manifest format " + std::to_string(m.schemaVersion) + "; this downloader reads " +
 			        std::to_string(ManifestSchema) + "). Try again later, or report it: " + IssuesUrl;
 		} else {
 			error = "The release manifest is damaged: " + error;
@@ -501,37 +407,25 @@ bool Launcher::CheckFeed(std::string& error) {
 		error = "The channel names D2R-XL " + ch.version + " but its manifest is " + m.version + ".";
 		return false;
 	}
-	offer_ = m.launcher;  // a launcher update is possible even when this launcher cannot install the release
-	if (m.d2rBuild != RequiredBuild) {
-		feed_ = m;
-		error = "D2R-XL " + m.version + " needs D2R build " + std::to_string(m.d2rBuild) + "; this launcher knows build " +
-		        std::to_string(RequiredBuild) + ". Get the new launcher: " + NewLauncherUrl();
+	offer_ = m.launcher;  // a downloader update is possible even when this one cannot install the release
+	if (!SafeModFolderName(m.modFolder)) {
+		error = "The release manifest names an unusable mod folder \"" + m.modFolder + "\".";
 		return false;
 	}
 	if (!m.complete) {
 		error = "The release manifest names D2R-XL " + m.version + " as incomplete (a test package without game data); it cannot be installed.";
 		return false;
 	}
-	// the launcher installs only its own pinned D2RLoader; a release that names another one needs a new launcher
-	if ((!m.d2rloader.version.empty() && m.d2rloader.version != LoaderVersion) ||
-	    (!m.d2rloader.sha256.empty() && m.d2rloader.sha256 != LoaderZipSha256) ||
-	    (!m.d2rloader.signerThumbprint.empty() && m.d2rloader.signerThumbprint != LoaderSigner)) {
-		feed_ = m;
-		error = "D2R-XL " + m.version + " needs D2RLoader " + m.d2rloader.version + "; this launcher installs " + LoaderVersion +
-		        ". Get the new launcher: " + NewLauncherUrl();
-		return false;
-	}
 	if (!m.launcherMin.empty() && CompareVersions(LauncherVersion, m.launcherMin) < 0) {
 		feed_ = m;
-		error = "D2R-XL " + m.version + " needs launcher " + m.launcherMin + " or newer (this is " + LauncherVersion +
+		error = "D2R-XL " + m.version + " needs downloader " + m.launcherMin + " or newer (this is " + LauncherVersion +
 		        "). Get it: " + NewLauncherUrl();
 		return false;
 	}
 	feed_ = std::move(m);
-	manifestUrl_ = manUrl;
 	feedChecked_ = true;
 	if (LauncherUpdateAvailable())
-		Report("A newer launcher (" + offer_.version + ") is available: " + NewLauncherUrl());
+		Report("A newer downloader (" + offer_.version + ") is available: " + NewLauncherUrl());
 	return true;
 }
 
@@ -562,12 +456,12 @@ void Launcher::RemoveOldExe() {
 	}).detach();
 }
 
-// The sha256 of the published launcher is what makes it trusted: it comes from the release manifest, which is checked
-// against the channel file's manifestSha256 and read over HTTPS. A signature is logged, never required, so a new
-// signing certificate (or none) does not block an update.
+// The sha256 of the published downloader is what makes it trusted: it comes from the release manifest, which is
+// checked against the channel file's manifestSha256 and read over HTTPS. A signature is logged, never required, so a
+// new signing certificate (or none) does not block an update.
 bool Launcher::SelfUpdate(std::string& error) {
 	if (!LauncherUpdateAvailable()) {
-		error = "No newer launcher is published.";
+		error = "No newer downloader is published.";
 		return false;
 	}
 	std::wstring exe = ExePath(), part = exe + L".download", old = exe + L".old";
@@ -576,10 +470,10 @@ bool Launcher::SelfUpdate(std::string& error) {
 	DeleteFileW(LongPath(part).c_str());
 	HANDLE h = CreateFileW(LongPath(part).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 	if (h == INVALID_HANDLE_VALUE) {
-		error = "Cannot write next to the launcher (" + Utf8(ParentDir(exe)) + "): " + Utf8(LastErrorText(GetLastError())) + "." + manual;
+		error = "Cannot write next to the downloader (" + Utf8(ParentDir(exe)) + "): " + Utf8(LastErrorText(GetLastError())) + "." + manual;
 		return false;
 	}
-	Report("Downloading launcher " + offer_.version + " from " + url);
+	Report("Downloading downloader " + offer_.version + " from " + url);
 	uint64_t got = 0;
 	bool writeOk = true;
 	FetchResult r = Fetch(url, 0, 0, [&](const uint8_t* p, size_t n) {
@@ -590,7 +484,7 @@ bool Launcher::SelfUpdate(std::string& error) {
 		}
 		got += n;
 		if (onProgress)
-			onProgress({"Downloading launcher " + offer_.version + ": " + Mb(got) + " of " + Mb(offer_.size), double(got) / double(offer_.size)});
+			onProgress({"Downloading downloader " + offer_.version + ": " + Mb(got) + " of " + Mb(offer_.size), double(got) / double(offer_.size)});
 		return !cancel.load();
 	});
 	CloseHandle(h);
@@ -598,9 +492,9 @@ bool Launcher::SelfUpdate(std::string& error) {
 	if (sha != offer_.sha256) {
 		DeleteFileW(LongPath(part).c_str());
 		if (!r.ok)
-			error = "Launcher download failed: " + r.error + "." + manual;
+			error = "Downloader download failed: " + r.error + "." + manual;
 		else
-			error = "The downloaded launcher does not match the release manifest (" + std::to_string(got) + " bytes, sha256 " +
+			error = "The downloaded downloader does not match the release manifest (" + std::to_string(got) + " bytes, sha256 " +
 			        (sha.empty() ? std::string("not checked") : sha) + "; expected " + std::to_string(offer_.size) + " bytes, " +
 			        offer_.sha256 + "). Nothing was changed.";
 		return false;
@@ -608,52 +502,116 @@ bool Launcher::SelfUpdate(std::string& error) {
 	std::string thumb;
 	bool intact = false;
 	if (SignerThumbprint(part, thumb, intact))
-		Log("launcher " + offer_.version + ": signed by " + thumb + (intact ? "" : " (signature not intact)"));
+		Log("downloader " + offer_.version + ": signed by " + thumb + (intact ? "" : " (signature not intact)"));
 	else
-		Log("launcher " + offer_.version + ": not signed");
+		Log("downloader " + offer_.version + ": not signed");
 	DeleteFileW(LongPath(old).c_str());
 	if (!MoveFileExW(LongPath(exe).c_str(), LongPath(old).c_str(), MOVEFILE_REPLACE_EXISTING)) {  // a running exe can be renamed
-		error = "Cannot replace the launcher: " + Utf8(LastErrorText(GetLastError())) + "." + manual;
+		error = "Cannot replace the downloader: " + Utf8(LastErrorText(GetLastError())) + "." + manual;
 		DeleteFileW(LongPath(part).c_str());
 		return false;
 	}
 	if (!MoveFileExW(LongPath(part).c_str(), LongPath(exe).c_str(), MOVEFILE_WRITE_THROUGH)) {
-		error = "Cannot replace the launcher: " + Utf8(LastErrorText(GetLastError())) + "." + manual;
+		error = "Cannot replace the downloader: " + Utf8(LastErrorText(GetLastError())) + "." + manual;
 		MoveFileExW(LongPath(old).c_str(), LongPath(exe).c_str(), 0);
 		DeleteFileW(LongPath(part).c_str());
 		return false;
 	}
-	Report("Launcher updated to " + offer_.version + " (sha256 checked against the release manifest)");
+	Report("Downloader updated to " + offer_.version + " (sha256 checked against the release manifest)");
 	return true;
 }
 
-namespace {
+// ---------------------------------------------------------------- the mod folder
 
-void RecordFile(Json& files, const std::wstring& dst, const std::string& path, const std::string& sha) {
-	uint64_t size = 0, mtime = 0;
-	FileSize(dst, size, &mtime);
-	Json rec = Json::Object();
-	rec.Set("size", size).Set("mtime", std::to_string(mtime)).Set("sha256", sha);
-	files.Set(path, rec);
+// Before anything is written: D2R not running, the mod folder ours (or the player said to replace it), the mods
+// folder writable. Then the marker goes in first, so a folder the downloader wrote into always carries it.
+bool Launcher::PrepareTarget(std::string& error) {
+	foreign_ = false;
+	if (!ProcessesUnder(d2rDir_).empty()) {
+		error = "D2R or D2RLoader is running from " + Utf8(d2rDir_) + ". Close the game first.";
+		return false;
+	}
+	std::wstring mod = ModDir();
+	if (mod.empty() || !PathUnder(mod, JoinPath(d2rDir_, L"mods")) || SamePath(mod, JoinPath(d2rDir_, L"mods"))) {
+		error = "Internal error: the mod folder " + Utf8(mod) + " is not inside " + Utf8(d2rDir_) + "\\mods.";
+		return false;
+	}
+	std::wstring markerPath = JoinPath(mod, Wide(InstallMarkerName));
+	std::string marker;
+	ReadWholeFile(markerPath, marker);
+	MarkerVerdict mv = CheckMarker(marker, state_["install_id"].Str());
+	std::string id;
+	if (mv == MarkerVerdict::Ours || mv == MarkerVerdict::OtherId) {
+		Json m;
+		std::string err;
+		Json::Parse(marker, m, err);
+		id = m["id"].Str();
+		if (mv == MarkerVerdict::OtherId)
+			Log("mod folder " + Utf8(mod) + " was made by the downloader under another state (id " + id + "); taking it over");
+	} else if (DirExists(mod) && !DirEmpty(mod)) {
+		if (!opt_.replace) {
+			foreign_ = true;
+			error = Utf8(mod) + " already exists but was not installed by the D2R-XL Downloader (a manual or developer "
+			        "install). Replace it with D2R-XL " + feed_.version + "? Your characters are not in that folder.";
+			return false;
+		}
+		Report("Replacing " + Utf8(mod) + ", which the downloader did not install");
+	}
+	if (mv != MarkerVerdict::Ours) {  // records of another installation, or of none: every file is hashed
+		state_.Set("mod", Json());
+		state_.Set("mod_files", Json::Object());
+	}
+	// writable? (the mods folder belongs to D2R's folder; Battle.net normally gives Users full control)
+	std::wstring mods = JoinPath(d2rDir_, L"mods");
+	if (!MakeDirs(mod)) {
+		error = NotWritable(mods, GetLastError());
+		return false;
+	}
+	if (id.empty())
+		id = RandomId();
+	std::wstring probe = markerPath + L".mxlpart";
+	HANDLE h = CreateFileW(LongPath(probe).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (h == INVALID_HANDLE_VALUE) {
+		error = NotWritable(mod, GetLastError());
+		return false;
+	}
+	CloseHandle(h);
+	DeleteFileW(LongPath(probe).c_str());
+	std::string version = mv == MarkerVerdict::None || mv == MarkerVerdict::Unreadable ? "" : state_["mod"]["version"].Str();
+	if (!WriteFileAtomic(markerPath, MakeMarker(id, version))) {
+		error = NotWritable(mod, GetLastError());
+		return false;
+	}
+	state_.Set("install_id", id);
+	state_.Set("d2r_dir", Utf8(d2rDir_));
+	state_.Set("d2r_source", d2rSource_);
+	state_.Set("mod_dir", Utf8(mod));
+	SaveState();
+	return true;
 }
 
-// Move `from` onto `to` (same volume): the old file stays in place until the new one is complete.
-bool MoveInto(const std::wstring& from, const std::wstring& to) {
-	MakeDirs(ParentDir(to));
-	return MoveFileExW(LongPath(from).c_str(), LongPath(to).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+// 7z or objects (docs/launcher.md "7z or objects"): the 7z when the objects to fetch add up to more bytes than the 7z
+// itself (a fresh install: about 1.2 GB of objects against a 355 MB 7z; a small update: a few objects).
+bool Launcher::UseSevenZip(const std::vector<ManifestFile>& fetch, uint64_t /*localBytes*/) const {
+	if (opt_.via == Via::Objects || feed_.archive.path.empty() || feed_.archive.size == 0 || feed_.archive.sha256.size() != 64)
+		return false;
+	if (opt_.via == Via::SevenZip)
+		return true;
+	uint64_t objectBytes = 0;
+	for (const auto& o : GroupObjects(fetch))
+		objectBytes += o.size;
+	return objectBytes > feed_.archive.size;
 }
 
-}  // namespace
-
-// docs/release.md "Hosting layout": every changed file is one object, <objectsBase><sha[0:2]>/<sha>, the only way a
-// release is installed. Downloads run in parallel into <game>\d2r-xl-download\<sha>.part, resume with a Range request
-// (ObjectAttempts tries per object, with a growing pause; 404/403/410 end it at once), are checked (size, sha256) and
-// then renamed into place. On return `fetch` holds what could not be installed; the rest stays installed.
+// docs/release.md "Hosting layout": every changed file is one object, <objectsBase><sha[0:2]>/<sha>. Downloads run in
+// parallel into <mod>\d2r-xl-download\<sha>.part, resume with a Range request (ObjectAttempts tries per object, with a
+// growing pause; 404/403/410 end it at once), are checked (size, sha256) and then renamed into place. On return `fetch`
+// holds what could not be installed; the rest stays installed.
 bool Launcher::InstallObjects(const std::wstring& mod, std::vector<ManifestFile>& fetch, Json& files, std::string& error) {
 	std::vector<ObjectFetch> objs = GroupObjects(fetch);
-	std::wstring tmp = JoinPath(gameDir_, L"d2r-xl-download");
+	std::wstring tmp = JoinPath(mod, Wide(DownloadFolderName));
 	if (!MakeDirs(tmp)) {
-		error = "cannot create " + Utf8(tmp);
+		error = NotWritable(tmp, GetLastError());
 		return false;
 	}
 	uint64_t totalBytes = 0;
@@ -664,15 +622,14 @@ bool Launcher::InstallObjects(const std::wstring& mod, std::vector<ManifestFile>
 	std::mutex mu;  // guards files, failed, firstError
 	std::set<std::string> failed;
 	std::string firstError;
-	Report(std::to_string(fetch.size()) + " files to download (" + Mb(totalBytes) + ", " + std::to_string(objs.size()) +
-	       " objects) from " + ResolveUrl(siteRoot_, feed_.objectsBase));
+	Report(Count(fetch.size(), "file") + " to download (" + Mb(totalBytes) + ", " + Count(objs.size(), "object") + ") from " +
+	       ResolveUrl(siteRoot_, feed_.objectsBase));
 
 	auto one = [&](HttpSession& http, const ObjectFetch& o, std::string& err) -> bool {
 		std::string url = ResolveUrl(siteRoot_, ObjectPath(feed_.objectsBase, o.sha256));
 		std::wstring part = JoinPath(tmp, Wide(o.sha256) + L".part");
 		for (int attempt = 0; attempt < ObjectAttempts; ++attempt) {
-			for (int waited = 0; attempt && waited < (1000 << attempt) && !cancel.load(); waited += 100)
-				Sleep(100);  // 2, 4, 8, 16 s between attempts: a dropped line often comes back
+			Pause(attempt, cancel);
 			if (cancel.load()) {
 				err = "cancelled";
 				return false;
@@ -776,7 +733,7 @@ bool Launcher::InstallObjects(const std::wstring& mod, std::vector<ManifestFile>
 		if (onProgress && now - lastShow >= 500) {
 			lastShow = now;
 			onProgress({"Downloading D2R-XL " + feed_.version + ": " + std::to_string(doneFiles.load()) + " of " +
-			                std::to_string(fetch.size()) + " files (" + Mb(doneBytes.load()) + " of " + Mb(totalBytes) + ")",
+			                Count(fetch.size(), "file") + " (" + Mb(doneBytes.load()) + " of " + Mb(totalBytes) + ")",
 			            totalBytes ? double(doneBytes.load()) / double(totalBytes) : -1});
 		}
 		if (now - lastSave > 5000) {  // resume point: what is installed so far
@@ -795,23 +752,271 @@ bool Launcher::InstallObjects(const std::wstring& mod, std::vector<ManifestFile>
 	size_t installed = fetch.size() - left.size();
 	fetch.swap(left);
 	if (fetch.empty()) {
-		std::string ignore;
-		RemoveTree(tmp, ignore);  // leftover parts of objects no longer needed
-		Report("Downloaded " + std::to_string(objs.size()) + " objects (" + Mb(totalBytes) + "), installed " + std::to_string(installed) +
-		       " files of D2R-XL " + feed_.version);
+		Report("Downloaded " + Count(objs.size(), "object") + " (" + Mb(totalBytes) + "), installed " + Count(installed, "file") +
+		       " of D2R-XL " + feed_.version);
 		return true;
 	}
 	error = cancel.load() ? std::string("cancelled") : std::to_string(failed.size()) + " downloads failed, first: " + firstError;
 	return false;
 }
 
-bool Launcher::EnsureMod(bool verify, std::string& error) {
-	if (!feedChecked_ && !CheckFeed(error))
+// The release's 7z into <data>\download\<name>: resumed with Range into <name>.part, its sha256 must be the manifest's
+// archive.sha256 (a damaged one is deleted and fetched again), then renamed to <name>.
+bool Launcher::Download7z(std::wstring& file, std::string& error) {
+	const auto& a = feed_.archive;
+	std::string name = a.name;
+	bool plain = !name.empty() && name.size() < 100 && name.find_first_of("/\\:") == std::string::npos && name[0] != '.';
+	if (!plain || Lower(name).size() < 3 || Lower(name).compare(name.size() - 3, 3, ".7z") != 0)
+		name = "D2R-XL-" + feed_.version + ".7z";
+	std::wstring dir = JoinPath(opt_.dataDir, L"download");
+	file = JoinPath(dir, Wide(name));
+	std::wstring part = file + L".part";
+	if (!MakeDirs(dir)) {
+		error = NotWritable(dir, GetLastError());
 		return false;
+	}
+	uint64_t size = 0;
+	if (FileSize(file, size) && size == a.size && FileSha256(file) == a.sha256) {
+		Report("The D2R-XL " + feed_.version + " 7z is already downloaded");
+		return true;
+	}
+	DeleteFileW(LongPath(file).c_str());
+	std::string url = ResolveUrl(siteRoot_, a.path);
+	for (int attempt = 0; attempt < ObjectAttempts; ++attempt) {
+		Pause(attempt, cancel);
+		if (cancel.load()) {
+			error = "cancelled";
+			return false;
+		}
+		uint64_t have = 0;
+		if (!FileSize(part, have) || have > a.size) {
+			DeleteFileW(LongPath(part).c_str());
+			have = 0;
+		}
+		uint64_t free = 0;
+		if (FreeBytes(dir, free) && free < a.size - have + (64ull << 20)) {
+			error = "Not enough disk space for the D2R-XL download in " + Utf8(dir) + ": it needs " + Mb(a.size - have) + ", " + Mb(free) + " are free.";
+			return false;
+		}
+		if (have < a.size) {
+			Report(have ? "Resuming the D2R-XL " + feed_.version + " 7z at " + Mb(have) + " of " + Mb(a.size)
+			            : "Downloading D2R-XL " + feed_.version + " as one 7z (" + Mb(a.size) + ") from " + url);
+			HANDLE h = CreateFileW(LongPath(part).c_str(), FILE_APPEND_DATA, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (h == INVALID_HANDLE_VALUE) {
+				error = NotWritable(dir, GetLastError());
+				return false;
+			}
+			bool writeOk = true;
+			uint64_t got = have;
+			ULONGLONG t0 = GetTickCount64(), lastShow = 0;
+			FetchResult r = Fetch(url, have, a.size - have, [&](const uint8_t* p, size_t n) {
+				DWORD w = 0;
+				if (got + n > a.size || !WriteFile(h, p, DWORD(n), &w, nullptr) || w != n) {
+					writeOk = false;
+					return false;
+				}
+				got += n;
+				ULONGLONG now = GetTickCount64();
+				if (onProgress && now - lastShow >= 300) {
+					lastShow = now;
+					double secs = double(now - t0) / 1000.0;
+					double rate = secs > 1 ? double(got - have) / secs : 0;
+					std::string eta = rate > 0 ? ", " + std::to_string(int(double(a.size - got) / rate / 60.0 + 0.5)) + " min left" : "";
+					onProgress({"Downloading D2R-XL " + feed_.version + " (7z): " + Mb(got) + " of " + Mb(a.size) + eta,
+					            double(got) / double(a.size)});
+				}
+				return !cancel.load();
+			});
+			CloseHandle(h);
+			if (!writeOk) {
+				error = "Cannot write " + Utf8(part) + " (disk full?)";
+				return false;
+			}
+			if (!r.ok) {
+				error = r.error;
+				Log("7z download: " + r.error + (r.status ? " (HTTP " + std::to_string(r.status) + ")" : ""));
+				if (r.status == 404 || r.status == 403 || r.status == 410 || cancel.load())
+					return false;
+				continue;
+			}
+		}
+		Report("Checking the 7z (sha256) ...");
+		std::string sha = FileSha256(part);
+		if (sha != a.sha256) {
+			Report("The downloaded 7z does not match the release manifest (sha256 " + sha + ", expected " + a.sha256 +
+			       "); downloading it again");
+			DeleteFileW(LongPath(part).c_str());
+			error = "the 7z download does not match the release manifest (sha256)";
+			continue;
+		}
+		if (!MoveFileExW(LongPath(part).c_str(), LongPath(file).c_str(), MOVEFILE_REPLACE_EXISTING)) {
+			error = "Cannot rename " + Utf8(part) + ": " + Utf8(LastErrorText(GetLastError()));
+			return false;
+		}
+		return true;
+	}
+	return false;
+}
+
+// docs/launcher.md "Installing from the 7z": unpack the 7z into <mod>\d2r-xl-download\7z (inside the mod folder: same
+// volume, and D2RLoader lists every folder of mods\ as a mod), check every file's size and sha256 against the
+// manifest, then rename each into place. Only the files in `fetch` are written; the 7z's other bytes are only decoded.
+bool Launcher::InstallFrom7z(const std::wstring& mod, std::vector<ManifestFile>& fetch, Json& files, std::string& error) {
+	std::wstring archive;
+	if (!Download7z(archive, error))
+		return false;
+	std::wstring staging = JoinPath(JoinPath(mod, Wide(DownloadFolderName)), L"7z");
+	std::string ignore;
+	RemoveTree(staging, ignore);
+	if (!MakeDirs(staging)) {
+		error = NotWritable(staging, GetLastError());
+		return false;
+	}
+	uint64_t need = 0;
+	std::map<std::string, size_t> wanted;  // lower-case path -> index in fetch
+	std::set<std::string> listed;
+	for (const auto& mf : feed_.files)
+		listed.insert(Lower(mf.path));
+	for (size_t i = 0; i < fetch.size(); ++i) {
+		wanted[Lower(fetch[i].path)] = i;
+		need += fetch[i].size;
+	}
+	uint64_t free = 0;
+	if (FreeBytes(mod, free) && free < need + (64ull << 20)) {
+		error = "Not enough disk space in " + Utf8(d2rDir_) + ": D2R-XL needs " + Mb(need) + ", " + Mb(free) + " are free.";
+		return false;
+	}
+	std::FILE* f = nullptr;
+	if (_wfopen_s(&f, LongPath(archive).c_str(), L"rb") != 0 || !f) {
+		error = "Cannot open " + Utf8(archive);
+		return false;
+	}
+	StdioSource src(f);
+	SevenZipArchive sz;
+	std::string err;
+	if (!sz.Open(src, err)) {
+		std::fclose(f);
+		DeleteFileW(LongPath(archive).c_str());  // its sha256 was the manifest's, so this is not a download fault; fetched again next time
+		error = "Cannot read the 7z: " + err;
+		return false;
+	}
+	const std::string prefix = Lower(ModFolder()) + "/";
+	std::vector<std::string> staged(fetch.size());  // sha256 of each staged file ("" not staged)
+	size_t curIndex = SIZE_MAX;
+	HANDLE out = INVALID_HANDLE_VALUE;
+	Sha256 hash;
+	uint64_t written = 0, total = sz.UnpackedSize();
+	size_t unknown = 0;
+	std::string writeError;
+	ULONGLONG lastShow = 0;
+	Report("Unpacking D2R-XL " + feed_.version + " (" + Mb(total) + ") ...");
+	SevenZipArchive::Sink sink;
+	sink.begin = [&](size_t i) {
+		const SevenZipEntry& e = sz.entries()[i];
+		curIndex = SIZE_MAX;
+		if (e.dir)
+			return false;
+		std::string p = Lower(e.path);
+		if (p.rfind(prefix, 0) != 0) {
+			++unknown;
+			return false;
+		}
+		auto it = wanted.find(p.substr(prefix.size()));
+		if (it == wanted.end()) {
+			if (!listed.count(p.substr(prefix.size())))
+				++unknown;
+			return false;  // unchanged here, or not part of the release: only decoded
+		}
+		const ManifestFile& mf = fetch[it->second];
+		if (mf.size != e.size || !SafeRelativePath(mf.path))
+			return false;
+		std::wstring dst = JoinPath(staging, Wide(mf.path));
+		MakeDirs(ParentDir(dst));
+		out = CreateFileW(LongPath(dst).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (out == INVALID_HANDLE_VALUE) {
+			writeError = NotWritable(ParentDir(dst), GetLastError());
+			return false;
+		}
+		hash = Sha256();
+		curIndex = it->second;
+		return true;
+	};
+	sink.data = [&](const uint8_t* p, size_t n) {
+		hash.Update(p, n);
+		DWORD w = 0;
+		if (!WriteFile(out, p, DWORD(n), &w, nullptr) || w != n) {
+			writeError = "Cannot write into " + Utf8(staging) + " (disk full?)";
+			return false;
+		}
+		written += n;
+		return true;
+	};
+	sink.end = [&](size_t) {
+		if (curIndex != SIZE_MAX) {
+			CloseHandle(out);
+			out = INVALID_HANDLE_VALUE;
+			std::string sha = hash.HexDigest();
+			if (sha == fetch[curIndex].sha256)
+				staged[curIndex] = sha;
+			else
+				Log("7z: " + fetch[curIndex].path + " has sha256 " + sha + ", the manifest " + fetch[curIndex].sha256);
+			curIndex = SIZE_MAX;
+		}
+		return writeError.empty() && !cancel.load();
+	};
+	sink.progress = [&](uint64_t done) {
+		ULONGLONG now = GetTickCount64();
+		if (onProgress && now - lastShow >= 300) {
+			lastShow = now;
+			onProgress({"Unpacking D2R-XL " + feed_.version + ": " + Mb(done) + " of " + Mb(total), total ? double(done) / double(total) : -1});
+		}
+		return !cancel.load();
+	};
+	SevenZipStats stats;
+	ULONGLONG t0 = GetTickCount64();
+	bool ok = sz.Extract(sink, err, &stats);
+	if (out != INVALID_HANDLE_VALUE)
+		CloseHandle(out);
+	std::fclose(f);
+	if (!ok) {
+		RemoveTree(staging, ignore);
+		if (!writeError.empty())
+			error = writeError;
+		else if (cancel.load())
+			error = "cancelled";
+		else {
+			DeleteFileW(LongPath(archive).c_str());
+			error = "Cannot unpack the 7z: " + err;
+		}
+		return false;
+	}
+	Log("7z: " + std::to_string(stats.streamedBlocks) + " streamed and " + std::to_string(stats.memoryBlocks) +
+	    " in-memory blocks, largest decode buffer " + Mb(stats.peakBuffer) + ", " + std::to_string(GetTickCount64() - t0) + " ms" +
+	    (unknown ? ", " + std::to_string(unknown) + " entries the manifest does not list (skipped)" : ""));
+	std::vector<ManifestFile> left;
+	size_t moved = 0;
+	for (size_t i = 0; i < fetch.size(); ++i) {
+		std::wstring from = JoinPath(staging, Wide(fetch[i].path)), to = JoinPath(mod, Wide(fetch[i].path));
+		if (staged[i].empty() || !MoveInto(from, to)) {
+			left.push_back(fetch[i]);
+			continue;
+		}
+		RecordFile(files, to, fetch[i].path, fetch[i].sha256);
+		++moved;
+	}
+	RemoveTree(staging, ignore);
+	Report("Unpacked " + Mb(written) + " from the 7z, installed " + Count(moved, "file") + " of D2R-XL " + feed_.version +
+	       (left.empty() ? std::string() : "; " + Count(left.size(), "file") + " come as objects"));
+	fetch.swap(left);
+	DeleteFileW(LongPath(archive).c_str());  // installed: the 7z is not kept
+	RemoveDirectoryW(LongPath(JoinPath(opt_.dataDir, L"download")).c_str());  // only when empty
+	return true;
+}
+
+bool Launcher::EnsureMod(bool verify, std::string& error) {
 	std::wstring mod = ModDir();
-	// d2r.imageTimestamp is not compared here: it is the TimeDateStamp of the unpacked image in memory (what the
-	// plugin's build guard reads); the D2R.exe file of build 93847 carries another one (0x6a6b96a4)
-	Json files = state_["mod_files"].IsObject() ? state_["mod_files"] : Json::Object();
+	// files records are only good for the folder they were made for
+	Json files = state_["mod_files"].IsObject() && SamePath(Wide(state_["mod_dir"].Str()), mod) ? state_["mod_files"] : Json::Object();
 	uint64_t hashed = 0;
 	Report(verify ? "Checking every installed D2R-XL file ..." : "Comparing the installed files with release " + feed_.version + " ...");
 	auto current = [&](const std::string& path) -> std::string {
@@ -837,10 +1042,23 @@ bool Launcher::EnsureMod(bool verify, std::string& error) {
 		files.Set(r, Json());
 	}
 	if (!plan.remove.empty())
-		Report("Removed " + std::to_string(plan.remove.size()) + " files that are not part of D2R-XL " + feed_.version);
+		Report("Removed " + Count(plan.remove.size(), "file") + " that " + (plan.remove.size() == 1 ? "is" : "are") +
+		       " not part of D2R-XL " + feed_.version);
 	if (!plan.fetch.empty()) {
 		std::vector<ManifestFile> left = plan.fetch;
-		if (!InstallObjects(mod, left, files, error)) {  // the objects are the only way in (docs/release.md)
+		if (UseSevenZip(left, 0)) {
+			std::string e7;
+			if (!InstallFrom7z(mod, left, files, e7)) {
+				state_.Set("mod_files", files);
+				SaveState();
+				if (cancel.load() || opt_.via == Via::SevenZip) {
+					error = cancel.load() ? "Stopped. Install again to continue where it stopped (the 7z download resumes)." : "7z install failed: " + e7;
+					return false;
+				}
+				Report("The 7z could not be used (" + e7 + "); downloading the files one by one instead");
+			}
+		}
+		if (!left.empty() && !InstallObjects(mod, left, files, error)) {
 			state_.Set("mod_files", files);
 			SaveState();
 			if (cancel.load())
@@ -854,6 +1072,8 @@ bool Launcher::EnsureMod(bool verify, std::string& error) {
 	} else {
 		Report("D2R-XL " + feed_.version + " is installed and up to date" + (hashed ? " (" + Mb(hashed) + " checked)" : ""));
 	}
+	std::string ignore;
+	RemoveTree(JoinPath(mod, Wide(DownloadFolderName)), ignore);  // leftover parts of objects no longer needed
 	for (const auto& d : feed_.emptyDirs)  // folders the release has without files (d2rloader/patches)
 		if (!MakeDirs(JoinPath(mod, Wide(d)))) {
 			error = "Cannot create " + Utf8(JoinPath(mod, Wide(d)));
@@ -865,221 +1085,68 @@ bool Launcher::EnsureMod(bool verify, std::string& error) {
 			clean.Set(k, v);
 	state_.Set("mod_files", clean);
 	state_.Set("mod", ManifestToJson(feed_));
+	WriteFileAtomic(JoinPath(mod, Wide(InstallMarkerName)), MakeMarker(state_["install_id"].Str(), feed_.version));
 	SaveState();
-	return WriteLaunchConfig(error);
+	Report("D2R-XL " + feed_.version + " is in " + Utf8(mod) + ". " + HowToPlay);
+	return true;
 }
 
 // ---------------------------------------------------------------- actions
 
 bool Launcher::InstallOrUpdate(std::string& error) {
 	cancel = false;
-	if (!Prepare(error) || !CheckFeed(error))
+	if (!FindD2R(error) || !CheckFeed(error) || !PrepareTarget(error))
 		return false;
-	if (!ProcessesUnder(gameDir_).empty()) {
-		error = "D2R-XL is running. Close the game first.";
-		return false;
-	}
-	return EnsureCopy(false, error) && EnsureLoader(false, error) && EnsureMod(false, error);
+	return EnsureMod(false, error);
 }
 
 bool Launcher::Repair(std::string& error) {
 	cancel = false;
-	if (!Prepare(error) || !CheckFeed(error))
+	if (!FindD2R(error) || !CheckFeed(error) || !PrepareTarget(error))
 		return false;
-	if (!ProcessesUnder(gameDir_).empty()) {
-		error = "D2R-XL is running. Close the game first.";
-		return false;
-	}
-	return EnsureCopy(true, error) && EnsureLoader(true, error) && EnsureMod(true, error);
-}
-
-bool Launcher::CanPlay(std::string* why) {
-	std::string e;
-	if (gameDir_.empty() && !Prepare(e)) {
-		if (why) *why = e;
-		return false;
-	}
-	if (!state_["copy_complete"].Bool() || !LooksLikeD2R(gameDir_)) {
-		if (why) *why = "D2R-XL is not installed yet. Press Update.";
-		return false;
-	}
-	if (!FileExists(JoinPath(gameDir_, L"D2RLoader.exe")) || !state_["mod"].IsObject()) {
-		if (why) *why = "The installation is incomplete. Press Update or Repair.";
-		return false;
-	}
-	return true;
-}
-
-namespace {
-struct FindCtx {
-	std::wstring dir;
-	HWND found = nullptr;
-};
-BOOL CALLBACK FindGameWindow(HWND h, LPARAM lp) {
-	auto ctx = reinterpret_cast<FindCtx*>(lp);
-	if (!IsWindowVisible(h))
-		return TRUE;
-	wchar_t title[128];
-	GetWindowTextW(h, title, int(std::size(title)));
-	if (std::wstring(title).rfind(L"Diablo II", 0) != 0)
-		return TRUE;
-	DWORD pid = 0;
-	GetWindowThreadProcessId(h, &pid);
-	HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-	if (!p)
-		return TRUE;
-	wchar_t img[MAX_PATH * 2];
-	DWORD n = DWORD(std::size(img));
-	bool ours = QueryFullProcessImageNameW(p, 0, img, &n) && PathUnder(std::wstring(img, n), ctx->dir);
-	CloseHandle(p);
-	if (ours) {
-		ctx->found = h;
-		return FALSE;
-	}
-	return TRUE;
-}
-}  // namespace
-
-bool Launcher::Play(std::string& error) {
-	cancel = false;
-	if (!Prepare(error))
-		return false;
-	std::string why;
-	if (!CanPlay(&why)) {
-		error = why;
-		return false;
-	}
-	if (!ProcessesUnder(gameDir_).empty()) {
-		error = "D2R-XL is already running.";
-		return false;
-	}
-	// D2R's options (graphics, sound) live in one Settings.json for every install; keep the player's own once
-	std::wstring settings = JoinPath(KnownFolder(1), L"Diablo II Resurrected\\Settings.json");
-	std::wstring backup = JoinPath(opt_.dataDir, L"backup\\Settings.json");
-	if (FileExists(settings) && !FileExists(backup)) {
-		MakeDirs(ParentDir(backup));
-		if (CopyFileW(settings.c_str(), backup.c_str(), TRUE))
-			Report("Saved a copy of your D2R settings to " + Utf8(backup));
-	}
-	std::wstring cookie = JoinPath(KnownFolder(0), L"Blizzard Entertainment\\ClientSdk\\cookie.bin");
-	uint64_t csize = 0, ctime = 0;
-	if (!FileSize(cookie, csize, &ctime)) {
-		Report("Note: no Battle.net login record found. If D2R says it has not been online for 30 days, start D2R once from Battle.net while online.");
-	} else {
-		FILETIME now;
-		GetSystemTimeAsFileTime(&now);
-		uint64_t n = (uint64_t(now.dwHighDateTime) << 32) | now.dwLowDateTime;
-		double days = double(n - ctime) / (10000000.0 * 86400.0);
-		if (days > 25)
-			Report("Note: D2R was last started online " + std::to_string(int(days)) +
-			       " days ago. D2R asks for an online start every 30 days: start it once from Battle.net.");
-	}
-	std::wstring exe = JoinPath(gameDir_, L"D2RLoader.exe");
-	if (!WriteLaunchConfig(error))  // the mod and its arguments come from the copy's d2rloader.toml
-		return false;
-	std::wstring cmd = Quote(exe);
-	STARTUPINFOW si{};
-	si.cb = sizeof(si);
-	if (opt_.background) {
-		si.dwFlags = STARTF_USESHOWWINDOW;
-		si.wShowWindow = SW_SHOWNOACTIVATE;
-	}
-	PROCESS_INFORMATION pi{};
-	HWND prevFg = GetForegroundWindow();
-	Report("Starting " + Utf8(cmd));
-	if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, gameDir_.c_str(), &si, &pi)) {
-		error = "Cannot start D2RLoader: " + Utf8(LastErrorText(GetLastError()));
-		return false;
-	}
-	CloseHandle(pi.hThread);
-	CloseHandle(pi.hProcess);
-	// The loader restarts itself and D2R takes the foreground when its window appears. In background mode (tests)
-	// the window goes to the back once and the foreground is handed back, exactly as tools/game_ctl.py does.
-	ULONGLONG t0 = GetTickCount64();
-	bool sentBack = !opt_.background;
-	while (GetTickCount64() - t0 < 30000) {
-		if (!sentBack) {
-			FindCtx ctx{gameDir_};
-			EnumWindows(FindGameWindow, reinterpret_cast<LPARAM>(&ctx));
-			if (ctx.found) {
-				SetWindowPos(ctx.found, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
-				if (prevFg && GetForegroundWindow() == ctx.found)
-					SetForegroundWindow(prevFg);
-				sentBack = true;
-			}
-		}
-		Sleep(50);
-	}
-	if (ProcessesUnder(gameDir_).empty()) {
-		error = "The game closed right after starting. Logs: " + Utf8(JoinPath(gameDir_, L"d2rloader\\logs")) +
-		        ". If D2R is installed on another drive than the D2R-XL folder, move the D2R-XL folder to that drive.";
-		return false;
-	}
-	Report("D2R-XL is running.");
-	return true;
+	return EnsureMod(true, error);
 }
 
 bool Launcher::Uninstall(std::string& error) {
 	cancel = false;
-	std::wstring dir = !opt_.gameDir.empty() ? opt_.gameDir : Wide(state_["game_dir"].Str());
-	gameDir_ = dir;
+	if (!FindD2R(error))
+		return false;
+	std::wstring mod = ModDir();
 	std::wstring saves = SavesDir();  // from the mod's modinfo.json, before it goes
-	if (!dir.empty() && !ProcessesUnder(dir).empty()) {
-		error = "D2R-XL is running. Close the game first.";
+	if (!DirExists(mod)) {
+		error = "D2R-XL is not installed in " + Utf8(d2rDir_) + " (no " + Utf8(mod) + ").";
 		return false;
 	}
-	if (!dir.empty() && DirExists(dir)) {
-		std::wstring marker = JoinPath(dir, Wide(MarkerName));
-		std::string text, err;
-		Json m;
-		if (!ReadWholeFile(marker, text) || !Json::Parse(text, m, err) || m["made_by"].Str() != "D2R-XL launcher") {
-			error = "Not removing " + Utf8(dir) + ": it has no D2R-XL launcher marker, so this launcher did not make it.";
-			return false;
-		}
-		if (!state_["copy_id"].Str().empty() && m["id"].Str() != state_["copy_id"].Str()) {
-			error = "Not removing " + Utf8(dir) + ": its marker belongs to another installation.";
-			return false;
-		}
-		if (!state_["source"].Str().empty() && (PathUnder(dir, Wide(state_["source"].Str())) || PathUnder(Wide(state_["source"].Str()), dir))) {
-			error = "Not removing " + Utf8(dir) + ": it overlaps the D2R install.";
-			return false;
-		}
-		Report("Removing the D2R-XL game copy " + Utf8(dir) + " ...");
-		if (!RemoveTree(dir, error))
-			return false;
-		std::wstring parent = ParentDir(dir);
-		if (!SamePath(parent, opt_.dataDir) && JoinPath(ParentDir(parent), L"D2R-XL") == parent)
-			RemoveDirectoryW(parent.c_str());  // <drive>\D2R-XL when empty
+	std::string marker;
+	ReadWholeFile(JoinPath(mod, Wide(InstallMarkerName)), marker);
+	if (CheckMarker(marker, state_["install_id"].Str()) != MarkerVerdict::Ours) {
+		error = "Not removing " + Utf8(mod) + ": it has no D2R-XL Downloader marker (" + InstallMarkerName +
+		        ") of this installation, so the downloader did not install it.";
+		return false;
 	}
-	std::string e2;
-	std::wstring cache = JoinPath(opt_.dataDir, L"cache");
-	if (DirExists(cache))
-		RemoveTree(cache, e2);
-	DeleteFileW(statePath_.c_str());
-	Report("D2R-XL is uninstalled. Your characters stay in " + Utf8(saves) + "; your D2R settings backup (if any) is in " +
-	       Utf8(JoinPath(opt_.dataDir, L"backup")) + ".");
-	state_ = Json::Object();
+	if (!ProcessesUnder(d2rDir_).empty()) {
+		error = "D2R or D2RLoader is running from " + Utf8(d2rDir_) + ". Close the game first.";
+		return false;
+	}
+	if (!PathUnder(mod, JoinPath(d2rDir_, L"mods")) || SamePath(mod, JoinPath(d2rDir_, L"mods"))) {
+		error = "Internal error: " + Utf8(mod) + " is not a folder inside " + Utf8(d2rDir_) + "\\mods.";
+		return false;
+	}
+	Report("Removing " + Utf8(mod) + " ...");
+	if (!RemoveTree(mod, error))
+		return false;
+	std::string ignore;
+	RemoveTree(JoinPath(opt_.dataDir, L"download"), ignore);
+	for (const char* k : {"mod", "mod_files", "install_id", "mod_dir"})
+		state_.Set(k, Json());
+	Json clean = Json::Object();
+	for (const auto& [k, v] : state_.members())
+		if (!v.IsNull())
+			clean.Set(k, v);
+	state_ = clean;
+	SaveState();
+	Report("D2R-XL is uninstalled (only " + Utf8(mod) + " was removed). Your characters stay in " + Utf8(saves) + ".");
 	return true;
-}
-
-std::string Launcher::StatusText() {
-	std::string e, out;
-	if (!Prepare(e))
-		return e;
-	out = "D2R: " + Utf8(source_.dir) + " (" + source_.source + ", " + source_.build.message + ")\n";
-	if (state_["copy_complete"].Bool())
-		out += "D2R-XL folder: " + Utf8(gameDir_) + " (build " + std::to_string(state_["copy_build"].Int()) + ")\n";
-	else
-		out += "D2R-XL folder: " + Utf8(gameDir_) + " (not made yet: needs about " +
-		       Gb(state_["copy_bytes"].Int(30ll << 30) + SpareBytes) + ")\n";
-	std::string installed = state_["mod"]["version"].Str();
-	out += "D2R-XL: " + (installed.empty() ? std::string("not installed") : installed);
-	if (feedChecked_ && !installed.empty() && feed_.version != installed)
-		out += " (update " + feed_.version + " available)";
-	else if (feedChecked_ && !installed.empty())
-		out += " (latest)";
-	out += "\nD2RLoader: " + state_["loader"].Str("not installed");
-	return out;
 }
 
 }  // namespace mxl

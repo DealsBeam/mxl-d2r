@@ -1,5 +1,5 @@
 // Version info and the application manifest (common controls v6, per-monitor DPI, long paths, asInvoker: the
-// launcher never asks for administrator rights).
+// downloader never asks for administrator rights).
 // No SDK headers (like plugin/src/mxl_core.rc): CI compiles this with llvm-rc on Linux, so the constants are written out.
 
 1 24 "launcher.manifest"  // 24 = RT_MANIFEST
@@ -25,12 +25,12 @@ BEGIN
 		BLOCK "040904b0"
 		BEGIN
 			VALUE "CompanyName", "mxl-d2r"
-			VALUE "FileDescription", "D2R-XL launcher"
+			VALUE "FileDescription", "D2R-XL Downloader"
 			VALUE "FileVersion", MXL_LV_STR
 			VALUE "ProductName", "D2R-XL"
 			VALUE "ProductVersion", MXL_LV_STR
 			VALUE "LegalCopyright", "D2R-XL, a port of Median XL by the Median XL team. Diablo II by Blizzard Entertainment."
-			VALUE "OriginalFilename", "D2R-XL-Launcher.exe"
+			VALUE "OriginalFilename", "D2R-XL-Downloader.exe"
 		END
 	END
 	BLOCK "VarFileInfo"

@@ -1,10 +1,11 @@
 # Player releases
 
-Owner decision 2026-10-26: the only supported install path is our own launcher (lane pub-launcher). It keeps a private
-copy of D2R build 93847 with D2RLoader 1.3.1 and the mod inside, so the player's real D2R install and their other mods
-are never touched. Mod managers (D2RMM and others) and Nexus are not supported. For a manual / offline install the
-release has a `.7z`. Owner decision 2026-10-26: **no zip files**, 7z only; the launcher installs from single-file
-objects ("Hosting layout") and has no archive fallback.
+Owner decision 2026-10-27: the supported install path is the **D2R-XL Downloader** (`D2R-XL-Downloader.exe`,
+docs/launcher.md). It puts the mod into `<D2R folder>\mods\D2R-XL` of the player's own D2R install and nothing else;
+the player installs D2RLoader 1.3.1 from d2rloader.net and starts the game with `D2RLoader.exe` (default mod D2R-XL).
+(The 0.1.x launcher's private game copy is gone.) Mod managers (D2RMM and others) and Nexus are not supported. For a
+manual / offline install the release has a `.7z`. Owner decision 2026-10-26: **no zip files**, 7z only. The downloader
+installs a fresh copy from that 7z and small updates and repairs from single-file objects ("Hosting layout").
 
 ## What a release is
 
@@ -12,7 +13,7 @@ objects ("Hosting layout") and has no archive fallback.
 
 | File | What |
 |---|---|
-| `release-manifest.json` | the launcher's feed (format below). `tools/publish_release.py` sends it to the download host ("Hosting layout") |
+| `release-manifest.json` | the downloader's feed (format below). `tools/publish_release.py` sends it to the download host ("Hosting layout") |
 | `D2R-XL-<version>.7z` | top folder `D2R-XL/`, unpacked into `<D2R>\mods\` it is the folder `tools/install_mod.py` writes. One solid LZMA2 7z (`-mx7`, multithreaded): the manual download for players. Release 0.69.0: 355 MB (the zip it replaces was 483 MB). Needs 7-Zip (`C:\Program Files\7-Zip\7z.exe`, else `7z` / `7zz` / `7za` / `7zr` on PATH): without it the packager stops with an error before doing anything. `--no-data` (CI) writes `D2R-XL-<version>-nodata.7z` |
 | `RELEASE_NOTES-<version>.md` | skeleton: requirements, install steps; fill in Changes / Known issues by hand |
 | `SHA256SUMS` | sha256 of the 7z, the manifest and the notes (`sha256sum -c` format) |
@@ -60,10 +61,10 @@ The default dev build is unchanged (`tools/build_plugin.ps1` -> `build/plugin/Re
 
 ## Release manifest (schemaVersion 2)
 
-Simple JSON, one object. The launcher must reject a `schemaVersion` it does not know. New fields may be added within
+Simple JSON, one object. The downloader must reject a `schemaVersion` it does not know. New fields may be added within
 schemaVersion 2 (ignore unknown fields); a change of meaning or a removed field raises schemaVersion. 2 (2026-10-26)
 removed `zip` (and with it the launcher's zip fallback) and added `archive` (the 7z) and `emptyDirs`; a schema 1 manifest
-is refused by this launcher ("too new for the release"), a schema 3 one by a launcher of today ("too old": it offers the
+is refused by this downloader ("too new for the release"), a schema 3 one by a downloader of today ("too old": it offers the
 manifest's `launcher` as a self-update). `package_release.py` writes the fields below except `objectsBase` and `launcher`
 (added by `publish_release.py`) and `archive.path` (the server's ingest, which also replaces `archive` by the 7z it built).
 
@@ -79,7 +80,7 @@ manifest's `launcher` as a self-update). `package_release.py` writes the fields 
  "d2rloader": {"version": "1.3.1-beta", "url": "https://d2rloader.net/download/D2RLoader-1.3.1-beta.zip",
                "size": 47652455, "sha256": "9286c6b5bff7f1043658411dbea305faa9698b6a455e6441668fc6d02c22aad7",
                "signerThumbprint": "8001082E968FADAA58BF2F73EFA1810A11D0C28F"},
- "launch": {"default_mod": "D2R-XL", "launch_arguments": "-txt"},
+ "launch": {"default_mod": "D2R-XL", "launch_arguments": ""},
  "modFolder": "D2R-XL",
  "saveFolder": "D2R-XL/",
  "preserve": ["d2rloader/config/d2rloader.toml"],
@@ -87,7 +88,7 @@ manifest's `launcher` as a self-update). `package_release.py` writes the fields 
              "path": "releases/0.70.0/D2R-XL-0.70.0.7z"},
  "emptyDirs": ["d2rloader/patches"],
  "objectsBase": "objects/",
- "launcher": {"version": "0.3.0", "path": "launcher/0.3.0/D2R-XL-Launcher.exe", "size": 12345678, "sha256": "..."},
+ "launcher": {"version": "0.3.0", "path": "launcher/0.3.0/D2R-XL-Downloader.exe", "size": 12345678, "sha256": "..."},
  "fileCount": 8802,
  "totalSize": 791000000,
  "files": [
@@ -97,38 +98,38 @@ manifest's `launcher` as a self-update). `package_release.py` writes the fields 
 }
 ```
 
-| Field | Meaning for the launcher |
+| Field | Meaning for the downloader |
 |---|---|
 | `version` | the release (tag `v<version>`); `pluginVersion` is the plugin's own PluginVersion (normally equal) |
 | `complete` | `false` only for a CI `--no-data` package (no `D2R-XL.mpq/data`): never install it for a player |
 | `d2r.build` | the D2R build the private copy must be at. `imageTimestamp` is the PE TimeDateStamp of that `D2R.exe` (the plugin checks it, `plugin/src/build_guard_logic.h`) |
-| `d2rloader` | the pinned D2RLoader: download `url`, check `size` and `sha256`, then the Authenticode signer thumbprint of `D2RLoader.exe` / `D2RCore.dll` (self-signed: check the thumbprint and an intact signature, docs/setup.md step 10). Unzip into the game folder |
-| `launch` | keys for the game folder's own `d2rloader/config/d2rloader.toml` (section `[d2rloader]`, where D2RLoader keeps `default_mod` and `launch_arguments`): the mod starts by itself, and `-txt` makes D2R read the mod's `.txt` tables |
+| `d2rloader` | the D2RLoader the release needs. The downloader compares `version` with `<D2R folder>\D2RLoader.exe` and, when it is missing or another version, shows "D2R-XL needs D2RLoader <version>" with a button to https://d2rloader.net/. It never downloads D2RLoader (`url`, `sha256` are informational) |
+| `launch` | what the game folder's own `d2rloader/config/d2rloader.toml` (section `[d2rloader]`) needs: `default_mod` = `D2R-XL`. The player sets it in the game (gear on the character screen, Default Mod); the downloader does not write that file. `-txt` is not needed: D2RLoader 1.3.1 compiles the mod's `.txt` tables itself at each start (tested 2026-10-27, docs/launcher.md) |
 | `modFolder` | every `files[].path` is relative to `<game>/mods/<modFolder>/`, with `/` separators |
-| `saveFolder` | characters live in `Saved Games/Diablo II Resurrected/mods/<saveFolder>` (modinfo.json `savepath`); the launcher never writes there |
+| `saveFolder` | characters live in `Saved Games/Diablo II Resurrected/mods/<saveFolder>` (modinfo.json `savepath`); the downloader never writes there |
 | `preserve` | files the player may edit: write them only when missing, never overwrite |
 | `files` | the complete mod folder, sorted by path. Update = for each entry, download when the local file is missing or its size / sha256 differ; then delete local files under the mod folder that are not listed (except `preserve` entries, and `d2rloader/logs/`, which D2RLoader writes) |
-| `emptyDirs` | folders of the mod folder that hold no file (`d2rloader/patches`): the launcher creates them, the 7z has them |
-| `archive` | the same content as a solid `.7z` for manual installs: `format` `"7z"`, `name`, `size`, `sha256`; `archive.path` is where the host has it. The launcher only names it in messages; it never downloads it |
-| `objectsBase` | (published manifests, required by the launcher) where the file bytes are, relative to the site root: `objects/`. The bytes of `files[i]` are at `<root>/<objectsBase><sha256[0:2]>/<sha256>` |
-| `launcher` | (published manifests, optional) the launcher build published with this release: `version`, `path` relative to the site root, `size`, `sha256` |
+| `emptyDirs` | folders of the mod folder that hold no file (`d2rloader/patches`): the downloader creates them, the 7z has them |
+| `archive` | the same content as a solid `.7z`: `format` `"7z"`, `name`, `size`, `sha256`; `archive.path` is where the host has it. The downloader uses it when the objects it would fetch add up to more than `size` (a fresh install): download resumable, check sha256, unpack with the built-in decoder, check every file (docs/launcher.md). Manual installs use it too |
+| `objectsBase` | (published manifests, required by the downloader) where the file bytes are, relative to the site root: `objects/`. The bytes of `files[i]` are at `<root>/<objectsBase><sha256[0:2]>/<sha256>` |
+| `launcher` | (published manifests, optional) the downloader build published with this release: `version`, `path` relative to the site root, `size`, `sha256` |
 
 ## Hosting layout (tools/publish_release.py, tools/dl_ingest.py)
 
 Owner decision 2026-10-26: the release files live on our own server, not on GitHub (the forge needs a sign-in for
 everything). A static HTTPS host serves one folder; the root URL is `https://dl.werdegames.com/mxl/` ("the site root"
-below; the launcher takes it as its one setting). Setting it up: docs/hosting.md. Players get the same layout from the DigitalOcean Space
+below; the downloader takes it as its one setting). Setting it up: docs/hosting.md. Players get the same layout from the DigitalOcean Space
 mirror behind Cloudflare, `https://files.werdegames.com/mxl/`: the server copies the site there after every ingest,
 promote and gc (tools/dl_sync.py, channel files last; docs/hosting.md section 7).
 
 ```
-channels/<channel>.json                   what a channel (stable, test) points to; the only file the launcher polls
+channels/<channel>.json                   what a channel (stable, test) points to; the only file the downloader polls
 releases/<v>/release-manifest.json        the packager's manifest + objectsBase, launcher, and the server's archive entry
 releases/<v>/D2R-XL-<v>.7z          the manual download for players, built on the server (-nodata.7z for a CI package)
 releases/<v>/SHA256SUMS                   sha256 of the 7z, the manifest, the notes (sha256sum -c format)
 releases/<v>/RELEASE_NOTES-<v>.md
 objects/<sha256[0:2]>/<sha256>            the raw bytes of a file, named by its sha256; shared by every version
-launcher/<v>/D2R-XL-Launcher.exe       and D2R-XL-Launcher.exe.sha256
+launcher/<v>/D2R-XL-Downloader.exe     and D2R-XL-Downloader.exe.sha256 (0.1.x: D2R-XL-Launcher.exe)
 assets/<files>                            the asset pack (lane pub-assets)
 ```
 
@@ -142,19 +143,23 @@ Channel file (`schemaVersion` 1, rules as for the manifest):
  "manifestSha256": "...", "publishedAt": "2026-10-26T12:00:00Z"}
 ```
 
-What the launcher does (all URLs are `<root>/` + the relative path):
+What the downloader does (all URLs are `<root>/` + the relative path):
 
 1. `GET channels/<channel>.json` (the host sends `Cache-Control: no-cache`); reject an unknown `schemaVersion`.
 2. `GET <manifest>`; its sha256 must equal `manifestSha256` (this also detects a half-updated host or a stale cache);
    `schemaVersion` must be 2.
-3. For each entry of `files` that is missing locally or differs in size / sha256: `GET <objectsBase><sha[0:2]>/<sha>`, check
+3. When the objects to fetch add up to more than `archive.size` (a fresh install): `GET <archive.path>` resumable into
+   `%LOCALAPPDATA%\D2R-XL\download`, check its sha256, unpack the files it still needs into staging inside the mod
+   folder, check each file's size and sha256 and move it into place. Whatever is still missing after that (or when the
+   7z fails) comes from the objects. Then
+   for each entry of `files` that is missing locally or differs in size / sha256: `GET <objectsBase><sha[0:2]>/<sha>`, check
    size and sha256 of what arrived, then move it into place. Objects never change, so a partial download is resumed
    with a `Range` request and a cache may keep them forever. Several entries with the same sha256 are one download. Each
    object is tried 5 times (resumed, with a growing pause); then the install stops with "Download failed ... try again",
    and what was installed so far stays (the next Update continues from there). There is no other source.
 4. Files under the mod folder that the release does not list are removed (except `preserve` and D2RLoader's logs);
    `emptyDirs` are created; the state file records the release.
-5. Launcher self-update: `launcher.version` / `.path` / `.sha256` of the channel's manifest.
+5. Downloader self-update: `launcher.version` / `.path` / `.sha256` of the channel's manifest.
 
 ### Publishing: a delta upload, checked and finished on the server
 
@@ -165,7 +170,7 @@ lacks, packed, in as few logins as possible, and the server does everything else
 2. The objects the host lacks (or has with another size) go into one solid 7z (`-mx7`), entries named by their sha256:
    `objects-<sha256 of the 7z, 16 hex>.7z`. It is kept in `dist/upload/<v>/` so a re-run sends the same bytes.
 3. One login uploads, into `incoming/<v>.uploading/`: that 7z, the manifest (without `archive`, plus `objectsBase` and
-   `launcher`), the notes and the launcher exe. Each under a temp name and renamed; the 7z under the fixed name
+   `launcher`), the notes and the downloader exe. Each under a temp name and renamed; the 7z under the fixed name
    `<name>.part-0`, continued with `reput` when a dropped connection left part of it. Then `READY` (JSON: version, channel,
    size and sha256 of every file, the 7z's name, `force`), **last**, and the folder is renamed to `incoming/<v>/`. When the
    connection drops, the upload is retried (5 times, a growing pause), each time resuming the 7z; when all fail, running
@@ -182,7 +187,7 @@ lacks, packed, in as few logins as possible, and the server does everything else
    `incoming/<v>/REFUSED`, the folder stays for a look, and the next `publish` of that version says why
    (`publish --force` deletes it and uploads again). `dl_ingest.py --retry <v>` tries a refused upload again.
 
-Rules the launcher can rely on:
+Rules the downloader can rely on:
 
 - The channel file is written last, after the objects, the 7z and the manifest are in place; a half-finished publish is
   never visible. Every file is written under a temp name and renamed.
@@ -240,8 +245,8 @@ game: no other D2R build is installed here; the decision is covered by the unit 
    `dist/`. `--plugin DLL` uses a release DLL built elsewhere (it is checked); `--data-from <mods\D2R-XL\D2R-XL.mpq\data>`
    copies a finished data folder instead of rebuilding it.
 3. Fill in `RELEASE_NOTES-<version>.md`, tag `v<version>`.
-4. `py -3 tools/publish_release.py publish --version <version> --channel test --target sftp://...` (when a launcher or asset
-   pack goes along: `--launcher`, `--assets`), look at it with the launcher on the test channel, then
+4. `py -3 tools/publish_release.py publish --version <version> --channel test --target sftp://...` (when a downloader or asset
+   pack goes along: `--launcher`, `--assets`), look at it with the downloader on the test channel, then
    `promote <version> --channel stable`. "Hosting layout" above; server setup in docs/hosting.md.
 
 CI (`.forgejo/workflows/release.yml`, runner `mxl-cross`, manual dispatch or tag `v*`): no game files on the
@@ -257,8 +262,9 @@ Into a D2R folder at build 93847 that has D2RLoader 1.3.1-beta (docs/setup.md st
 
 1. Unpack `D2R-XL-<version>.7z` into `<D2R folder>\mods\` (Windows 11 opens .7z files; otherwise use
    [7-Zip](https://www.7-zip.org)): `<D2R folder>\mods\D2R-XL\D2R-XL.mpq\modinfo.json` must exist.
-2. In `<D2R folder>\d2rloader\config\d2rloader.toml` (written by D2RLoader at its first start) set
-   `default_mod = "D2R-XL"` and `launch_arguments = "-txt"`.
+2. Start `D2RLoader.exe`, click the gear on the character screen, set Default Mod to D2R-XL, Apply, and start
+   D2RLoader again (or set `default_mod = "D2R-XL"` in `<D2R folder>\d2rloader\config\d2rloader.toml`). `-txt` is
+   not needed.
 3. Start `D2RLoader.exe`. Saves: `Saved Games\Diablo II Resurrected\mods\D2R-XL\`.
 4. Update: delete `mods\D2R-XL\D2R-XL.mpq\data`, unpack the new release over the folder (keep your own
    `mods\D2R-XL\d2rloader\config\d2rloader.toml` if you edited it).
@@ -273,7 +279,7 @@ Into a D2R folder at build 93847 that has D2RLoader 1.3.1-beta (docs/setup.md st
 - `package_release.py` on the game PC: `D2R-XL-0.69.0.zip` 483 MB (10,471 files, 1,241 MB unpacked); 23 files left out
   as byte copies of D2R's own (`global/excel/{,base/}` armtype, composit, monmode, monplace, objmode, plrmode, soundenviron,
   storepage, uniqueappellation, uniqueprefix, uniquesuffix and `hd/overlays/common/lightning.json`). The excel folder holds
-  only `.txt` tables, so `-txt` is required.
+  only `.txt` tables, so `-txt` is required (2026-10-27: not with D2RLoader 1.3.1, which compiles them itself; docs/launcher.md).
 - Release DLL (`-DMXL_RELEASE=ON`): 874 KB against 1,153 KB for the dev DLL, no `mxl-testharness` string. Zip unpacked
   into slot 3 and started: `mxl-core 0.69.0 loaded (mod D2R-XL, D2R 3.3.0, image 0x6ab3782c)` and every part logs `on`,
   no test harness line. The game then quits at "Preparing frontend launch task": slots 2 and 3 are copies on drive D:,

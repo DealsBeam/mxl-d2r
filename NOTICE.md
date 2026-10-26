@@ -3,7 +3,7 @@
 ## What the MIT license covers
 
 The MIT license in [LICENSE](LICENSE) covers the code and documentation written for this project: the D2RLoader
-plugin in `plugin/`, the tools in `tools/`, the notes in `docs/` and `research/`, the launcher's code, the build scripts and
+plugin in `plugin/`, the tools in `tools/`, the notes in `docs/` and `research/`, the downloader's code, the build scripts and
 the CI configuration.
 
 ## What it does not cover
@@ -17,14 +17,15 @@ D2R-XL is a port of Median XL by the Median XL team. Diablo II by Blizzard Enter
   those the team grants itself. Median XL's site: <https://www.median-xl.com>.
 - **Diablo II** and **Diablo II: Resurrected** belong to Blizzard Entertainment. This project is not affiliated with or
   endorsed by Blizzard Entertainment or the Median XL team. No Blizzard game files are in this repository or in our
-  releases: you need your own copy of Diablo II: Resurrected (build 93847), which the launcher copies on your PC.
-- **D2RLoader** is a separate project (<https://d2rloader.net>) with its own license. It is not part of this repository;
-  the launcher downloads it from its official site, or you install it yourself.
+  releases: you need your own copy of Diablo II: Resurrected (build 93847); the D2R-XL Downloader puts the mod into its
+  `mods` folder.
+- **D2RLoader** is a separate project (<https://d2rloader.net>) with its own license. It is not part of this repository
+  or our releases, and the downloader does not download it: you install it yourself from its official site.
 
-## The launcher's art (`launcher/res`)
+## The downloader's art (`launcher/res`)
 
-The launcher window uses the art of the official Median XL launcher (<https://launcher.median-xl.com>), embedded in
-`D2R-XL-Launcher.exe`. It is not covered by the MIT license:
+The downloader's window uses the art of the official Median XL launcher (<https://launcher.median-xl.com>), embedded in
+`D2R-XL-Downloader.exe`. It is not covered by the MIT license:
 
 | File | What | By | License |
 |---|---|---|---|
@@ -45,3 +46,10 @@ These are Git submodules that keep their own licenses (all MIT):
 | [PluginSDK](https://github.com/D2RLoader/PluginSDK) | D2RLoader contributors | MIT |
 
 Their license texts are in their own folders (`third_party/<name>/LICENSE`).
+
+## The downloader's 7z decoder (`launcher/third_party/lzma`)
+
+`D2R-XL-Downloader.exe` unpacks the release's `.7z` with the C 7z decoder of the
+[LZMA SDK](https://www.7-zip.org/sdk.html) 25.01 by Igor Pavlov, copied unchanged (only the files the decoder needs).
+The LZMA SDK is placed in the **public domain** (`launcher/third_party/lzma/lzma-sdk.txt`); no license text is
+required, the credit is ours.

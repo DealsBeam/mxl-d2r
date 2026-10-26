@@ -10,7 +10,7 @@ tools/publish_release.py uploads into <root>/incoming/<version>.uploading/ and, 
   release-manifest.json        the release manifest (schemaVersion 2) without "archive": this script builds the 7z
   objects-<sha16>.7z           the objects the host lacked, entries named by their sha256 (absent when it lacked none)
   RELEASE_NOTES-<v>.md         optional
-  D2R-XL-Launcher.exe        optional (the manifest's "launcher" names it)
+  D2R-XL-Downloader.exe      optional (the manifest's "launcher" names it; D2R-XL-Launcher.exe from 0.1.x publishers too)
 
 For every such folder, in version order:
 
@@ -52,7 +52,9 @@ READY_SCHEMA = 1
 CHANNEL_SCHEMA = 1
 CHANNELS = ("stable", "test")
 OBJECTS_BASE = "objects/"
-LAUNCHER_NAME = "D2R-XL-Launcher.exe"
+LAUNCHER_NAME = "D2R-XL-Downloader.exe"
+# Publishers before the downloader (launcher 0.1.x) upload D2R-XL-Launcher.exe: still accepted, under its own name.
+LAUNCHER_NAMES = (LAUNCHER_NAME, "D2R-XL-Launcher.exe")
 MANIFEST_NAME = "release-manifest.json"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -162,12 +164,13 @@ def check_ready(inc: Path, version: str) -> dict:
         raise Refused(f"READY lists no {MANIFEST_NAME}")
     pack, launcher = ready.get("objectsPack"), ready.get("launcher")
     for name, meta in files.items():
-        ok = name == MANIFEST_NAME or NOTES_RE.match(name) or PACK_RE.match(name) or name == LAUNCHER_NAME
+        ok = name == MANIFEST_NAME or NOTES_RE.match(name) or PACK_RE.match(name) or name in LAUNCHER_NAMES
         if not ok or not isinstance(meta, dict) or not SHA_RE.match(str(meta.get("sha256"))) or not isinstance(meta.get("size"), int):
             raise Refused(f"READY lists a file it may not: {name!r}")
     if pack is not None and (pack not in files or not PACK_RE.match(pack)):
         raise Refused(f"READY names objectsPack {pack!r}, which it does not list")
-    if (launcher is not None and launcher != LAUNCHER_NAME) or (launcher is None) != (LAUNCHER_NAME not in files):
+    uploaded = [n for n in LAUNCHER_NAMES if n in files]
+    if (launcher is not None and launcher not in LAUNCHER_NAMES) or uploaded != ([launcher] if launcher else []):
         raise Refused("READY's launcher entry and its file list disagree")
     if any(PACK_RE.match(n) for n in files if n != pack):
         raise Refused("READY lists an objects 7z that is not its objectsPack")
@@ -222,9 +225,9 @@ def check_manifest(raw: bytes, version: str, ready: dict) -> dict:
     lr = man.get("launcher")
     if ready.get("launcher"):
         if not isinstance(lr, dict) or not VERSION_RE.match(str(lr.get("version"))) or \
-                lr.get("path") != f"launcher/{lr.get('version')}/{LAUNCHER_NAME}":
+                lr.get("path") != f"launcher/{lr.get('version')}/{ready['launcher']}":
             raise Refused("the manifest's launcher entry is missing or malformed")
-        meta = ready["files"][LAUNCHER_NAME]
+        meta = ready["files"][ready["launcher"]]
         if lr.get("sha256") != meta["sha256"] or lr.get("size") != meta["size"]:
             raise Refused("the uploaded launcher does not match the manifest's launcher entry")
     elif lr is not None:
@@ -402,11 +405,12 @@ class Ingest:
         if ready.get("launcher"):
             lr = man["launcher"]
             ldir = self.site / "launcher" / lr["version"]
-            exe = ldir / LAUNCHER_NAME
+            name = ready["launcher"]
+            exe = ldir / name
             if not (exe.is_file() and sha256_file(exe) == lr["sha256"]):
-                write_atomic(exe, src=inc / LAUNCHER_NAME)
-            write_atomic(ldir / f"{LAUNCHER_NAME}.sha256", data=f"{lr['sha256']}  {LAUNCHER_NAME}\n".encode())
-            log(f"{v}: launcher {lr['version']} in launcher/{lr['version']}/")
+                write_atomic(exe, src=inc / name)
+            write_atomic(ldir / f"{name}.sha256", data=f"{lr['sha256']}  {name}\n".encode())
+            log(f"{v}: downloader {lr['version']} in launcher/{lr['version']}/{name}")
         if ready.get("channel"):  # LAST
             ch = {"schemaVersion": CHANNEL_SCHEMA, "version": v, "manifest": f"releases/{v}/{MANIFEST_NAME}",
                   "manifestSha256": sha256_bytes(man_bytes), "publishedAt": now_utc()}

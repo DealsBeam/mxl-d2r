@@ -1,4 +1,4 @@
-// SHA-256 (FIPS 180-4). Portable so the unit tests run on the Linux CI runner; the launcher hashes every file it
+// SHA-256 (FIPS 180-4). Portable so the unit tests run on the Linux CI runner; the downloader hashes every file it
 // downloads, installs or verifies with it.
 #pragma once
 

@@ -1,503 +1,309 @@
-# D2R-XL launcher
+# D2R-XL Downloader
 
 The product is **D2R-XL** (owner decision 2026-10-26), a port of Median XL by the Median XL team; the repository
 stays `mxl-d2r`, the plugin `mxl-core.dll`.
 
-Goal (owner, 2026-10-26): "people should be able to use this mod without having to change anything else". The
-launcher, `D2R-XL-Launcher.exe` (source in `launcher/`), is the only supported install path. D2RMM, other mod
-managers and Nexus are neither used nor supported (docs/release.md); the launcher's job toward them is never to
-disturb them. The release's `.7z` is the manual-install fallback; the launcher itself installs from single-file objects only
-(there is no zip any more, owner decision 2026-10-26).
+Owner decision 2026-10-27: the 0.1.x launcher (a private copy of D2R with D2RLoader and the mod, and a Play button)
+becomes the **D2R-XL Downloader**, `D2R-XL-Downloader.exe` (source in `launcher/`; the folder, the CMake target and
+the `Launcher` class keep their old names). It does one thing: put the D2R-XL release into the player's own D2R, in
+`<D2R>\mods\D2R-XL\`, and keep it up to date. It never starts the game and never installs D2RLoader:
 
-What the player does: download one exe, run it, press **Play**. The first start makes a **private copy** of their
-D2R install. The pinned D2RLoader and the D2R-XL release go into that copy only. Their own D2R folder, their other
-mods and their Battle.net settings are never written.
+1. The player installs **D2RLoader 1.3.1** from <https://d2rloader.net/> (the downloader checks for it and links there).
+2. The player runs `D2R-XL-Downloader.exe` and presses **Install**.
+3. The player starts D2R-XL the D2RLoader way (below, "How the player starts D2R-XL").
 
-## Research (Phase A, 2026-10-26)
+D2RMM, other mod managers and Nexus are neither used nor supported (docs/release.md). The release's `.7z` stays the
+manual-install fallback, and the downloader uses the same `.7z` for a fresh install.
 
-### D2RLoader 1.3.1-beta: install and start
+## What it does
 
-Sources: https://d2rloader.net/download.html (download page and changelog), Nexus mod 1119
-(https://www.nexusmods.com/diablo2resurrected/mods/1119), and, as research into how other tools install and start
-D2RLoader (not as a supported path), D2RMM Custom's `D2RLoaderInstaller.ts`, `D2RLoader.ts`, `BridgeAPI.ts`
-(`prepareD2RLoaderLaunch`) and `useGameLaunchArgs.tsx`.
-
-- The download is `https://d2rloader.net/download/D2RLoader-1.3.1-beta.zip`; `/downloads/latest` redirects (302) to
-  it. The zip is 47,652,455 bytes, sha256 `9286c6b5bff7f1043658411dbea305faa9698b6a455e6441668fc6d02c22aad7`, the
-  same value the site lists. The site also lists the signing certificate thumbprint
-  `8001082E968FADAA58BF2F73EFA1810A11D0C28F`.
-- The zip holds `D2RLoader.exe`, `D2RCore.dll`, `d2rloader.mpq` and `d2rloader/config/d2rloader.toml`, plus the
-  empty folders `mods/` and `d2rloader/{config,data,plugins,logs,crashes}`.
-- **Install = extract into the D2R folder.** D2RMM does that, then writes `d2rloader.default_mod = "<mod>"` into the
-  TOML and starts `D2RLoader.exe -mod <mod> -txt`. The mod is the folder `<game>\mods\<mod>`, which holds
-  `<mod>.mpq\modinfo.json` (its `savepath` picks the save folder) and `d2rloader\plugins\*.dll`.
-- **Started without arguments**, D2RLoader builds the D2R command line from its TOML: `<launch_arguments> -mod
-  <default_mod>` (`d2rloader.log`: `D2R command line: ...\D2RLoader.exe -txt -w -mod D2R-XL`). The launcher uses
-  that: it writes `default_mod` and `launch_arguments` (the release's `launch` keys, docs/release.md) into the copy's
-  TOML and starts `D2RLoader.exe` with no arguments, so a start by hand from the copy behaves the same.
-- **Only 1.3.1-beta can be downloaded.** The site lists checksums of 1.0.0 to 1.3.0, but serves no files for them.
-- **All D2RLoader state is per game folder** (`<game>\d2rloader\config`, `logs`, `crashes`). The only exception is
-  the backups in `Saved Games\Diablo II Resurrected\D2RLoader Backups\<mod>`, which are kept per mod.
-- **D2RLoader cannot run from outside the D2R folder**: it starts the `D2R.exe` next to itself. So a side-by-side
-  setup needs a whole D2R folder of its own, which is the private copy below.
-- **Redistribute or download? Download.** The site publishes no licence text, so we do not ship D2RLoader. The
-  launcher downloads exactly 1.3.1-beta from that URL and checks the zip sha256 and every extracted file against
-  pinned values (`launcher/src/win/app.h`, `app.cpp` `LoaderFiles`). It also checks the Authenticode signer of
-  `D2RLoader.exe` and `D2RCore.dll`: the thumbprint must be `8001082E...C28F` and the signature intact. The
-  certificate is self-signed, so an untrusted root is accepted, but a changed file is not. It never fetches
-  "latest". A file with a different hash is refused.
-
-### Finding D2R and its build
+### Finding D2R
 
 - **Battle.net**: the Uninstall key `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Diablo II
-  Resurrected`, value `InstallLocation`, in HKLM (also HKCU and the native view). D2R has no other registry keys of
-  its own. The HKCU "Diablo II" keys belong to classic D2 / PD2.
-- **Steam**: `HKCU\Software\Valve\Steam\SteamPath`, then `steamapps\libraryfolders.vdf` (every library), then each
-  `steamapps\appmanifest_*.acf` whose `name` is "Diablo II: Resurrected", then `steamapps\common\<installdir>`.
-  Steam is installed on the game PC but D2R is not on it, so this path is covered by unit tests only.
-- The default folders under Program Files are checked last.
-- **Build**: `.build.info`, the `Version` column of the row with `Active` = 1, e.g. `3.3.93847`. `D2R.exe`'s
-  FileVersion (`3.3.93847`) is the fallback. The build must be 93847 (`launcher/src/core/detect.cpp` `CheckBuild`):
-  - older: "update D2R in Battle.net"
-  - newer: "D2R-XL needs D2R build 93847; this D2R is build X. Waiting for a D2R-XL update for the new build."
-  - With a complete copy already made, a newer source build does not matter: the copy stays at 93847 (it is never
-    patched; see "Updates of D2R" below).
+  Resurrected`, value `InstallLocation` (HKLM, HKCU, both views). **Steam**: `SteamPath`, `libraryfolders.vdf`, the
+  `appmanifest_*.acf` named "Diablo II: Resurrected" (unit tests only: no Steam D2R on the game PC). Then the default
+  folders, `C:\Program Files (x86)\Diablo II Resurrected` first.
+- **D2R folder** (the button, `--game-dir` on the command line) picks another folder; it must hold `D2R.exe` and
+  `Data`. The choice is saved. The old launcher's game copy (it has `d2r-xl-copy.json`) and the official Median XL's
+  folders are refused.
+- **Build**: `.build.info` (the `Version` of the active row, e.g. `3.3.93847`), `D2R.exe`'s FileVersion as the
+  fallback. Not the release's `d2r.build` (93847): a red status line ("D2R build 91636: D2R-XL needs 93847. Update
+  D2R in Battle.net.", or "... Wait for a D2R-XL update." for a newer build) and a question before Install, which is
+  still allowed. The plugin itself refuses to load on another build.
 
-### Private game copy
+### D2RLoader
 
-The owner's direction (2026-10-26): the launcher copies the player's D2R install to its own folder and installs
-D2RLoader and the mod there only. Research found no blocker, but it found one rule, the drive rule below.
+Not downloaded and not installed (owner decision 2026-10-27). The downloader reads the file version of
+`<D2R>\D2RLoader.exe` and compares it with the release's `d2rloader.version` (`1.3.1-beta`; equal numbers are
+enough: `1.3.1`, `1.3.1.0` and `1.3.1-beta` match, `1.3.0` and `1.4.0` do not, `paths.cpp` `LoaderVersionMatches`).
+Missing or another version: the status says "D2RLoader missing: D2R-XL needs D2RLoader 1.3.1-beta" (or "D2RLoader
+1.2.0: ...") and a **Get D2RLoader** button opens
+<https://d2rloader.net/> in the browser (`ShellExecute`). Right: "D2RLoader: 1.3.1-beta (OK)". Install works in both
+cases.
 
-**Copy, not hardlinks.** Battle.net patches rewrite CASC files in place. On the game PC, `Data\data\data.024` and
-`Data\data\090000000f.idx` were rewritten on 2026-10-21 10:14 under the same file names. A hardlinked copy would get
-the new data under its old index, or the other way round, and break both installs. The game also writes into its own
-folder at every start (`Data\data\shmem`, `Data\ecache\shmem`, `Data\osi\shmem`), and so does D2RLoader
-(`Data\hd\objects\dummy\d2rloader_stash_proxy.json`). So the copy is a full copy.
+### Where it writes
 
-**Block cloning.** The copy uses `CopyFile2`. On ReFS, including a Dev Drive, that block-clones by itself
-(copy-on-write: instant and no extra space until a file changes). On NTFS it is an ordinary copy: 27.6 GB, about
-40 s from NVMe to NVMe on the game PC.
+- **`<D2R>\mods\D2R-XL\`**: exactly the release's mod folder (`modFolder` of the manifest; one plain name, nothing
+  that can leave `mods\`, `paths.cpp` `SafeModFolderName` / `ModTargetDir`). Nothing else in the D2R folder is
+  written by the downloader. D2RLoader itself writes into the mod folder when the game runs (it rewrites
+  `d2rloader\config\d2rloader.toml`, a `preserve` entry, and fills `d2rloader\logs\`), and into its game-wide
+  `d2rloader\config\d2rloader.toml` when the player sets the default mod ("How the player starts D2R-XL").
+- **`mods\D2R-XL\d2r-xl-install.json`**: the marker (`made_by` "D2R-XL Downloader", an id, the version). It is written
+  before anything else, and its id must match the state's for Uninstall. A `mods\D2R-XL` without it (a manual or
+  developer install) is never written into without asking: the window asks "Replace it with D2R-XL <v>?", the CLI needs
+  `--replace`. A marker of the downloader with another id (state deleted, another Windows user) is taken over.
+- **`mods\D2R-XL\d2r-xl-download\`**: downloads in progress (objects as `<sha>.part`, the unpacked 7z in `7z\`).
+  Inside the mod folder on purpose: it is on the same volume, so every finished file is renamed into place, and
+  D2RLoader lists every folder of `mods\` as a mod, so a staging folder next to `D2R-XL` would show up in its mod list.
+  Removed when the install is complete. An update never deletes the marker or this folder (`RuntimeOutput`).
+- **`%LOCALAPPDATA%\D2R-XL\`**: `launcher.json` (state), `launcher.log`, `download\` (the release 7z while it is
+  downloaded; deleted after the install).
+- Next to the exe: `D2R-XL-Downloader.exe.download` / `.old` during a self-update.
 
-**What is copied**: everything in the D2R folder except `mods\`, all D2RLoader files and folders (`D2RLoader*.exe`,
-`D2RCore.dll`, `d2rloader.mpq`, `d2rloader\`), `logs\`, `crashes\`, `*.log`, `*.dmp`, the stash proxy above and our
-own `*.mxlpart` / marker files (`launcher/src/core/gamecopy.cpp` `ExcludedFromCopy`). Junctions and other reparse
-points are not followed.
+The exe runs `asInvoker`. The usual Battle.net folder lets Users write, so no administrator rights are needed. When
+the folder is not writable (another install location, a locked-down PC), the message says so: "Cannot write into
+<folder>: Access is denied. Run the D2R-XL Downloader as administrator (right-click it, Run as administrator), or give
+your Windows user write access to the D2R folder."
 
-**Drive rule (the one blocker-class finding).** D2RLoader decrypts
-`%LOCALAPPDATA%\Blizzard Entertainment\ClientSdk\cookie.bin`, the Battle.net session record behind D2R's "online in
-the last 30 days" check. The key is derived from the machine (MachineGuid) and the **volume serial of the drive the
-loader runs from** (docs/testing.md "Parallel slots"; the plugin test harness word `volserial` fakes the serial for
-slots 2 and 3, which run from D:). The folder path is not part of the key. Tested on 2026-10-26 with the release plugin
-(`-DMXL_RELEASE=ON`) and no harness file, launcher-installed copies of the same build:
+D2R, D2RLoader, `Saved Games` (characters, `Settings.json`) and other mods are never written. The downloader refuses
+to install, repair or uninstall while a process runs from the D2R folder (D2R or D2RLoader).
 
-- **Same volume (C:, where Battle.net's install is):** the copy ran for 114 s and reached the main menu window.
-  `d2rloader.log` shows `D2R startup complete.` after "Preparing frontend launch task" (the cookie step).
-- **Other volume (D:):** the copy died at about 8 s, in "Preparing frontend launch task", as documented.
+### Install, Update, Repair
 
-In both runs `cookie.bin` kept its sha256 and its mtime.
+One button: **Install** (nothing installed, or a foreign folder), **Update** (a newer release on the channel, or the
+channel could not be read), **Up to date** (disabled). Each run:
 
-**Who writes `cookie.bin`.** There is one file per Windows user, at a fixed path; there is no file per install. D2R
-writes it during a start from Battle.net (Play), when it signs in online. On the game PC its mtime
-(2026-10-21 11:52:56) falls 29 s after Battle.net's `LaunchBinary: uid=osi` and inside the game process's 37 s run
-(`%LOCALAPPDATA%\Battle.net\Logs`). Offline D2RLoader starts read it and leave it alone: slot 1's run on 2026-10-25 and
-the two runs above did not change it. A copy therefore cannot have its own cookie. Refreshing it "from the copy" would
-mean pointing Battle.net at the copy, which changes Battle.net's install record and makes the cookie unreadable for
-the real install. That is not a legitimate route for us. The legitimate refresh is the normal one: play the real D2R
-once from Battle.net, online. The copy on the same volume reads the new cookie, because the key is the same.
+1. `GET channels/<channel>.json`, then the manifest; its sha256 must be the channel's `manifestSha256`, its schema 2
+   (docs/release.md). The channel's read errors: 404 "No release has been published on the <channel> channel yet.",
+   another status "The download site answered <status> for <url>", no answer "Cannot reach the download site (<url>):
+   <WinHTTP error>".
+2. The plan (`manifest.cpp` `PlanInstall`): every listed file whose local copy is missing or has another sha256 is
+   fetched (size and mtime from the state skip the hash of unchanged files; **Repair** hashes every file); files under
+   the mod folder that the release does not list are deleted, except `preserve` entries, D2RLoader's `d2rloader/logs/`
+   and `crashes/`, the marker and `d2r-xl-download/`.
+3. The files come from the release **7z** or as single **objects** (below), are checked (size, sha256) and renamed into
+   place one by one; the old file stays until the new one is complete. `emptyDirs` are created, the marker gets the
+   version, the state records the release.
 
-So:
+Stopping (the **Stop** button, closing the window, a killed process, a dropped line) keeps everything finished; the
+next Install continues: the 7z download resumes, objects resume from their `.part`, installed files are not fetched
+again.
 
-- the copy must be on the same volume as the Battle.net D2R install;
-- the default is `%LOCALAPPDATA%\D2R-XL\game` when that is on the D2R drive, else `<D2R drive>\D2R-XL\game`;
-- a folder the player picks on another volume is **refused**, with a message that says why (volume serials are
-  compared, so another partition of the same disk counts as another volume);
-- `--any-drive` lifts the rule; it exists only in a test build (`cmake -DMXL_LAUNCHER_TEST_OPTIONS=ON`), a player build
-  does not know the switch;
-- no volume-serial shim and nothing that touches Battle.net's session data is shipped (owner decision, 2026-10-26).
+### 7z or objects
 
-**Battle.net does not need to be running or logged in.** The slots start with Battle.net closed. What D2R needs is an
-online start from Battle.net within the last 30 days (the cookie). Without one, D2R shows "You have not been online
-in the last 30 days" at the main menu. Play logs a hint when `cookie.bin` is missing or older than 25 days.
+The owner's requirement (2026-10-27): "make sure the downloader can pull the full folder as a 7z and unzip it."
 
-**Updates of D2R.** The copy is never patched. When Battle.net updates the player's real D2R, the copy stays at
-93847 and Median keeps working. A Median release for a new build will need a fresh copy: the release manifest names
-its `d2r_build`, and the launcher refuses a release whose build does not match the copy.
+- **Rule** (`app.cpp` `UseSevenZip`): the 7z when the objects to fetch add up to more bytes than the 7z (`archive.size`
+  of the manifest). A fresh install of 0.69.1 is about 1.1 GB of objects against a 355 MB 7z, so it takes the 7z; a small
+  update or a Repair of a few files takes the objects. `--via auto|7z|objects` forces one (tests). When the 7z cannot
+  be used (an old manifest without `archive.path`, a failed download or unpack), the install continues with objects;
+  `--via 7z` stops instead.
+- **7z download**: `archive.path` into `%LOCALAPPDATA%\D2R-XL\download\<name>.part`, resumed with a Range request, 5
+  tries with a pause of 2, 4, 8, 16 s; a 404 / 403 / 410 stops at once. Then its sha256 must be `archive.sha256`: a
+  mismatch deletes the part and downloads it again (within the same 5 tries). Free space is checked first.
+- **Unpack** (`src/core/sevenzip.cpp`, the LZMA SDK 25.01 C decoder in `launcher/third_party/lzma`, public domain,
+  NOTICE.md): the release 7z is two solid blocks, LZMA2 with a 128 MB dictionary (`-mx7`) for the data and BCJ +
+  LZMA2 for `mxl-core.dll`. A block of a single LZMA2 / LZMA / Copy coder is **streamed**: the decoder writes 1 MB at a
+  time through its dictionary, cut into files as it goes; a block with a filter (the DLL's) is decoded in memory, up to
+  64 MB. Only files of the plan are written, into `mods\D2R-XL\d2r-xl-download\7z\`; each one's CRC (7z) and sha256
+  (manifest) are checked, then it is renamed into place. Entries the manifest does not list are skipped. The 7z is
+  deleted after a successful install, kept (as `.part` or whole) when something failed.
+- **Memory**: the dictionary (128 MB for the release) plus 1 MB output, 1 MB input buffer and the 7z header. Measured
+  peak working set of the whole exe (CLI, 2026-10-27): **159 MB** for the fresh install on slot 2 (1,184 MB unpacked),
+  75 MB for an objects update or Repair.
+- **Objects**: `objects/<sha[0:2]>/<sha>`, 8 downloads in parallel (one WinHTTP session each), into
+  `d2r-xl-download\<sha>.part`, resumed with Range, 5 tries each, checked, renamed. Several paths with one sha256 are one
+  download.
+- Both paths give the same folder (tested, "Testing").
 
-### Shared state outside the copy
+### Uninstall
 
-| State | Shared? | What the launcher does |
-|---|---|---|
-| `Saved Games\Diablo II Resurrected\Settings.json` (graphics, audio, options) | yes, by every D2R install | Neither D2R nor D2RLoader can use another settings root (D2RCore resolves it with `SHGetKnownFolderPath`). D2R writes the file only when options are changed. The first Play backs it up once to `%LOCALAPPDATA%\D2R-XL\backup\Settings.json`; no swapping. |
-| Saves | no | `D2R-XL.mpq\modinfo.json` `savepath` = `D2R-XL/`, i.e. `Saved Games\Diablo II Resurrected\mods\D2R-XL`. Vanilla and other mods' saves are never touched. Uninstall keeps the saves. |
-| D2RLoader backups | per save folder | `Saved Games\...\D2RLoader Backups\<savepath>` (`D2R-XL`, the same folder a manual install uses) |
-| Registry | none written | D2R has no registry state beyond the Uninstall key; the launcher only reads. |
-| Single-instance mutex | none | D2R / D2RLoader run side by side (docs/testing.md); the launcher does not need to stop another D2R. |
-| `<game>\d2rloader\config\*.toml` | per game folder | Written only in the copy. Note: `tools/install_mod.py` (the developers' path) edits `<game>\d2rloader\config\input-bindings.toml` of the folder it installs into, which is shared by every mod that D2RLoader runs there. The launcher never runs install_mod.py and never writes outside its copy. |
+Removes `mods\D2R-XL` only, and only with the marker of this installation (`Uninstall` refuses a folder without it:
+"it has no D2R-XL Downloader marker ... so the downloader did not install it"). It also clears the state and
+`%LOCALAPPDATA%\D2R-XL\download`. Characters (`Saved Games\Diablo II Resurrected\mods\D2R-XL`), D2RLoader, its
+configuration and other mods stay. The game-wide `default_mod = "D2R-XL"` the player set stays too (the downloader
+never wrote it); the player picks another mod, or none, the same way (gear, Default Mod).
+
+### How the player starts D2R-XL
+
+How D2RLoader 1.3.1 picks the mod (read from its config and log on slot 2, 2026-10-27):
+
+- `D2RLoader.exe` started with no arguments reads the game-wide `<D2R>\d2rloader\config\d2rloader.toml`, section
+  `[d2rloader]`: `default_mod` and `launch_arguments` ("-mod is not allowed here"), and starts D2R with
+  `<launch_arguments> -mod <default_mod>` (the log: `D2R command line: ...\D2RLoader.exe -w -mod D2R-XL`).
+- The per-mod `mods\D2R-XL\d2rloader\config\d2rloader.toml` (shipped with the release, `preserve`) only overrides the
+  `[d2rcore.*]` settings of the active mod ("Active mods can override these"; the `[d2rloader]` settings "Mods cannot
+  override"). It cannot choose the mod.
+- D2RLoader's own options set the default mod: the gear on the character screen, **Default Mod**, Apply. It writes
+  `default_mod` into the game-wide file.
+
+So the downloader writes **nothing outside `mods\D2R-XL`**: the player makes the one choice in D2RLoader, once. The
+window, README and release notes say:
+
+> How to play: start D2RLoader.exe in your D2R folder. The first time, click the gear on the character screen, set
+> Default Mod to D2R-XL, Apply, and start D2RLoader again.
+
+`-txt` is **not** needed (the 0.69.0 notes and the 0.1.x launcher set `launch_arguments = "-txt"`). Slot 2 with
+`launch_arguments = "-w"` only: D2RLoader logs "TXT compilation: the mod has no custom BIN set; using current TXT files
+and supported legacy BINs", compiles 139 of the mod's 142 `.txt` tables (the other three, `objtype` twice and
+`base/sounds`, have no BIN in D2R) "for this launch only", and `game_checks.py all mxl` passes. The manifest's `launch`
+now says `"launch_arguments": ""` (informational; nothing reads it).
+
+### From launcher 0.1.x
+
+The 0.1.x launcher kept a private copy of D2R (`%LOCALAPPDATA%\D2R-XL\game` or `<drive>\D2R-XL\game`, marker
+`d2r-xl-copy.json`) and the D2RLoader zip in `%LOCALAPPDATA%\D2R-XL\cache`. The downloader converts its state: the copy
+is remembered under `legacy`, everything else is dropped (the old D2R folder becomes the D2R folder). The window then
+asks once: "The old D2R-XL launcher (0.1.x) left its own copy of D2R in <folder> ... Delete it?". Yes deletes the copy
+(only when its marker's `made_by` is "D2R-XL launcher" and its id is the state's `copy_id`, never a folder that overlaps
+the D2R folder) and the cache; No is remembered. CLI: `--cli remove-old-copy`. The old launcher's Settings backup
+(`%LOCALAPPDATA%\D2R-XL\backup`) and log stay. The private-copy feature itself (copying D2R, the drive rule, Play, the
+D2RLoader download and its signer pin, `--any-drive`) is gone.
+
+A 0.1.x launcher sees the 0.2.0 downloader in the release manifest's `launcher` entry and offers it as a self-update; the
+new exe then keeps the old file name (`D2R-XL-Launcher.exe`).
 
 ### Coexisting with the official Median XL
 
 D2R-XL installs next to the official Median XL (the classic game with its own launcher, launcher.median-xl.com) and
-never touches its files. `launcher/src/core/gamecopy.h` `OfficialMedianXLPath` names its folders; the launcher refuses
-a data or game folder there (unit test `TestCoexist` in `launcher/tests/core_tests.cpp`: the default folders never
-resolve under them).
+never touches its files. `paths.h` `OfficialMedianXLPath` names its folders; the downloader refuses a data folder or D2R
+folder there (unit test `TestCoexist`).
 
 | | Official Median XL | D2R-XL |
 |---|---|---|
-| Launcher | `%LOCALAPPDATA%\mxl-launcher\` (`launcher.exe`, `launcher.json`, `logs.log`, `median-xl.msi`) | `D2R-XL-Launcher.exe` wherever the player put it; data in `%LOCALAPPDATA%\D2R-XL\` (`launcher.json`, `launcher.log`, `cache\`, `backup\`) |
-| Game files | the classic `Diablo II` folder (e.g. `C:\Program Files (x86)\Diablo II`; its config's `install_directory` may point elsewhere) | a private copy of D2R: `%LOCALAPPDATA%\D2R-XL\game` on the D2R drive, else `<drive>:\D2R-XL\game`; the mod in `mods\D2R-XL` |
+| Program | `%LOCALAPPDATA%\mxl-launcher\` (`launcher.exe`, `launcher.json`, `logs.log`, `median-xl.msi`) | `D2R-XL-Downloader.exe` wherever the player put it; data in `%LOCALAPPDATA%\D2R-XL\` |
+| Game files | the classic `Diablo II` folder | `<D2R>\mods\D2R-XL` |
 | Saves | `%APPDATA%\MedianXL\save` | `Saved Games\Diablo II Resurrected\mods\D2R-XL` |
 | Updates | `get.median-xl.com` | `dl.werdegames.com/mxl/` |
-| Window class, exe, version resource | (theirs) | `D2RXLLauncher`, `D2R-XL-Launcher.exe`, ProductName `D2R-XL`, manifest identity `D2R-XL.Launcher` |
+| Window class, exe, version resource | (theirs) | `D2RXLDownloader`, `D2R-XL-Downloader.exe`, FileDescription `D2R-XL Downloader`, manifest identity `D2R-XL.Downloader` |
 
-The launcher never reads or writes `%LOCALAPPDATA%\mxl-launcher`, `%APPDATA%\MedianXL`, `%LOCALAPPDATA%\MedianXL`
-or a folder named `Diablo II`. It creates no mutex, registry key, shell association, AppUserModelID or shortcut, and
-its temporary files live next to the exe (`D2R-XL-Launcher.exe.download` / `.old`) or in the game copy
-(`d2r-xl-download\`).
-
-## Design
-
-### Files
-
-- `%LOCALAPPDATA%\D2R-XL\launcher.json`: state (game folder, site and channel, the installed release's manifest,
-  size / mtime / sha256 of every installed file).
-- `%LOCALAPPDATA%\D2R-XL\launcher.log`: log.
-- `%LOCALAPPDATA%\D2R-XL\cache\D2RLoader-1.3.1-beta.zip`: the loader download.
-- `%LOCALAPPDATA%\D2R-XL\backup\Settings.json`: the settings backup.
-- The game copy (`...\D2R-XL\game`) holds `d2r-xl-copy.json`, a marker (made_by, id, source, build). Uninstall
-  removes a folder only when the marker is there and its id matches the state. Install refuses to put a copy into a
-  non-empty folder without it.
-
-### Steps (Install / Update)
-
-1. **Find D2R** and check its build (above). The player can pick another folder ("Choose D2R folder").
-2. **Copy**: list the files, check free space (the missing bytes + 3 GB), write the marker, copy. Each file goes to
-   `<file>.mxlpart` and is renamed when complete. Files whose size and mtime already match are skipped, so an
-   interrupted copy resumes (tested: killed at 23 GB, the rerun copied the last 4.5 GB in 3 s). Then the copy's
-   build is checked again.
-3. **D2RLoader**: download (or use the cached zip), check sha256, extract the pinned files, check the signer of the two
-   binaries. The copy's `d2rloader.toml` comes from the zip's template only when missing.
-4. **D2R-XL** from the download site (below): only new or changed files, with resume and verification. Then the
-   copy's `d2rloader.toml` gets the release's `launch` keys (`default_mod = "D2R-XL"`, `launch_arguments = "-txt"`)
-   and `check_for_updates = false`.
-5. **Play**: rewrite those keys (extra test arguments such as `-w` are appended to `launch_arguments`), then start
-   `D2RLoader.exe` from the copy with no arguments. `-txt` makes D2R read the mod's text tables at every start; the
-   release's excel folder holds only `.txt` tables, so it is required. The launcher waits 30 s and reports an error if
-   the game is gone by then.
-
-**Repair** runs the same steps but hashes every installed file and the loader's signatures again instead of trusting
-size and mtime. Its copy check uses size and mtime. **Uninstall** removes the copy, the cache and the state. It keeps
-saves, the settings backup and the log, and never touches the real D2R.
-
-### Download site
-
-Owner decision 2026-10-26: releases are served from our own static HTTPS host, not from GitHub or the forge (the
-forge needs a sign-in for everything). The layout is lane pub-publish's (docs/release.md "Hosting layout",
-`tools/publish_release.py`); the launcher's one setting is the site root, default `https://dl.werdegames.com/mxl/`
-(`--site`, saved in the state; `http://`, `file://` or a plain local folder work for tests). `--channel` picks
-`stable` (default) or `test`.
-
-1. `GET channels/<channel>.json`: schemaVersion 1, `version`, `manifest`, `manifestSha256`. A login page or other
-   HTML is "not usable", not a crash. When it cannot be read (`ChannelReadError`, manifest.h): a 404 (or a missing
-   file on a local site) says "No release has been published on the <channel> channel yet."; another HTTP status
-   "The download site answered <status> for <url>"; no answer at all (DNS, connection, TLS) "Cannot reach the download
-   site (<url>): <WinHTTP error>". `launcher.log` gets `channel <url>: HTTP <status>` (or `no answer`) with the error.
-2. `GET <manifest>`; its sha256 must equal `manifestSha256` ("the site may be in the middle of an update"), and its
-   `version` must be the channel's. Its `schemaVersion` must be 2: a newer one says "This launcher is too old for
-   D2R-XL <v>" and offers the manifest's `launcher` as a self-update; an older one (the zip releases) says "This
-   launcher is too new for the release on the download site".
-3. The install plan (below). For each missing or different file: `GET <objectsBase><sha[0:2]>/<sha>`. Files with the
-   same content are one download. Eight workers, each with its own WinHTTP session (keep-alive). Every object goes
-   to `<game>\d2r-xl-download\<sha>.part`, is resumed with a Range request when a part is already there, is checked
-   (size, sha256; a bad one is deleted and fetched again), and is then renamed into place (`MoveFileEx` with
-   replace; for a second path with the same content a copy goes through `.mxlpart`). The download folder is removed
-   when everything is in place.
-4. Each object gets 5 tries (`ObjectAttempts`), resumed each time, with a pause of 2, 4, 8, 16 s between them; a 404,
-   403 or 410 ends it at once. When objects still fail, the install stops with "Download failed: N of M files could
-   not be downloaded (...). Check your connection and try again: the K files already downloaded are kept." There is
-   no other source (no zip). The next Update or Repair continues from what is installed and from the `.part` files.
-   `emptyDirs` of the manifest (`d2rloader/patches`) are created.
-5. The state file `launcher.json` gets the installed manifest and size / mtime / sha256 of every installed file
-   (saved every 5 s during a download, so an interrupted install continues where it stopped).
-6. `launcher` in the manifest (when published with one): a newer launcher is offered as a self-update (below).
+The downloader never reads or writes `%LOCALAPPDATA%\mxl-launcher`, `%APPDATA%\MedianXL`, `%LOCALAPPDATA%\MedianXL` or a
+folder named `Diablo II`, and creates no mutex, registry key, shell association or shortcut.
 
 ### Self-update
 
-`publish_release.py --launcher EXE` puts the exe under `launcher/<v>/` and its `version`, `path`, `size` and `sha256`
-into the release manifest. After reading the channel the window asks "Launcher X is available. Update now?" (CLI:
-`--cli self-update`). The offer is also made when the release itself is refused because it needs a newer launcher
-(build, D2RLoader pin, `launcherMin`).
+`publish_release.py --launcher EXE` puts the exe under `launcher/<v>/D2R-XL-Downloader.exe` and its `version`, `path`,
+`size` and `sha256` into the release manifest. After reading the channel the window says "A newer downloader is
+available: X ... Update now? The downloader updates itself" (CLI: `--cli self-update`). It is offered only when the
+version is higher **and** the sha256 differs from the running exe (the 0.1.2 fix: no loop on a mislabelled exe), also
+when the release is refused because it needs a newer downloader (`launcherMin`, manifest schema 3).
 
-- The exe is downloaded next to the running one (`D2R-XL-Launcher.exe.download`), then its size and **sha256 must
-  equal the manifest's**. That is the trust chain: HTTPS, the channel file's `manifestSha256`, the manifest's sha256 of
-  the exe. A mismatch deletes the download and changes nothing.
-- Authenticode plays no part in the decision: a signature is logged (signer thumbprint) but never required or pinned,
-  so a new certificate (Azure's renew every few days), another signing service or an unsigned build all update the
-  same way.
-- Swap: the running exe is renamed to `D2R-XL-Launcher.exe.old` (Windows allows renaming a running exe), the
-  download takes its name, the window starts it with the same arguments and closes. The next start deletes `.old`.
-  If the folder is not writable, the message gives the download URL instead.
-- The new exe is written by the launcher itself, so it carries no "downloaded from the internet" mark and SmartScreen
-  does not ask again; signing matters for the first download from the website.
-
-D2RLoader still comes from d2rloader.net (pinned URL, size, sha256, signer), not from our host: its site publishes no
-licence, so we do not redistribute it (Research, "Redistribute or download?").
-
-How the launcher uses the manifest's fields:
-
-- `schemaVersion` other than 1 is refused; unknown fields are ignored (a unit test has one).
-- `complete: false` (a CI package without data) is refused.
-- `d2r.build` must be 93847. `d2rloader.version`, `.sha256` and `.signerThumbprint` must equal the launcher's own pin;
-  a release that names another D2RLoader needs a new launcher. The launcher always downloads its own pinned URL.
-- `d2r.imageTimestamp` is parsed but **not compared with the file**. `0x6ab3782c` is the TimeDateStamp of the
-  unpacked image in memory, which the plugin's build guard reads. The `D2R.exe` file of build 93847 has `0x6a6b96a4`.
-  Found in the isolation test below; for lane pub-release, the docs/release.md wording "PE TimeDateStamp of that
-  D2R.exe" should say "of the running image".
-- `launch` goes into the copy's `d2rloader.toml`. `modFolder` is the zip's top folder and `<copy>\mods\<modFolder>`.
-- `files` and `fileCount` / `totalSize`: paths are checked (no `..`, no drive letters, no case-insensitive
-  duplicates), and the counts must match the list.
-- `preserve` (the mod's `d2rloader.toml`): written only when missing, never overwritten, also not by Repair.
-  Owner question: that also hides new keys a release adds to that file.
-- Update rule, as docs/release.md says: fetch every entry whose file is missing or whose size / sha256 differ, then
-  delete every file under the mod folder that the release does not list, except `preserve` entries,
-  `d2rloader/logs/` and `d2rloader/crashes/`. Crash reports are also D2RLoader output; proposed for docs/release.md.
-- `objectsBase` is required (it is the only install path); `objectsBase`, `archive.path`, `launcher.path` must be safe
-  relative paths under the site root (`objectsBase` ends in `/`); an absolute URL is refused. `emptyDirs` entries must
-  be safe paths too.
-- `launcherMin` (optional, a launcher-lane addition within the schema): the oldest launcher that may install
-  the release; an older one says "download the new launcher".
+- Downloaded next to the running exe (`.download`); size and **sha256 must equal the manifest's** (HTTPS, the channel's
+  `manifestSha256`, the manifest's sha256 of the exe). A mismatch deletes it and changes nothing.
+- A signature is logged, never required: a new certificate or an unsigned build updates the same way.
+- Swap: the running exe becomes `.old`, the download takes its name, the window restarts it; the next start deletes
+  `.old`. A folder that is not writable gets the download URL instead.
 
 ### Window and CLI
 
-The window (`launcher/src/win/window.cpp`) is modelled on the official Median XL launcher (launcher.median-xl.com, a
-Flet app: only its look is reused, not its code) and uses its art, embedded in the exe (`launcher/res`, credited in
-NOTICE.md):
-- the temple background (`background.png`, 900 x 600: the window's canvas), the burning logo (`logo.gif`, 55 frames,
-  40 ms each) at the top. Changing the logo (for example the D2R-XL logo) is replacing `launcher/res/logo.gif`: any
-  number of frames, each frame's own delay is used, stretched to 388 x 134 (`LogoRect` in window.cpp; keep that
-  aspect ratio), resource id 102 in `launcher/res/launcher.rc`. Nothing else changes; rebuild the exe;
-- the stone panel (`popup-window.png`) with the status (D2R, game copy, D2R-XL version, D2RLoader), the current
-  step and a progress bar (a moving piece while the amount is unknown);
-- a big **Play** button (installs first if needed; while working it becomes **Stop**, which cancels the current step),
-  then **Update**, **Repair**, **Uninstall** (asks first), **Saves folder**, **D2R folder** (choose another D2R
-  install), in Exocet (`exocet.ttf`); body text in Roboto Condensed;
-- the credits line and a link icon (`comment.svg`, Font Awesome) for **Report a problem** (GitHub issues). The
-  official launcher's Discord / Reddit / Patreon / guide icons are left out: we have no links of our own for them.
+The window (`launcher/src/win/window.cpp`) keeps the 0.1.x look: the official Median XL launcher's art (temple
+background, stone panel, Exocet and Roboto Condensed, NOTICE.md) and the D2R XL logo (`launcher/res/logo.gif`).
 
-Toolkit: Win32 + GDI+, both part of Windows, so the exe stays a single file with no runtime. GDI+ decodes the PNGs and
-every GIF frame (pre-scaled once, then drawn as cached bitmaps on a 20 ms timer that only repaints the logo), loads the
-fonts from the exe's resources (`PrivateFontCollection`; Georgia / Segoe UI if one cannot be loaded) and draws
-anti-aliased text and the icon. The icon's SVG path is read by `launcher/src/core/svgpath.cpp` (unit-tested) and
-filled as a GDI+ path. The buttons stay real BUTTON windows (owner-drawn), so Tab / Space / Enter and screen readers
-work. The canvas is scaled to the monitor's DPI (smaller if it would not fit the work area); the title bar is dark.
-
-`--snapshot FILE` draws the window once into a PNG after the start-up check, without showing it (for docs and checks
-from the background).
-
-Work runs on a worker thread. At start the launcher reads the channel and says whether an update is available.
+- Title "D2R-XL Downloader 0.2.0"; the panel: D2R folder and build, D2RLoader, D2R-XL (installed / available), the mod
+  folder; warnings in red. Below it the current step and a progress bar (download in MB with minutes left, unpacking in
+  MB, objects as files and MB).
+- A big **Install / Update** button (**Stop** while working), then **Repair**, **Uninstall** (asks first), **Get
+  D2RLoader** (only when needed), **D2R folder** (browse), **Mods folder** (opens `mods\D2R-XL`, or `mods`, never
+  created), and the issue-tracker icon.
+- The how-to-play line, then the footer "Downloader 0.2.0 · D2R-XL, a port of Median XL ...".
+- Nothing takes focus or the cursor (no `SetForegroundWindow`; the 0.1.x Play was the only user).
+- `--snapshot FILE` draws the window once into a PNG after the start-up check, without showing it.
 
 ```
-D2R-XL-Launcher.exe --cli status|detect|install|update|repair|play|uninstall|self-update
-    [--data-dir DIR] [--site URL|DIR] [--channel stable|test] [--source D2R_DIR] [--game-dir DIR]
-    [--args "-w"] [--background] [--loader-url file:///...]
+D2R-XL-Downloader.exe --cli status|detect|install|update|repair|uninstall|self-update|remove-old-copy
+    [--data-dir DIR] [--site URL|DIR] [--channel stable|test] [--game-dir D2R_DIR] [--replace]
+    [--via auto|7z|objects] [--snapshot FILE]
 ```
 
-(`--any-drive` only in a test build, see "Drive rule".) The exe is a GUI-subsystem program. From PowerShell use `Start-Process -NoNewWindow -Wait`, because `& exe` does not
-wait. Note that `-Wait` also waits for the game that `play` started.
+`--source` is still read as `--game-dir`. The exe is a GUI-subsystem program: from PowerShell use `Start-Process
+-NoNewWindow -Wait`.
 
-Build: `cmake -S launcher -B build/launcher -A x64 && cmake --build build/launcher --config Release` gives a 2 MB
-static exe (1.5 MB of it the art): C++20, no runtime to install, WinHTTP (TLS 1.2 / 1.3, no HTTPS-to-HTTP redirects), `asInvoker` (never
-asks for admin), long paths, per-monitor DPI. CI (`.forgejo/workflows/ci.yml`) has two jobs: `launcher` cross-builds
-the exe with `plugin/cmake/xwin-toolchain.cmake`, and `launcher-tests` runs `launcher/tests` with g++ on Linux. The
-portable core (`launcher/src/core`: sha256, JSON, manifest and plan, inflate and zip (for the D2RLoader zip), detection parsing, copy filter,
-TOML, SVG paths) has no Windows headers. `launcher/res/launcher.rc` includes no SDK header either, so llvm-rc needs none.
+Build: `cmake -S launcher -B build/launcher -A x64 && cmake --build build/launcher --config Release`: one static exe, no
+runtime to install (C++20 and the LZMA SDK's C, WinHTTP, Win32 + GDI+), `asInvoker`, long paths, per-monitor DPI. CI
+(`.forgejo/workflows/ci.yml`): `launcher` cross-builds it with `plugin/cmake/xwin-toolchain.cmake` (clang-cl), and
+`launcher-tests` runs `launcher/tests` with g++ on Linux. The portable core (`launcher/src/core`: sha256, JSON,
+manifest and plan, paths and marker, detection parsing, 7z, TOML, SVG paths) has no Windows headers.
 
 ## Testing
 
-Runs dated before the D2R-XL rename (2026-10-26) used the MedianXL names (`mods\MedianXL`, `MedianXL-lt/`, ...); they are
-written below with the current names.
+Unit tests (`launcher/tests`, MSVC and g++): detection, manifest and plan, paths and marker (`TestPaths`), the 7z
+decoder on `tests/data/sample.7z` (7,917 bytes, made by `tests/data/make_sample_7z.py` with 7-Zip: a streamed LZMA2
+block and a BCJ block, an empty file and an empty folder; a flipped byte, a cut-off archive and junk are refused),
+coexistence; 163 checks. Tools tests: `tools/test_*.py` (dl_ingest accepts both exe names, refuses two).
 
-- Unit tests: `launcher/tests/core_tests.cpp`, 142 checks: release-manifest parsing (docs/release.md schema 2, unknown
-  fields, count checks, `emptyDirs`, the published fields `objectsBase` / `archive.path` / `launcher` and their
-  refusals, schema 1 and 3 refused with the launcher entry still read, no `objectsBase` refused), channel files
-  (schema, unsafe paths, an HTML login page), site roots and object paths, grouping of same-content files, the install
-  plan (fetch / remove unlisted / preserve / D2RLoader output kept), versions and URLs, `.build.info` / vdf / acf
-  parsing and the build verdict, zip directory / inflate, the copy filter, the channel read errors (404: "No release
-  has been published on the <channel> channel yet.", another status, no answer), the default folders against the
-  official Median XL's (`TestCoexist`), TOML edits, SVG path data (relative
-  commands, numbers run together, S / Q to cubics, refusals) and every embedded icon.
-- Self-update (2026-10-26): a 0.1.1 build (`-DMXL_LAUNCHER_VERSION=0.1.1`) signed with a throw-away certificate
-  through `sign_launcher.py`, published with `publish_release.py --launcher` next to a `--no-data` package on the
-  `test` channel, served by `serve_dir.py`. A 0.1.0 exe in its own folder, `--cli self-update`: three requests
-  (channel, manifest, exe), the exe replaced (sha256 = the manifest's), the next start reports 0.1.1 and removed
-  `.old`, a second run says nothing newer is published. The same site with one byte of the exe changed: refused with
-  both hashes in the message, the old exe unchanged, no `.download` left.
-- Window (2026-10-26, nothing shown in front, no focus or cursor use): `--snapshot` at rest and with a progress bar
-  (a test build), and the live window started with `SW_SHOWNOACTIVATE` and captured with `PrintWindow`: same picture
-  as the snapshot, the logo animates, the foreground window never changed. Hover needs the real cursor and was not
-  tested.
-- Scratch tests (D:, no slot): fresh install; update over HTTP fetching only 3 changed files; repair against a server
-  without Range; refusal of foreign folders, non-empty folders and the wrong drive; uninstall leaving the source and
-  its mods untouched.
-- End-to-end, 2026-10-26, slot 2 locked:
-  - Source `D:\D2R-93847`, copy to a new folder on C: (`--any-drive`, since the source is on D: but Battle.net's
-    install and its cookie are on C:).
-  - Release: a manifest of slot 2's mod folder, served on localhost (before the download site; superseded by the
-    test below).
-  - Install with a kill mid-copy and a resume. D2RLoader downloaded from d2rloader.net and verified. Mod install with
-    a kill and a resume, then repair.
-  - `play --background --args -w` started the game from the C: copy without the `volserial` word (dev plugin,
-    harness `tag=s2` only, for game_checks) and it stayed up.
-  - `game_checks.py all mxl` with `MXL_ATTACH=1` gave **PASS**: all 20 feature lines, image hash match, 0 cursor or
-    focus changes.
-  - Uninstall removed the copy; `Settings.json` was unchanged (same hash as the backup); slot 2 was untouched; the
-    throwaway character was deleted.
-- **Isolation test** (owner, 2026-10-26), release.md manifest format, slot 2 locked:
-  - Stand-in for the player's real D2R: a build 93847 folder on C: (robocopy of slot 2 without its mods and loader).
-    Inside it:
-    - a D2RLoader that is not the pinned one: the 1.3.1 files with a changed `D2RLoader.exe`, since older builds
-      cannot be downloaded;
-    - D2RMM's config: `default_mod = "D2RMM"`, its own `input-bindings.toml` and a log;
-    - D2RMM's output mod `mods\D2RMM` (`D2RMM.mpq\modinfo.json` savepath `D2RMM/`, excel and strings files);
-    - a D2RMM save in `Saved Games\...\mods\D2RMM`.
-  - `tools/launcher_isolation.py snapshot` hashed that folder (370 files, 27.7 GB) and all of `Saved Games\Diablo II
-    Resurrected` (1,211 files, Settings.json included), leaving out only the test release's own save folder
-    `mods\D2R-XL-lt`.
-  - The launcher installed from that source with the normal drive rule (both on C:, no `--any-drive`):
-    - The copy holds only `mods\D2R-XL`; the D2RMM mod and the other loader were not copied, the pinned loader
-      was installed and its signer checked.
-    - Play: `d2rloader.log` shows `D2R command line: ...\D2RLoader.exe -txt -w -mod D2R-XL`.
-    - `game_checks all mxl` (`MXL_ATTACH=1`): **PASS**, 0 cursor or focus changes.
-  - `compare` after play and again after Uninstall: **all 370 + 1,211 files unchanged** (sha256, size and mtime).
-    D2RLoader wrote no backups during the run.
-  - Cleanup: the stand-in folder, the test save folder and the D2RMM save were deleted.
-- **Download site** (owner, 2026-10-26), slot 2 locked, a new copy on C: (`--any-drive`, source on D:):
-  - Releases: `tools/package_release.py` of slot 2's data with the release DLL, then `tools/launcher_testsite.py
-    derive` (savepath `D2R-XL-lt/`, the dev `mxl-core.dll` for the harness, two dummy files) as `0.70.0-lt1`. From
-    that, `0.70.0-lt2`: two files changed, two added with the same content, the two dummies removed. Both published
-    with `tools/publish_release.py --target dir:<site>` (lt1 on `stable`, lt2 with `--no-channel`) and served by
-    `tools/serve_dir.py` on localhost (`--site http://127.0.0.1:<port>/`).
-  - **Empty state → full install**: 8,521 objects (1,053 MB) in about 50 s; all 10,496 files match the manifest
-    (sha256), nothing else in the mod folder; the server log has exactly 8,521 object requests. **Play → `game_checks
-    all mxl` PASS** (20 feature lines, image match, 0 cursor or focus changes, no crash files).
-  - **`promote 0.70.0-lt2` → Update**: channel, manifest and 3 object requests (6 MB) for the 4 new or changed files;
-    the 2 dropped files removed (and two harness logs, which no release lists); a before/after hash of the mod folder
-    shows only those changes. **`mxl` PASS.**
-  - **One byte of `median.json` changed → Repair**: one object request; the file is back to the manifest's sha256;
-    nothing else touched.
-  - Also: a half-downloaded `.part` resumed with one `206` request; an object missing on the site (404) fell back to the
-    zip (HEAD plus 3 ranged requests; that fallback is gone since, see below); a channel with a wrong `manifestSha256`
-    was refused with a clear message; a local folder as `--site` works.
-  - Cleanup: uninstall, the test save folder (own character only), the site, the server and the copy removed.
-- **7z only, server ingest** (2026-10-26, slot 2 locked, the player build without `--any-drive`, the normal drive
-  rule: source `D:\D2R-93847`, copy on D:, harness words `volserial tag=s2`):
-  - Site: `package_release.py` 0.69.0 (the 7z: 355 MB), `launcher_testsite.py derive` as `0.69.1-lt1` and `-lt2` (as
-    above, savepath `D2R-XL-7z/`), each sent with `publish_release.py --target dir:<srv>/mxl` (objects 7z plus
-    manifest into `incoming/`) and published by `tools/dl_ingest.py`; served by `serve_dir.py` on localhost.
-  - **Full install**: copy 27.6 GB in 39 s, then 8,509 objects (1,053 MB), 10,474 files, in 30 s; the server log
-    has exactly 8,509 object requests. **Play → `game_checks all mxl` PASS**, 0 cursor or focus changes.
-  - **`promote 0.69.1-lt2` → Update**: channel, manifest and 3 object requests for the 4 new or changed files;
-    `lt/dummy2.txt` removed (with the two harness logs). **`mxl` PASS** again.
-  - **One byte of `armor.txt` flipped, size and mtime kept → Repair**: one object request (that file's sha256); the
-    file is back to the manifest's hash.
-  - Cleanup: uninstall, the test save folder (own character only), the server and the scratch folder removed.
+E2E 2026-10-27 (downloader 0.2.0, test releases 0.69.1-lt1 / lt2 from `launcher_testsite.py derive --savepath
+D2R-XL-lt/` with the dev plugin, published to a local folder site, `dl_ingest.py`, `serve_dir.py`):
 
-To run a check on a launcher-started game:
+| Step | Result |
+|---|---|
+| Fresh install, 7z (scratch D2R folder) | 339 MB download + 31 s unpack (1,184 MB), 52 s; 1 streamed + 1 in-memory block, largest buffer 128 MB |
+| Fresh install, objects (`--via objects`) | 8,509 objects, 56 s |
+| 7z vs objects | the two folders are identical (10,474 entries, sha256 of every file; the markers differ only in their id) |
+| 7z download killed at 39 MB, started again | "Resuming ... at 39 MB of 339 MB" (HTTP 206), install OK |
+| A byte of the finished 7z flipped | "The downloaded 7z does not match the release manifest ...; downloading it again", install OK |
+| Slot 2 (`D:\D2R-93847`, build 93847, D2RLoader 1.3.1-beta) fresh install | 7z, 35 s, peak working set 159 MB; `launcher_isolation.py`: the D2R folder (11,350 files) and Saved Games unchanged outside `mods\D2R-XL` |
+| Play the player's way | `default_mod = "D2R-XL"`, `launch_arguments = "-w"`, `game_ctl.py start` (D2RLoader with no arguments, background mode, harness `volserial tag=s2`), `game_checks.py all mxl` with `MXL_ATTACH=1`: **PASS** (75 lines, 20 feature lines, 0 crash files) |
+| Update lt1 to lt2 | objects: 4 files (3 objects, 9 MB), 3 files removed (`lt/dummy2.txt` and two test-harness files), the edited `d2rloader.toml` kept; the folder matches the lt2 manifest |
+| Repair after one flipped byte (size and mtime kept) | Update: "up to date" (it trusts size and mtime); Repair: 1 file fetched, folder matches again |
+| Uninstall | only `mods\D2R-XL` removed; D2R folder and Saved Games unchanged (snapshot compare) |
+
+Window snapshots (`--snapshot`): not installed, installed, D2RLoader missing, wrong D2R build (kept outside the
+repository).
+
+To run a check on a game the player's way:
 
 ```
-MXL_SLOT=2 MXL_D2R_GAME=<copy> MXL_HARNESS_WORDS="tag=s2" py -3 tools/game_ctl.py harness on
-D2R-XL-Launcher.exe --cli play --data-dir <test data> --background --args -w
-MXL_SLOT=2 MXL_D2R_GAME=<copy> MXL_RUN=<lock> MXL_CHAR=<own character> MXL_ATTACH=1 py -3 tools/game_checks.py all mxl
+D2R-XL-Downloader.exe --cli install --game-dir D:\D2R-93847 --data-dir <test data> --site http://127.0.0.1:<port>/
+MXL_SLOT=2 MXL_RUN=<lock> py -3 tools/game_ctl.py start          # D2RLoader with no arguments, background mode
+MXL_SLOT=2 MXL_RUN=<lock> MXL_CHAR=<own character> MXL_ATTACH=1 py -3 tools/game_checks.py all mxl
 ```
 
-`MXL_ATTACH=1` makes the first start of game_checks use the running game instead of restarting it. `package_release`
-writes savepath `D2R-XL/`, the player's real save folder, so a test release needs `launcher_testsite.py derive
---savepath D2R-XL-lt/` (it sets `D2R-XL.mpq\modinfo.json`, the one D2R reads, and the manifest's `saveFolder`).
-game_ctl reads the save folder from that same file.
+`package_release` writes savepath `D2R-XL/`, the player's real save folder, so a test release needs
+`launcher_testsite.py derive --savepath D2R-XL-lt/` (it sets `D2R-XL.mpq\modinfo.json`, the one D2R reads, and the
+manifest's `saveFolder`).
 
 ## Release and signing
 
-**Version.** The launcher's version is `MXL_LAUNCHER_VERSION` in `src/win/app.h`.
-- CMake reads it from there for both the code and the exe's version resource.
-- `publish_release.py --launcher` reads it back from the resource and refuses a different `--launcher-version`.
-- Raise it whenever the exe changes.
-- The launcher offers itself an update only if the published version is higher **and** the sha256 differs from its own exe.
+**Version.** The downloader's version is `MXL_LAUNCHER_VERSION` in `src/win/app.h` (0.2.0). CMake reads it for the code
+and the exe's version resource; `publish_release.py --launcher` reads it back from the resource and refuses a different
+`--launcher-version`. Raise it whenever the exe changes.
 
-This is the 2026-10-26 bug it fixes: the release's version (0.69.1) was published as the launcher's version. Launcher 0.1.1 then kept offering itself the same exe.
+Signing is a separate, last step:
 
-Signing is a separate, last step, so any service can be added later without touching the build:
+1. **Build** (CI job `launcher`): the unsigned `D2R-XL-Downloader.exe` and `D2R-XL-Downloader.exe.sha256`.
+2. **Sign or not**: `tools/sign_launcher.py --exe <build>/D2R-XL-Downloader.exe --out dist-launcher` plus nothing
+   (unsigned), `--command "signtool sign ... {file}"` or `--signed FILE`. It checks that a signed exe is the same
+   program as the build (`tools/test_sign_launcher.py`) and writes the exe, its `.sha256` and `signing.json`.
+3. **Publish**: `tools/publish_release.py publish ... --launcher dist-launcher/D2R-XL-Downloader.exe`.
 
-1. **Build** (CMake, CI job `launcher`): the unsigned `D2R-XL-Launcher.exe` and `D2R-XL-Launcher.exe.sha256`
-   next to it (`launcher/cmake/sha256.cmake`, sha256sum format; CI checks it with `sha256sum -c`).
-2. **Sign or not**: `tools/sign_launcher.py --exe <build>/D2R-XL-Launcher.exe --out dist-launcher` plus one of
-   - nothing: an unsigned release (copied, sha256 written);
-   - `--command "signtool sign /fd SHA256 /tr <timestamp url> /td SHA256 <service options> {file}"`: a local signer
-     (Azure's `/dlib Azure.CodeSigning.Dlib.dll /dmdf metadata.json`, SSL.com eSigner's CodeSignTool, a token);
-   - `--signed FILE`: an exe signed elsewhere (SignPath returns the signed artifact).
-
-   It checks that the input still matches the build's sha256, that a signed exe is the **same program** (equal to the
-   unsigned build except the PE checksum, the security directory entry, the padding and the appended signature, i.e.
-   what Authenticode leaves out; `tools/test_sign_launcher.py`), and on Windows that `Get-AuthenticodeSignature` says
-   Valid with a timestamp. It writes `D2R-XL-Launcher.exe`, its `.sha256` and `signing.json` (unsigned and final
-   sha256, signer, timestamp).
-3. **Publish**: `tools/publish_release.py publish ... --launcher dist-launcher/D2R-XL-Launcher.exe`: the manifest gets
-   the sha256 of the file players download, signed or not; the self-update checks exactly that.
-
-Tested 2026-10-26 with a throw-away certificate (a .pfx file made with openssl, nothing added to a certificate store)
-and signtool: unsigned copy; signed by `--command`, refused as untrusted without `--allow-untrusted`; the same file
-adopted with `--signed`; one flipped byte in a signed exe refused ("differs from the unsigned build beyond the
-signature"); a different build refused against the `.sha256`.
+The download host's `tools/dl_ingest.py` accepts the new name and the 0.1.x name `D2R-XL-Launcher.exe` and publishes the
+exe under the name it was uploaded with.
 
 ## Code signing (not bought; options for the owner)
 
-An unsigned exe downloaded from the web gets SmartScreen's "Windows protected your PC" (More info, Run anyway), and
-on Windows 11 Smart App Control may block it outright. A signature alone does not remove the warning: reputation
-builds per certificate (or per file hash when unsigned) over weeks and downloads. Since 2024 EV certificates no longer
-bypass SmartScreen (Microsoft: "Paying a premium for EV solely to avoid SmartScreen warnings is no longer justified",
-learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation, 2026-05-04).
+An unsigned exe from the web gets SmartScreen's "Windows protected your PC" (More info, Run anyway); Smart App Control
+may block it. A signature alone does not remove the warning (reputation builds per certificate over weeks), and EV no
+longer bypasses SmartScreen (Microsoft, 2024). The official Median XL launcher is signed with an SSL.com OV certificate.
 
-**How the official Median XL launcher does it** (coordinator, 2026-10-26): its MSI and launcher.exe (version 2.0.0, build 38) are
-Authenticode-signed with an OV certificate (policy 2.23.140.1.4.1) issued to "VGP Ltd., Sofia, BG" by SSL.com Code
-Signing Intermediate CA RSA R1, valid 2024-09-12 to 2027-09-12, with an SSL.com timestamp: reputation built on an OV
-certificate, no EV.
-
-Checked 2026-10-26 on the vendors' pages (prices in USD):
-
-| | SignPath Foundation | Azure Artifact Signing (was Trusted Signing) | SSL.com IV / OV certificate |
+| | SignPath Foundation | Azure Artifact Signing | SSL.com IV / OV certificate |
 |---|---|---|---|
-| Price | free for OSS | Basic $9.99/month (5,000 signatures), Premium $99.99/month (100,000); $0.01 per extra signature; no free / trial subscriptions | $129/year (1 year; less per year for multi-year terms); key storage extra: eSigner cloud signing from $20/month or $180/year (20 signings/month), or a YubiKey $379 (no CI) |
-| Who | OSS projects; SignPath decides, no appeal | organisations in US, CA, EU, UK, AU, NZ, JP, KR, SG, CH, NO, IL; **individuals only in the US or Canada** | individuals (IV: ID + phone check) or companies (OV); EU individuals: no restriction found, not confirmed |
-| Certificate shows | **"SignPath Foundation"**, not us | the validated legal name (no EV); 3-day certificates, so a timestamp is required | our name (IV) or company (OV) |
-| CI | GitHub-hosted runners only for OSS on GitHub (all jobs up to the signing request), artifact uploaded to the workflow; Forgejo not supported | GitHub Action or signtool + dlib, anywhere | eSigner from CI (CodeSignTool / GitHub Action, TOTP secret) |
-| Our problem | terms: an OSI licence "for all components" and "no proprietary, non open-source component"; the exe embeds the Median XL art and the commercial Exocet font, and the program needs proprietary game data: likely refused. Also: released already, policy page with roles, MFA, every signing approved | an individual outside US / CA cannot get it; an EU organisation needs a legal entity, its domain and e-mail | none known; multi-year terms are re-issued yearly (CA/B Forum CSC-31: certificates at most 460 days since 2026-03-01) |
+| Price | free for OSS | $9.99/month (Basic) | $129/year + eSigner from $180/year |
+| Who | OSS projects with an OSI licence for all components | organisations in listed countries; individuals only in the US / Canada | individuals (IV) or companies (OV) |
+| Our problem | the embedded Median XL art and the commercial Exocet font: likely refused | an individual outside US / CA cannot get it | none known |
 
-Sources: signpath.org/terms, docs.signpath.io/trusted-build-systems/github; azure.microsoft.com/pricing/details/artifact-signing,
-learn.microsoft.com/azure/artifact-signing (quickstart 2026-05-21, FAQ 2026-05-14); ssl.com code-signing buy page,
-ssl.com/guide/esigner-pricing-for-code-signing (2026-03-25); cabforum.org ballot CSC-31.
-
-**Recommendation.** The coordinator's order is SignPath, then Azure, then SSL.com. But SignPath's terms very likely
-exclude us (the embedded art and font), and Azure excludes individuals outside the US and Canada. So unless the owner
-signs as a US/CA individual or through a company, the realistic choice is the one the official launcher made: an
-**SSL.com IV (or OV with a company) certificate with eSigner**, about $129 + $180 a year, signing from CI. If the art
-and font ever leave the exe (downloaded at run time instead) and the repo is public, SignPath becomes worth an
-application. Nothing in the build has to change for any of them (above).
+Recommendation: an SSL.com IV (or OV with a company) certificate with eSigner, signing from CI. Nothing in the build has
+to change for any of them.
 
 ## Open questions for the owner
 
-1. (Decided: same volume only, no shim; `--any-drive` is gone from the player build, test builds only.)
-2. Steam installs are untested on a real Steam D2R (none on the game PC).
-3. The cookie / volume-serial behaviour is D2RLoader's. A future D2RLoader or D2R build could change it; the pin
-   makes that our choice, not a surprise.
-4. Signing (above): which certificate, and in whose name (an individual in the US / Canada, a company, or SSL.com IV).
-5. With lane pub-release:
-   - the `imageTimestamp` wording;
-   - `d2rloader/crashes/` kept like `logs/`;
-   - the optional `launcherMin`.
-6. `preserve` semantics for `d2rloader.toml` (an edited file also misses new keys from a release).
-7. Self-update: tested from the CLI; the window's question and restart were not run here (a dialog would take focus).
-8. D2RLoader is downloaded from d2rloader.net (no licence to mirror it); if that site goes away, new installs stop
-   until we get permission to mirror it or pin a new source.
-9. Fonts of the window: `exocet.ttf` says "Copyright (C) 1992 Emigre Graphics, Designed by Jonathan Barnbrook";
-   Exocet is a commercial typeface. It is embedded because the official launcher ships it and the owner asked for it,
-   but we have no licence of our own for it. Before the repo or the exe goes public: a licence from Emigre, the Median XL
-   team's word that theirs covers us, or a free look-alike (removing the resource is enough: the window falls back to
-   Georgia). Roboto Condensed is Apache 2.0; the icon is Font Awesome Free (CC BY 4.0).
+1. Steam installs are untested on a real Steam D2R (none on the game PC).
+2. Signing (above): which certificate, in whose name.
+3. `preserve` for `d2rloader.toml`: an edited file also misses new keys a release adds.
+4. Self-update: tested from the CLI; the window's question and restart were not run (a dialog would take focus).
+5. Fonts: `exocet.ttf` is a commercial typeface (Emigre), embedded because the official launcher ships it; we have no
+   licence of our own. Before the exe goes public: a licence, the Median XL team's word, or a free look-alike (removing
+   the resource is enough: the window falls back to Georgia).
+6. **The download host's `tools/dl_ingest.py` must be updated** to this version before a 0.2.0 downloader is published
+   (the server copy only accepts `D2R-XL-Launcher.exe`).
+7. After Uninstall, `default_mod` still names D2R-XL; what D2RLoader does with a default mod that is gone was not
+   tested.

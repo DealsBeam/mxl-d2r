@@ -1,6 +1,5 @@
 #include "game.h"
 
-#include "../core/gamecopy.h"
 #include "util.h"
 
 #include <windows.h>
@@ -145,21 +144,6 @@ std::vector<D2RInstall> FindD2RInstalls() {
 	return out;
 }
 
-uint32_t VolumeSerial(const std::wstring& path, std::wstring* root) {
-	wchar_t vol[MAX_PATH];
-	std::wstring probe = path;
-	while (!probe.empty() && !DirExists(probe) && !FileExists(probe))
-		probe = ParentDir(probe);  // the copy folder may not exist yet
-	if (probe.empty() || !GetVolumePathNameW(probe.c_str(), vol, MAX_PATH))
-		return 0;
-	DWORD serial = 0;
-	if (!GetVolumeInformationW(vol, nullptr, 0, &serial, nullptr, nullptr, nullptr, 0))
-		return 0;
-	if (root)
-		*root = vol;
-	return serial;
-}
-
 bool FreeBytes(const std::wstring& path, uint64_t& free) {
 	std::wstring probe = path;
 	while (!probe.empty() && !DirExists(probe))
@@ -168,134 +152,6 @@ bool FreeBytes(const std::wstring& path, uint64_t& free) {
 	if (probe.empty() || !GetDiskFreeSpaceExW((probe.size() == 2 ? probe + L"\\" : probe).c_str(), &avail, nullptr, nullptr))
 		return false;
 	free = avail.QuadPart;
-	return true;
-}
-
-std::string FileSystemName(const std::wstring& path) {
-	std::wstring root;
-	if (!VolumeSerial(path, &root))
-		return "";
-	wchar_t fs[64] = {};
-	if (!GetVolumeInformationW(root.c_str(), nullptr, 0, nullptr, nullptr, nullptr, fs, DWORD(std::size(fs))))
-		return "";
-	return Utf8(fs);
-}
-
-namespace {
-bool ListInto(const std::wstring& src, const std::wstring& rel, CopyList& out, std::string& error) {
-	WIN32_FIND_DATAW fd;
-	std::wstring pattern = LongPath(JoinPath(rel.empty() ? src : JoinPath(src, rel), L"*"));
-	HANDLE h = FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
-	if (h == INVALID_HANDLE_VALUE) {
-		DWORD e = GetLastError();
-		if (e == ERROR_FILE_NOT_FOUND)
-			return true;
-		error = "cannot list " + Utf8(JoinPath(src, rel)) + ": " + Utf8(LastErrorText(e));
-		return false;
-	}
-	bool ok = true;
-	do {
-		std::wstring name = fd.cFileName;
-		if (name == L"." || name == L"..")
-			continue;
-		std::wstring r = rel.empty() ? name : rel + L"\\" + name;
-		if (ExcludedFromCopy(Utf8(r)))
-			continue;
-		if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
-			continue;  // never follow a junction or link out of the game folder
-		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-			out.dirs.push_back(r);
-			ok = ListInto(src, r, out, error);
-		} else {
-			uint64_t size = (uint64_t(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
-			uint64_t mtime = (uint64_t(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime;
-			out.files.push_back({r, size, mtime});
-			out.bytes += size;
-		}
-	} while (ok && FindNextFileW(h, &fd));
-	FindClose(h);
-	return ok;
-}
-
-struct CopyCtx {
-	std::atomic<bool>* cancel;
-	const std::function<void(const CopyProgress&)>* progress;
-	CopyProgress* state;
-	uint64_t base;
-	ULONGLONG lastTick;
-};
-
-COPYFILE2_MESSAGE_ACTION CALLBACK CopyCallback(const COPYFILE2_MESSAGE* msg, PVOID ctxp) {
-	auto ctx = static_cast<CopyCtx*>(ctxp);
-	if (ctx->cancel->load())
-		return COPYFILE2_PROGRESS_CANCEL;
-	if (msg->Type == COPYFILE2_CALLBACK_CHUNK_FINISHED) {
-		ULONGLONG now = GetTickCount64();
-		if (now - ctx->lastTick > 200) {
-			ctx->lastTick = now;
-			ctx->state->doneBytes = ctx->base + msg->Info.ChunkFinished.uliTotalBytesTransferred.QuadPart;
-			(*ctx->progress)(*ctx->state);
-		}
-	}
-	return COPYFILE2_PROGRESS_CONTINUE;
-}
-}  // namespace
-
-bool ListGameFiles(const std::wstring& src, CopyList& out, std::string& error) {
-	out = CopyList();
-	return ListInto(TrimSlash(src), L"", out, error);
-}
-
-bool CopyGameFiles(const std::wstring& src, const std::wstring& dst, const CopyList& list, std::atomic<bool>& cancel,
-                   const std::function<void(const CopyProgress&)>& progress, std::string& error) {
-	CopyProgress st;
-	st.totalBytes = list.bytes;
-	st.totalFiles = list.files.size();
-	if (!MakeDirs(dst)) {
-		error = "cannot create " + Utf8(dst) + ": " + Utf8(LastErrorText(GetLastError()));
-		return false;
-	}
-	for (const auto& d : list.dirs)
-		if (!MakeDirs(JoinPath(dst, d))) {
-			error = "cannot create " + Utf8(JoinPath(dst, d)) + ": " + Utf8(LastErrorText(GetLastError()));
-			return false;
-		}
-	for (const auto& f : list.files) {
-		if (cancel.load()) {
-			error = "cancelled";
-			return false;
-		}
-		std::wstring from = JoinPath(src, f.rel), to = JoinPath(dst, f.rel);
-		st.current = f.rel;
-		uint64_t size = 0, mtime = 0;
-		if (FileSize(to, size, &mtime) && size == f.size && mtime == f.mtime) {
-			st.doneBytes += f.size;
-			st.skippedBytes += f.size;
-			++st.doneFiles;
-			continue;
-		}
-		std::wstring part = to + L".mxlpart";
-		COPYFILE2_EXTENDED_PARAMETERS p{};
-		p.dwSize = sizeof(p);
-		p.dwCopyFlags = 0;  // a stale .mxlpart from an interrupted run is overwritten
-		CopyCtx ctx{&cancel, &progress, &st, st.doneBytes, 0};
-		p.pProgressRoutine = CopyCallback;
-		p.pvCallbackContext = &ctx;
-		HRESULT hr = CopyFile2(LongPath(from).c_str(), LongPath(part).c_str(), &p);
-		if (FAILED(hr)) {
-			DeleteFileW(LongPath(part).c_str());
-			error = cancel.load() ? "cancelled" : "copy " + Utf8(f.rel) + " failed: " + Utf8(LastErrorText(HRESULT_CODE(hr)));
-			return false;
-		}
-		if (!MoveFileExW(LongPath(part).c_str(), LongPath(to).c_str(), MOVEFILE_REPLACE_EXISTING)) {
-			error = "rename " + Utf8(f.rel) + " failed: " + Utf8(LastErrorText(GetLastError()));
-			return false;
-		}
-		st.doneBytes = ctx.base + f.size;  // the callback already moved it part of the way
-		++st.doneFiles;
-		progress(st);
-	}
-	progress(st);
 	return true;
 }
 

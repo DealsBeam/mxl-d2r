@@ -49,11 +49,12 @@ D2RLOADER = {"version": "1.3.1-beta", "url": "https://d2rloader.net/download/D2R
              "sha256": "9286c6b5bff7f1043658411dbea305faa9698b6a455e6441668fc6d02c22aad7",
              "signerThumbprint": "8001082E968FADAA58BF2F73EFA1810A11D0C28F"}
 # What the game folder's own d2rloader/config/d2rloader.toml needs for this mod ([d2rloader] section of D2RLoader's config):
-# the mod starts by itself, and -txt makes D2R read the mod's .txt tables (it ships no .bin for most of them).
-LAUNCH = {"default_mod": NAME, "launch_arguments": "-txt"}
-# The player's own settings: the launcher writes these only when they are missing (docs/release.md).
+# the mod starts by itself. The player sets it in the game (Default Mod); the downloader does not write that file. No -txt:
+# D2RLoader 1.3.1 compiles the mod's .txt tables itself at each start (docs/launcher.md "How the player starts the game").
+LAUNCH = {"default_mod": NAME, "launch_arguments": ""}
+# The player's own settings: the downloader writes these only when they are missing (docs/release.md).
 PRESERVE = ["d2rloader/config/d2rloader.toml"]
-SCHEMA = 2  # 2: the 7z ("archive") replaced the zip; the launcher installs from objects only (docs/release.md)
+SCHEMA = 2  # 2: the 7z ("archive") replaced the zip; the downloader installs from it or from objects (docs/release.md)
 STAMP = (2026, 1, 1, 0, 0, 0)  # the staged files' mtime
 # 7z: LZMA2, one solid block, multithreaded. No time stamps go in the archive (-mtm/-mtc/-mta off) and the staged files get
 # STAMP as mtime anyway; the same input gives the same bytes with the same 7-Zip build (docs/release.md).
@@ -217,13 +218,17 @@ D2R-XL is Median XL 2.14.4 (by the Median XL team) ported to Diablo II: Resurrec
 
 ## Install
 
-With the D2R-XL launcher (recommended): it keeps its own copy of D2R build {build} with D2RLoader and the mod, so your
-normal D2R install and other mods stay as they are. It reads release-manifest.json and downloads only changed files.
+1. Install D2RLoader {loader} from https://d2rloader.net/ into your D2R folder (build {build}).
+2. Run `D2R-XL-Downloader.exe` (https://dl.werdegames.com/mxl/) and press **Install** (or **Update**). It puts the mod
+   in `<D2R folder>\\mods\\D2R-XL` and changes nothing else.
+3. How to play: start `D2RLoader.exe` in your D2R folder. The first time, click the gear on the character screen, set
+   Default Mod to D2R-XL, Apply, and start D2RLoader again.
 
-By hand (offline fallback), into a D2R folder at build {build} that has D2RLoader {loader}:
+By hand (offline), into a D2R folder at build {build} that has D2RLoader {loader}:
 
 1. {unpack}
-2. In `<D2R folder>\\d2rloader\\config\\d2rloader.toml` set `default_mod = "D2R-XL"` and `launch_arguments = "-txt"`.
+2. Set the default mod as in step 3 above (or `default_mod = "D2R-XL"` in
+   `<D2R folder>\\d2rloader\\config\\d2rloader.toml`).
 3. Start `D2RLoader.exe`. Characters are saved in `Saved Games\\Diablo II Resurrected\\mods\\D2R-XL\\`.
    To update, delete `mods\\D2R-XL\\D2R-XL.mpq\\data` and unpack the new release; keep your
    `mods\\D2R-XL\\d2rloader\\config\\d2rloader.toml` if you changed it.

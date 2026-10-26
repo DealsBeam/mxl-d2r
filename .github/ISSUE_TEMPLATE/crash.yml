@@ -31,14 +31,14 @@ body:
   - type: input
     id: launcher_version
     attributes:
-      label: Launcher version
-      description: Leave empty if you did not use the launcher.
+      label: Downloader version
+      description: Leave empty if you did not use the downloader (or the old launcher).
   - type: dropdown
     id: install_method
     attributes:
       label: Install method
       options:
-        - D2R-XL Launcher
+        - D2R-XL Downloader
         - Manual 7z
     validations:
       required: true

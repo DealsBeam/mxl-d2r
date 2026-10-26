@@ -19,8 +19,8 @@ struct ManifestFile {
 	std::string sha256;
 };
 
-// The release manifest schema this launcher reads. 2: the release is a 7z (built on the server) and the launcher
-// installs from the objects only; schema 1 (the zip) is gone.
+// The release manifest schema this downloader reads. 2: the release is a 7z (built on the server) plus one object per
+// file; the downloader installs from either (docs/launcher.md "7z or objects"); schema 1 (the zip) is gone.
 constexpr int ManifestSchema = 2;
 
 // release-manifest.json, schemaVersion 2 (docs/release.md "Release manifest"). Unknown fields are ignored; another
@@ -40,15 +40,15 @@ struct Manifest {
 	std::string launchDefaultMod;  // launch.default_mod, for the copy's d2rloader.toml
 	std::string launchArguments;   // launch.launch_arguments ("-txt")
 	std::string modFolder;         // the files live in <game>\mods\<modFolder>; the 7z's top folder
-	std::string saveFolder;        // modinfo savepath ("D2R-XL/"); the launcher never writes there
+	std::string saveFolder;        // modinfo savepath ("D2R-XL/"); the downloader never writes there
 	std::set<std::string> preserve;  // player-editable: written only when missing
 	std::vector<std::string> emptyDirs;  // folders of the release without files (d2rloader/patches): created
-	struct Archive {               // archive: the 7z for a manual install (the launcher only names it in messages)
+	struct Archive {               // archive: the release 7z (a fresh install downloads and unpacks it; also for manual installs)
 		std::string name, path, sha256;  // path: relative to the site root (published manifests)
 		uint64_t size = 0;
 	} archive;
 	std::string objectsBase;       // required: files[i] is at <root><objectsBase><sha[0:2]>/<sha> ("objects/")
-	struct LauncherRef {           // launcher (published manifests, optional): the launcher published with the release
+	struct LauncherRef {           // launcher (published manifests, optional): the downloader published with the release
 		std::string version, path, sha256;
 		uint64_t size = 0;
 	} launcher;
@@ -90,7 +90,7 @@ std::vector<ObjectFetch> GroupObjects(const std::vector<ManifestFile>& files);
 // Parse and check a manifest. Every path must pass SafeRelativePath, sha256 must be 64 hex digits, fileCount /
 // totalSize (when given) must match the list, objectsBase must be there. When schemaVersion is not ManifestSchema it
 // returns false with out.schemaVersion, out.version and out.launcher set (so the caller can say "too old / too new"
-// and still offer the launcher that the release names).
+// and still offer the downloader that the release names).
 bool ParseManifest(const std::string& text, Manifest& out, std::string& error);
 Json ManifestToJson(const Manifest& m);
 
@@ -99,7 +99,8 @@ Json ManifestToJson(const Manifest& m);
 bool SafeRelativePath(const std::string& path);
 
 // Files under the mod folder that an update never deletes although the release does not list them: D2RLoader's own
-// output (d2rloader/logs/, d2rloader/crashes/).
+// output (d2rloader/logs/, d2rloader/crashes/) and the downloader's marker and downloads (d2r-xl-install.json,
+// d2r-xl-download/).
 bool RuntimeOutput(const std::string& path);
 
 struct InstallPlan {

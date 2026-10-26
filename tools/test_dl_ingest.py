@@ -191,9 +191,35 @@ class IngestTests(Base):
         exe = self.tmp / "l.exe"
         exe.write_bytes(b"MZ one")
         inc = self.upload(launcher=exe, launcher_version="0.3.0")
-        (inc / "D2R-XL-Launcher.exe").write_bytes(b"MZ two")
-        self.reseal(inc, "D2R-XL-Launcher.exe")
+        (inc / "D2R-XL-Downloader.exe").write_bytes(b"MZ two")
+        self.reseal(inc, "D2R-XL-Downloader.exe")
         self.assert_refused(inc, "the uploaded launcher does not match")
+
+    def test_old_launcher_name_is_still_accepted(self):
+        """A publisher from before the downloader (launcher 0.1.x) uploads D2R-XL-Launcher.exe: published under that name."""
+        inc = self.upload(launcher=self.make_exe(), launcher_version="0.3.0")
+        old = "D2R-XL-Launcher.exe"
+        (inc / "D2R-XL-Downloader.exe").rename(inc / old)
+        man = inc / "release-manifest.json"
+        m = json.loads(man.read_text("utf-8"))
+        m["launcher"]["path"] = f"launcher/0.3.0/{old}"
+        man.write_text(json.dumps(m), encoding="utf-8")
+
+        def edit(r):
+            r["files"][old] = r["files"].pop("D2R-XL-Downloader.exe")
+            r["launcher"] = old
+        self.rewrite_ready(inc, edit)
+        self.reseal(inc, "release-manifest.json")
+        self.ingest()
+        self.assertTrue((self.site / "launcher/0.3.0" / old).is_file())
+        self.assertFalse((self.site / "launcher/0.3.0/D2R-XL-Downloader.exe").exists())
+        self.assertEqual((self.site / f"launcher/0.3.0/{old}.sha256").read_text().split()[1], old)
+
+    def test_two_launchers_are_refused(self):
+        inc = self.upload(launcher=self.make_exe(), launcher_version="0.3.0")
+        (inc / "D2R-XL-Launcher.exe").write_bytes(b"MZ other")
+        self.reseal(inc, "D2R-XL-Launcher.exe")
+        self.assert_refused(inc, "launcher entry and its file list disagree")
 
     def test_published_version_never_changes_without_force(self):
         self.publish("1.0.0", "stable")
@@ -234,7 +260,7 @@ class IngestTests(Base):
         rest = writes[len(objects):]
         self.assertLess(rest.index("releases/1.0.0/D2R-XL-1.0.0.7z"), rest.index("releases/1.0.0/release-manifest.json"))
         self.assertLess(rest.index("releases/1.0.0/release-manifest.json"), rest.index("channels/stable.json"))
-        self.assertIn("launcher/0.3.0/D2R-XL-Launcher.exe", rest)
+        self.assertIn("launcher/0.3.0/D2R-XL-Downloader.exe", rest)
         self.assertFalse(inc.exists())
 
     def make_exe(self):
