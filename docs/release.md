@@ -7,7 +7,7 @@ fallback.
 
 ## What a release is
 
-`py -3 tools/package_release.py` (the game PC, after `tools/build.py`) writes into `dist/`:
+`py -3 tools/package_release.py` (on the game PC, after `tools/build.py`) writes into `dist/`:
 
 | File | What |
 |---|---|
@@ -121,7 +121,7 @@ game: no other D2R build is installed here; the decision is covered by the unit 
    copies a finished data folder instead of rebuilding it.
 3. Fill in `RELEASE_NOTES-<version>.md`, tag `v<version>`, upload the four files.
 
-CI (`.forgejo/workflows/release.yml`, runner `mxl-cross` , manual dispatch or tag `v*`): no game files on the
+CI (`.forgejo/workflows/release.yml`, runner `mxl-cross`, manual dispatch or tag `v*`): no game files on the
 server, so it cannot run tools/build.py. It cross-builds the release DLL, runs the packager's unit tests and
 `package_release.py --no-data`, and keeps `dist/` as the artifact `mxl-d2r-release` (`MedianXL-D2R-<v>-nodata.zip`,
 manifest with `"complete": false`). It checks that the release plugin builds and packs; the player zip comes from the game PC.
