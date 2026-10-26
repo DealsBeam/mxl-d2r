@@ -431,6 +431,18 @@ class VersionTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 pub.check_version(bad)
 
+    def test_exe_version(self):
+        import struct
+        key = "VS_VERSION_INFO".encode("utf-16-le") + b"\0\0"
+        fixed = bytes.fromhex("bd04effe") + struct.pack("<III", 0x10000, (0 << 16) | 1, (2 << 16) | 0)
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / "x.exe"
+            # the signature bytes once in "code" before the resource, then the real VS_FIXEDFILEINFO
+            exe.write_bytes(b"MZ" + bytes.fromhex("bd04effe") + b"\x07" * 12 + key + fixed)
+            self.assertEqual(pub.exe_version(exe), "0.1.2")
+            exe.write_bytes(b"MZ no resource")
+            self.assertEqual(pub.exe_version(exe), "")
+
     def test_sftp_target_parse(self):
         t = pub.SftpTarget.parse("sftp://upload@dlhost:2222/mxl/")
         self.assertEqual((t.user, t.host, t.port, t.path), ("upload", "dlhost", 2222, "/mxl"))

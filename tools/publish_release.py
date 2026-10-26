@@ -45,6 +45,7 @@ import secrets
 import shlex
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 import time
@@ -108,6 +109,23 @@ def check_version(v: str) -> str:
     if not VERSION_RE.match(v):
         raise SystemExit(f"bad version {v!r} (expected 1.2.3 or 1.2.3-rc1)")
     return v
+
+
+def exe_version(path) -> str:
+    """x.y.z from the FILEVERSION of a Windows exe's version resource (VS_FIXEDFILEINFO), or "" when it has none.
+    The launcher compares this number with its own: publishing it under another version (the release's) made every
+    launcher offer itself the same exe again, forever."""
+    data = Path(path).read_bytes()
+    # VS_FIXEDFILEINFO right after the UTF-16 key "VS_VERSION_INFO" (the same 4 signature bytes can occur in code)
+    key = "VS_VERSION_INFO".encode("utf-16-le")
+    i = data.find(key)
+    while i >= 0:
+        j = data.find(bytes.fromhex("bd04effe"), i, i + len(key) + 8)  # dwSignature, after the key's padding
+        if j >= 0 and struct.unpack_from("<I", data, j + 4)[0] == 0x10000:  # dwStrucVersion 1.0
+            ms, ls = struct.unpack_from("<II", data, j + 8)
+            return f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}"
+        i = data.find(key, i + 1)
+    return ""
 
 
 def strip(man: dict) -> dict:
@@ -603,7 +621,12 @@ def publish(target: Target, dist: Path, version: str, channel, source=None, laun
     pub = {k: v for k, v in man.items() if k != "archive"}
     pub["objectsBase"] = OBJECTS_BASE
     if launcher:
-        lv = check_version(launcher_version or version)
+        own = exe_version(launcher)
+        if launcher_version and own and check_version(launcher_version) != own:
+            raise PublishError(f"--launcher-version {launcher_version}, but {Path(launcher).name} says it is {own}")
+        if not (launcher_version or own):
+            raise PublishError(f"{Path(launcher).name} has no version resource: give --launcher-version")
+        lv = check_version(launcher_version or own)
         pub["launcher"] = {"version": lv, "path": f"launcher/{lv}/{LAUNCHER_NAME}", "size": Path(launcher).stat().st_size,
                            "sha256": sha256_file(launcher)}
     objs = object_table(man["files"])
@@ -906,7 +929,7 @@ def main(argv=None) -> int:
     p.add_argument("--stage", type=Path, help="read file bytes from this D2R-XL/ folder instead of the 7z")
     p.add_argument("--work", type=Path, help="where the objects 7z is built and kept (default: <dist>/upload/<version>)")
     p.add_argument("--launcher", type=Path, help="D2R-XL-Launcher.exe to publish with this release")
-    p.add_argument("--launcher-version", help="default: the release version")
+    p.add_argument("--launcher-version", help="default: the exe's own version resource (must agree when given)")
     p.add_argument("--assets", type=Path, help="folder of asset-pack files for assets/ (uploaded directly)")
     p.add_argument("--allow-incomplete", action="store_true", help="accept a --no-data package (test channel / --no-channel only)")
     p.add_argument("--force", action="store_true", help="replace a waiting or refused upload, or a published version")

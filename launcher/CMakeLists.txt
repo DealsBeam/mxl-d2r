@@ -12,9 +12,22 @@ set_target_properties(mxl_launcher PROPERTIES OUTPUT_NAME "D2R-XL-Launcher")
 target_compile_features(mxl_launcher PRIVATE cxx_std_20)
 target_compile_definitions(mxl_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 set(MXL_LAUNCHER_VERSION "" CACHE STRING "override the launcher version (tests of the self-update); empty: app.h's")
+# One version for the code and the exe's version resource (tools/publish_release.py reads the resource): app.h's
+# MXL_LAUNCHER_VERSION unless overridden here.
 if(MXL_LAUNCHER_VERSION)
-	target_compile_definitions(mxl_launcher PRIVATE MXL_LAUNCHER_VERSION="${MXL_LAUNCHER_VERSION}")
+	set(launcher_version "${MXL_LAUNCHER_VERSION}")
+else()
+	file(STRINGS src/win/app.h version_line REGEX "^#define MXL_LAUNCHER_VERSION \"[0-9]+[.][0-9]+[.][0-9]+\"")
+	string(REGEX REPLACE ".*\"([0-9.]+)\".*" "\\1" launcher_version "${version_line}")
 endif()
+if(NOT launcher_version MATCHES "^([0-9]+)[.]([0-9]+)[.]([0-9]+)$")
+	message(FATAL_ERROR "launcher version '${launcher_version}' is not x.y.z")
+endif()
+set_property(SOURCE src/win/app.cpp src/win/main.cpp src/win/window.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+             MXL_LAUNCHER_VERSION="${launcher_version}")
+set_property(SOURCE res/launcher.rc APPEND PROPERTY COMPILE_DEFINITIONS MXL_LV_STR="${launcher_version}"
+             MXL_LV_NUM=${CMAKE_MATCH_1},${CMAKE_MATCH_2},${CMAKE_MATCH_3},0)
+message(STATUS "launcher version ${launcher_version}")
 # Test-only switches (--any-drive) exist only in a build made with -DMXL_LAUNCHER_TEST_OPTIONS=ON, never in a player build.
 option(MXL_LAUNCHER_TEST_OPTIONS "build the test-only command line switches (--any-drive)" OFF)
 if(MXL_LAUNCHER_TEST_OPTIONS)

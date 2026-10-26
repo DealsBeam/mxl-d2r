@@ -15,8 +15,8 @@
 106 10 "comment.svg"
 
 1 VERSIONINFO  // 1 = VS_VERSION_INFO
- FILEVERSION 0,1,0,0
- PRODUCTVERSION 0,1,0,0
+ FILEVERSION MXL_LV_NUM  // from app.h through CMakeLists.txt
+ PRODUCTVERSION MXL_LV_NUM
  FILEOS 0x40004  // VOS_NT_WINDOWS32
  FILETYPE 0x1  // VFT_APP
 BEGIN
@@ -26,9 +26,9 @@ BEGIN
 		BEGIN
 			VALUE "CompanyName", "mxl-d2r"
 			VALUE "FileDescription", "D2R-XL launcher"
-			VALUE "FileVersion", "0.1.0"
+			VALUE "FileVersion", MXL_LV_STR
 			VALUE "ProductName", "D2R-XL"
-			VALUE "ProductVersion", "0.1.0"
+			VALUE "ProductVersion", MXL_LV_STR
 			VALUE "LegalCopyright", "D2R-XL, a port of Median XL by the Median XL team. Diablo II by Blizzard Entertainment."
 			VALUE "OriginalFilename", "D2R-XL-Launcher.exe"
 		END

@@ -530,14 +530,20 @@ bool Launcher::CheckFeed(std::string& error) {
 	feed_ = std::move(m);
 	manifestUrl_ = manUrl;
 	feedChecked_ = true;
-	if (!feed_.launcher.version.empty() && CompareVersions(feed_.launcher.version, LauncherVersion) > 0)
-		Report("A newer launcher (" + feed_.launcher.version + ") is available: " + NewLauncherUrl());
+	if (LauncherUpdateAvailable())
+		Report("A newer launcher (" + offer_.version + ") is available: " + NewLauncherUrl());
 	return true;
 }
 
 bool Launcher::LauncherUpdateAvailable() const {
-	return !offer_.version.empty() && !offer_.path.empty() && offer_.size > 0 && offer_.sha256.size() == 64 &&
-	       CompareVersions(offer_.version, LauncherVersion) > 0;
+	if (offer_.version.empty() || offer_.path.empty() || offer_.size <= 0 || offer_.sha256.size() != 64 ||
+	    CompareVersions(offer_.version, LauncherVersion) <= 0)
+		return false;
+	// The published exe is this one (a release whose launcher entry carries a wrong version): nothing to update, and
+	// offering it would loop, since the replacement reports the same version again.
+	if (selfSha256_.empty())
+		selfSha256_ = FileSha256(ExePath());
+	return selfSha256_ != offer_.sha256;
 }
 
 std::wstring Launcher::ExePath() {

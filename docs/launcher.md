@@ -416,6 +416,14 @@ game_ctl reads the save folder from that same file.
 
 ## Release and signing
 
+**Version.** The launcher's version is `MXL_LAUNCHER_VERSION` in `src/win/app.h`.
+- CMake reads it from there for both the code and the exe's version resource.
+- `publish_release.py --launcher` reads it back from the resource and refuses a different `--launcher-version`.
+- Raise it whenever the exe changes.
+- The launcher offers itself an update only if the published version is higher **and** the sha256 differs from its own exe.
+
+This is the 2026-10-26 bug it fixes: the release's version (0.69.1) was published as the launcher's version. Launcher 0.1.1 then kept offering itself the same exe.
+
 Signing is a separate, last step, so any service can be added later without touching the build:
 
 1. **Build** (CMake, CI job `launcher`): the unsigned `D2R-XL-Launcher.exe` and `D2R-XL-Launcher.exe.sha256`

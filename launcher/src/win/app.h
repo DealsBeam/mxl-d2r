@@ -13,7 +13,8 @@
 namespace mxl {
 
 #ifndef MXL_LAUNCHER_VERSION
-#define MXL_LAUNCHER_VERSION "0.1.1"  // cmake -DMXL_LAUNCHER_VERSION=x.y.z (tests of the self-update)
+#define MXL_LAUNCHER_VERSION "0.1.2"  // the launcher version; CMake reads it from here for the version resource
+                                      // (cmake -DMXL_LAUNCHER_VERSION=x.y.z overrides both, for tests of the self-update)
 #endif
 constexpr const char* LauncherVersion = MXL_LAUNCHER_VERSION;
 // the download host (docs/release.md "Hosting layout"): channels/<channel>.json, releases/<v>/, objects/
@@ -106,6 +107,7 @@ private:
 	bool feedChecked_ = false;
 	Manifest feed_;            // the channel's release manifest
 	decltype(Manifest::launcher) offer_;  // its launcher entry (set even when the release itself is refused)
+	mutable std::string selfSha256_;      // sha256 of this exe, read once: an offer of the same bytes is no update
 	std::string siteRoot_;     // SiteRoot(opt_.site)
 	std::string manifestUrl_;
 };
