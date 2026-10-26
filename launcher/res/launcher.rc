@@ -4,6 +4,16 @@
 
 1 24 "launcher.manifest"  // 24 = RT_MANIFEST
 
+// The art of the official Median XL launcher (launcher.median-xl.com), by the Median XL team (NOTICE.md). Ids: the
+// Res* enum in src/win/window.cpp. 10 = RT_RCDATA.
+1 ICON "icon.ico"
+101 10 "background.png"
+102 10 "logo.gif"
+103 10 "popup-window.png"
+104 10 "exocet.ttf"
+105 10 "RobotoCondensed.ttf"
+106 10 "comment.svg"
+
 1 VERSIONINFO  // 1 = VS_VERSION_INFO
  FILEVERSION 0,1,0,0
  PRODUCTVERSION 0,1,0,0

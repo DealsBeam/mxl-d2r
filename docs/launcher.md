@@ -218,12 +218,28 @@ How the launcher uses the manifest's fields:
 
 ### Window and CLI
 
-The window has:
-- a status line and a progress bar;
-- **Play** (installs first if needed), **Update**, **Repair**, **Uninstall** (asks first);
-- **Open saves folder**, **Report a problem** (GitHub issues), **Choose D2R folder**, **Stop** (cancels the current
-  step);
-- a credits line.
+The window (`launcher/src/win/window.cpp`) is modelled on the official Median XL launcher (launcher.median-xl.com, a
+Flet app: only its look is reused, not its code) and uses its art, embedded in the exe (`launcher/res`, credited in
+NOTICE.md):
+- the temple background (`background.png`, 900 x 600: the window's canvas), the burning logo (`logo.gif`, 55 frames,
+  40 ms each) at the top;
+- the stone panel (`popup-window.png`) with the status (D2R, game copy, Median XL version, D2RLoader), the current
+  step and a progress bar (a moving piece while the amount is unknown);
+- a big **Play** button (installs first if needed; while working it becomes **Stop**, which cancels the current step),
+  then **Update**, **Repair**, **Uninstall** (asks first), **Saves folder**, **D2R folder** (choose another D2R
+  install), in Exocet (`exocet.ttf`); body text in Roboto Condensed;
+- the credits line and a link icon (`comment.svg`, Font Awesome) for **Report a problem** (GitHub issues). The
+  official launcher's Discord / Reddit / Patreon / guide icons are left out: we have no links of our own for them.
+
+Toolkit: Win32 + GDI+, both part of Windows, so the exe stays a single file with no runtime. GDI+ decodes the PNGs and
+every GIF frame (pre-scaled once, then drawn as cached bitmaps on a 20 ms timer that only repaints the logo), loads the
+fonts from the exe's resources (`PrivateFontCollection`; Georgia / Segoe UI if one cannot be loaded) and draws
+anti-aliased text and the icon. The icon's SVG path is read by `launcher/src/core/svgpath.cpp` (unit-tested) and
+filled as a GDI+ path. The buttons stay real BUTTON windows (owner-drawn), so Tab / Space / Enter and screen readers
+work. The canvas is scaled to the monitor's DPI (smaller if it would not fit the work area); the title bar is dark.
+
+`--snapshot FILE` draws the window once into a PNG after the start-up check, without showing it (for docs and checks
+from the background).
 
 Work runs on a worker thread. At start the launcher reads the channel and says whether an update is available.
 
@@ -236,20 +252,25 @@ MedianXL-Launcher.exe --cli status|detect|install|update|repair|play|uninstall
 The exe is a GUI-subsystem program. From PowerShell use `Start-Process -NoNewWindow -Wait`, because `& exe` does not
 wait. Note that `-Wait` also waits for the game that `play` started.
 
-Build: `cmake -S launcher -B build/launcher -A x64 && cmake --build build/launcher --config Release` gives a 0.5 MB
-static exe: C++20, no runtime to install, WinHTTP (TLS 1.2 / 1.3, no HTTPS-to-HTTP redirects), `asInvoker` (never
+Build: `cmake -S launcher -B build/launcher -A x64 && cmake --build build/launcher --config Release` gives a 2 MB
+static exe (1.5 MB of it the art): C++20, no runtime to install, WinHTTP (TLS 1.2 / 1.3, no HTTPS-to-HTTP redirects), `asInvoker` (never
 asks for admin), long paths, per-monitor DPI. CI (`.forgejo/workflows/ci.yml`) has two jobs: `launcher` cross-builds
 the exe with `plugin/cmake/xwin-toolchain.cmake`, and `launcher-tests` runs `launcher/tests` with g++ on Linux. The
 portable core (`launcher/src/core`: sha256, JSON, manifest and plan, inflate, zip, detection parsing, copy filter,
-TOML) has no Windows headers. `launcher/res/launcher.rc` includes no SDK header either, so llvm-rc needs none.
+TOML, SVG paths) has no Windows headers. `launcher/res/launcher.rc` includes no SDK header either, so llvm-rc needs none.
 
 ## Testing
 
-- Unit tests: `launcher/tests/core_tests.cpp`, 109 checks: release-manifest parsing (docs/release.md format, unknown
+- Unit tests: `launcher/tests/core_tests.cpp`, 123 checks: release-manifest parsing (docs/release.md format, unknown
   fields, count checks, the published fields `objectsBase` / `zip.path` / `launcher` and their refusals), channel files
-  (schema, unsafe paths, an HTML login page), site roots and object paths, grouping of same-content files, the install plan (fetch / remove unlisted / preserve / D2RLoader output kept), versions and
-  URLs, `.build.info` / vdf / acf parsing and the build verdict, zip / inflate / range planning, the copy filter, TOML
-  edits.
+  (schema, unsafe paths, an HTML login page), site roots and object paths, grouping of same-content files, the install
+  plan (fetch / remove unlisted / preserve / D2RLoader output kept), versions and URLs, `.build.info` / vdf / acf
+  parsing and the build verdict, zip / inflate / range planning, the copy filter, TOML edits, SVG path data (relative
+  commands, numbers run together, S / Q to cubics, refusals) and every embedded icon.
+- Window (2026-10-26, nothing shown in front, no focus or cursor use): `--snapshot` at rest and with a progress bar
+  (a test build), and the live window started with `SW_SHOWNOACTIVATE` and captured with `PrintWindow`: same picture
+  as the snapshot, the logo animates, the foreground window never changed. Hover needs the real cursor and was not
+  tested.
 - Scratch tests (D:, no slot): fresh install; update over HTTP fetching only 3 changed files; repair against a server
   without Range; refusal of foreign folders, non-empty folders and the wrong drive; uninstall leaving the source and
   its mods untouched.
@@ -348,3 +369,8 @@ Recommendation: Azure Trusted Signing Basic when the repo goes public, or SignPa
 7. The launcher reports a newer launcher from the manifest's `launcher` entry but does not replace itself yet.
 8. D2RLoader is downloaded from d2rloader.net (no licence to mirror it); if that site goes away, new installs stop
    until we get permission to mirror it or pin a new source.
+9. Fonts of the window: `exocet.ttf` says "Copyright (C) 1992 Emigre Graphics, Designed by Jonathan Barnbrook";
+   Exocet is a commercial typeface. It is embedded because the official launcher ships it and the owner asked for it,
+   but we have no licence of our own for it. Before the repo or the exe goes public: a licence from Emigre, the Median XL
+   team's word that theirs covers us, or a free look-alike (removing the resource is enough: the window falls back to
+   Georgia). Roboto Condensed is Apache 2.0; the icon is Font Awesome Free (CC BY 4.0).

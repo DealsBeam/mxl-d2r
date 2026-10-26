@@ -5,7 +5,8 @@ project(mxl_launcher_tests LANGUAGES CXX)
 
 set(core ${CMAKE_CURRENT_SOURCE_DIR}/../src/core)
 add_executable(launcher_tests core_tests.cpp ${core}/sha256.cpp ${core}/json.cpp ${core}/manifest.cpp ${core}/inflate.cpp
-               ${core}/zip.cpp ${core}/detect.cpp ${core}/gamecopy.cpp)
+               ${core}/zip.cpp ${core}/detect.cpp ${core}/gamecopy.cpp ${core}/svgpath.cpp)
+target_compile_definitions(launcher_tests PRIVATE MXL_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../res")
 target_compile_features(launcher_tests PRIVATE cxx_std_20)
 if(MSVC)
 	target_compile_options(launcher_tests PRIVATE /W4 /permissive- /EHsc /utf-8)

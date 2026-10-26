@@ -1,0 +1,751 @@
+// The window, modelled on the official Median XL launcher (launcher.median-xl.com) with its art (launcher/res, credited
+// in NOTICE.md): the temple background, the burning logo (an animated GIF), a stone panel for status and progress, a
+// big Play button and the smaller actions in Exocet, body text in Roboto Condensed, a link icon.
+//
+// Plain Win32 + GDI+ (part of Windows): GDI+ decodes the PNGs and every GIF frame, loads the two fonts from the exe's
+// resources (PrivateFontCollection) and draws anti-aliased text and paths. The buttons are real BUTTON windows
+// (BS_OWNERDRAW), so Tab, Space and screen readers work as before; they are drawn over the same background.
+// Everything is laid out on a 900 x 600 canvas (the background's size) and scaled to the monitor's DPI.
+#include "window.h"
+
+#include "../core/svgpath.h"
+#include "game.h"
+#include "util.h"
+
+#include <windows.h>
+#include <commctrl.h>
+#include <dwmapi.h>
+#include <shellapi.h>
+#include <shlwapi.h>
+#include <shobjidl.h>
+
+#include <algorithm>
+#include <cmath>
+#include <memory>
+#include <thread>
+#include <vector>
+
+namespace Gdiplus {
+using std::max;  // gdiplus.h needs min / max, which NOMINMAX takes away
+using std::min;
+}  // namespace Gdiplus
+#include <objidl.h>
+#include <gdiplus.h>
+
+namespace mxl {
+
+namespace {
+
+namespace gp = Gdiplus;
+
+// Resource ids: launcher/res/launcher.rc
+enum : int { ResBackground = 101, ResLogo, ResPanel, ResTitleFont, ResBodyFont, ResIssuesIcon };
+
+constexpr float CanvasW = 900, CanvasH = 600;
+const gp::RectF LogoRect(256, 12, 388, 134);
+const gp::RectF PanelRect(200, 158, 500, 170);
+const gp::RectF StatusRect(240, 182, 420, 76);  // four lines
+const gp::RectF LineRect(240, 259, 420, 20);
+const gp::RectF BarRect(242, 285, 416, 9);
+
+const gp::Color Gold(255, 232, 196, 128), GoldBright(255, 255, 228, 168), Body(255, 222, 212, 192), Dim(255, 150, 136, 112),
+	ErrorText(255, 240, 128, 104);
+
+enum : int { IdPlay = 101, IdUpdate, IdRepair, IdUninstall, IdSaves, IdIssues, IdChoose, IdCancel };
+enum Kind { Big, Small, Icon };
+struct Button {
+	int id;
+	const wchar_t* label;  // also the window text (screen readers, tooltips)
+	Kind kind;
+	gp::RectF r;
+	HWND h = nullptr;
+	bool hot = false;
+};
+Button buttons[] = {
+	{IdPlay, L"Play", Big, gp::RectF(330, 346, 240, 66)},
+	{IdCancel, L"Stop", Big, gp::RectF(330, 346, 240, 66)},
+	{IdUpdate, L"Update", Small, gp::RectF(228, 430, 140, 34)},
+	{IdRepair, L"Repair", Small, gp::RectF(380, 430, 140, 34)},
+	{IdUninstall, L"Uninstall", Small, gp::RectF(532, 430, 140, 34)},
+	{IdSaves, L"Saves folder", Small, gp::RectF(278, 474, 168, 34)},
+	{IdChoose, L"D2R folder", Small, gp::RectF(456, 474, 168, 34)},
+	{IdIssues, L"Report a problem", Icon, gp::RectF(858, 556, 28, 28)},
+};
+
+constexpr UINT WmProgress = WM_APP + 1, WmDone = WM_APP + 2;
+constexpr UINT_PTR AnimTimer = 1;
+
+struct ProgressMsg {
+	std::string text;
+	double fraction;
+};
+
+struct Art {
+	std::unique_ptr<gp::Bitmap> background, panel;
+	std::vector<std::unique_ptr<gp::Bitmap>> logo;  // every frame, already scaled to the window
+	std::vector<std::unique_ptr<gp::CachedBitmap>> logoCached;
+	std::vector<UINT> delays;  // ms per frame
+	gp::PrivateFontCollection titleFonts, bodyFonts;
+	std::unique_ptr<gp::FontFamily> title, body;
+	SvgIcon issues;
+};
+
+struct Ui {
+	HINSTANCE inst = nullptr;
+	HWND wnd = nullptr, tip = nullptr;
+	float s = 1;  // canvas -> pixels
+	int w = 0, h = 0;
+	HDC sceneDC = nullptr, backDC = nullptr;  // the static layer (background, panel, footer) and the back buffer
+	HBITMAP sceneBmp = nullptr, backBmp = nullptr, sceneOld = nullptr, backOld = nullptr;
+	std::unique_ptr<Art> art;
+	size_t frame = 0;
+	ULONGLONG frameAt = 0;
+	std::string status, line = "Checking for updates ...";
+	bool lineError = false;
+	double fraction = -2;  // 0..1, -1 busy (moving bar), < -1 no bar
+	int marquee = 0;
+	std::unique_ptr<Launcher> launcher;
+	Options opt;
+	std::wstring snapshot;
+	bool busy = false;
+	std::thread worker;
+};
+Ui g;
+
+int Px(float v) { return int(std::lround(v * g.s)); }
+
+Button* FindButton(int id) {
+	for (auto& b : buttons)
+		if (b.id == id)
+			return &b;
+	return nullptr;
+}
+
+// ---------------------------------------------------------------- art
+
+std::pair<const void*, DWORD> Resource(int id) {
+	HRSRC r = FindResourceW(g.inst, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(10));  // 10 = RT_RCDATA
+	if (!r)
+		return {nullptr, 0};
+	HGLOBAL h = LoadResource(g.inst, r);
+	return {h ? LockResource(h) : nullptr, SizeofResource(g.inst, r)};
+}
+
+// A new 32-bit premultiplied bitmap of `src` (or of its current frame), scaled to w x h. GDI+ reads an image from its
+// stream lazily, so nothing that came from a stream is kept.
+std::unique_ptr<gp::Bitmap> Copy(gp::Image& src, int w, int h) {
+	auto out = std::make_unique<gp::Bitmap>(w, h, PixelFormat32bppPARGB);
+	gp::Graphics gr(out.get());
+	gr.SetInterpolationMode(gp::InterpolationModeHighQualityBicubic);
+	gr.SetPixelOffsetMode(gp::PixelOffsetModeHalf);
+	gr.DrawImage(&src, gp::Rect(0, 0, w, h), 0, 0, int(src.GetWidth()), int(src.GetHeight()), gp::UnitPixel);
+	return out;
+}
+
+// Loads resource `id` as an image; for each frame calls `use`. Returns the number of frames (0: not loaded).
+template <class F>
+UINT ForEachFrame(int id, F use) {
+	auto [data, size] = Resource(id);
+	if (!data)
+		return 0;
+	IStream* stream = SHCreateMemStream(static_cast<const BYTE*>(data), size);
+	if (!stream)
+		return 0;
+	UINT frames = 0;
+	{
+		gp::Bitmap img(stream);
+		if (img.GetLastStatus() == gp::Ok) {
+			GUID dim = gp::FrameDimensionTime;
+			frames = std::max(1u, img.GetFrameCount(&dim));
+			std::vector<UINT> delays(frames, 100);
+			UINT bytes = img.GetPropertyItemSize(PropertyTagFrameDelay);
+			if (bytes) {
+				std::vector<uint8_t> buf(bytes);
+				auto* item = reinterpret_cast<gp::PropertyItem*>(buf.data());
+				if (img.GetPropertyItem(PropertyTagFrameDelay, bytes, item) == gp::Ok)
+					for (UINT i = 0; i < frames && (i + 1) * 4 <= item->length; ++i)
+						delays[i] = std::max(20u, static_cast<UINT*>(item->value)[i] * 10);  // 1/100 s
+			}
+			for (UINT i = 0; i < frames; ++i) {
+				if (frames > 1)
+					img.SelectActiveFrame(&dim, i);
+				use(img, delays[i]);
+			}
+		}
+	}
+	stream->Release();
+	return frames;
+}
+
+std::unique_ptr<gp::FontFamily> LoadFont(gp::PrivateFontCollection& pfc, int id, const wchar_t* fallback) {
+	auto [data, size] = Resource(id);
+	if (data && pfc.AddMemoryFont(data, INT(size)) == gp::Ok && pfc.GetFamilyCount() > 0) {
+		auto fam = std::make_unique<gp::FontFamily>();
+		INT found = 0;
+		if (pfc.GetFamilies(1, fam.get(), &found) == gp::Ok && found == 1)
+			return fam;
+	}
+	Log("window: font resource " + std::to_string(id) + " not usable, using " + Utf8(fallback));
+	return std::make_unique<gp::FontFamily>(fallback);
+}
+
+void LoadArt() {
+	Art& a = *g.art;
+	ForEachFrame(ResBackground, [&](gp::Image& img, UINT) { a.background = Copy(img, g.w, g.h); });
+	ForEachFrame(ResPanel, [&](gp::Image& img, UINT) { a.panel = Copy(img, Px(PanelRect.Width), Px(PanelRect.Height)); });
+	ForEachFrame(ResLogo, [&](gp::Image& img, UINT delay) {
+		a.logo.push_back(Copy(img, Px(LogoRect.Width), Px(LogoRect.Height)));
+		a.delays.push_back(delay);
+	});
+	a.title = LoadFont(a.titleFonts, ResTitleFont, L"Georgia");
+	a.body = LoadFont(a.bodyFonts, ResBodyFont, L"Segoe UI");
+	auto [svg, size] = Resource(ResIssuesIcon);
+	std::string error;
+	if (!svg || !ParseSvgIcon(std::string(static_cast<const char*>(svg), size), a.issues, error))
+		Log("window: icon not usable: " + error);
+	Log("window: art loaded, logo " + std::to_string(a.logo.size()) + " frames");
+}
+
+// ---------------------------------------------------------------- drawing (canvas coordinates)
+
+void Quality(gp::Graphics& gr) {
+	gr.SetSmoothingMode(gp::SmoothingModeAntiAlias);
+	gr.SetTextRenderingHint(gp::TextRenderingHintAntiAliasGridFit);
+	gr.SetInterpolationMode(gp::InterpolationModeHighQualityBicubic);
+	gr.SetPixelOffsetMode(gp::PixelOffsetModeHalf);
+}
+
+void AddRoundRect(gp::GraphicsPath& p, const gp::RectF& r, float rad) {
+	float d = rad * 2;
+	p.AddArc(r.X, r.Y, d, d, 180, 90);
+	p.AddArc(r.X + r.Width - d, r.Y, d, d, 270, 90);
+	p.AddArc(r.X + r.Width - d, r.Y + r.Height - d, d, d, 0, 90);
+	p.AddArc(r.X, r.Y + r.Height - d, d, d, 90, 90);
+	p.CloseFigure();
+}
+
+enum Trim { TrimEnd, TrimPath };
+void Text(gp::Graphics& gr, const std::wstring& t, const gp::FontFamily& fam, float px, const gp::Color& c, const gp::RectF& r,
+          gp::StringAlignment align = gp::StringAlignmentNear, Trim trim = TrimEnd, bool shadow = true) {
+	gp::Font font(&fam, px, gp::FontStyleRegular, gp::UnitPixel);
+	gp::StringFormat f;
+	f.SetAlignment(align);
+	f.SetLineAlignment(gp::StringAlignmentCenter);
+	f.SetFormatFlags(gp::StringFormatFlagsNoWrap);
+	f.SetTrimming(trim == TrimPath ? gp::StringTrimmingEllipsisPath : gp::StringTrimmingEllipsisCharacter);
+	if (shadow) {  // keeps light text readable on the brighter parts of the art
+		gp::SolidBrush sb(gp::Color(170, 0, 0, 0));
+		gp::RectF sr(r.X + 1, r.Y + 1, r.Width, r.Height);
+		gr.DrawString(t.c_str(), INT(t.size()), &font, sr, &f, &sb);
+	}
+	gp::SolidBrush b(c);
+	gr.DrawString(t.c_str(), INT(t.size()), &font, r, &f, &b);
+}
+
+// The part that never changes: background, the panel, the footer.
+void DrawScene(gp::Graphics& gr) {
+	if (g.art->background)
+		gr.DrawImage(g.art->background.get(), 0, 0);
+	else
+		gr.Clear(gp::Color(255, 16, 14, 12));
+	if (g.art->panel)
+		gr.DrawImage(g.art->panel.get(), Px(PanelRect.X), Px(PanelRect.Y));
+	gr.ScaleTransform(g.s, g.s);
+	std::wstring footer = L"Launcher " + Wide(LauncherVersion) +
+	                      L"  ·  Median XL and its art by the Median XL team; Diablo II by Blizzard Entertainment. Not affiliated with Blizzard.";
+	Text(gr, footer, *g.art->body, 12, Dim, gp::RectF(14, 560, 830, 24));
+	gr.ResetTransform();
+}
+
+// The part that changes: the logo frame, status, progress. `cached`: the logo through CachedBitmaps made for the
+// window's device (the snapshot draws into a bitmap instead).
+void DrawDynamic(gp::Graphics& gr, bool cached = true) {
+	if (!g.art->logo.empty() && !cached) {
+		gr.DrawImage(g.art->logo[g.frame].get(), Px(LogoRect.X), Px(LogoRect.Y));
+	} else if (!g.art->logo.empty()) {
+		if (g.art->logoCached.size() != g.art->logo.size()) {  // a CachedBitmap belongs to the device it was made for
+			g.art->logoCached.clear();
+			for (auto& f : g.art->logo)
+				g.art->logoCached.push_back(std::make_unique<gp::CachedBitmap>(f.get(), &gr));
+		}
+		gr.DrawCachedBitmap(g.art->logoCached[g.frame].get(), Px(LogoRect.X), Px(LogoRect.Y));
+	}
+	gr.ScaleTransform(g.s, g.s);
+	Quality(gr);
+	// status: "Name: value" lines; long paths are shortened in the middle
+	size_t start = 0;
+	int row = 0;
+	std::wstring st = Wide(g.status);
+	while (start <= st.size() && row < 4) {
+		size_t nl = st.find(L'\n', start);
+		std::wstring l = st.substr(start, nl == std::wstring::npos ? std::wstring::npos : nl - start);
+		gp::RectF r(StatusRect.X, StatusRect.Y + row * 19.f, StatusRect.Width, 19);
+		Text(gr, l, *g.art->body, 14, Body, r, gp::StringAlignmentNear, TrimPath);
+		++row;
+		if (nl == std::wstring::npos)
+			break;
+		start = nl + 1;
+	}
+	Text(gr, Wide(g.line), *g.art->body, 14, g.lineError ? ErrorText : Gold, LineRect, gp::StringAlignmentCenter);
+	if (g.fraction >= -1) {
+		gp::SolidBrush track(gp::Color(170, 0, 0, 0));
+		gr.FillRectangle(&track, BarRect);
+		float x = BarRect.X, w = BarRect.Width;
+		if (g.fraction >= 0) {
+			w = float(std::clamp(g.fraction, 0.0, 1.0)) * BarRect.Width;
+		} else {  // busy, no amount known: a moving piece
+			float piece = BarRect.Width / 4, run = BarRect.Width + piece;
+			x = BarRect.X - piece + std::fmod(g.marquee * 6.f, run);
+			w = piece;
+			float l = std::max(x, BarRect.X), r = std::min(x + w, BarRect.X + BarRect.Width);
+			x = l, w = std::max(0.f, r - l);
+		}
+		if (w > 0.5f) {
+			gp::RectF fill(x, BarRect.Y, w, BarRect.Height);
+			gp::LinearGradientBrush lb(gp::PointF(0, BarRect.Y), gp::PointF(0, BarRect.Y + BarRect.Height), gp::Color(255, 240, 180, 90),
+			                           gp::Color(255, 150, 80, 20));
+			gr.FillRectangle(&lb, fill);
+		}
+		gp::Pen frame(gp::Color(255, 110, 88, 56), 1);
+		gr.DrawRectangle(&frame, BarRect);
+	}
+	gr.ResetTransform();
+}
+
+void DrawIcon(gp::Graphics& gr, const SvgIcon& icon, const gp::RectF& r, const gp::Color& c) {
+	if (icon.path.empty())
+		return;
+	gp::GraphicsPath p(gp::FillModeWinding);
+	gp::PointF cur;
+	for (const auto& cmd : icon.path) {
+		switch (cmd.op) {
+		case 'M': p.StartFigure(); cur = gp::PointF(cmd.p[0], cmd.p[1]); break;
+		case 'L': p.AddLine(cur, gp::PointF(cmd.p[0], cmd.p[1])); cur = gp::PointF(cmd.p[0], cmd.p[1]); break;
+		case 'C':
+			p.AddBezier(cur, gp::PointF(cmd.p[0], cmd.p[1]), gp::PointF(cmd.p[2], cmd.p[3]), gp::PointF(cmd.p[4], cmd.p[5]));
+			cur = gp::PointF(cmd.p[4], cmd.p[5]);
+			break;
+		case 'Z': p.CloseFigure(); break;
+		}
+	}
+	float k = std::min(r.Width / icon.viewBox[2], r.Height / icon.viewBox[3]);
+	gp::Matrix m;
+	m.Translate(r.X + (r.Width - icon.viewBox[2] * k) / 2, r.Y + (r.Height - icon.viewBox[3] * k) / 2);
+	m.Scale(k, k);
+	m.Translate(-icon.viewBox[0], -icon.viewBox[1]);
+	p.Transform(&m);
+	gp::SolidBrush shadow(gp::Color(170, 0, 0, 0));
+	gp::Matrix off;
+	off.Translate(1, 1);
+	std::unique_ptr<gp::GraphicsPath> sp(p.Clone());
+	sp->Transform(&off);
+	gr.FillPath(&shadow, sp.get());
+	gp::SolidBrush b(c);
+	gr.FillPath(&b, &p);
+}
+
+void DrawButton(gp::Graphics& gr, const Button& b, bool pressed, bool disabled, bool focus) {
+	gp::RectF r = b.r;
+	if (pressed)
+		r.Offset(1, 1);
+	bool hot = b.hot && !disabled;
+	if (b.kind == Icon) {
+		DrawIcon(gr, g.art->issues, gp::RectF(r.X + 3, r.Y + 3, r.Width - 6, r.Height - 6), hot ? GoldBright : Gold);
+	} else {
+		gp::RectF box(r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2);
+		gp::GraphicsPath p;
+		AddRoundRect(p, box, b.kind == Big ? 7.f : 4.f);
+		if (b.kind == Big) {
+			gp::Color top = disabled ? gp::Color(225, 52, 46, 42) : hot ? gp::Color(235, 128, 44, 18) : gp::Color(230, 96, 30, 12);
+			gp::Color bottom = disabled ? gp::Color(225, 30, 27, 25) : hot ? gp::Color(235, 60, 18, 8) : gp::Color(230, 42, 12, 6);
+			gp::LinearGradientBrush fill(gp::PointF(0, box.Y), gp::PointF(0, box.Y + box.Height), top, bottom);
+			gr.FillPath(&fill, &p);
+			gp::Pen edge(disabled ? Dim : hot ? GoldBright : Gold, 2);
+			gr.DrawPath(&edge, &p);
+		} else {
+			gp::SolidBrush fill(gp::Color(hot ? 190 : 160, 0, 0, 0));
+			gr.FillPath(&fill, &p);
+			gp::Pen edge(disabled ? gp::Color(255, 70, 60, 48) : hot ? Gold : gp::Color(255, 120, 96, 60), 1);
+			gr.DrawPath(&edge, &p);
+		}
+		Text(gr, b.label, *g.art->title, b.kind == Big ? 30.f : 15.f, disabled ? Dim : hot ? GoldBright : Gold, r,
+		     gp::StringAlignmentCenter);
+	}
+	if (focus) {
+		gp::Pen dots(gp::Color(200, 232, 196, 128), 1);
+		dots.SetDashStyle(gp::DashStyleDot);
+		gr.DrawRectangle(&dots, gp::RectF(r.X - 2, r.Y - 2, r.Width + 3, r.Height + 3));
+	}
+}
+
+// The whole window into one bitmap (--snapshot): the same functions as the real painting.
+bool Snapshot(const std::wstring& file) {
+	gp::Bitmap bmp(g.w, g.h, PixelFormat32bppARGB);
+	{
+		gp::Graphics gr(&bmp);
+		HDC dc = gr.GetHDC();
+		BitBlt(dc, 0, 0, g.w, g.h, g.sceneDC, 0, 0, SRCCOPY);
+		gr.ReleaseHDC(dc);
+		DrawDynamic(gr, false);
+		gr.ScaleTransform(g.s, g.s);
+		Quality(gr);
+		for (const auto& b : buttons)
+			if (GetWindowLongPtrW(b.h, GWL_STYLE) & WS_VISIBLE)  // the window itself is hidden
+				DrawButton(gr, b, false, !IsWindowEnabled(b.h), false);
+	}
+	CLSID png{0x557cf406, 0x1a04, 0x11d3, {0x9a, 0x73, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e}};
+	bool ok = bmp.Save(file.c_str(), &png, nullptr) == gp::Ok;
+	Log("window: snapshot " + Utf8(file) + (ok ? " written" : " FAILED"));
+	return ok;
+}
+
+// ---------------------------------------------------------------- state
+
+void SetBusy(bool busy) {
+	g.busy = busy;
+	for (auto& b : buttons) {
+		if (b.id == IdIssues)
+			continue;
+		if (b.id == IdPlay || b.id == IdCancel) {
+			ShowWindow(b.h, (b.id == IdCancel) == busy ? SW_SHOWNA : SW_HIDE);  // Stop takes Play's place
+			continue;
+		}
+		EnableWindow(b.h, !busy);
+	}
+}
+
+void InvalidatePanel() {
+	RECT r{Px(PanelRect.X), Px(PanelRect.Y), Px(PanelRect.X + PanelRect.Width), Px(PanelRect.Y + PanelRect.Height)};
+	InvalidateRect(g.wnd, &r, FALSE);
+}
+
+void RefreshStatus() {
+	std::string why;
+	g.status = g.launcher->StatusText();
+	EnableWindow(FindButton(IdPlay)->h, !g.busy && g.launcher->CanPlay(&why));
+	InvalidateRect(FindButton(IdPlay)->h, nullptr, FALSE);
+	InvalidatePanel();
+}
+
+void RunAction(int id) {
+	if (g.busy)
+		return;
+	if (id == IdUninstall &&
+	    MessageBoxW(g.wnd, L"Remove the Median XL game copy and the launcher's downloads?\n\nYour characters and your D2R install are not touched.",
+	                L"Uninstall Median XL", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+		return;
+	g.launcher->cancel = false;
+	SetBusy(true);
+	if (g.worker.joinable())
+		g.worker.join();
+	g.worker = std::thread([id] {
+		std::string err;
+		bool ok = false;
+		Launcher& l = *g.launcher;
+		switch (id) {
+		case IdPlay: ok = (l.CanPlay() || l.InstallOrUpdate(err)) && l.Play(err); break;  // Play works offline once installed
+		case IdUpdate: ok = l.InstallOrUpdate(err); break;
+		case IdRepair: ok = l.Repair(err); break;
+		case IdUninstall: ok = l.Uninstall(err); break;
+		}
+		auto* msg = new ProgressMsg{ok ? std::string(id == IdPlay ? "Have fun." : "Done.") : err, ok ? 1.0 : -2.0};
+		PostMessageW(g.wnd, WmDone, WPARAM(ok ? 1 : 0), reinterpret_cast<LPARAM>(msg));
+	});
+}
+
+void ChooseSource() {
+	IFileOpenDialog* dlg = nullptr;
+	if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))))
+		return;
+	DWORD flags = 0;
+	dlg->GetOptions(&flags);
+	dlg->SetOptions(flags | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+	dlg->SetTitle(L"Choose the Diablo II Resurrected folder (with D2R.exe)");
+	if (SUCCEEDED(dlg->Show(g.wnd))) {
+		IShellItem* item = nullptr;
+		if (SUCCEEDED(dlg->GetResult(&item))) {
+			PWSTR path = nullptr;
+			if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+				if (!LooksLikeD2R(path)) {
+					MessageBoxW(g.wnd, L"That folder has no D2R.exe and Data folder.", L"Median XL", MB_ICONWARNING);
+				} else {
+					g.opt.source = path;
+					auto progress = std::move(g.launcher->onProgress);
+					g.launcher = std::make_unique<Launcher>(g.opt);
+					g.launcher->onProgress = std::move(progress);
+					RefreshStatus();
+				}
+				CoTaskMemFree(path);
+			}
+			item->Release();
+		}
+	}
+	dlg->Release();
+}
+
+// ---------------------------------------------------------------- window procedures
+
+LRESULT CALLBACK ButtonProc(HWND h, UINT m, WPARAM w, LPARAM lp, UINT_PTR, DWORD_PTR ref) {
+	auto* b = reinterpret_cast<Button*>(ref);
+	switch (m) {
+	case WM_MOUSEMOVE:
+		if (!b->hot) {
+			b->hot = true;
+			TRACKMOUSEEVENT t{sizeof(t), TME_LEAVE, h, 0};
+			TrackMouseEvent(&t);
+			InvalidateRect(h, nullptr, FALSE);
+		}
+		break;
+	case WM_MOUSELEAVE:
+		b->hot = false;
+		InvalidateRect(h, nullptr, FALSE);
+		break;
+	case WM_SETCURSOR:
+		SetCursor(LoadCursorW(nullptr, IDC_HAND));
+		return TRUE;
+	case WM_ERASEBKGND:
+		return 1;
+	}
+	return DefSubclassProc(h, m, w, lp);
+}
+
+void DrawItem(const DRAWITEMSTRUCT& d) {
+	Button* b = FindButton(int(d.CtlID));
+	if (!b)
+		return;
+	int w = d.rcItem.right - d.rcItem.left, h = d.rcItem.bottom - d.rcItem.top;
+	HDC mem = CreateCompatibleDC(d.hDC);
+	HBITMAP bmp = CreateCompatibleBitmap(d.hDC, w, h), old = HBITMAP(SelectObject(mem, bmp));
+	POINT at{0, 0};
+	MapWindowPoints(d.hwndItem, g.wnd, &at, 1);
+	BitBlt(mem, 0, 0, w, h, g.sceneDC, at.x, at.y, SRCCOPY);  // the art behind the button
+	{
+		gp::Graphics gr(mem);
+		Quality(gr);
+		gr.ScaleTransform(g.s, g.s);
+		gr.TranslateTransform(-at.x / g.s, -at.y / g.s);
+		DrawButton(gr, *b, (d.itemState & ODS_SELECTED) != 0, (d.itemState & ODS_DISABLED) != 0,
+		           (d.itemState & ODS_FOCUS) && !(d.itemState & ODS_NOFOCUSRECT));
+	}
+	BitBlt(d.hDC, 0, 0, w, h, mem, 0, 0, SRCCOPY);
+	SelectObject(mem, old);
+	DeleteObject(bmp);
+	DeleteDC(mem);
+}
+
+void Paint(HWND h) {
+	PAINTSTRUCT ps;
+	HDC dc = BeginPaint(h, &ps);
+	const RECT& u = ps.rcPaint;
+	int uw = u.right - u.left, uh = u.bottom - u.top;
+	BitBlt(g.backDC, u.left, u.top, uw, uh, g.sceneDC, u.left, u.top, SRCCOPY);
+	{
+		gp::Graphics gr(g.backDC);
+		gr.SetClip(gp::Rect(u.left, u.top, uw, uh));
+		DrawDynamic(gr);
+	}
+	BitBlt(dc, u.left, u.top, uw, uh, g.backDC, u.left, u.top, SRCCOPY);
+	EndPaint(h, &ps);
+}
+
+void Tick() {
+	ULONGLONG now = GetTickCount64();
+	if (g.art->logo.size() > 1 && now - g.frameAt >= g.art->delays[g.frame]) {
+		g.frameAt = now;
+		g.frame = (g.frame + 1) % g.art->logo.size();
+		RECT r{Px(LogoRect.X), Px(LogoRect.Y), Px(LogoRect.X + LogoRect.Width), Px(LogoRect.Y + LogoRect.Height)};
+		InvalidateRect(g.wnd, &r, FALSE);
+	}
+	if (g.fraction > -2 && g.fraction < 0) {
+		++g.marquee;
+		RECT r{Px(BarRect.X) - 1, Px(BarRect.Y) - 1, Px(BarRect.X + BarRect.Width) + 2, Px(BarRect.Y + BarRect.Height) + 2};
+		InvalidateRect(g.wnd, &r, FALSE);
+	}
+}
+
+LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM lp) {
+	switch (m) {
+	case WM_COMMAND:
+		switch (LOWORD(w)) {
+		case IdPlay: case IdUpdate: case IdRepair: case IdUninstall: RunAction(LOWORD(w)); return 0;
+		case IdSaves: {
+			std::wstring d = g.launcher->SavesDir();
+			MakeDirs(d);
+			ShellExecuteW(h, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+			return 0;
+		}
+		case IdIssues: ShellExecuteW(h, L"open", Wide(IssuesUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL); return 0;
+		case IdChoose: if (!g.busy) ChooseSource(); return 0;
+		case IdCancel: g.launcher->cancel = true; return 0;
+		}
+		break;
+	case WM_DRAWITEM:
+		DrawItem(*reinterpret_cast<const DRAWITEMSTRUCT*>(lp));
+		return TRUE;
+	case WM_ERASEBKGND:
+		return 1;
+	case WM_PAINT:
+		Paint(h);
+		return 0;
+	case WM_TIMER:
+		if (w == AnimTimer)
+			Tick();
+		return 0;
+	case WmProgress: case WmDone: {
+		std::unique_ptr<ProgressMsg> msg(reinterpret_cast<ProgressMsg*>(lp));
+		g.line = msg->text;
+		g.lineError = m == WmDone && w != 1;
+		g.fraction = msg->fraction;
+		if (m == WmDone) {
+			g.fraction = -2;
+			SetBusy(false);
+			RefreshStatus();
+			if (!g.snapshot.empty()) {  // after the start-up check: draw, save, close
+				Snapshot(g.snapshot);
+				DestroyWindow(h);
+				return 0;
+			}
+			if (w == 0)
+				MessageBoxW(h, Wide(msg->text).c_str(), L"Median XL", MB_ICONWARNING);
+		}
+		InvalidatePanel();
+		return 0;
+	}
+	case WM_CLOSE:
+		if (g.busy && MessageBoxW(h, L"An installation is running. Stop it and quit? It continues where it stopped next time.", L"Median XL",
+		                          MB_YESNO | MB_ICONQUESTION) != IDYES)
+			return 0;
+		g.launcher->cancel = true;
+		if (g.worker.joinable())
+			g.worker.join();
+		DestroyWindow(h);
+		return 0;
+	case WM_DESTROY:
+		KillTimer(h, AnimTimer);
+		PostQuitMessage(0);
+		return 0;
+	}
+	return DefWindowProcW(h, m, w, lp);
+}
+
+// Canvas scale: the monitor's DPI, made smaller if the window would not fit the work area.
+float ChooseScale(DWORD style) {
+	float s = float(GetDpiForSystem()) / 96.f;
+	RECT work{0, 0, 1280, 720};
+	SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+	RECT frame{0, 0, 0, 0};
+	AdjustWindowRectEx(&frame, style, FALSE, 0);
+	float fw = float(work.right - work.left - (frame.right - frame.left)) / CanvasW;
+	float fh = float(work.bottom - work.top - (frame.bottom - frame.top)) / CanvasH;
+	return std::max(0.5f, std::min({s, fw, fh}));
+}
+
+void MakeLayers() {
+	HDC screen = GetDC(nullptr);
+	g.sceneDC = CreateCompatibleDC(screen);
+	g.backDC = CreateCompatibleDC(screen);
+	g.sceneBmp = CreateCompatibleBitmap(screen, g.w, g.h);
+	g.backBmp = CreateCompatibleBitmap(screen, g.w, g.h);
+	ReleaseDC(nullptr, screen);
+	g.sceneOld = HBITMAP(SelectObject(g.sceneDC, g.sceneBmp));
+	g.backOld = HBITMAP(SelectObject(g.backDC, g.backBmp));
+	gp::Graphics gr(g.sceneDC);
+	Quality(gr);
+	DrawScene(gr);
+}
+
+void FreeLayers() {
+	SelectObject(g.sceneDC, g.sceneOld);
+	SelectObject(g.backDC, g.backOld);
+	DeleteObject(g.sceneBmp);
+	DeleteObject(g.backBmp);
+	DeleteDC(g.sceneDC);
+	DeleteDC(g.backDC);
+}
+
+}  // namespace
+
+int RunWindow(HINSTANCE inst, const Options& opt, const std::wstring& snapshot) {
+	g.inst = inst;
+	g.opt = opt;
+	g.snapshot = snapshot;
+	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+	INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES};
+	InitCommonControlsEx(&icc);
+	gp::GdiplusStartupInput gsi;
+	ULONG_PTR gdiplus = 0;
+	if (gp::GdiplusStartup(&gdiplus, &gsi, nullptr) != gp::Ok) {
+		MessageBoxW(nullptr, L"GDI+ could not be started.", L"Median XL", MB_ICONERROR);
+		return 1;
+	}
+
+	WNDCLASSEXW wc{sizeof(wc)};
+	wc.lpfnWndProc = WndProc;
+	wc.hInstance = inst;
+	wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+	wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
+	wc.lpszClassName = L"MedianXLLauncher";
+	RegisterClassExW(&wc);
+
+	const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+	g.s = ChooseScale(style);
+	g.w = Px(CanvasW);
+	g.h = Px(CanvasH);
+	RECT r{0, 0, g.w, g.h};
+	AdjustWindowRectEx(&r, style, FALSE, 0);
+	std::wstring title = L"Median XL Launcher " + Wide(LauncherVersion);
+	g.wnd = CreateWindowExW(0, wc.lpszClassName, title.c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top,
+	                        nullptr, nullptr, inst, nullptr);
+	BOOL dark = TRUE;  // a dark title bar to match the art (Windows 10 2004+; ignored elsewhere)
+	DwmSetWindowAttribute(g.wnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
+
+	g.art = std::make_unique<Art>();
+	LoadArt();
+	MakeLayers();
+	for (auto& b : buttons) {
+		DWORD bs = WS_CHILD | WS_TABSTOP | BS_OWNERDRAW | (b.id == IdCancel ? 0 : WS_VISIBLE);
+		b.h = CreateWindowExW(0, L"BUTTON", b.label, bs, Px(b.r.X), Px(b.r.Y), Px(b.r.Width), Px(b.r.Height), g.wnd,
+		                      HMENU(INT_PTR(b.id)), inst, nullptr);
+		SetWindowSubclass(b.h, ButtonProc, 0, reinterpret_cast<DWORD_PTR>(&b));
+	}
+	g.tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0, g.wnd, nullptr,
+	                        inst, nullptr);
+	TTTOOLINFOW ti{sizeof(ti)};
+	ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+	ti.hwnd = g.wnd;
+	ti.uId = UINT_PTR(FindButton(IdIssues)->h);
+	ti.lpszText = const_cast<wchar_t*>(L"Report a problem (opens the issue tracker)");
+	SendMessageW(g.tip, TTM_ADDTOOLW, 0, LPARAM(&ti));
+
+	g.launcher = std::make_unique<Launcher>(g.opt);
+	g.launcher->onProgress = [](const Progress& p) {
+		PostMessageW(g.wnd, WmProgress, 0, reinterpret_cast<LPARAM>(new ProgressMsg{p.text, p.fraction}));
+	};
+	RefreshStatus();
+	SetBusy(true);
+	g.fraction = -1;
+	SetTimer(g.wnd, AnimTimer, 20, nullptr);
+	if (g.snapshot.empty())
+		ShowWindow(g.wnd, SW_SHOWNORMAL);
+	g.worker = std::thread([] {  // the release check at start, so the status shows "update available"
+		std::string err;
+		bool ok = g.launcher->CheckFeed(err);
+		PostMessageW(g.wnd, WmDone, ok ? 1 : 2, reinterpret_cast<LPARAM>(new ProgressMsg{ok ? "Ready." : err, -2}));
+	});
+	MSG msg;
+	while (GetMessageW(&msg, nullptr, 0, 0)) {
+		if (!IsDialogMessageW(g.wnd, &msg)) {
+			TranslateMessage(&msg);
+			DispatchMessageW(&msg);
+		}
+	}
+	if (g.worker.joinable())
+		g.worker.join();
+	g.launcher.reset();
+	FreeLayers();
+	g.art.reset();  // GDI+ objects go before GdiplusShutdown
+	gp::GdiplusShutdown(gdiplus);
+	return 0;
+}
+
+}  // namespace mxl

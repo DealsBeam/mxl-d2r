@@ -1,5 +1,6 @@
 // Unit tests of the launcher's portable core (no Windows headers): manifest parsing and the install plan, path
-// safety, D2R detection parsers and the build check, zip directory + inflate, TOML edits, the copy filter.
+// safety, D2R detection parsers and the build check, zip directory + inflate, TOML edits, the copy filter, the SVG
+// path reader for the window's icons.
 // Built and run by CI on Linux (g++) and locally with MSVC: cmake -S launcher/tests -B build/launcher-tests.
 #include "../src/core/detect.h"
 #include "../src/core/gamecopy.h"
@@ -7,11 +8,14 @@
 #include "../src/core/json.h"
 #include "../src/core/manifest.h"
 #include "../src/core/sha256.h"
+#include "../src/core/svgpath.h"
 #include "../src/core/zip.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <map>
 #include <string>
 #include <vector>
@@ -348,6 +352,41 @@ void TestToml() {
 	Check(mxl::GetTomlKey("[a]\ns = \"a # b\" # c\n", "a", "s") == "\"a # b\"", "# inside quotes is no comment");
 }
 
+bool Near(float a, float b) { return a - b < 0.001f && b - a < 0.001f; }
+
+void TestSvg() {
+	std::vector<mxl::PathCmd> p;
+	std::string e;
+	Check(mxl::ParseSvgPath("M10 20l5-5h3v-2zm1,1", p, e) && p.size() == 6, "path: commands");
+	Check(p[1].op == 'L' && Near(p[1].p[0], 15) && Near(p[1].p[1], 15), "relative line");
+	Check(Near(p[2].p[0], 18) && Near(p[2].p[1], 15) && Near(p[3].p[1], 13), "h and v");
+	Check(p[4].op == 'Z' && p[5].op == 'M' && Near(p[5].p[0], 11) && Near(p[5].p[1], 21), "move after close starts at the subpath start");
+	p.clear();
+	Check(mxl::ParseSvgPath("M0 0 1.5.5-2-3", p, e) && p.size() == 3 && Near(p[1].p[0], 1.5f) && Near(p[1].p[1], 0.5f) &&
+	          Near(p[2].p[0], -2) && Near(p[2].p[1], -3), "numbers run together; pairs after M are lines");
+	p.clear();
+	Check(mxl::ParseSvgPath("M0 0c1 2 3 4 5 6s7 8 9 10", p, e) && p.size() == 3 && p[2].op == 'C' && Near(p[2].p[0], 7) && Near(p[2].p[1], 8) &&
+	          Near(p[2].p[4], 14) && Near(p[2].p[5], 16), "s reflects the last control point");
+	p.clear();
+	Check(mxl::ParseSvgPath("M0 0Q3 3 6 0", p, e) && p[1].op == 'C' && Near(p[1].p[0], 2) && Near(p[1].p[1], 2) && Near(p[1].p[4], 6),
+	      "q becomes a cubic");
+	p.clear();
+	Check(mxl::ParseSvgPath("M1e1 2E-1L.5 .5", p, e) && Near(p[0].p[0], 10) && Near(p[0].p[1], 0.2f), "exponents");
+	Check(!mxl::ParseSvgPath("M0 0A1 1 0 0 1 2 2", p, e), "arcs refused");
+	Check(!mxl::ParseSvgPath("M0 0L1", p, e), "missing number refused");
+	Check(!mxl::ParseSvgPath("5 5", p, e), "number without a command refused");
+	mxl::SvgIcon icon;
+	Check(mxl::ParseSvgIcon("<svg xmlns=\"x\" viewBox=\"0 0 448 512\"><!-- c --><path d=\"M0 0h1v1z\"/><path d='M2 2h1z'/></svg>", icon, e) &&
+	          Near(icon.viewBox[2], 448) && icon.path.size() == 7, "icon: viewBox and every path");
+	Check(!mxl::ParseSvgIcon("<svg><path d=\"M0 0\"/></svg>", icon, e), "icon without viewBox refused");
+	for (const char* name : {"comment.svg"}) {  // the icons the window embeds (launcher/res)
+		std::ifstream f(std::string(MXL_RES_DIR) + "/" + name, std::ios::binary);
+		std::stringstream ss;
+		ss << f.rdbuf();
+		Check(mxl::ParseSvgIcon(ss.str(), icon, e) && icon.path.size() > 3, name);
+	}
+}
+
 }  // namespace
 
 int main() {
@@ -362,6 +401,7 @@ int main() {
 	TestZip();
 	TestCopyFilter();
 	TestToml();
+	TestSvg();
 	std::printf("%d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }
