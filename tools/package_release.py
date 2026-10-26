@@ -21,7 +21,7 @@ extract/ (Blizzard's own files: D2R reads those from its own install).
 
   py -3 tools/package_release.py [--version 0.70.0] [--plugin DLL] [--data-from DIR] [--game DIR] [--out dist]
   py -3 tools/package_release.py --no-data --plugin build/mxl-core.dll   (CI: no game files there; plugin + config only)
-Version: --version, else PluginVersion of plugin/src/mxl_core.cpp.
+Version: PluginVersion of plugin/src/mxl_core.cpp; --version must equal it (only --no-data builds may differ).
 """
 import argparse
 import datetime
@@ -259,7 +259,14 @@ def main() -> int:
 
     version = (a.version or plugin_version()).lstrip("v")
     if version != plugin_version():
-        print(f"note: release {version}, plugin PluginVersion {plugin_version()}")
+        # One number for the release and the plugin inside it (the build guard and `mxl` show PluginVersion): a player
+        # release must raise PluginVersion in plugin/src/mxl_core.cpp, even for a repackage. --no-data builds (CI, tests)
+        # are not player releases and may differ.
+        if not a.no_data:
+            print(f"error: release {version} but PluginVersion is {plugin_version()}: set PluginVersion in "
+                  f"plugin/src/mxl_core.cpp to {version} (or leave out --version)")
+            return 1
+        print(f"note: release {version}, plugin PluginVersion {plugin_version()} (--no-data: allowed)")
     sevenzip = find_7z()
     if not sevenzip:  # before the long part of the run
         print(f"error: {NO_7Z}")

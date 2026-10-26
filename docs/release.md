@@ -244,6 +244,19 @@ game: no other D2R build is installed here; the decision is covered by the unit 
 2. `py -3 tools/package_release.py [--version X]`: builds the release plugin (CMake on PATH), stages, checks, writes
    `dist/`. `--plugin DLL` uses a release DLL built elsewhere (it is checked); `--data-from <mods\D2R-XL\D2R-XL.mpq\data>`
    copies a finished data folder instead of rebuilding it.
+
+   **One version number.** The release version is `PluginVersion` in `plugin/src/mxl_core.cpp`. That number appears in:
+   - the release name;
+   - the d2rloader metadata;
+   - the plugin's `mxl` line;
+   - the build-guard message.
+
+   Raise it for every player release, even a repackage with the same code.
+   - `--version` must equal it. Otherwise the packager stops; only `--no-data` builds may differ.
+   - Publishing a version that is already on the host is refused (without `--force`).
+   - Releases 0.69.1 and 0.69.2 were repackages that still carried plugin 0.69.0; this rule came after them.
+
+   The downloader has its own version (`MXL_LAUNCHER_VERSION` in `launcher/src/win/app.h`), because it updates separately.
 3. Fill in `RELEASE_NOTES-<version>.md`, tag `v<version>`.
 4. `py -3 tools/publish_release.py publish --version <version> --channel test --target sftp://...` (when a downloader or asset
    pack goes along: `--launcher`, `--assets`), look at it with the downloader on the test channel, then

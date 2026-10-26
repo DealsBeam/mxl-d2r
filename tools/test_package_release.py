@@ -149,12 +149,18 @@ class PackageReleaseTests(unittest.TestCase):
         out = self.tmp / "dist"
         out.mkdir()
         (out / "D2R-XL-1.2.2.zip").write_bytes(b"an earlier packager's zip")
+        v = pr.plugin_version()
+        # a player release whose --version is not PluginVersion is refused before anything is written
         r = subprocess.run([sys.executable, "-I", str(HERE / "package_release.py"), "--plugin", str(self.dll),
-                            "--version", "1.2.3", "--data-from", str(data), "--out", str(out)], capture_output=True, text=True)
+                            "--version", "99.0.0", "--data-from", str(data), "--out", str(out)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("PluginVersion", r.stdout)
+        r = subprocess.run([sys.executable, "-I", str(HERE / "package_release.py"), "--plugin", str(self.dll),
+                            "--data-from", str(data), "--out", str(out)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        seven = out / "D2R-XL-1.2.3.7z"
+        seven = out / f"D2R-XL-{v}.7z"
         self.assertEqual(sorted(p.name for p in out.iterdir()),
-                         ["D2R-XL-1.2.3.7z", "RELEASE_NOTES-1.2.3.md", "SHA256SUMS", "release-manifest.json"])
+                         [f"D2R-XL-{v}.7z", f"RELEASE_NOTES-{v}.md", "SHA256SUMS", "release-manifest.json"])
         man = json.loads((out / "release-manifest.json").read_text())
         self.assertEqual(man["schemaVersion"], 2)
         self.assertNotIn("zip", man)
@@ -163,8 +169,8 @@ class PackageReleaseTests(unittest.TestCase):
         sums = (out / "SHA256SUMS").read_text().splitlines()
         self.assertIn(f"{pr.sha256(seven)}  {seven.name}", sums)
         self.assertEqual(len(sums), 3)
-        notes = (out / "RELEASE_NOTES-1.2.3.md").read_text()
-        self.assertIn("`D2R-XL-1.2.3.7z`", notes)
+        notes = (out / f"RELEASE_NOTES-{v}.md").read_text()
+        self.assertIn(f"`D2R-XL-{v}.7z`", notes)
         self.assertIn("Windows 11 opens .7z files", notes)
         self.assertNotIn("Unzip", notes)
         self.assertIn("as 7z", r.stdout)
