@@ -40,12 +40,19 @@ Expect bugs. Please report them (below).
 
 Use the **Median XL Launcher** ([docs/launcher.md](docs/launcher.md)):
 
-1. Download the launcher from [GitHub Releases](https://github.com/Nugwa628/mxl-d2r/releases).
+1. Download the launcher from https://dl.werdegames.com/mxl/ (the link is also on the [Releases](https://github.com/Nugwa628/mxl-d2r/releases) page).
 2. Run it, then press **Play**.
 
 The launcher copies your D2R into its own private folder at build 93847 and puts D2RLoader and the mod inside that copy.
 It does **not** modify your existing D2R install or any other mods, and your Battle.net install keeps updating as usual.
 It needs about 28 GB of free space for its copy.
+
+Two things the launcher needs from your existing D2R:
+
+- **The same drive.** The copy goes on the drive D2R is installed on. D2R's saved Battle.net sign-in only works from
+  that drive, so the launcher refuses other drives.
+- **A recent online sign-in.** D2R wants to have been online in the last 30 days. If the launcher says the sign-in is
+  missing or too old, start the normal D2R once from Battle.net, then use the launcher again.
 
 Advanced fallback: each release also has a plain zip with a `MedianXL/` folder (`MedianXL.mpq/` and `d2rloader/`). It
 is unpacked into the `mods` folder of a D2R + D2RLoader 1.3.1 install at build 93847 that you maintain yourself. Steps

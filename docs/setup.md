@@ -39,8 +39,8 @@ base game files are taken from the D2R install and are never committed or packed
      the default trusts an unchanged stat snapshot of the last full check; `--strict` also fails on extra files).
    - Changing assets: edit `assets/`, then `MXL_SKIP_ASSET_CHECK=1 tools/build.py` builds with a warning. A new pack:
      `py -3 tools/asset_pack.py build --version <N> --write-lock` (writes `build/asset-pack/assets-<N>.zip` + manifest and
-     `assets.lock`; `build` first scans the text files with `tools/check_public.py`'s rules and refuses on a hit, `asset_pack.py scan` runs only that); the coordinator uploads the zip as the asset of release tag `assets-<N>` (GitHub `Nugwa628/mxl-d2r`; the
-     forge release is the second URL) and commits `assets.lock`. Same tree, same bytes (sorted entries, fixed timestamps).
+     `assets.lock`; `build` first scans the text files with `tools/check_public.py`'s rules and refuses on a hit, `asset_pack.py scan` runs only that); the coordinator uploads the zip to the download host with
+     `tools/publish_release.py --assets` (it lands in `https://dl.werdegames.com/mxl/assets/`, docs/hosting.md) and commits `assets.lock`. Same tree, same bytes (sorted entries, fixed timestamps).
    - Our own files that used to sit in `assets/` are tracked now: [assets-median.md](assets-median.md) (what the Median tree
      is), [hd-wereowl-assets.md](hd-wereowl-assets.md) (the Wereowl model README), `tools/sprite3d/data/wereowl/cams.json`.
 5. Extract the D2R baseline, all sets the build reads:

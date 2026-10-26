@@ -49,6 +49,7 @@ FIXED_TIME = (1980, 1, 1, 0, 0, 0)         # zip entries: the pack is byte-ident
 CHUNK = 1 << 20
 LFS_POINTER = b"version https://git-lfs"
 REPO = "Nugwa628/mxl-d2r"
+DOWNLOAD_BASE = "https://dl.werdegames.com/mxl/"  # the download host (docs/hosting.md); publish_release.py --assets puts packs in assets/
 
 
 def sha256_file(path) -> str:
@@ -199,8 +200,7 @@ def build(args) -> int:
         "manifest_sha256": hashlib.sha256(data).hexdigest(),
         "files": len(files),
         "bytes": total,
-        "urls": [f"https://github.com/{REPO}/releases/download/assets-{args.version}/{pack.name}",
-                 f"https://git.werdegames.com/WerdeGames/mxl-d2r/releases/download/assets-{args.version}/{pack.name}"],
+        "urls": [f"{DOWNLOAD_BASE}assets/{pack.name}"],
     }
     print(f"{pack}: {lock['size']:,} bytes from {total:,} bytes in {len(files)} files ({time.time() - t0:.0f} s)")
     print(f"  sha256 {lock['sha256']}")
