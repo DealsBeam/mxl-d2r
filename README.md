@@ -75,6 +75,7 @@ The short version: `git clone --recurse-submodules`, get the asset pack, `py -3 
 |---|---|
 | `tools/` | Python CLI tools (MPQ/CASC extraction, bin2txt, formula codec, txt migration, validation) |
 | `plugin/` | D2RLoader plugin (C++20, CMake) that reimplements D2Sigma.dll |
+| `launcher/` | `MedianXL-Launcher.exe` (C++20, CMake): private game copy, D2RLoader, install and update ([docs/launcher.md](docs/launcher.md)) |
 | `work/mod/` | Generated D2R mod sources: migrated tables, strings, layouts |
 | `docs/` | Plan and one note per D2Sigma subsystem (`docs/subsystems/`) |
 | `research/` | D2R address registry and RE notes (no game binaries) |

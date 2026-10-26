@@ -1,0 +1,860 @@
+#include "app.h"
+
+#include "../core/gamecopy.h"
+#include "../core/inflate.h"
+#include "../core/sha256.h"
+#include "../core/zip.h"
+#include "http.h"
+#include "util.h"
+
+#include <windows.h>
+
+#include <algorithm>
+#include <map>
+
+namespace mxl {
+namespace {
+
+struct LoaderFile {
+	const char* path;  // inside the zip and inside the game folder
+	const char* sha256;
+	bool config;  // the player may edit it: written once, then only our keys are set
+};
+const LoaderFile LoaderFiles[] = {
+	{"D2RLoader.exe", "93021dad48533bcfca8a95c69a0cc00cdb9008a3ce6ceba1d04c7aca71985a10", false},
+	{"D2RCore.dll", "2a868d013d2e0830bd2d9e04b918b19e46a73cf726c833e70d089b948fdeb5a2", false},
+	{"d2rloader.mpq", "1f02aa4e3179cb8a8417125160aa3ef18003ea81ee1a4f54e0a76fd3f22d933b", false},
+	{"d2rloader/config/d2rloader.toml", "86be762edb678386ef109589df85cb234cf13d992c548607a44f072d77655e42", true},
+};
+const char* LoaderDirs[] = {"mods", "d2rloader/config", "d2rloader/data", "d2rloader/plugins", "d2rloader/logs", "d2rloader/crashes"};
+
+constexpr uint64_t SpareBytes = 3ull << 30;  // the release (about 1.5 GB) plus room for logs and saves
+constexpr const char* MarkerName = "medianxl-copy.json";
+
+std::string Mb(uint64_t b) { return std::to_string((b + (1 << 19)) >> 20) + " MB"; }
+std::string Gb(uint64_t b) {
+	char s[32];
+	std::snprintf(s, sizeof(s), "%.1f GB", double(b) / double(1ull << 30));
+	return s;
+}
+
+std::string RandomId() {
+	LARGE_INTEGER c;
+	QueryPerformanceCounter(&c);
+	char s[40];
+	std::snprintf(s, sizeof(s), "%08lx%016llx", GetCurrentProcessId(), static_cast<unsigned long long>(c.QuadPart));
+	return s;
+}
+
+// Read a zip entry out of a whole-file buffer (the D2RLoader zip is read from the cache in one piece).
+bool ZipEntryData(const std::string& zip, const ZipEntry& e, std::vector<uint8_t>& out, std::string& error) {
+	auto p = reinterpret_cast<const uint8_t*>(zip.data());
+	if (e.offset + 30 > zip.size()) {
+		error = "zip entry outside the file";
+		return false;
+	}
+	size_t hs = LocalHeaderSize(p + e.offset, zip.size() - size_t(e.offset));
+	if (!hs || e.offset + hs + e.compSize > zip.size()) {
+		error = "bad zip entry " + e.name;
+		return false;
+	}
+	const uint8_t* d = p + e.offset + hs;
+	if (e.method == 0)
+		out.assign(d, d + e.compSize);
+	else if (e.method != 8 || !Inflate(d, size_t(e.compSize), out, size_t(e.size))) {
+		error = "cannot unpack " + e.name;
+		return false;
+	}
+	if (Crc32(out.data(), out.size()) != e.crc) {
+		error = "CRC mismatch in " + e.name;
+		return false;
+	}
+	return true;
+}
+
+bool ReadZipDirectory(const std::string& zip, std::vector<ZipEntry>& entries, std::string& error) {
+	size_t tailSize = zip.size() < 70000 ? zip.size() : 70000;
+	std::vector<uint8_t> tail(zip.end() - std::ptrdiff_t(tailSize), zip.end());
+	ZipTail t;
+	if (!FindZipTail(tail, zip.size(), t, error))
+		return false;
+	return ParseCentralDirectory(reinterpret_cast<const uint8_t*>(zip.data()) + t.cdOffset, size_t(t.cdSize), t.entries, entries, error);
+}
+
+std::wstring Quote(const std::wstring& s) { return L"\"" + s + L"\""; }
+
+}  // namespace
+
+Launcher::Launcher(Options o) : opt_(std::move(o)) {
+	if (opt_.dataDir.empty())
+		opt_.dataDir = JoinPath(KnownFolder(0), L"MedianXL");
+	statePath_ = JoinPath(opt_.dataDir, L"launcher.json");
+	LoadState();
+	if (opt_.feed.empty())
+		opt_.feed = state_["feed"].Str(DefaultFeed);
+}
+
+void Launcher::Report(const std::string& text, double fraction) {
+	Log(text);
+	if (onProgress)
+		onProgress({text, fraction});
+}
+
+bool Launcher::LoadState() {
+	std::string text, err;
+	state_ = Json::Object();
+	if (!ReadWholeFile(statePath_, text))
+		return false;
+	Json j;
+	if (!Json::Parse(text, j, err) || !j.IsObject()) {
+		Log("state file unreadable (" + err + "), starting over: " + Utf8(statePath_));
+		return false;
+	}
+	state_ = j;
+	return true;
+}
+
+bool Launcher::SaveState() {
+	state_.Set("launcher", LauncherVersion);
+	state_.Set("feed", opt_.feed);
+	return WriteFileAtomic(statePath_, state_.Dump());
+}
+
+std::string Launcher::ModFolder() const {
+	return !feed_.modFolder.empty() ? feed_.modFolder : state_["mod"]["modFolder"].Str("MedianXL");
+}
+std::wstring Launcher::ModDir() const { return JoinPath(gameDir_, L"mods\\" + Wide(ModFolder())); }
+
+// The copy's own d2rloader.toml gets the release's launch keys (docs/release.md "launch"); D2RLoader started without
+// arguments builds the D2R command line from them ("<launch_arguments> -mod <default_mod>").
+bool Launcher::WriteLaunchConfig(std::string& error) {
+	std::wstring toml = JoinPath(gameDir_, L"d2rloader\\config\\d2rloader.toml");
+	std::string text;
+	if (!ReadWholeFile(toml, text)) {
+		error = "Cannot read " + Utf8(toml) + ". Press Repair.";
+		return false;
+	}
+	const Json& launch = state_["mod"]["launch"];
+	std::string mod = !feed_.launchDefaultMod.empty() ? feed_.launchDefaultMod : launch["default_mod"].Str(ModFolder());
+	std::string args = feed_.version.empty() ? launch["launch_arguments"].Str("-txt") : feed_.launchArguments;
+	if (!opt_.extraArgs.empty())
+		args += (args.empty() ? "" : " ") + Utf8(opt_.extraArgs);
+	std::string quoted;
+	for (char c : args)
+		if (c != '"' && uint8_t(c) >= 0x20)
+			quoted += c;
+	std::string fixed = SetTomlKey(text, "d2rloader", "default_mod", "\"" + mod + "\"");
+	fixed = SetTomlKey(fixed, "d2rloader", "launch_arguments", "\"" + quoted + "\"");
+	fixed = SetTomlKey(fixed, "d2rloader", "check_for_updates", "false");
+	if (fixed != text && !WriteFileAtomic(toml, fixed)) {
+		error = "Cannot write " + Utf8(toml);
+		return false;
+	}
+	return true;
+}
+
+std::wstring Launcher::DefaultGameDir(const std::wstring& source) {
+	std::wstring root;
+	uint32_t src = VolumeSerial(source, &root);
+	std::wstring local = JoinPath(opt_.dataDir, L"game");
+	if (!src || VolumeSerial(opt_.dataDir) == src)
+		return local;
+	return JoinPath(root, L"MedianXL\\game");  // same drive as D2R (docs/launcher.md "Drive rule")
+}
+
+bool Launcher::LocationOk(const std::wstring& source, const std::wstring& dir, std::string& error) {
+	if (PathUnder(dir, source) || PathUnder(source, dir)) {
+		error = "The Median XL folder must be outside the D2R folder (" + Utf8(source) + ").";
+		return false;
+	}
+	if (dir.size() <= 3) {
+		error = "Pick a folder, not a whole drive.";
+		return false;
+	}
+	if (!opt_.anyDrive && VolumeSerial(dir) != VolumeSerial(source)) {
+		std::wstring root;
+		VolumeSerial(source, &root);
+		error = "The Median XL folder must be on the same drive as D2R (" + Utf8(root) +
+		        "): D2R's Battle.net login file only opens from that drive. Pick a folder on " + Utf8(root) + ".";
+		return false;
+	}
+	return true;
+}
+
+bool Launcher::Prepare(std::string& error) {
+	// the source: from the command line, the state, or detection
+	std::wstring src = opt_.source.empty() ? Wide(state_["source"].Str()) : opt_.source;
+	if (src.empty() || !LooksLikeD2R(src)) {
+		auto found = FindD2RInstalls();
+		if (found.empty()) {
+			error = "D2R was not found. Install Diablo II: Resurrected from Battle.net or Steam, or choose its folder.";
+			return false;
+		}
+		source_ = found.front();
+	} else {
+		source_ = InspectD2R(src, opt_.source.empty() ? state_["source_kind"].Str("saved") : "chosen");
+	}
+	if (FileExists(JoinPath(source_.dir, Wide(MarkerName)))) {
+		error = "That folder is a Median XL game copy, not the D2R install. Choose the D2R folder from Battle.net or Steam.";
+		return false;
+	}
+	gameDir_ = !opt_.gameDir.empty() ? opt_.gameDir : !state_["game_dir"].Str().empty() ? Wide(state_["game_dir"].Str()) : DefaultGameDir(source_.dir);
+	state_.Set("source", Utf8(source_.dir));
+	state_.Set("source_kind", source_.source);
+	state_.Set("game_dir", Utf8(gameDir_));
+	return true;
+}
+
+std::wstring Launcher::SavesDir() {
+	std::string savepath = "MedianXL/", text, err;
+	Json j;
+	if (!gameDir_.empty() && ReadWholeFile(JoinPath(ModDir(), L"MedianXL.mpq\\modinfo.json"), text) && Json::Parse(text, j, err))
+		savepath = j["savepath"].Str(savepath);
+	std::wstring w = Wide(savepath);
+	while (!w.empty() && (w.back() == L'/' || w.back() == L'\\'))
+		w.pop_back();
+	return JoinPath(KnownFolder(1), L"Diablo II Resurrected\\mods\\" + w);
+}
+
+// ---------------------------------------------------------------- the copy
+
+bool Launcher::EnsureCopy(bool verify, std::string& error) {
+	bool complete = state_["copy_complete"].Bool() && FileExists(JoinPath(gameDir_, Wide(MarkerName))) && LooksLikeD2R(gameDir_);
+	if (complete && !verify) {
+		D2RInstall copy = InspectD2R(gameDir_, "copy");
+		if (copy.build.verdict != BuildVerdict::Ok) {
+			error = "The Median XL game copy is not build " + std::to_string(RequiredBuild) + " (" + copy.build.message + "). Use Repair.";
+			return false;
+		}
+		return true;
+	}
+	if (source_.build.verdict != BuildVerdict::Ok) {
+		if (complete) {  // a newer D2R cannot repair the frozen copy, but the copy itself still works
+			Report("D2R is now build " + std::to_string(source_.build.build) + "; the Median XL copy stays at build " +
+			       std::to_string(RequiredBuild) + " and is not compared with it.");
+			return true;
+		}
+		error = source_.build.message;
+		return false;
+	}
+	if (!complete && !LocationOk(source_.dir, gameDir_, error))
+		return false;
+	std::wstring marker = JoinPath(gameDir_, Wide(MarkerName));
+	if (DirExists(gameDir_) && !FileExists(marker)) {
+		WIN32_FIND_DATAW fd;  // an existing folder must be empty: we only ever delete what we made
+		HANDLE h = FindFirstFileW(JoinPath(gameDir_, L"*").c_str(), &fd);
+		bool empty = true;
+		if (h != INVALID_HANDLE_VALUE) {
+			do {
+				std::wstring n = fd.cFileName;
+				empty = empty && (n == L"." || n == L"..");
+			} while (empty && FindNextFileW(h, &fd));
+			FindClose(h);
+		}
+		if (!empty) {
+			error = "The folder " + Utf8(gameDir_) + " is not empty and was not made by this launcher. Choose an empty or new folder.";
+			return false;
+		}
+	}
+	Report("Listing the files of D2R in " + Utf8(source_.dir) + " ...");
+	CopyList list;
+	if (!ListGameFiles(source_.dir, list, error))
+		return false;
+	uint64_t present = 0;
+	for (const auto& f : list.files) {
+		uint64_t size = 0, mtime = 0;
+		if (FileSize(JoinPath(gameDir_, f.rel), size, &mtime) && size == f.size && mtime == f.mtime)
+			present += f.size;
+	}
+	uint64_t free = 0;
+	if (FreeBytes(gameDir_, free) && free < list.bytes - present + SpareBytes) {
+		error = "Not enough disk space for the Median XL game copy: it needs " + Gb(list.bytes - present + SpareBytes) + ", " + Gb(free) +
+		        " are free on that drive.";
+		return false;
+	}
+	if (!FileExists(marker)) {
+		MakeDirs(gameDir_);
+		Json m = Json::Object();
+		m.Set("made_by", "Median XL launcher").Set("id", RandomId()).Set("source", Utf8(source_.dir)).Set("build", RequiredBuild);
+		if (!WriteFileAtomic(marker, m.Dump())) {
+			error = "Cannot write into " + Utf8(gameDir_) + ": " + Utf8(LastErrorText(GetLastError()));
+			return false;
+		}
+	}
+	std::string marktext, err;
+	Json mj;
+	if (ReadWholeFile(marker, marktext) && Json::Parse(marktext, mj, err))
+		state_.Set("copy_id", mj["id"].Str());
+	state_.Set("copy_complete", false);
+	SaveState();
+	Report("Copying D2R (" + Gb(list.bytes) + (present ? ", " + Gb(present) + " already copied" : "") + ") to " + Utf8(gameDir_) +
+	       " (" + FileSystemName(gameDir_) + ")");
+	ULONGLONG t0 = GetTickCount64();
+	bool ok = CopyGameFiles(source_.dir, gameDir_, list, cancel, [&](const CopyProgress& p) {
+		double secs = double(GetTickCount64() - t0) / 1000.0;
+		double rate = secs > 1 ? double(p.doneBytes - p.skippedBytes) / secs : 0;
+		std::string eta = rate > 0 && p.totalBytes > p.doneBytes ? ", " + std::to_string(int(double(p.totalBytes - p.doneBytes) / rate / 60.0 + 0.5)) + " min left" : "";
+		if (onProgress)
+			onProgress({"Copying D2R: " + Gb(p.doneBytes) + " of " + Gb(p.totalBytes) + eta,
+			             p.totalBytes ? double(p.doneBytes) / double(p.totalBytes) : -1});
+	}, error);
+	if (!ok)
+		return false;
+	D2RInstall copy = InspectD2R(gameDir_, "copy");
+	if (copy.build.verdict != BuildVerdict::Ok) {
+		error = "The copy does not read as build " + std::to_string(RequiredBuild) + ": " + copy.build.message;
+		return false;
+	}
+	state_.Set("copy_complete", true);
+	state_.Set("copy_build", copy.build.build);
+	state_.Set("copy_bytes", list.bytes);
+	SaveState();
+	Report("Game copy ready: " + Utf8(gameDir_) + " (" + Gb(list.bytes) + ", " + std::to_string(list.files.size()) + " files, " +
+	       std::to_string(int(double(GetTickCount64() - t0) / 1000.0)) + " s)");
+	return true;
+}
+
+// ---------------------------------------------------------------- D2RLoader
+
+// On top of the pinned sha256: the Authenticode signer of the two binaries (docs/release.md "d2rloader").
+bool Launcher::CheckLoaderSignatures(std::string& error) {
+	for (const wchar_t* name : {L"D2RLoader.exe", L"D2RCore.dll"}) {
+		std::string thumb;
+		bool intact = false;
+		if (!SignerThumbprint(JoinPath(gameDir_, name), thumb, intact) || !intact || thumb != LoaderSigner) {
+			error = "The D2RLoader file " + Utf8(name) + " does not carry the expected signature (signer " + (thumb.empty() ? "none" : thumb) +
+			        (intact ? "" : ", signature not intact") + "). Press Repair.";
+			return false;
+		}
+	}
+	return true;
+}
+
+bool Launcher::EnsureLoader(bool verify, std::string& error) {
+	bool allOk = true;
+	for (const auto& f : LoaderFiles) {
+		std::wstring p = JoinPath(gameDir_, Wide(f.path));
+		if (f.config) {
+			allOk = allOk && FileExists(p);
+			continue;
+		}
+		uint64_t size = 0, mtime = 0;
+		auto rec = state_["loader_files"][f.path];
+		bool quick = !verify && FileSize(p, size, &mtime) && rec["mtime"].Str() == std::to_string(mtime) && rec["size"].Int() == int64_t(size);
+		allOk = allOk && (quick || FileSha256(p) == f.sha256);
+	}
+	if (allOk && (!verify || CheckLoaderSignatures(error))) {
+		state_.Set("loader", LoaderVersion);
+		return true;
+	}
+	error.clear();
+	std::wstring cache = JoinPath(opt_.dataDir, L"cache\\D2RLoader-" + Wide(LoaderVersion) + L".zip");
+	MakeDirs(ParentDir(cache));
+	std::string zip;
+	if (!ReadWholeFile(cache, zip) || Sha256Hex(zip.data(), zip.size()) != LoaderZipSha256) {
+		std::string url = opt_.loaderUrl.empty() ? LoaderUrl : opt_.loaderUrl;
+		Report("Downloading D2RLoader " + std::string(LoaderVersion) + " from " + url);
+		zip.clear();
+		FetchResult r = Fetch(url, 0, 0, [&](const uint8_t* p, size_t n) {
+			if (zip.size() + n > LoaderZipSize + 1024)
+				return false;
+			zip.append(reinterpret_cast<const char*>(p), n);
+			if (onProgress)
+				onProgress({"Downloading D2RLoader: " + Mb(zip.size()) + " of " + Mb(LoaderZipSize), double(zip.size()) / double(LoaderZipSize)});
+			return !cancel.load();
+		});
+		if (!r.ok) {
+			error = "D2RLoader download failed: " + r.error;
+			return false;
+		}
+		std::string got = Sha256Hex(zip.data(), zip.size());
+		if (got != LoaderZipSha256) {
+			error = "The D2RLoader download does not match the pinned " + std::string(LoaderVersion) + " (sha256 " + got +
+			        "). Nothing was installed.";
+			return false;
+		}
+		WriteFileAtomic(cache, zip);
+	}
+	std::vector<ZipEntry> entries;
+	if (!ReadZipDirectory(zip, entries, error))
+		return false;
+	for (const char* d : LoaderDirs)
+		MakeDirs(JoinPath(gameDir_, Wide(d)));
+	Json rec = Json::Object();
+	for (const auto& f : LoaderFiles) {
+		auto it = std::find_if(entries.begin(), entries.end(), [&](const ZipEntry& e) { return e.name == f.path; });
+		if (it == entries.end()) {
+			error = std::string("D2RLoader zip lacks ") + f.path;
+			return false;
+		}
+		std::wstring p = JoinPath(gameDir_, Wide(f.path));
+		std::vector<uint8_t> data;
+		if (!ZipEntryData(zip, *it, data, error))
+			return false;
+		if (Sha256Hex(data.data(), data.size()) != f.sha256) {
+			error = std::string("D2RLoader file ") + f.path + " does not match the pinned version";
+			return false;
+		}
+		if (f.config) {  // the template, only when missing; the launch keys are set by WriteLaunchConfig
+			if (!FileExists(p) && !WriteFileAtomic(p, data.data(), data.size())) {
+				error = "Cannot write " + Utf8(p);
+				return false;
+			}
+			continue;
+		}
+		if (FileSha256(p) != f.sha256) {
+			Report(std::string("Installing D2RLoader file ") + f.path);
+			if (!WriteFileAtomic(p, data.data(), data.size())) {
+				error = "Cannot write " + Utf8(p) + ": " + Utf8(LastErrorText(GetLastError()));
+				return false;
+			}
+		}
+		uint64_t size = 0, mtime = 0;
+		FileSize(p, size, &mtime);
+		Json r = Json::Object();
+		r.Set("size", size).Set("mtime", std::to_string(mtime));
+		rec.Set(f.path, r);
+	}
+	if (!CheckLoaderSignatures(error))
+		return false;
+	state_.Set("loader_files", rec);
+	state_.Set("loader", LoaderVersion);
+	SaveState();
+	Report(std::string("D2RLoader ") + LoaderVersion + " ready in the game copy");
+	return true;
+}
+
+// ---------------------------------------------------------------- the release
+
+bool Launcher::CheckFeed(std::string& error) {
+	Report("Reading the release list " + opt_.feed);
+	std::string text;
+	if (!FetchText(opt_.feed, text, error)) {
+		error = "Cannot read the Median XL release list (" + opt_.feed + "): " + error;
+		return false;
+	}
+	Manifest m;
+	if (!ParseManifest(text, m, error)) {
+		error = "The release list is damaged: " + error;
+		return false;
+	}
+	if (m.d2rBuild != RequiredBuild) {
+		error = "Median XL " + m.version + " needs D2R build " + std::to_string(m.d2rBuild) + "; this launcher knows build " +
+		        std::to_string(RequiredBuild) + ". Download the new launcher from " + ReleasesUrl + ".";
+		return false;
+	}
+	if (!m.complete) {
+		error = "The release list names Median XL " + m.version + " as incomplete (a test package without game data); it cannot be installed.";
+		return false;
+	}
+	// the launcher installs only its own pinned D2RLoader; a release that names another one needs a new launcher
+	if ((!m.d2rloader.version.empty() && m.d2rloader.version != LoaderVersion) ||
+	    (!m.d2rloader.sha256.empty() && m.d2rloader.sha256 != LoaderZipSha256) ||
+	    (!m.d2rloader.signerThumbprint.empty() && m.d2rloader.signerThumbprint != LoaderSigner)) {
+		error = "Median XL " + m.version + " needs D2RLoader " + m.d2rloader.version + "; this launcher installs " + LoaderVersion +
+		        ". Download the new launcher from " + ReleasesUrl + ".";
+		return false;
+	}
+	if (!m.launcherMin.empty() && CompareVersions(LauncherVersion, m.launcherMin) < 0) {
+		error = "Median XL " + m.version + " needs launcher " + m.launcherMin + " or newer (this is " + LauncherVersion + ").";
+		return false;
+	}
+	feed_ = std::move(m);
+	feedChecked_ = true;
+	return true;
+}
+
+bool Launcher::EnsureMod(bool verify, std::string& error) {
+	if (!feedChecked_ && !CheckFeed(error))
+		return false;
+	std::wstring mod = ModDir();
+	// d2r.imageTimestamp is not compared here: it is the TimeDateStamp of the unpacked image in memory (what the
+	// plugin's build guard reads); the D2R.exe file of build 93847 carries another one (0x6a6b96a4)
+	Json files = state_["mod_files"].IsObject() ? state_["mod_files"] : Json::Object();
+	uint64_t hashed = 0;
+	Report(verify ? "Checking every installed Median XL file ..." : "Comparing the installed files with release " + feed_.version + " ...");
+	auto current = [&](const std::string& path) -> std::string {
+		std::wstring p = JoinPath(mod, Wide(path));
+		uint64_t size = 0, mtime = 0;
+		if (!FileSize(p, size, &mtime))
+			return "";
+		const Json& r = files[path];
+		if (!verify && r["size"].Int(-1) == int64_t(size) && r["mtime"].Str() == std::to_string(mtime) && r["sha256"].IsString())
+			return r["sha256"].Str();
+		hashed += size;
+		std::string sha = FileSha256(p);
+		Json rec = Json::Object();
+		rec.Set("size", size).Set("mtime", std::to_string(mtime)).Set("sha256", sha);
+		files.Set(path, rec);
+		return sha;
+	};
+	InstallPlan plan = PlanInstall(feed_, ListFilesUnder(mod), current);
+	for (const auto& k : plan.preserved)
+		Report("Kept your " + k);
+	for (const auto& r : plan.remove) {  // not part of the release (docs/release.md "files")
+		DeleteFileW(LongPath(JoinPath(mod, Wide(r))).c_str());
+		files.Set(r, Json());
+	}
+	if (!plan.remove.empty())
+		Report("Removed " + std::to_string(plan.remove.size()) + " files that are not part of Median XL " + feed_.version);
+	if (!plan.fetch.empty()) {
+		std::string url = ResolveUrl(opt_.feed, feed_.zipName);
+		uint64_t zipSize = 0;
+		if (!FetchSize(url, zipSize, error)) {
+			error = "Cannot reach the release package: " + error;
+			return false;
+		}
+		if (feed_.zipSize && zipSize != feed_.zipSize) {
+			error = "The release package has " + std::to_string(zipSize) + " bytes, the release list says " + std::to_string(feed_.zipSize);
+			return false;
+		}
+		Report(std::to_string(plan.fetch.size()) + " files to install (" + Mb(plan.fetchBytes) + ") from " + url);
+		uint64_t tailLen = zipSize < 70000 ? zipSize : 70000;
+		std::vector<uint8_t> tail;
+		FetchResult fr = Fetch(url, zipSize - tailLen, tailLen, [&](const uint8_t* p, size_t n) { tail.insert(tail.end(), p, p + n); return true; });
+		ZipTail zt;
+		if (!fr.ok || !FindZipTail(tail, zipSize, zt, error)) {
+			error = "Cannot read the release package directory: " + (fr.ok ? error : fr.error);
+			return false;
+		}
+		std::vector<uint8_t> cd;
+		fr = Fetch(url, zt.cdOffset, zt.cdSize, [&](const uint8_t* p, size_t n) { cd.insert(cd.end(), p, p + n); return true; });
+		std::vector<ZipEntry> entries;
+		if (!fr.ok || !ParseCentralDirectory(cd.data(), cd.size(), zt.entries, entries, error)) {
+			error = "Cannot read the release package directory: " + (fr.ok ? error : fr.error);
+			return false;
+		}
+		std::sort(entries.begin(), entries.end(), [](const ZipEntry& a, const ZipEntry& b) { return a.offset < b.offset; });
+		std::map<std::string, size_t> byName;
+		for (size_t i = 0; i < entries.size(); ++i)
+			byName[entries[i].name] = i;
+		std::string prefix = feed_.modFolder + "/";  // the zip's top folder (docs/release.md)
+		std::vector<size_t> wanted;
+		std::map<size_t, const ManifestFile*> fileOf;
+		for (const auto& f : plan.fetch) {
+			auto it = byName.find(prefix + f.path);
+			if (it == byName.end()) {
+				error = "The release package lacks " + prefix + f.path;
+				return false;
+			}
+			const ZipEntry& e = entries[it->second];
+			if (e.size != f.size || (e.method != 0 && e.method != 8) || (e.flags & 1)) {
+				error = "The release package entry " + e.name + " does not match the release list (size, method or encryption)";
+				return false;
+			}
+			wanted.push_back(it->second);
+			fileOf[it->second] = &f;
+		}
+		auto ranges = PlanRanges(entries, wanted, zt.cdOffset, 1u << 20);
+		uint64_t totalRange = 0, doneRange = 0;
+		for (const auto& r : ranges)
+			totalRange += r.end - r.begin;
+		size_t installed = 0;
+		ULONGLONG lastSave = GetTickCount64();
+		for (const auto& r : ranges) {
+			std::vector<uint8_t> buf;
+			size_t start = 0;  // bytes of buf already used
+			uint64_t pos = r.begin;  // file offset of buf[start]
+			size_t next = 0;
+			std::string werr;
+			auto sink = [&](const uint8_t* p, size_t n) -> bool {
+				buf.insert(buf.end(), p, p + n);
+				doneRange += n;
+				while (next < r.entries.size()) {
+					const ZipEntry& e = entries[r.entries[next]];
+					if (e.offset > pos) {  // bytes between wanted entries
+						size_t drop = size_t(std::min<uint64_t>(e.offset - pos, buf.size() - start));
+						start += drop;
+						pos += drop;
+						if (e.offset > pos)
+							break;
+					}
+					size_t avail = buf.size() - start;
+					size_t hs = avail >= 30 ? LocalHeaderSize(buf.data() + start, avail) : 0;
+					if (avail >= 30 && !hs) {
+						werr = "bad local header for " + e.name;
+						return false;
+					}
+					if (!hs || avail < hs + e.compSize)
+						break;
+					const ManifestFile& f = *fileOf[r.entries[next]];
+					const uint8_t* d = buf.data() + start + hs;
+					std::vector<uint8_t> data;
+					if (e.method == 0)
+						data.assign(d, d + e.compSize);
+					else if (!Inflate(d, size_t(e.compSize), data, size_t(e.size))) {
+						werr = "cannot unpack " + e.name;
+						return false;
+					}
+					if (Crc32(data.data(), data.size()) != e.crc || Sha256Hex(data.data(), data.size()) != f.sha256) {
+						werr = "downloaded " + f.path + " does not match the release list (sha256)";
+						return false;
+					}
+					std::wstring dst = JoinPath(mod, Wide(f.path));
+					if (!WriteFileAtomic(dst, data.data(), data.size())) {
+						werr = "cannot write " + Utf8(dst) + ": " + Utf8(LastErrorText(GetLastError()));
+						return false;
+					}
+					uint64_t size = 0, mtime = 0;
+					FileSize(dst, size, &mtime);
+					Json rec = Json::Object();
+					rec.Set("size", size).Set("mtime", std::to_string(mtime)).Set("sha256", f.sha256);
+					files.Set(f.path, rec);
+					++installed;
+					start += hs + size_t(e.compSize);
+					pos += hs + e.compSize;
+					++next;
+				}
+				if (start > (8u << 20) && start * 2 > buf.size()) {
+					buf.erase(buf.begin(), buf.begin() + std::ptrdiff_t(start));
+					start = 0;
+				}
+				ULONGLONG now = GetTickCount64();
+				if (now - lastSave > 5000) {  // resume point: what is installed so far
+					lastSave = now;
+					state_.Set("mod_files", files);
+					SaveState();
+					if (onProgress)
+						onProgress({"Installing Median XL " + feed_.version + ": " + std::to_string(installed) + " of " + std::to_string(plan.fetch.size()) +
+						                " files (" + Mb(doneRange) + " of " + Mb(totalRange) + ")",
+						            totalRange ? double(doneRange) / double(totalRange) : -1});
+				}
+				return !cancel.load();
+			};
+			FetchResult res = Fetch(url, r.begin, r.end - r.begin, sink);
+			if (!res.ok || !werr.empty() || next != r.entries.size()) {
+				state_.Set("mod_files", files);
+				SaveState();
+				error = "Installing Median XL stopped: " + (!werr.empty() ? werr : !res.ok ? res.error : "the download ended early") +
+				        ". Update again to continue where it stopped.";
+				return false;
+			}
+		}
+		Report("Installed " + std::to_string(installed) + " files of Median XL " + feed_.version);
+	} else {
+		Report("Median XL " + feed_.version + " is installed and up to date" + (hashed ? " (" + Mb(hashed) + " checked)" : ""));
+	}
+	Json clean = Json::Object();  // drop records of files that are gone
+	for (const auto& [k, v] : files.members())
+		if (v.IsObject())
+			clean.Set(k, v);
+	state_.Set("mod_files", clean);
+	state_.Set("mod", ManifestToJson(feed_));
+	SaveState();
+	return WriteLaunchConfig(error);
+}
+
+// ---------------------------------------------------------------- actions
+
+bool Launcher::InstallOrUpdate(std::string& error) {
+	cancel = false;
+	if (!Prepare(error) || !CheckFeed(error))
+		return false;
+	if (!ProcessesUnder(gameDir_).empty()) {
+		error = "Median XL is running. Close the game first.";
+		return false;
+	}
+	return EnsureCopy(false, error) && EnsureLoader(false, error) && EnsureMod(false, error);
+}
+
+bool Launcher::Repair(std::string& error) {
+	cancel = false;
+	if (!Prepare(error) || !CheckFeed(error))
+		return false;
+	if (!ProcessesUnder(gameDir_).empty()) {
+		error = "Median XL is running. Close the game first.";
+		return false;
+	}
+	return EnsureCopy(true, error) && EnsureLoader(true, error) && EnsureMod(true, error);
+}
+
+bool Launcher::CanPlay(std::string* why) {
+	std::string e;
+	if (gameDir_.empty() && !Prepare(e)) {
+		if (why) *why = e;
+		return false;
+	}
+	if (!state_["copy_complete"].Bool() || !LooksLikeD2R(gameDir_)) {
+		if (why) *why = "Median XL is not installed yet. Press Update.";
+		return false;
+	}
+	if (!FileExists(JoinPath(gameDir_, L"D2RLoader.exe")) || !state_["mod"].IsObject()) {
+		if (why) *why = "The installation is incomplete. Press Update or Repair.";
+		return false;
+	}
+	return true;
+}
+
+namespace {
+struct FindCtx {
+	std::wstring dir;
+	HWND found = nullptr;
+};
+BOOL CALLBACK FindGameWindow(HWND h, LPARAM lp) {
+	auto ctx = reinterpret_cast<FindCtx*>(lp);
+	if (!IsWindowVisible(h))
+		return TRUE;
+	wchar_t title[128];
+	GetWindowTextW(h, title, int(std::size(title)));
+	if (std::wstring(title).rfind(L"Diablo II", 0) != 0)
+		return TRUE;
+	DWORD pid = 0;
+	GetWindowThreadProcessId(h, &pid);
+	HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+	if (!p)
+		return TRUE;
+	wchar_t img[MAX_PATH * 2];
+	DWORD n = DWORD(std::size(img));
+	bool ours = QueryFullProcessImageNameW(p, 0, img, &n) && PathUnder(std::wstring(img, n), ctx->dir);
+	CloseHandle(p);
+	if (ours) {
+		ctx->found = h;
+		return FALSE;
+	}
+	return TRUE;
+}
+}  // namespace
+
+bool Launcher::Play(std::string& error) {
+	cancel = false;
+	if (!Prepare(error))
+		return false;
+	std::string why;
+	if (!CanPlay(&why)) {
+		error = why;
+		return false;
+	}
+	if (!ProcessesUnder(gameDir_).empty()) {
+		error = "Median XL is already running.";
+		return false;
+	}
+	// D2R's options (graphics, sound) live in one Settings.json for every install; keep the player's own once
+	std::wstring settings = JoinPath(KnownFolder(1), L"Diablo II Resurrected\\Settings.json");
+	std::wstring backup = JoinPath(opt_.dataDir, L"backup\\Settings.json");
+	if (FileExists(settings) && !FileExists(backup)) {
+		MakeDirs(ParentDir(backup));
+		if (CopyFileW(settings.c_str(), backup.c_str(), TRUE))
+			Report("Saved a copy of your D2R settings to " + Utf8(backup));
+	}
+	std::wstring cookie = JoinPath(KnownFolder(0), L"Blizzard Entertainment\\ClientSdk\\cookie.bin");
+	uint64_t csize = 0, ctime = 0;
+	if (!FileSize(cookie, csize, &ctime)) {
+		Report("Note: no Battle.net login record found. If D2R says it has not been online for 30 days, start D2R once from Battle.net while online.");
+	} else {
+		FILETIME now;
+		GetSystemTimeAsFileTime(&now);
+		uint64_t n = (uint64_t(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+		double days = double(n - ctime) / (10000000.0 * 86400.0);
+		if (days > 25)
+			Report("Note: D2R was last started online " + std::to_string(int(days)) +
+			       " days ago. D2R asks for an online start every 30 days: start it once from Battle.net.");
+	}
+	std::wstring exe = JoinPath(gameDir_, L"D2RLoader.exe");
+	if (!WriteLaunchConfig(error))  // the mod and its arguments come from the copy's d2rloader.toml
+		return false;
+	std::wstring cmd = Quote(exe);
+	STARTUPINFOW si{};
+	si.cb = sizeof(si);
+	if (opt_.background) {
+		si.dwFlags = STARTF_USESHOWWINDOW;
+		si.wShowWindow = SW_SHOWNOACTIVATE;
+	}
+	PROCESS_INFORMATION pi{};
+	HWND prevFg = GetForegroundWindow();
+	Report("Starting " + Utf8(cmd));
+	if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, gameDir_.c_str(), &si, &pi)) {
+		error = "Cannot start D2RLoader: " + Utf8(LastErrorText(GetLastError()));
+		return false;
+	}
+	CloseHandle(pi.hThread);
+	CloseHandle(pi.hProcess);
+	// The loader restarts itself and D2R takes the foreground when its window appears. In background mode (tests)
+	// the window goes to the back once and the foreground is handed back, exactly as tools/game_ctl.py does.
+	ULONGLONG t0 = GetTickCount64();
+	bool sentBack = !opt_.background;
+	while (GetTickCount64() - t0 < 30000) {
+		if (!sentBack) {
+			FindCtx ctx{gameDir_};
+			EnumWindows(FindGameWindow, reinterpret_cast<LPARAM>(&ctx));
+			if (ctx.found) {
+				SetWindowPos(ctx.found, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+				if (prevFg && GetForegroundWindow() == ctx.found)
+					SetForegroundWindow(prevFg);
+				sentBack = true;
+			}
+		}
+		Sleep(50);
+	}
+	if (ProcessesUnder(gameDir_).empty()) {
+		error = "The game closed right after starting. Logs: " + Utf8(JoinPath(gameDir_, L"d2rloader\\logs")) +
+		        ". If D2R is installed on another drive than the Median XL folder, move the Median XL folder to that drive.";
+		return false;
+	}
+	Report("Median XL is running.");
+	return true;
+}
+
+bool Launcher::Uninstall(std::string& error) {
+	cancel = false;
+	std::wstring dir = !opt_.gameDir.empty() ? opt_.gameDir : Wide(state_["game_dir"].Str());
+	gameDir_ = dir;
+	std::wstring saves = SavesDir();  // from the mod's modinfo.json, before it goes
+	if (!dir.empty() && !ProcessesUnder(dir).empty()) {
+		error = "Median XL is running. Close the game first.";
+		return false;
+	}
+	if (!dir.empty() && DirExists(dir)) {
+		std::wstring marker = JoinPath(dir, Wide(MarkerName));
+		std::string text, err;
+		Json m;
+		if (!ReadWholeFile(marker, text) || !Json::Parse(text, m, err) || m["made_by"].Str() != "Median XL launcher") {
+			error = "Not removing " + Utf8(dir) + ": it has no Median XL launcher marker, so this launcher did not make it.";
+			return false;
+		}
+		if (!state_["copy_id"].Str().empty() && m["id"].Str() != state_["copy_id"].Str()) {
+			error = "Not removing " + Utf8(dir) + ": its marker belongs to another installation.";
+			return false;
+		}
+		if (!state_["source"].Str().empty() && (PathUnder(dir, Wide(state_["source"].Str())) || PathUnder(Wide(state_["source"].Str()), dir))) {
+			error = "Not removing " + Utf8(dir) + ": it overlaps the D2R install.";
+			return false;
+		}
+		Report("Removing the Median XL game copy " + Utf8(dir) + " ...");
+		if (!RemoveTree(dir, error))
+			return false;
+		std::wstring parent = ParentDir(dir);
+		if (!SamePath(parent, opt_.dataDir) && JoinPath(ParentDir(parent), L"MedianXL") == parent)
+			RemoveDirectoryW(parent.c_str());  // <drive>\MedianXL when empty
+	}
+	std::string e2;
+	std::wstring cache = JoinPath(opt_.dataDir, L"cache");
+	if (DirExists(cache))
+		RemoveTree(cache, e2);
+	DeleteFileW(statePath_.c_str());
+	Report("Median XL is uninstalled. Your characters stay in " + Utf8(saves) + "; your D2R settings backup (if any) is in " +
+	       Utf8(JoinPath(opt_.dataDir, L"backup")) + ".");
+	state_ = Json::Object();
+	return true;
+}
+
+std::string Launcher::StatusText() {
+	std::string e, out;
+	if (!Prepare(e))
+		return e;
+	out = "D2R: " + Utf8(source_.dir) + " (" + source_.source + ", " + source_.build.message + ")\n";
+	if (state_["copy_complete"].Bool())
+		out += "Median XL folder: " + Utf8(gameDir_) + " (build " + std::to_string(state_["copy_build"].Int()) + ")\n";
+	else
+		out += "Median XL folder: " + Utf8(gameDir_) + " (not made yet: needs about " +
+		       Gb(state_["copy_bytes"].Int(30ll << 30) + SpareBytes) + ")\n";
+	std::string installed = state_["mod"]["version"].Str();
+	out += "Median XL: " + (installed.empty() ? std::string("not installed") : installed);
+	if (feedChecked_ && !installed.empty() && feed_.version != installed)
+		out += " (update " + feed_.version + " available)";
+	else if (feedChecked_ && !installed.empty())
+		out += " (latest)";
+	out += "\nD2RLoader: " + state_["loader"].Str("not installed");
+	return out;
+}
+
+}  // namespace mxl

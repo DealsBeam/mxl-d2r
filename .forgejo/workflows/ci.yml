@@ -39,6 +39,26 @@ jobs:
           cmake --build build -j6 --target mxl_core
           ls -la build/mxl-core.dll
 
+  launcher:
+    runs-on: mxl-cross
+    steps:
+      - uses: https://git.werdegames.com/actions-mirror/checkout@v4
+      - name: Build MedianXL-Launcher.exe (docs/launcher.md)
+        run: |
+          cmake -S launcher -B build-launcher -DCMAKE_TOOLCHAIN_FILE="$PWD/plugin/cmake/xwin-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-launcher -j6 --target mxl_launcher
+          ls -la build-launcher/MedianXL-Launcher.exe
+
+  launcher-tests:
+    runs-on: mxl-cross
+    steps:
+      - uses: https://git.werdegames.com/actions-mirror/checkout@v4
+      - name: Launcher unit tests (portable core, g++)
+        run: |
+          cmake -S launcher/tests -B build-launcher-tests -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-launcher-tests -j6
+          ./build-launcher-tests/launcher_tests
+
   tests:
     runs-on: mxl-cross
     steps:

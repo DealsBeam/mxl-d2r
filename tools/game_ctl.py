@@ -8,6 +8,7 @@ Run with `py -3 tools/game_ctl.py <command>`. Commands:
   click FX FY [right]   click at a fraction (0..1) of the client rect
   console CMD           open the developer console (Ctrl+`), type CMD, Enter, close
   stop                  close the game (CloseMainWindow, force after timeout)
+  harness on|off        write or remove the plugin test-harness file (for a game started by the launcher)
   logscan               new ERROR/ASSERT lines, mxl-core.log summary, new crash files
   smoke                 full scenario, writes report.md in the run folder
 Run folders: %USERPROFILE%\\mxl-d2r-runs\\<run>; the current run name is kept in runs\\current.txt.
@@ -989,6 +990,8 @@ def main():
         console(" ".join(a[1:]))
     elif c == "stop":
         stop()
+    elif c == "harness":  # by hand, for a game this script does not start (the launcher's, docs/launcher.md "Testing")
+        harness_switch(a[1:2] == ["on"])
     elif c == "logscan":
         logscan()
     elif c == "smoke":

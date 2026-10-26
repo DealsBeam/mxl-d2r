@@ -246,8 +246,15 @@ def counter(text, key, pattern):
 DIFF_Y = {"normal": 0.42, "nightmare": 0.482, "hell": 0.542}
 
 
+# MXL_ATTACH=1: the first start uses a game that is already running (one the Median XL launcher started, docs/launcher.md
+# "Testing"; `game_ctl.py harness on` writes the harness file before that launch) instead of restarting it
+ATTACH = {"v": os.environ.get("MXL_ATTACH") == "1"}
+
+
 def to_menu():
-    if g.game_pids():
+    if ATTACH["v"] and g.game_pids():
+        ATTACH["v"] = False
+    elif g.game_pids():
         g.stop()
         time.sleep(2)
     DEBUG_ON["v"] = False
@@ -12889,7 +12896,7 @@ def run_all(only=None):
     WD.start()
     try:
         backup_saves()
-        if g.game_pids():
+        if g.game_pids() and not ATTACH["v"]:
             g.stop()
             time.sleep(2)
         # Quest state of the test character: the kill / dialog checks need quests 4 (Cain rescued, bit 1) and 6 (Andariel)

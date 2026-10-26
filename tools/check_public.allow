@@ -3,3 +3,5 @@
 
 # A software version number (Granny exporter SDK), not an IP address.
 docs/hd-models.md | SDK version 2\.12\.0\.5
+# The common-controls assembly version in the launcher manifest, not an IP address.
+launcher/res/launcher.manifest | Microsoft\.Windows\.Common-Controls" version="6\.0\.0\.0"
