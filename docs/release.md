@@ -11,7 +11,7 @@ fallback.
 
 | File | What |
 |---|---|
-| `release-manifest.json` | the launcher's feed (format below). Fixed name, so `.../releases/latest/download/release-manifest.json` always finds the newest one |
+| `release-manifest.json` | the launcher's feed (format below). `tools/publish_release.py` copies it to the download host ("Hosting layout") |
 | `MedianXL-D2R-<version>.zip` | top folder `MedianXL/`, unzipped into `<D2R>\mods\` it is the folder `tools/install_mod.py` writes |
 | `RELEASE_NOTES-<version>.md` | skeleton: requirements, install steps; fill in Changes / Known issues by hand |
 | `SHA256SUMS` | sha256 of the three files above (`sha256sum -c` format) |
@@ -50,7 +50,9 @@ The default dev build is unchanged (`tools/build_plugin.ps1` -> `build/plugin/Re
 ## Release manifest (schemaVersion 1)
 
 Simple JSON, one object. The launcher must reject a `schemaVersion` it does not know. New fields may be added within
-schemaVersion 1 (ignore unknown fields); a change of meaning or a removed field raises schemaVersion.
+schemaVersion 1 (ignore unknown fields); a change of meaning or a removed field raises schemaVersion. `package_release.py`
+writes the fields below except `objectsBase`, `zip.path` and `launcher`, which `publish_release.py` adds (optional,
+schemaVersion stays 1).
 
 ```json
 {
@@ -68,7 +70,10 @@ schemaVersion 1 (ignore unknown fields); a change of meaning or a removed field 
  "modFolder": "MedianXL",
  "saveFolder": "MedianXL/",
  "preserve": ["d2rloader/config/d2rloader.toml"],
- "zip": {"name": "MedianXL-D2R-0.70.0.zip", "size": 512345678, "sha256": "..."},
+ "zip": {"name": "MedianXL-D2R-0.70.0.zip", "size": 512345678, "sha256": "...",
+         "path": "releases/0.70.0/MedianXL-D2R-0.70.0.zip"},
+ "objectsBase": "objects/",
+ "launcher": {"version": "0.3.0", "path": "launcher/0.3.0/MedianXL-Launcher.exe", "size": 12345678, "sha256": "..."},
  "fileCount": 8802,
  "totalSize": 791000000,
  "files": [
@@ -89,12 +94,66 @@ schemaVersion 1 (ignore unknown fields); a change of meaning or a removed field 
 | `saveFolder` | characters live in `Saved Games/Diablo II Resurrected/mods/<saveFolder>` (modinfo.json `savepath`); the launcher never writes there |
 | `preserve` | files the player may edit: write them only when missing, never overwrite |
 | `files` | the complete mod folder, sorted by path. Update = for each entry, download when the local file is missing or its size / sha256 differ; then delete local files under the mod folder that are not listed (except `preserve` entries, and `d2rloader/logs/`, which D2RLoader writes) |
-| `zip` | the same content as one archive (fallback / first install) |
+| `zip` | the same content as one archive (fallback / first install); `zip.path` is where the host has it |
+| `objectsBase` | (published manifests) where the file bytes are, relative to the site root: `objects/`. The bytes of `files[i]` are at `<root>/<objectsBase><sha256[0:2]>/<sha256>` |
+| `launcher` | (published manifests, optional) the launcher build published with this release: `version`, `path` relative to the site root, `size`, `sha256` |
 
-Open point for the launcher lane: where single files are downloaded from. GitHub releases cannot hold ~9,000 assets; the
-manifest has no URL per file yet. Options: the launcher fetches the zip once and extracts only the changed entries
-(`MedianXL/<path>`; the zip is written deterministically: sorted entries, one timestamp); or a file host keyed by path or
-sha256, which would add a `filesBaseUrl` field (still schemaVersion 1).
+## Hosting layout (tools/publish_release.py)
+
+Owner decision 2026-10-26: the release files live on our own server, not on GitHub (the forge needs a sign-in for
+everything). A plain static HTTPS host serves one folder; the planned root URL is `https://dl.werdegames.com/mxl/`
+("the site root" below; the launcher takes it as its one setting). Setting it up: docs/hosting.md.
+
+```
+channels/<channel>.json                   what a channel (stable, test) points to; the only file the launcher polls
+releases/<v>/release-manifest.json        the packager's manifest + objectsBase, zip.path, launcher
+releases/<v>/MedianXL-D2R-<v>.zip         manual / offline fallback (the --no-data CI package keeps its -nodata name)
+releases/<v>/SHA256SUMS                   sha256 of the zip, the manifest, the notes (sha256sum -c format)
+releases/<v>/RELEASE_NOTES-<v>.md
+objects/<sha256[0:2]>/<sha256>            the raw bytes of a file, named by its sha256; shared by every version
+launcher/<v>/MedianXL-Launcher.exe       and MedianXL-Launcher.exe.sha256
+assets/<files>                            the asset pack (lane pub-assets)
+```
+
+Channel file (`schemaVersion` 1, rules as for the manifest):
+
+```json
+{"schemaVersion": 1, "version": "0.70.0", "manifest": "releases/0.70.0/release-manifest.json",
+ "manifestSha256": "...", "publishedAt": "2026-10-26T12:00:00Z"}
+```
+
+What the launcher does (all URLs are `<root>/` + the relative path):
+
+1. `GET channels/<channel>.json` (the host sends `Cache-Control: no-cache`); reject an unknown `schemaVersion`.
+2. `GET <manifest>`; its sha256 must equal `manifestSha256` (this also detects a half-updated host or a stale cache).
+3. For each entry of `files` that is missing locally or differs in size / sha256: `GET <objectsBase><sha[0:2]>/<sha>`, check
+   size and sha256 of what arrived, then move it into place. Objects never change, so a partial download can be resumed
+   with a `Range` request and a cache may keep them forever. Several entries with the same sha256 are one download.
+4. Fallback when objects fail: the zip at `zip.path`, checked against `zip.sha256`.
+5. Launcher self-update: `launcher.version` / `.path` / `.sha256` of the channel's manifest.
+
+Rules the publisher keeps, which the launcher can rely on:
+
+- The channel file is written last, after every object, the zip and the manifest are on the host and were listed again; a
+  half-finished publish is never visible. Every file is uploaded under a temp name and renamed.
+- A published version never changes (`releases/<v>/` and the objects it names). A new build is a new version.
+- Objects are only added by `publish`; `gc --keep N` removes releases older than the newest N and the objects only they used,
+  and never a version a channel points to.
+
+```
+py -3 tools/publish_release.py publish --version 0.70.0 --channel test --target sftp://user@host/mxl [--launcher EXE] [--assets DIR]
+py -3 tools/publish_release.py promote 0.70.0 --channel stable --target ...
+py -3 tools/publish_release.py list | gc --keep 3 [--dry-run] --target ...
+py -3 tools/publish_release.py verify --url https://dl.werdegames.com/mxl/ --channel stable   # fetch + sha256 over HTTPS
+py -3 tools/serve_dir.py <folder>                                                              # local Range-capable test host
+```
+
+`publish` reads the file bytes from the packager's zip (the staging folder is deleted after packaging), checks every file
+against the manifest while extracting it, and refuses a `complete: false` package for the stable channel
+(`--allow-incomplete` lets one onto `test`). Targets: `dir:<path>` (a local folder: tests, or a run on the server) and
+`sftp://user@host[:port]/<path>` (OpenSSH `sftp`, key login, no shell needed on the server). `tools/test_publish_release.py`
+covers dedup, channel-last, resume after a dead upload, gc safety, the sftp backend (against `tools/fake_sftp.py`) and a
+publish -> `serve_dir.py` -> sha256 round trip.
 
 ## Wrong game build
 
@@ -119,7 +178,10 @@ game: no other D2R build is installed here; the decision is covered by the unit 
 2. `py -3 tools/package_release.py [--version X]`: builds the release plugin (CMake on PATH), stages, checks, writes
    `dist/`. `--plugin DLL` uses a release DLL built elsewhere (it is checked); `--data-from <mods\MedianXL\MedianXL.mpq\data>`
    copies a finished data folder instead of rebuilding it.
-3. Fill in `RELEASE_NOTES-<version>.md`, tag `v<version>`, upload the four files.
+3. Fill in `RELEASE_NOTES-<version>.md`, tag `v<version>`.
+4. `py -3 tools/publish_release.py publish --version <version> --channel test --target sftp://...` (when a launcher or asset
+   pack goes along: `--launcher`, `--assets`), look at it with the launcher on the test channel, then
+   `promote <version> --channel stable`. "Hosting layout" above; server setup in docs/hosting.md.
 
 CI (`.forgejo/workflows/release.yml`, runner `mxl-cross`, manual dispatch or tag `v*`): no game files on the
 server, so it cannot run tools/build.py. It cross-builds the release DLL, runs the packager's unit tests and

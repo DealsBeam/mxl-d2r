@@ -58,6 +58,8 @@ jobs:
       - uses: https://git.werdegames.com/actions-mirror/checkout@v4
       - name: Python syntax
         run: python3 -m compileall -q tools
+      - name: Publisher and download-host server unit tests (tools/publish_release.py, serve_dir.py)
+        run: cd tools && python3 -m unittest test_publish_release
       - name: No private details in tracked text (tools/check_public.py; allowlist tools/check_public.allow)
         run: python3 tools/check_public.py
       - name: Median inputs come from assets/median (D2R-only release, docs/setup.md)
