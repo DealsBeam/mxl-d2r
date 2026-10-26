@@ -67,6 +67,8 @@
 #include "skill_tree.h"
 #include "state_trace.h"
 #include "testharness.h"
+#include "build_guard.h"
+#include "build_guard_logic.h"
 #include "item_text.h"
 #include "tooltip_probe.h"
 #include "travel.h"
@@ -78,6 +80,7 @@
 #include <windows.h>
 
 #include <cctype>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -85,7 +88,12 @@
 namespace {
 
 constexpr const char* PluginVersion = "0.69.0";
-constexpr uint32_t ExpectedImage = 0x6ab3782cU;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
+constexpr uint32_t ExpectedImage = build_guard::ExpectedImage;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
+#ifdef MXL_RELEASE
+constexpr const char* BuildKind = "release";  // cmake -DMXL_RELEASE=ON: no test harness compiled in
+#else
+constexpr const char* BuildKind = "dev";
+#endif
 
 const D2RL::PluginContext* g_context = nullptr;
 int g_skillsInstalled = 0;
@@ -175,14 +183,25 @@ constexpr D2RL::PluginInfo Info {
 };
 
 auto ImageStamp(const D2RL::PluginContext* context) noexcept -> uint32_t {
+	if (context->exeBase == 0) {
+		return 0;
+	}
 	const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(context->exeBase);
 	const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(context->exeBase + dos->e_lfanew);
 	return nt->FileHeader.TimeDateStamp;
 }
 
-auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
-	return context->exeBase != 0 && ImageStamp(context) == ExpectedImage;
+// D2RLoader's build name ("93847"), null when its context is too old to carry the field.
+auto BuildName(const D2RL::PluginContext* context) noexcept -> const char* {
+	return context->contextSize >= offsetof(D2RL::PluginContext, buildName) + sizeof(context->buildName) ? context->buildName : nullptr;
 }
+
+// Every hook and patch belongs to the dumped image (build_guard_logic.h); on any other build none goes in.
+auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
+	return context->exeBase != 0 && build_guard::Matches(ImageStamp(context), BuildName(context));
+}
+
+char g_wrongBuild[256] = "";  // the message for a player on another build, empty on build 93847
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
 // items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock mediantowns statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard
@@ -239,11 +258,15 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		return D2RL::ConsoleCommandResult::Failed;
 	}
 	char line[384];
-	std::snprintf(line, sizeof(line), "mxl-core %s | D2R %s | image 0x%08x (expects 0x%08x, %s) | exe base 0x%llx",
-	              PluginVersion, g_context->buildVersion ? g_context->buildVersion : "?", ImageStamp(g_context),
+	std::snprintf(line, sizeof(line), "mxl-core %s (%s) | D2R %s | image 0x%08x (expects 0x%08x, %s) | exe base 0x%llx",
+	              PluginVersion, BuildKind, g_context->buildVersion ? g_context->buildVersion : "?", ImageStamp(g_context),
 	              ExpectedImage, BuildMatches(g_context) ? "match" : "MISMATCH, hooks off",
 	              static_cast<unsigned long long>(g_context->exeBase));
 	Say(command, line);
+	if (g_wrongBuild[0] != '\0') {
+		Say(command, g_wrongBuild);
+		return D2RL::ConsoleCommandResult::Handled;  // nothing below was installed
+	}
 	std::snprintf(line, sizeof(line), "states fix %s", g_statesReport);
 	Say(command, line);
 	std::snprintf(line, sizeof(line), "level types %s", g_levelTypesReport);
@@ -551,7 +574,17 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	              context->activeMod ? context->activeMod : "?", context->buildVersion ? context->buildVersion : "?",
 	              ImageStamp(context), BuildMatches(context) ? "" : "; not the expected image, engine hooks stay off");
 	context->LogInfo(line);
-	if (BuildMatches(context)) {
+	if (!BuildMatches(context)) {
+		// Another game build: no hook, patch or harness at all (their addresses are build 93847's). Say why, and keep `mxl`.
+		build_guard::Message(g_wrongBuild, sizeof(g_wrongBuild), PluginVersion, ImageStamp(context),
+		                     BuildName(context));
+		context->LogError(g_wrongBuild);
+		if (!ShowWrongBuildNotice(context, g_wrongBuild)) {
+			context->LogWarn("mxl-core: no overlay service, the wrong-build notice is in this log only");
+		}
+		return context->RegisterConsoleCommand("mxl", MxlCommand, "Median XL core plugin status.");
+	}
+	{
 		ReadOffList();
 		if (g_offList[0] != '\0') {
 			std::snprintf(line, sizeof(line), "mxl-core: mxl-core-off.txt leaves out: %s", g_offList);
