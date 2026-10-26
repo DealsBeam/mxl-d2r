@@ -10,7 +10,7 @@ namespace mxl {
 
 struct FetchResult {
 	bool ok = false;
-	int status = 0;           // HTTP status (206 for a range), 200 for a file
+	int status = 0;           // HTTP status (206 for a range), 200 for a file, 404 for a missing file; 0: no answer
 	bool rangeHonoured = false;  // false: the server sent the whole file instead of the range
 	uint64_t totalSize = 0;   // whole resource size when known (Content-Range, Content-Length of a 200, file size)
 	std::string error;
@@ -38,8 +38,8 @@ private:
 // Size of a resource (HEAD, or a 1-byte range when HEAD gives none).
 bool FetchSize(const std::string& url, uint64_t& size, std::string& error);
 
-// Whole small resource into memory (manifests).
-bool FetchText(const std::string& url, std::string& out, std::string& error, size_t limit = 64u << 20);
+// Whole small resource into memory (manifests). status (optional): the HTTP status, 0 when there was no answer.
+bool FetchText(const std::string& url, std::string& out, std::string& error, size_t limit = 64u << 20, int* status = nullptr);
 
 void SetUserAgent(const std::wstring& ua);
 

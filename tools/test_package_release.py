@@ -21,7 +21,7 @@ class PackageReleaseTests(unittest.TestCase):
         self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
         self.dll = self.tmp / "mxl-core.dll"
         self.dll.write_bytes(b"MZ..." + pr.plugin_version().encode() + b"\0...")
-        self.mod = self.tmp / "stage" / "MedianXL"
+        self.mod = self.tmp / "stage" / "D2R-XL"
 
     def staged(self, files=None):
         data = self.tmp / "data"
@@ -33,7 +33,7 @@ class PackageReleaseTests(unittest.TestCase):
 
     def test_layout_matches_install_mod(self):
         mod = self.staged()
-        self.assertEqual(json.loads((mod / "MedianXL.mpq" / "modinfo.json").read_text()), {"name": "MedianXL", "savepath": "MedianXL/"})
+        self.assertEqual(json.loads((mod / "D2R-XL.mpq" / "modinfo.json").read_text()), {"name": "D2R-XL", "savepath": "D2R-XL/"})
         meta = json.loads((mod / "d2rloader" / "metadata.json").read_text())
         self.assertEqual(meta["namespace"], "medianxl")
         self.assertEqual(meta["metadata"]["modVersion"], "1.2.3")
@@ -45,7 +45,7 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertTrue((mod / "d2rloader" / "patches").is_dir())
 
     def fake_7z(self, mod):
-        out = self.tmp / "MedianXL-D2R-1.2.3.7z"
+        out = self.tmp / "D2R-XL-1.2.3.7z"
         out.write_bytes(b"7z fake")
         return out
 
@@ -60,7 +60,7 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertEqual(len(m["d2rloader"]["sha256"]), 64)
         paths = [f["path"] for f in files]
         self.assertEqual(paths, sorted(paths))
-        self.assertIn("MedianXL.mpq/data/global/excel/armor.txt", paths)
+        self.assertIn("D2R-XL.mpq/data/global/excel/armor.txt", paths)
         self.assertIn("d2rloader/plugins/mxl-core.dll", paths)
         armor = next(f for f in files if f["path"].endswith("armor.txt"))
         self.assertEqual(armor["size"], len(b"Median armor\n"))
@@ -72,7 +72,7 @@ class PackageReleaseTests(unittest.TestCase):
         mod = self.staged()
         seven = self.fake_7z(mod)
         m = pr.manifest("1.2.3", pr.file_list(mod), seven, True)
-        self.assertEqual(m["archive"], {"format": "7z", "name": "MedianXL-D2R-1.2.3.7z", "size": 7, "sha256": pr.sha256(seven)})
+        self.assertEqual(m["archive"], {"format": "7z", "name": "D2R-XL-1.2.3.7z", "size": 7, "sha256": pr.sha256(seven)})
 
     def test_no_7zip_is_an_error(self):
         mod = self.staged()
@@ -135,11 +135,11 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertIn("Method = LZMA2", listing)
         self.assertIn("Solid = +", listing)
         paths = {ln[7:].replace("\\", "/") for ln in listing.splitlines() if ln.startswith("Path = ")} - {a.as_posix()}
-        self.assertTrue(all(n == "MedianXL" or n.startswith("MedianXL/") for n in paths), paths)
+        self.assertTrue(all(n == "D2R-XL" or n.startswith("D2R-XL/") for n in paths), paths)
         out = self.tmp / "unpacked"
         subprocess.run([SEVEN, "x", "-y", f"-o{out}", str(a)], check=True, capture_output=True)
-        self.assertEqual(pr.file_list(out / "MedianXL"), pr.file_list(mod))
-        self.assertTrue((out / "MedianXL" / "d2rloader" / "patches").is_dir())
+        self.assertEqual(pr.file_list(out / "D2R-XL"), pr.file_list(mod))
+        self.assertTrue((out / "D2R-XL" / "d2rloader" / "patches").is_dir())
 
     @unittest.skipUnless(SEVEN, "no 7-Zip on this machine")
     def test_main_writes_the_7z_only(self):
@@ -148,13 +148,13 @@ class PackageReleaseTests(unittest.TestCase):
         (data / "global" / "excel" / "armor.txt").write_bytes(b"Median armor\n" * 1000)
         out = self.tmp / "dist"
         out.mkdir()
-        (out / "MedianXL-D2R-1.2.2.zip").write_bytes(b"an earlier packager's zip")
+        (out / "D2R-XL-1.2.2.zip").write_bytes(b"an earlier packager's zip")
         r = subprocess.run([sys.executable, "-I", str(HERE / "package_release.py"), "--plugin", str(self.dll),
                             "--version", "1.2.3", "--data-from", str(data), "--out", str(out)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        seven = out / "MedianXL-D2R-1.2.3.7z"
+        seven = out / "D2R-XL-1.2.3.7z"
         self.assertEqual(sorted(p.name for p in out.iterdir()),
-                         ["MedianXL-D2R-1.2.3.7z", "RELEASE_NOTES-1.2.3.md", "SHA256SUMS", "release-manifest.json"])
+                         ["D2R-XL-1.2.3.7z", "RELEASE_NOTES-1.2.3.md", "SHA256SUMS", "release-manifest.json"])
         man = json.loads((out / "release-manifest.json").read_text())
         self.assertEqual(man["schemaVersion"], 2)
         self.assertNotIn("zip", man)
@@ -164,7 +164,7 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertIn(f"{pr.sha256(seven)}  {seven.name}", sums)
         self.assertEqual(len(sums), 3)
         notes = (out / "RELEASE_NOTES-1.2.3.md").read_text()
-        self.assertIn("`MedianXL-D2R-1.2.3.7z`", notes)
+        self.assertIn("`D2R-XL-1.2.3.7z`", notes)
         self.assertIn("Windows 11 opens .7z files", notes)
         self.assertNotIn("Unzip", notes)
         self.assertIn("as 7z", r.stdout)
@@ -175,10 +175,10 @@ class PackageReleaseTests(unittest.TestCase):
         r = subprocess.run([sys.executable, "-I", str(HERE / "package_release.py"), "--no-data", "--plugin", str(self.dll),
                             "--version", "1.2.3", "--out", str(out)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(sorted(p.name for p in out.glob("*.7z")), ["MedianXL-D2R-1.2.3-nodata.7z"])
+        self.assertEqual(sorted(p.name for p in out.glob("*.7z")), ["D2R-XL-1.2.3-nodata.7z"])
         man = json.loads((out / "release-manifest.json").read_text())
         self.assertFalse(man["complete"])
-        self.assertEqual(man["archive"]["name"], "MedianXL-D2R-1.2.3-nodata.7z")
+        self.assertEqual(man["archive"]["name"], "D2R-XL-1.2.3-nodata.7z")
 
     def test_test_and_player_files_are_refused(self):
         mod = self.staged({"global/excel/armor.txt": b"x", "global/x.txt": b"y"})
@@ -198,7 +198,7 @@ class PackageReleaseTests(unittest.TestCase):
             (extract / "data" / rel).parent.mkdir(parents=True, exist_ok=True)
             (extract / "data" / rel).write_bytes(body)
         self.assertEqual(pr.drop_blizzard_copies(mod, extract), 1)
-        data = mod / "MedianXL.mpq" / "data"
+        data = mod / "D2R-XL.mpq" / "data"
         self.assertFalse((data / "global/excel/sounds.txt").exists())
         self.assertTrue((data / "global/excel/armor.txt").exists())
         self.assertTrue((data / "global/dataversionbuild.txt").exists())

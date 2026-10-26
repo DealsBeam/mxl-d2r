@@ -13,7 +13,7 @@ objects ("Hosting layout") and has no archive fallback.
 | File | What |
 |---|---|
 | `release-manifest.json` | the launcher's feed (format below). `tools/publish_release.py` sends it to the download host ("Hosting layout") |
-| `MedianXL-D2R-<version>.7z` | top folder `MedianXL/`, unpacked into `<D2R>\mods\` it is the folder `tools/install_mod.py` writes. One solid LZMA2 7z (`-mx7`, multithreaded): the manual download for players. Release 0.69.0: 355 MB (the zip it replaces was 483 MB). Needs 7-Zip (`C:\Program Files\7-Zip\7z.exe`, else `7z` / `7zz` / `7za` / `7zr` on PATH): without it the packager stops with an error before doing anything. `--no-data` (CI) writes `MedianXL-D2R-<version>-nodata.7z` |
+| `D2R-XL-<version>.7z` | top folder `D2R-XL/`, unpacked into `<D2R>\mods\` it is the folder `tools/install_mod.py` writes. One solid LZMA2 7z (`-mx7`, multithreaded): the manual download for players. Release 0.69.0: 355 MB (the zip it replaces was 483 MB). Needs 7-Zip (`C:\Program Files\7-Zip\7z.exe`, else `7z` / `7zz` / `7za` / `7zr` on PATH): without it the packager stops with an error before doing anything. `--no-data` (CI) writes `D2R-XL-<version>-nodata.7z` |
 | `RELEASE_NOTES-<version>.md` | skeleton: requirements, install steps; fill in Changes / Known issues by hand |
 | `SHA256SUMS` | sha256 of the 7z, the manifest and the notes (`sha256sum -c` format) |
 
@@ -27,11 +27,11 @@ Reproducibility: the 7z is written from the sorted staging folder with all three
 sha256), and 7-Zip versions may encode differently. The published manifest records the sha256 of the 7z the server
 built; `files[]` (the content) does not depend on any of this.
 
-Layout of the mod folder (the 7z's `MedianXL/`, the manifest's paths):
+Layout of the mod folder (the 7z's `D2R-XL/`, the manifest's paths):
 
 ```
-MedianXL.mpq/modinfo.json          {"name": "MedianXL", "savepath": "MedianXL/"}
-MedianXL.mpq/data/...              install_mod.build_data: work/mod/data + global/dataversionbuild.txt (93847) + Median's
+D2R-XL.mpq/modinfo.json          {"name": "D2R-XL", "savepath": "D2R-XL/"}
+D2R-XL.mpq/data/...              install_mod.build_data: work/mod/data + global/dataversionbuild.txt (93847) + Median's
                                    tiles (ds1 ids renumbered) + HD scenes (maps_hd) + Median-only classic art
 modinfo.json                       copy at the mod root (D2RLoader guide layout)
 d2rloader/metadata.json            schemaVersion 1, namespace "medianxl", metadata.modVersion = <version>,
@@ -70,7 +70,7 @@ manifest's `launcher` as a self-update). `package_release.py` writes the fields 
 ```json
 {
  "schemaVersion": 2,
- "name": "MedianXL",
+ "name": "D2R-XL",
  "version": "0.70.0",
  "pluginVersion": "0.70.0",
  "released": "2026-10-26",
@@ -79,19 +79,19 @@ manifest's `launcher` as a self-update). `package_release.py` writes the fields 
  "d2rloader": {"version": "1.3.1-beta", "url": "https://d2rloader.net/download/D2RLoader-1.3.1-beta.zip",
                "size": 47652455, "sha256": "9286c6b5bff7f1043658411dbea305faa9698b6a455e6441668fc6d02c22aad7",
                "signerThumbprint": "8001082E968FADAA58BF2F73EFA1810A11D0C28F"},
- "launch": {"default_mod": "MedianXL", "launch_arguments": "-txt"},
- "modFolder": "MedianXL",
- "saveFolder": "MedianXL/",
+ "launch": {"default_mod": "D2R-XL", "launch_arguments": "-txt"},
+ "modFolder": "D2R-XL",
+ "saveFolder": "D2R-XL/",
  "preserve": ["d2rloader/config/d2rloader.toml"],
- "archive": {"format": "7z", "name": "MedianXL-D2R-0.70.0.7z", "size": 372345678, "sha256": "...",
-             "path": "releases/0.70.0/MedianXL-D2R-0.70.0.7z"},
+ "archive": {"format": "7z", "name": "D2R-XL-0.70.0.7z", "size": 372345678, "sha256": "...",
+             "path": "releases/0.70.0/D2R-XL-0.70.0.7z"},
  "emptyDirs": ["d2rloader/patches"],
  "objectsBase": "objects/",
- "launcher": {"version": "0.3.0", "path": "launcher/0.3.0/MedianXL-Launcher.exe", "size": 12345678, "sha256": "..."},
+ "launcher": {"version": "0.3.0", "path": "launcher/0.3.0/D2R-XL-Launcher.exe", "size": 12345678, "sha256": "..."},
  "fileCount": 8802,
  "totalSize": 791000000,
  "files": [
-  {"path": "MedianXL.mpq/data/global/excel/armor.txt", "size": 123456, "sha256": "..."},
+  {"path": "D2R-XL.mpq/data/global/excel/armor.txt", "size": 123456, "sha256": "..."},
   {"path": "d2rloader/plugins/mxl-core.dll", "size": 874496, "sha256": "..."}
  ]
 }
@@ -100,7 +100,7 @@ manifest's `launcher` as a self-update). `package_release.py` writes the fields 
 | Field | Meaning for the launcher |
 |---|---|
 | `version` | the release (tag `v<version>`); `pluginVersion` is the plugin's own PluginVersion (normally equal) |
-| `complete` | `false` only for a CI `--no-data` package (no `MedianXL.mpq/data`): never install it for a player |
+| `complete` | `false` only for a CI `--no-data` package (no `D2R-XL.mpq/data`): never install it for a player |
 | `d2r.build` | the D2R build the private copy must be at. `imageTimestamp` is the PE TimeDateStamp of that `D2R.exe` (the plugin checks it, `plugin/src/build_guard_logic.h`) |
 | `d2rloader` | the pinned D2RLoader: download `url`, check `size` and `sha256`, then the Authenticode signer thumbprint of `D2RLoader.exe` / `D2RCore.dll` (self-signed: check the thumbprint and an intact signature, docs/setup.md step 10). Unzip into the game folder |
 | `launch` | keys for the game folder's own `d2rloader/config/d2rloader.toml` (section `[d2rloader]`, where D2RLoader keeps `default_mod` and `launch_arguments`): the mod starts by itself, and `-txt` makes D2R read the mod's `.txt` tables |
@@ -122,11 +122,11 @@ below; the launcher takes it as its one setting). Setting it up: docs/hosting.md
 ```
 channels/<channel>.json                   what a channel (stable, test) points to; the only file the launcher polls
 releases/<v>/release-manifest.json        the packager's manifest + objectsBase, launcher, and the server's archive entry
-releases/<v>/MedianXL-D2R-<v>.7z          the manual download for players, built on the server (-nodata.7z for a CI package)
+releases/<v>/D2R-XL-<v>.7z          the manual download for players, built on the server (-nodata.7z for a CI package)
 releases/<v>/SHA256SUMS                   sha256 of the 7z, the manifest, the notes (sha256sum -c format)
 releases/<v>/RELEASE_NOTES-<v>.md
 objects/<sha256[0:2]>/<sha256>            the raw bytes of a file, named by its sha256; shared by every version
-launcher/<v>/MedianXL-Launcher.exe       and MedianXL-Launcher.exe.sha256
+launcher/<v>/D2R-XL-Launcher.exe       and D2R-XL-Launcher.exe.sha256
 assets/<files>                            the asset pack (lane pub-assets)
 ```
 
@@ -172,8 +172,8 @@ lacks, packed, in as few logins as possible, and the server does everything else
    file against `READY`, the manifest (schema 2, safe paths, sizes), lists the objects 7z before unpacking it (plain files
    named by a sha256 the manifest uses, with that size; no folders, links or other names), unpacks it into
    `incoming/<v>/.work/`, checks every object's sha256 against its name and moves them into `objects/`. Every object the
-   manifest names must then be on the host. It links the player's `MedianXL/` folder together from the objects (each one
-   hashed again) and packs `releases/<v>/MedianXL-D2R-<v>.7z` with the packager's switches, writes the notes, the manifest
+   manifest names must then be on the host. It links the player's `D2R-XL/` folder together from the objects (each one
+   hashed again) and packs `releases/<v>/D2R-XL-<v>.7z` with the packager's switches, writes the notes, the manifest
    (with `archive` of that 7z), `SHA256SUMS`, `launcher/<lv>/`, and the channel file **last**. Then it deletes
    `incoming/<v>/` and `*.part-*` files older than an hour anywhere in the site (leftovers of dead uploads).
 5. Anything that fails a check is refused: nothing is published, the reason goes to the journal and to
@@ -223,7 +223,7 @@ D2RLoader's build name (when it gives one) is `93847`. Otherwise it installs not
 an ERROR line to `d2rloader.log`, draws the line at the top of the screen through D2RLoader's overlay service, and `mxl`
 prints it:
 
-    Median XL D2R 0.69.0 needs D2R build 93847; this is 94100. The mod's engine changes are off.
+    D2R-XL 0.69.0 needs D2R build 93847; this is 94100. The mod's engine changes are off.
 
 (For a different `D2R.exe` with the same build number: `this is 93847 with another D2R.exe (image 0x...)`.)
 D2RLoader 1.3.1 itself checks the game build at start (`D2RCore.dll build compatibility verified`, `Loaded build
@@ -235,7 +235,7 @@ game: no other D2R build is installed here; the decision is covered by the unit 
 1. `py -3 tools/build.py` (needs `extract/` and the native libs, docs/setup.md), D2R build 93847 installed for
    `maps_hd` (`--game`, default `MXL_D2R_GAME` or the slot 1 folder; only read).
 2. `py -3 tools/package_release.py [--version X]`: builds the release plugin (CMake on PATH), stages, checks, writes
-   `dist/`. `--plugin DLL` uses a release DLL built elsewhere (it is checked); `--data-from <mods\MedianXL\MedianXL.mpq\data>`
+   `dist/`. `--plugin DLL` uses a release DLL built elsewhere (it is checked); `--data-from <mods\D2R-XL\D2R-XL.mpq\data>`
    copies a finished data folder instead of rebuilding it.
 3. Fill in `RELEASE_NOTES-<version>.md`, tag `v<version>`.
 4. `py -3 tools/publish_release.py publish --version <version> --channel test --target sftp://...` (when a launcher or asset
@@ -244,7 +244,7 @@ game: no other D2R build is installed here; the decision is covered by the unit 
 
 CI (`.forgejo/workflows/release.yml`, runner `mxl-cross`, manual dispatch or tag `v*`): no game files on the
 server, so it cannot run tools/build.py. It cross-builds the release DLL, runs the packager's unit tests and
-`package_release.py --no-data`, and keeps `dist/` as the artifact `mxl-d2r-release` (`MedianXL-D2R-<v>-nodata.7z`,
+`package_release.py --no-data`, and keeps `dist/` as the artifact `mxl-d2r-release` (`D2R-XL-<v>-nodata.7z`,
 manifest with `"complete": false`; the runner needs 7-Zip, the job checks for it first). It checks that the release plugin
 builds and packs; the player release comes from the game PC.
 No GitHub workflow uses a self-hosted runner.
@@ -253,27 +253,27 @@ No GitHub workflow uses a self-hosted runner.
 
 Into a D2R folder at build 93847 that has D2RLoader 1.3.1-beta (docs/setup.md step 10):
 
-1. Unpack `MedianXL-D2R-<version>.7z` into `<D2R folder>\mods\` (Windows 11 opens .7z files; otherwise use
-   [7-Zip](https://www.7-zip.org)): `<D2R folder>\mods\MedianXL\MedianXL.mpq\modinfo.json` must exist.
+1. Unpack `D2R-XL-<version>.7z` into `<D2R folder>\mods\` (Windows 11 opens .7z files; otherwise use
+   [7-Zip](https://www.7-zip.org)): `<D2R folder>\mods\D2R-XL\D2R-XL.mpq\modinfo.json` must exist.
 2. In `<D2R folder>\d2rloader\config\d2rloader.toml` (written by D2RLoader at its first start) set
-   `default_mod = "MedianXL"` and `launch_arguments = "-txt"`.
-3. Start `D2RLoader.exe`. Saves: `Saved Games\Diablo II Resurrected\mods\MedianXL\`.
-4. Update: delete `mods\MedianXL\MedianXL.mpq\data`, unpack the new release over the folder (keep your own
-   `mods\MedianXL\d2rloader\config\d2rloader.toml` if you edited it).
+   `default_mod = "D2R-XL"` and `launch_arguments = "-txt"`.
+3. Start `D2RLoader.exe`. Saves: `Saved Games\Diablo II Resurrected\mods\D2R-XL\`.
+4. Update: delete `mods\D2R-XL\D2R-XL.mpq\data`, unpack the new release over the folder (keep your own
+   `mods\D2R-XL\d2rloader\config\d2rloader.toml` if you edited it).
 
 ## Tested (2026-10-26, plugin 0.69.0, slot 3)
 
 - 7z (lane pub-7z, 7-Zip on the game PC, release 0.69.0 data unpacked from the earlier zip): `package_release.py` wrote the
-  same zip as before (482,667,265 bytes, same sha256) and `MedianXL-D2R-0.69.0.7z` 354,928,967 bytes (355 MB, 69 s of the
+  same zip as before (482,667,265 bytes, same sha256) and `D2R-XL-0.69.0.7z` 354,928,967 bytes (355 MB, 69 s of the
   2 min 14 s run); a second run gave the same sha256. `7z t` ok, and unpacking it gave all 10,471 files with the
   manifest's sizes and sha256 plus the empty `d2rloader/patches/`. The same data with `-mmt=2`: 353,685,822 bytes, 200 s.
 
-- `package_release.py` on the game PC: `MedianXL-D2R-0.69.0.zip` 483 MB (10,471 files, 1,241 MB unpacked); 23 files left out
+- `package_release.py` on the game PC: `D2R-XL-0.69.0.zip` 483 MB (10,471 files, 1,241 MB unpacked); 23 files left out
   as byte copies of D2R's own (`global/excel/{,base/}` armtype, composit, monmode, monplace, objmode, plrmode, soundenviron,
   storepage, uniqueappellation, uniqueprefix, uniquesuffix and `hd/overlays/common/lightning.json`). The excel folder holds
   only `.txt` tables, so `-txt` is required.
 - Release DLL (`-DMXL_RELEASE=ON`): 874 KB against 1,153 KB for the dev DLL, no `mxl-testharness` string. Zip unpacked
-  into slot 3 and started: `mxl-core 0.69.0 loaded (mod MedianXL, D2R 3.3.0, image 0x6ab3782c)` and every part logs `on`,
+  into slot 3 and started: `mxl-core 0.69.0 loaded (mod D2R-XL, D2R 3.3.0, image 0x6ab3782c)` and every part logs `on`,
   no test harness line. The game then quits at "Preparing frontend launch task": slots 2 and 3 are copies on drive D:,
   and D2R there only gets past the Battle.net session cookie with the dev harness's `volserial` word (docs/testing.md).
   So the release DLL can only be played from the drive the game was installed on (slot 1, or a player's own copy); the

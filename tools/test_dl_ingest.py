@@ -154,7 +154,7 @@ class IngestTests(Base):
         self.assert_refused(inc, "READY lists a file it may not: 'index.html'")
 
     def test_bad_manifest_paths_are_refused(self):
-        for path, words in (("../escape.txt", "bad manifest entry"), ("MedianXL/../../x", "bad manifest entry"),
+        for path, words in (("../escape.txt", "bad manifest entry"), ("D2R-XL/../../x", "bad manifest entry"),
                             ("C:/x", "bad manifest entry"), (None, "duplicate path")):
             with self.subTest(path=path):
                 shutil.rmtree(self.incoming / "1.0.0", ignore_errors=True)
@@ -191,8 +191,8 @@ class IngestTests(Base):
         exe = self.tmp / "l.exe"
         exe.write_bytes(b"MZ one")
         inc = self.upload(launcher=exe, launcher_version="0.3.0")
-        (inc / "MedianXL-Launcher.exe").write_bytes(b"MZ two")
-        self.reseal(inc, "MedianXL-Launcher.exe")
+        (inc / "D2R-XL-Launcher.exe").write_bytes(b"MZ two")
+        self.reseal(inc, "D2R-XL-Launcher.exe")
         self.assert_refused(inc, "the uploaded launcher does not match")
 
     def test_published_version_never_changes_without_force(self):
@@ -230,9 +230,9 @@ class IngestTests(Base):
         objects = [w for w in writes if w.startswith("objects/")]
         self.assertEqual(writes[:len(objects)], objects, "objects first")
         rest = writes[len(objects):]
-        self.assertLess(rest.index("releases/1.0.0/MedianXL-D2R-1.0.0.7z"), rest.index("releases/1.0.0/release-manifest.json"))
+        self.assertLess(rest.index("releases/1.0.0/D2R-XL-1.0.0.7z"), rest.index("releases/1.0.0/release-manifest.json"))
         self.assertLess(rest.index("releases/1.0.0/release-manifest.json"), rest.index("channels/stable.json"))
-        self.assertIn("launcher/0.3.0/MedianXL-Launcher.exe", rest)
+        self.assertIn("launcher/0.3.0/D2R-XL-Launcher.exe", rest)
         self.assertFalse(inc.exists())
 
     def make_exe(self):
@@ -316,9 +316,9 @@ class IngestTests(Base):
         self.assertEqual((arch.stat().st_size, pub.sha256_file(arch)), (man["archive"]["size"], man["archive"]["sha256"]))
         out = self.tmp / "x"
         subprocess.run([self.seven, "x", "-y", f"-o{out}", str(arch)], check=True, capture_output=True)
-        got = sorted(p.relative_to(out / "MedianXL").as_posix() for p in (out / "MedianXL").rglob("*") if p.is_file())
+        got = sorted(p.relative_to(out / "D2R-XL").as_posix() for p in (out / "D2R-XL").rglob("*") if p.is_file())
         self.assertEqual(got, sorted(f["path"] for f in man["files"]))
-        self.assertTrue((out / "MedianXL/d2rloader/patches").is_dir())
+        self.assertTrue((out / "D2R-XL/d2rloader/patches").is_dir())
         self.assertFalse(inc.exists())
 
     @unittest.skipUnless(REAL_7Z, "reproducibility of the real 7z")

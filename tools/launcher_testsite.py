@@ -4,16 +4,16 @@ tools/package_release.py output, with a few files changed, added or removed. too
 into a local site folder in the download host's layout, and tools/serve_dir.py serves that folder with Range.
 
   py -3 tools/launcher_testsite.py derive --from dist --out dist-lt2 --version 0.70.0-lt2
-        [--savepath MedianXL-lt/] [--put REL=FILE ...] [--append REL=TEXT ...] [--remove REL ...]
+        [--savepath D2R-XL-lt/] [--put REL=FILE ...] [--append REL=TEXT ...] [--remove REL ...]
 
-  --savepath  MedianXL.mpq/modinfo.json "savepath" and the manifest's saveFolder: a test release must never use a real
-              save folder (package_release writes MedianXL/, the player's)
+  --savepath  D2R-XL.mpq/modinfo.json "savepath" and the manifest's saveFolder: a test release must never use a real
+              save folder (package_release writes D2R-XL/, the player's)
   --put       replace or add a file (e.g. the dev mxl-core.dll, so the game checks can drive the game)
   --append    add a line to a text file (a changed file)
   --remove    drop a file
 
 Everything else in the manifest (d2r, d2rloader, launch, preserve, ...) is the source's. The 7z is written the way
-package_release writes it (tools/package_release.py write_7z, top folder MedianXL/); needs 7-Zip.
+package_release writes it (tools/package_release.py write_7z, top folder D2R-XL/); needs 7-Zip.
 """
 import argparse
 import datetime
@@ -31,9 +31,9 @@ import package_release as pr  # noqa: E402
 def derive(a) -> int:
     src = Path(a.src)
     man = json.loads((src / "release-manifest.json").read_text("utf-8"))
-    archives = list(src.glob("MedianXL-D2R-*.7z"))
+    archives = list(src.glob("D2R-XL-*.7z"))
     if len(archives) != 1:
-        print(f"{src}: expected one MedianXL-D2R-*.7z, found {len(archives)}")
+        print(f"{src}: expected one D2R-XL-*.7z, found {len(archives)}")
         return 1
     sevenzip = pr.find_7z()
     if not sevenzip:
@@ -45,7 +45,7 @@ def derive(a) -> int:
         subprocess.run([sevenzip, "x", "-y", "-bd", f"-o{tmp}", str(archives[0])], check=True, capture_output=True)
         mod = Path(tmp) / pr.NAME
         if a.savepath:
-            info = mod / "MedianXL.mpq" / "modinfo.json"
+            info = mod / "D2R-XL.mpq" / "modinfo.json"
             mi = json.loads(info.read_text("utf-8"))
             mi["savepath"] = a.savepath
             info.write_text(json.dumps(mi, indent=2) + "\n", encoding="utf-8")
@@ -60,7 +60,7 @@ def derive(a) -> int:
                 f.write(text + "\n")
         for rel in a.remove:
             (mod / rel).unlink()
-        archive = out / f"MedianXL-D2R-{a.version}.7z"
+        archive = out / f"D2R-XL-{a.version}.7z"
         pr.write_7z(mod, archive, sevenzip)
         files, dirs = pr.file_list(mod), pr.empty_dirs(mod)
     man.update({
@@ -75,7 +75,7 @@ def derive(a) -> int:
     man_path = out / "release-manifest.json"
     man_path.write_text(json.dumps(man, indent=1) + "\n", encoding="utf-8")
     notes = out / f"RELEASE_NOTES-{a.version}.md"
-    notes.write_text(f"# Median XL D2R {a.version}\n\nTest release derived from {man.get('version')} for the launcher tests.\n",
+    notes.write_text(f"# D2R-XL {a.version}\n\nTest release derived from {man.get('version')} for the launcher tests.\n",
                      encoding="utf-8")
     (out / "SHA256SUMS").write_text("".join(f"{pr.sha256(p)}  {p.name}\n" for p in (archive, man_path, notes)), encoding="utf-8")
     print(f"{out}: {a.version}, {len(files)} files ({len(a.put)} put, {len(a.append)} changed, {len(a.remove)} removed)")

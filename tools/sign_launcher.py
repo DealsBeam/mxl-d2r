@@ -1,15 +1,15 @@
 #!/usr/bin/env python
 """The launcher's release step between the build and tools/publish_release.py (docs/launcher.md "Release and signing").
 
-The build (launcher/CMakeLists.txt) leaves an UNSIGNED MedianXL-Launcher.exe and MedianXL-Launcher.exe.sha256. This
+The build (launcher/CMakeLists.txt) leaves an UNSIGNED D2R-XL-Launcher.exe and D2R-XL-Launcher.exe.sha256. This
 step takes that pair and writes the exe to publish into --out, unsigned or signed by whichever service we end up with:
 
-  py -3 tools/sign_launcher.py --exe build/launcher/Release/MedianXL-Launcher.exe --out dist-launcher
+  py -3 tools/sign_launcher.py --exe build/launcher/Release/D2R-XL-Launcher.exe --out dist-launcher
         [--command "signtool sign /fd SHA256 /tr <timestamp url> /td SHA256 ... {file}"]   sign here (a local tool)
         [--signed FILE]                                                                   signed elsewhere (SignPath)
         [--allow-untrusted]                                                               test certificates
 
-  then: py -3 tools/publish_release.py publish ... --launcher dist-launcher/MedianXL-Launcher.exe
+  then: py -3 tools/publish_release.py publish ... --launcher dist-launcher/D2R-XL-Launcher.exe
 
 Checks:
   - the exe still matches the build's .sha256 (the file that is signed is the file that was built and tested);
@@ -17,7 +17,7 @@ Checks:
     directory entry, the zero padding and the signature appended at the end (the parts Authenticode leaves out);
   - on Windows, Get-AuthenticodeSignature must say Valid and show a timestamp (--allow-untrusted: any signature).
 
-Writes --out/MedianXL-Launcher.exe, .sha256 (of the final file: publish_release puts that in the release manifest,
+Writes --out/D2R-XL-Launcher.exe, .sha256 (of the final file: publish_release puts that in the release manifest,
 and the launcher's self-update checks it, signed or not) and signing.json (what was done).
 """
 import argparse
@@ -31,7 +31,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-NAME = "MedianXL-Launcher.exe"
+NAME = "D2R-XL-Launcher.exe"
 
 
 def sha256(data: bytes) -> str:

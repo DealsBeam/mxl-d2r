@@ -253,7 +253,7 @@ void DrawScene(gp::Graphics& gr) {
 		gr.DrawImage(g.art->panel.get(), Px(PanelRect.X), Px(PanelRect.Y));
 	gr.ScaleTransform(g.s, g.s);
 	std::wstring footer = L"Launcher " + Wide(LauncherVersion) +
-	                      L"  ·  Median XL and its art by the Median XL team; Diablo II by Blizzard Entertainment. Not affiliated with Blizzard.";
+	                      L"  ·  D2R-XL, a port of Median XL by the Median XL team. Diablo II by Blizzard Entertainment. Not affiliated with Blizzard.";
 	Text(gr, footer, *g.art->body, 12, Dim, gp::RectF(14, 560, 830, 24));
 	gr.ResetTransform();
 }
@@ -432,8 +432,8 @@ void RunAction(int id) {
 	if (g.busy)
 		return;
 	if (id == IdUninstall &&
-	    MessageBoxW(g.wnd, L"Remove the Median XL game copy and the launcher's downloads?\n\nYour characters and your D2R install are not touched.",
-	                L"Uninstall Median XL", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+	    MessageBoxW(g.wnd, L"Remove the D2R-XL game copy and the launcher's downloads?\n\nYour characters and your D2R install are not touched.",
+	                L"Uninstall D2R-XL", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
 		return;
 	g.launcher->cancel = false;
 	SetBusy(true);
@@ -469,7 +469,7 @@ void ChooseSource() {
 			PWSTR path = nullptr;
 			if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
 				if (!LooksLikeD2R(path)) {
-					MessageBoxW(g.wnd, L"That folder has no D2R.exe and Data folder.", L"Median XL", MB_ICONWARNING);
+					MessageBoxW(g.wnd, L"That folder has no D2R.exe and Data folder.", L"D2R-XL", MB_ICONWARNING);
 				} else {
 					g.opt.source = path;
 					auto progress = std::move(g.launcher->onProgress);
@@ -504,7 +504,7 @@ void OfferSelfUpdate() {
 	std::wstring q = L"Launcher " + Wide(l.LauncherUpdateVersion()) + L" is available (this is " + Wide(LauncherVersion) +
 	                 L").\n\nUpdate now? The download is checked against the release's sha256 before it replaces this launcher, "
 	                 L"which then restarts.";
-	if (MessageBoxW(g.wnd, q.c_str(), L"Median XL launcher update", MB_YESNO | MB_ICONQUESTION) == IDYES)
+	if (MessageBoxW(g.wnd, q.c_str(), L"D2R-XL launcher update", MB_YESNO | MB_ICONQUESTION) == IDYES)
 		RunAction(IdSelfUpdate);
 }
 
@@ -635,10 +635,10 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM lp) {
 					DestroyWindow(h);
 					return 0;
 				}
-				MessageBoxW(h, L"The launcher was updated. Start it again.", L"Median XL", MB_ICONINFORMATION);
+				MessageBoxW(h, L"The launcher was updated. Start it again.", L"D2R-XL", MB_ICONINFORMATION);
 			}
 			if (w == 0)
-				MessageBoxW(h, Wide(msg->text).c_str(), L"Median XL", MB_ICONWARNING);
+				MessageBoxW(h, Wide(msg->text).c_str(), L"D2R-XL", MB_ICONWARNING);
 			if (msg->action == 0) {
 				InvalidatePanel();
 				OfferSelfUpdate();
@@ -649,7 +649,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM lp) {
 		return 0;
 	}
 	case WM_CLOSE:
-		if (g.busy && MessageBoxW(h, L"An installation is running. Stop it and quit? It continues where it stopped next time.", L"Median XL",
+		if (g.busy && MessageBoxW(h, L"An installation is running. Stop it and quit? It continues where it stopped next time.", L"D2R-XL",
 		                          MB_YESNO | MB_ICONQUESTION) != IDYES)
 			return 0;
 		g.launcher->cancel = true;
@@ -712,7 +712,7 @@ int RunWindow(HINSTANCE inst, const Options& opt, const std::wstring& snapshot) 
 	gp::GdiplusStartupInput gsi;
 	ULONG_PTR gdiplus = 0;
 	if (gp::GdiplusStartup(&gdiplus, &gsi, nullptr) != gp::Ok) {
-		MessageBoxW(nullptr, L"GDI+ could not be started.", L"Median XL", MB_ICONERROR);
+		MessageBoxW(nullptr, L"GDI+ could not be started.", L"D2R-XL", MB_ICONERROR);
 		return 1;
 	}
 
@@ -721,7 +721,7 @@ int RunWindow(HINSTANCE inst, const Options& opt, const std::wstring& snapshot) 
 	wc.hInstance = inst;
 	wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
 	wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
-	wc.lpszClassName = L"MedianXLLauncher";
+	wc.lpszClassName = L"D2RXLLauncher";
 	RegisterClassExW(&wc);
 
 	const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
@@ -730,7 +730,7 @@ int RunWindow(HINSTANCE inst, const Options& opt, const std::wstring& snapshot) 
 	g.h = Px(CanvasH);
 	RECT r{0, 0, g.w, g.h};
 	AdjustWindowRectEx(&r, style, FALSE, 0);
-	std::wstring title = L"Median XL Launcher " + Wide(LauncherVersion);
+	std::wstring title = L"D2R-XL Launcher " + Wide(LauncherVersion);
 	g.wnd = CreateWindowExW(0, wc.lpszClassName, title.c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top,
 	                        nullptr, nullptr, inst, nullptr);
 	BOOL dark = TRUE;  // a dark title bar to match the art (Windows 10 2004+; ignored elsewhere)

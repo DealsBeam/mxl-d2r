@@ -1,4 +1,4 @@
-# Median XL launcher (docs/launcher.md). One static exe, no runtime to install: WinHTTP, CopyFile2, Win32 + GDI+.
+# D2R-XL launcher (docs/launcher.md). One static exe, no runtime to install: WinHTTP, CopyFile2, Win32 + GDI+.
 #   cmake -S launcher -B build/launcher -A x64 && cmake --build build/launcher --config Release
 # CI cross-builds it like the plugin: -DCMAKE_TOOLCHAIN_FILE=plugin/cmake/xwin-toolchain.cmake (clang-cl + lld-link).
 cmake_minimum_required(VERSION 3.20)
@@ -8,7 +8,7 @@ set(core src/core/sha256.cpp src/core/json.cpp src/core/manifest.cpp src/core/in
          src/core/gamecopy.cpp src/core/svgpath.cpp)
 add_executable(mxl_launcher WIN32 src/win/main.cpp src/win/window.cpp src/win/app.cpp src/win/game.cpp src/win/http.cpp src/win/util.cpp ${core}
                res/launcher.rc)
-set_target_properties(mxl_launcher PROPERTIES OUTPUT_NAME "MedianXL-Launcher")
+set_target_properties(mxl_launcher PROPERTIES OUTPUT_NAME "D2R-XL-Launcher")
 target_compile_features(mxl_launcher PRIVATE cxx_std_20)
 target_compile_definitions(mxl_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 set(MXL_LAUNCHER_VERSION "" CACHE STRING "override the launcher version (tests of the self-update); empty: app.h's")

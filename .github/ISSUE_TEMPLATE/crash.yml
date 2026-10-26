@@ -38,8 +38,8 @@ body:
     attributes:
       label: Install method
       options:
-        - Median XL Launcher
-        - Manual zip
+        - D2R-XL Launcher
+        - Manual 7z
     validations:
       required: true
   - type: textarea
@@ -74,4 +74,4 @@ body:
     id: save
     attributes:
       label: Save file (optional)
-      description: A zip of the character's files (`.d2s`, `.d2i`, `.d2rl`) from the `MedianXL` save folder, if the crash repeats with that character. Remove other characters first.
+      description: A zip of the character's files (`.d2s`, `.d2i`, `.d2rl`) from the `D2R-XL` save folder, if the crash repeats with that character. Remove other characters first.

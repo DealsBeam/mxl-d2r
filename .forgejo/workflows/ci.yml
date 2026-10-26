@@ -43,14 +43,14 @@ jobs:
     runs-on: mxl-cross
     steps:
       - uses: https://git.werdegames.com/actions-mirror/checkout@v4
-      - name: Build MedianXL-Launcher.exe (docs/launcher.md)
+      - name: Build D2R-XL-Launcher.exe (docs/launcher.md)
         run: |
           cmake -S launcher -B build-launcher -DCMAKE_TOOLCHAIN_FILE="$PWD/plugin/cmake/xwin-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release
           cmake --build build-launcher -j6 --target mxl_launcher
-          ls -la build-launcher/MedianXL-Launcher.exe
+          ls -la build-launcher/D2R-XL-Launcher.exe
           # unsigned build + its sha256; signing is a later step (tools/sign_launcher.py, docs/launcher.md)
-          cat build-launcher/MedianXL-Launcher.exe.sha256
-          (cd build-launcher && sha256sum -c MedianXL-Launcher.exe.sha256)
+          cat build-launcher/D2R-XL-Launcher.exe.sha256
+          (cd build-launcher && sha256sum -c D2R-XL-Launcher.exe.sha256)
 
   launcher-tests:
     runs-on: mxl-cross

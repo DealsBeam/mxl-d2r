@@ -1,10 +1,10 @@
-# mxl-d2r
+# D2R-XL
 
-A port of **Median XL 2.14.4** to **Diablo II: Resurrected 3.3**. It runs on retail D2R (build 93847) through
+**D2R-XL** is a port of **Median XL 2.14.4** to **Diablo II: Resurrected 3.3**. It runs on retail D2R (build 93847) through
 [D2RLoader](https://d2rloader.net) 1.3.1 and a D2RLoader plugin (`mxl-core`, C++20) that re-implements the engine side of
 Median XL's own `D2Sigma.dll`. The tables, strings, maps and items are converted from Median XL's data.
 
-This is a fan project. Median XL belongs to the Median XL team, Diablo II to Blizzard Entertainment; see
+The repository is `mxl-d2r`. This is a fan project. Median XL belongs to the Median XL team, Diablo II to Blizzard Entertainment; see
 [NOTICE.md](NOTICE.md). It is not affiliated with or endorsed by either.
 
 ## Where it stands
@@ -38,7 +38,7 @@ Expect bugs. Please report them (below).
 
 ## Install
 
-Use the **Median XL Launcher** ([docs/launcher.md](docs/launcher.md)):
+Use the **D2R-XL Launcher** (`D2R-XL-Launcher.exe`) ([docs/launcher.md](docs/launcher.md)):
 
 1. Download the launcher from https://dl.werdegames.com/mxl/ (the link is also on the [Releases](https://github.com/Nugwa628/mxl-d2r/releases) page).
 2. Run it, then press **Play**.
@@ -54,8 +54,8 @@ Two things the launcher needs from your existing D2R:
 - **A recent online sign-in.** D2R wants to have been online in the last 30 days. If the launcher says the sign-in is
   missing or too old, start the normal D2R once from Battle.net, then use the launcher again.
 
-Advanced fallback (manual install): each release also has a `.7z` file (`MedianXL-D2R-<version>.7z`, about 355 MB) with a
-`MedianXL/` folder (`MedianXL.mpq/` and `d2rloader/`). Windows 11 opens .7z files; otherwise use
+Advanced fallback (manual install): each release also has a `.7z` file (`D2R-XL-<version>.7z`, about 355 MB) with a
+`D2R-XL/` folder (`D2R-XL.mpq/` and `d2rloader/`). Windows 11 opens .7z files; otherwise use
 [7-Zip](https://www.7-zip.org). It is unpacked into the `mods` folder of a D2R + D2RLoader 1.3.1 install at build 93847
 that you maintain yourself. Steps and the file layout are in [docs/release.md](docs/release.md). Use it only if you know
 why you need it; it does change that install.
@@ -83,7 +83,7 @@ The short version: `git clone --recurse-submodules`, get the asset pack, `py -3 
 |---|---|
 | `tools/` | Python CLI tools (MPQ/CASC extraction, bin2txt, formula codec, txt migration, validation) |
 | `plugin/` | D2RLoader plugin (C++20, CMake) that reimplements D2Sigma.dll |
-| `launcher/` | `MedianXL-Launcher.exe` (C++20, CMake): private game copy, D2RLoader, install and update ([docs/launcher.md](docs/launcher.md)) |
+| `launcher/` | `D2R-XL-Launcher.exe` (C++20, CMake): private game copy, D2RLoader, install and update ([docs/launcher.md](docs/launcher.md)) |
 | `work/mod/` | Generated D2R mod sources: migrated tables, strings, layouts |
 | `docs/` | Plan and one note per D2Sigma subsystem (`docs/subsystems/`) |
 | `research/` | D2R address registry and RE notes (no game binaries) |

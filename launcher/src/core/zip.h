@@ -1,4 +1,4 @@
-// Zip directory reader, for the pinned D2RLoader zip (read whole from the launcher's cache). Median XL releases are
+// Zip directory reader, for the pinned D2RLoader zip (read whole from the launcher's cache). D2R-XL releases are
 // no zip: the launcher installs them from content-addressed objects (docs/release.md "Hosting layout").
 #pragma once
 

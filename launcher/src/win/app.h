@@ -1,5 +1,5 @@
 // What the launcher does (docs/launcher.md): find D2R, make the private game copy, put the pinned D2RLoader and the
-// Median XL release into it, start the game; Repair and Uninstall. Used by the window (main.cpp) and the CLI.
+// D2R-XL release into it, start the game; Repair and Uninstall. Used by the window (main.cpp) and the CLI.
 #pragma once
 
 #include "../core/json.h"
@@ -30,11 +30,11 @@ constexpr unsigned long long LoaderZipSize = 47652455;
 constexpr const char* LoaderSigner = "8001082E968FADAA58BF2F73EFA1810A11D0C28F";  // D2RLoader.exe / D2RCore.dll signer
 
 struct Options {
-	std::wstring dataDir;    // state, cache, log (default %LOCALAPPDATA%\MedianXL)
+	std::wstring dataDir;    // state, cache, log (default %LOCALAPPDATA%\D2R-XL)
 	std::string site;        // download site root: https://, http://, file:// or a local folder (default DefaultSite, or the saved one)
 	std::string channel;     // "stable" (default) or "test"
 	std::wstring source;     // the player's D2R folder (default: detected)
-	std::wstring gameDir;    // the private copy (default: <data>\game when on the D2R drive, else <D2R drive>\MedianXL\game)
+	std::wstring gameDir;    // the private copy (default: <data>\game when on the D2R drive, else <D2R drive>\D2R-XL\game)
 	bool anyDrive = false;   // test builds only (MXL_LAUNCHER_TEST_OPTIONS): a copy on another drive than D2R (docs/launcher.md "Drive rule")
 	std::wstring extraArgs;  // more game arguments ("-w")
 	bool background = false; // tests: start the game without taking the foreground (as tools/game_ctl.py does)
@@ -45,6 +45,9 @@ struct Progress {
 	std::string text;
 	double fraction = -1;  // 0..1, or -1 for "busy"
 };
+
+// docs/launcher.md "Coexisting with the official Median XL": its folders and a classic Diablo II folder are never used.
+bool OfficialMedianXLFolder(const std::wstring& dir);
 
 class Launcher {
 public:

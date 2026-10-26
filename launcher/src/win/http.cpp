@@ -10,7 +10,7 @@
 namespace mxl {
 namespace {
 
-std::wstring g_ua = L"MedianXL-Launcher";
+std::wstring g_ua = L"D2R-XL-Launcher";
 
 struct Handle {
 	HINTERNET h = nullptr;
@@ -40,7 +40,10 @@ FetchResult FetchFile(const std::string& url, uint64_t offset, uint64_t length, 
 	std::wstring path = FilePathOfUrl(url);
 	HANDLE h = CreateFileW(LongPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
 	if (h == INVALID_HANDLE_VALUE) {
-		r.error = "cannot open " + Utf8(path) + ": " + Utf8(LastErrorText(GetLastError()));
+		DWORD e = GetLastError();
+		if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND)
+			r.status = 404;  // like an http site, so callers tell "not there" from "cannot read"
+		r.error = "cannot open " + Utf8(path) + ": " + Utf8(LastErrorText(e));
 		return r;
 	}
 	LARGE_INTEGER sz, pos;
@@ -278,7 +281,7 @@ bool FetchSize(const std::string& url, uint64_t& size, std::string& error) {
 	return false;
 }
 
-bool FetchText(const std::string& url, std::string& out, std::string& error, size_t limit) {
+bool FetchText(const std::string& url, std::string& out, std::string& error, size_t limit, int* status) {
 	out.clear();
 	FetchResult r = Fetch(url, 0, 0, [&](const uint8_t* p, size_t n) {
 		if (out.size() + n > limit)
@@ -286,6 +289,8 @@ bool FetchText(const std::string& url, std::string& out, std::string& error, siz
 		out.append(reinterpret_cast<const char*>(p), n);
 		return true;
 	});
+	if (status)
+		*status = r.status;
 	if (!r.ok)
 		error = r.error;
 	return r.ok;

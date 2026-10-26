@@ -1108,7 +1108,7 @@ the `mxl` line says why).
 
 ## Diagnosis switch and state trace
 
-`<game>/mods/MedianXL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
+`<game>/mods/D2R-XL/d2rloader/plugins/mxl-core-off.txt` (read at launch, next to the DLL) lists words separated by
 spaces, commas or lines. `statesfix` turns the (default-off) states fix on. Parts left out: `states levels calc skills items missiles mana itemstat whirlwind wwproc cube craftflags quests quests2 waypoints wparrival wpauto mapreveal hotkeys lockout goblins npc reqgates hirelings skilltree runewords xp mapmem mercrevive questxp questrewards`. Never leave out
 `calc` alone while skills or missiles are on (the game hangs on load). Extra words: `trace` turns on the state trace
 (`state_trace.cpp`, 0.34.0: hooks set/clear state `0x2f7ea0` and the state-mask check `0x336440`, logs each distinct

@@ -343,7 +343,7 @@ auto RegisterHotkeys(const D2RL::PluginContext* context) noexcept -> int {
 		reg.structSize = D2RL::Input::ActionRegistrationSize;
 		reg.logicalId = h.id;
 		reg.displayName = h.name;
-		reg.category = "Median XL";
+		reg.category = "D2R-XL";
 		reg.defaultPrimary = {static_cast<D2RL::Input::Key>(h.key), D2RL::Input::Modifier::None};
 		reg.defaultSecondary = {D2RL::Input::Key::None, D2RL::Input::Modifier::None};
 		reg.callback = &OnAction;

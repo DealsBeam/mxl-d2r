@@ -1,5 +1,5 @@
 import csv
-EXC = r"C:/Program Files (x86)/Diablo II Resurrected/mods/MedianXL/MedianXL.mpq/data/global/excel/"
+EXC = r"C:/Program Files (x86)/Diablo II Resurrected/mods/D2R-XL/D2R-XL.mpq/data/global/excel/"
 def tsv(n): return list(csv.DictReader(open(EXC+n,newline='',encoding='utf-8',errors='replace'),delimiter='\t'))
 ISC = {}
 for r in tsv('itemstatcost.txt'):

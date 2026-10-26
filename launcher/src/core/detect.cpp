@@ -170,11 +170,11 @@ BuildCheck CheckBuild(const std::string& infoVersion, const std::string& exeVers
 		c.message = "D2R build " + std::to_string(c.build);
 	} else if (c.build > required) {
 		c.verdict = BuildVerdict::Newer;
-		c.message = "Median XL needs D2R build " + std::to_string(required) + "; this D2R is build " + std::to_string(c.build) +
-		            ". Waiting for a Median XL update for the new build.";
+		c.message = "D2R-XL needs D2R build " + std::to_string(required) + "; this D2R is build " + std::to_string(c.build) +
+		            ". Waiting for a D2R-XL update for the new build.";
 	} else {
 		c.verdict = BuildVerdict::Older;
-		c.message = "Median XL needs D2R build " + std::to_string(required) + "; this D2R is build " + std::to_string(c.build) +
+		c.message = "D2R-XL needs D2R build " + std::to_string(required) + "; this D2R is build " + std::to_string(c.build) +
 		            ". Update D2R in Battle.net or Steam first.";
 	}
 	return c;

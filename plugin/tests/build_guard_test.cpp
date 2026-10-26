@@ -30,7 +30,7 @@ int main() {
 
 	char text[256];
 	Message(text, sizeof(text), "0.69.0", 0x6b000000U, "94100");
-	Check(std::strncmp(text, "Median XL D2R 0.69.0 needs D2R build 93847; this is 94100.", 58) == 0, "message names both builds");
+	Check(std::strncmp(text, "D2R-XL 0.69.0 needs D2R build 93847; this is 94100.", 51) == 0, "message names both builds");
 	Message(text, sizeof(text), "0.69.0", 0x6b000000U, nullptr);
 	Check(std::strstr(text, "this is an unknown build (image 0x6b000000)") != nullptr, "message without a build name gives the image");
 	Message(text, sizeof(text), "0.69.0", 0x6ab3782dU, "93847");

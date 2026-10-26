@@ -19,7 +19,7 @@ Read this first, then `docs/PLAN.md` (phases and status), `docs/txt-migrate.md` 
 | Permission | Ask the mod team first | Median's team approved this port; nothing of theirs or Blizzard's is committed (`.gitignore`: `extract/`, `work/`). |
 
 Machine paths for this port: repo `%USERPROFILE%\Desktop\sugma\mxl-d2r`, game `C:\Program Files (x86)\Diablo II
-Resurrected`, saves `%USERPROFILE%\Saved Games\Diablo II Resurrected\mods\MedianXL`.
+Resurrected`, saves `%USERPROFILE%\Saved Games\Diablo II Resurrected\mods\D2R-XL`.
 
 ## 2. Phases and how the work split
 

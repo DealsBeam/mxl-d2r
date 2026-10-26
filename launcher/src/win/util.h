@@ -28,7 +28,7 @@ bool FileSize(const std::wstring& path, uint64_t& size, uint64_t* mtime = nullpt
 // sha256 of a file ("" when it cannot be read)
 std::string FileSha256(const std::wstring& path, const std::function<void(uint64_t)>& onBytes = {});
 
-std::wstring KnownFolder(int which);  // 0 LocalAppData, 1 Saved Games, 2 ProgramData
+std::wstring KnownFolder(int which);  // 0 LocalAppData, 1 Saved Games, 2 ProgramData, 3 (roaming) AppData
 std::wstring LastErrorText(unsigned long code);
 
 // Log to %data%\launcher.log and to the console when there is one (CLI mode).

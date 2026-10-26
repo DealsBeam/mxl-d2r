@@ -8,6 +8,9 @@ the CI configuration.
 
 ## What it does not cover
 
+D2R-XL is a port of Median XL by the Median XL team. Diablo II by Blizzard Entertainment. Not affiliated with Blizzard.
+
+
 - **Median XL** (the mod, its data tables, strings, maps, models, sounds and art, including the files under
   `assets/median` and the HD art derived from them) belongs to the Median XL team. The port is a fan project; the team
   approved it (see docs/PLAN.md, Phase 0). Nothing in this repository grants you rights to Median XL's content beyond
@@ -21,7 +24,7 @@ the CI configuration.
 ## The launcher's art (`launcher/res`)
 
 The launcher window uses the art of the official Median XL launcher (<https://launcher.median-xl.com>), embedded in
-`MedianXL-Launcher.exe`. It is not covered by the MIT license:
+`D2R-XL-Launcher.exe`. It is not covered by the MIT license:
 
 | File | What | By | License |
 |---|---|---|---|

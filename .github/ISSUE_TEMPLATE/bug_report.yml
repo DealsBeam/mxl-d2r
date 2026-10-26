@@ -40,8 +40,8 @@ body:
     attributes:
       label: Install method
       options:
-        - Median XL Launcher
-        - Manual zip
+        - D2R-XL Launcher
+        - Manual 7z
     validations:
       required: true
   - type: textarea
@@ -71,9 +71,9 @@ body:
     id: log
     attributes:
       label: D2RLoader log
-      description: Drag in `d2rloader/logs/d2rloader.log` (and `mods/MedianXL/d2rloader/logs/mxl-core.log` if it exists) from the game folder the launcher or your install uses.
+      description: Drag in `d2rloader/logs/d2rloader.log` (and `mods/D2R-XL/d2rloader/logs/mxl-core.log` if it exists) from the game folder the launcher or your install uses.
   - type: textarea
     id: save
     attributes:
       label: Save file (optional)
-      description: A zip of the affected character's files (`.d2s`, `.d2i`, `.d2rl`) from the `MedianXL` save folder, only if the bug depends on the character. Remove other characters first.
+      description: A zip of the affected character's files (`.d2s`, `.d2i`, `.d2rl`) from the `D2R-XL` save folder, only if the bug depends on the character. Remove other characters first.

@@ -5136,7 +5136,7 @@ def _leave_and_reenter():
 
 
 def _plugin_dir():
-    return os.path.join(g.GAME_DIR, "mods", "MedianXL", "d2rloader", "plugins")
+    return os.path.join(g.GAME_DIR, "mods", "D2R-XL", "d2rloader", "plugins")
 
 
 def _write_off(words):

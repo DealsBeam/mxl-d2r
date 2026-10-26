@@ -23,7 +23,7 @@ FILES = ("cubemain.txt", "uniqueitems.txt", "setitems.txt")
 
 
 def excel(game):
-    return os.path.join(game, "mods", "MedianXL", "MedianXL.mpq", "data", "global", "excel")
+    return os.path.join(game, "mods", "D2R-XL", "D2R-XL.mpq", "data", "global", "excel")
 
 
 def patch(path, old, new, rows=None, cols=None):

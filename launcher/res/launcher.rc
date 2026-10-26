@@ -25,12 +25,12 @@ BEGIN
 		BLOCK "040904b0"
 		BEGIN
 			VALUE "CompanyName", "mxl-d2r"
-			VALUE "FileDescription", "Median XL launcher"
+			VALUE "FileDescription", "D2R-XL launcher"
 			VALUE "FileVersion", "0.1.0"
-			VALUE "ProductName", "Median XL for D2R"
+			VALUE "ProductName", "D2R-XL"
 			VALUE "ProductVersion", "0.1.0"
-			VALUE "LegalCopyright", "Median XL by the Median XL team. Diablo II by Blizzard Entertainment."
-			VALUE "OriginalFilename", "MedianXL-Launcher.exe"
+			VALUE "LegalCopyright", "D2R-XL, a port of Median XL by the Median XL team. Diablo II by Blizzard Entertainment."
+			VALUE "OriginalFilename", "D2R-XL-Launcher.exe"
 		END
 	END
 	BLOCK "VarFileInfo"

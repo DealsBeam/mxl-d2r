@@ -1,6 +1,7 @@
-// Median XL launcher: the window (window.cpp: status, progress, Play / Update / Repair / Uninstall, saves folder, bug
+// D2R-XL launcher: the window (window.cpp: status, progress, Play / Update / Repair / Uninstall, saves folder, bug
 // reports) or, with --cli, the same actions from a terminal (used by the tests, docs/launcher.md "Command line").
 #include "app.h"
+#include "../core/gamecopy.h"
 #include "game.h"
 #include "http.h"
 #include "util.h"
@@ -15,12 +16,12 @@ using namespace mxl;
 namespace {
 
 const wchar_t* Usage =
-	L"MedianXL-Launcher.exe [--cli status|detect|install|update|repair|play|uninstall|self-update] [options]\n"
-	L"  --data-dir DIR   state, cache and log (default %LOCALAPPDATA%\\MedianXL)\n"
+	L"D2R-XL-Launcher.exe [--cli status|detect|install|update|repair|play|uninstall|self-update] [options]\n"
+	L"  --data-dir DIR   state, cache and log (default %LOCALAPPDATA%\\D2R-XL)\n"
 	L"  --site URL|DIR   download site root (default https://dl.werdegames.com/mxl/; http://, file:// or a folder for tests)\n"
 	L"  --channel NAME   release channel: stable (default) or test\n"
 	L"  --source DIR     the D2R folder to copy (default: found via Battle.net / Steam)\n"
-	L"  --game-dir DIR   the Median XL game copy (default: on the D2R drive)\n"
+	L"  --game-dir DIR   the D2R-XL game copy (default: on the D2R drive)\n"
 #ifdef MXL_LAUNCHER_TEST_OPTIONS
 	L"  --any-drive      test builds only: allow a game copy on another drive than D2R\n"
 #endif
@@ -67,7 +68,9 @@ Cli ParseArgs() {
 }
 
 void SetupLog(const Options& o, bool console) {
-	std::wstring data = o.dataDir.empty() ? JoinPath(KnownFolder(0), L"MedianXL") : o.dataDir;
+	std::wstring data = o.dataDir.empty() ? Wide(DefaultDataDir(Utf8(KnownFolder(0)))) : o.dataDir;
+	if (OfficialMedianXLFolder(data))  // never write into the official Median XL's folders (the launcher refuses them)
+		data = Wide(DefaultDataDir(Utf8(KnownFolder(0))));
 	LogInit(JoinPath(data, L"launcher.log"), console);
 }
 
@@ -75,7 +78,7 @@ int RunCli(Cli& c) {
 	if (!AttachConsole(ATTACH_PARENT_PROCESS))
 		AllocConsole();
 	SetupLog(c.opt, true);
-	Log(std::string("Median XL launcher ") + LauncherVersion + " --cli " + Utf8(c.command));
+	Log(std::string("D2R-XL launcher ") + LauncherVersion + " --cli " + Utf8(c.command));
 	if (c.command == L"detect") {
 		auto found = FindD2RInstalls();
 		if (found.empty())
@@ -126,16 +129,16 @@ int RunCli(Cli& c) {
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
-	SetUserAgent(L"MedianXL-Launcher/" + Wide(LauncherVersion));
+	SetUserAgent(L"D2R-XL-Launcher/" + Wide(LauncherVersion));
 	Launcher::RemoveOldExe();
 	Cli c = ParseArgs();
 	if (c.bad) {
-		MessageBoxW(nullptr, Usage, L"Median XL launcher", MB_ICONINFORMATION);
+		MessageBoxW(nullptr, Usage, L"D2R-XL launcher", MB_ICONINFORMATION);
 		return 2;
 	}
 	if (!c.command.empty())
 		return RunCli(c);
 	SetupLog(c.opt, false);
-	Log(std::string("Median XL launcher ") + LauncherVersion + " (window)");
+	Log(std::string("D2R-XL launcher ") + LauncherVersion + " (window)");
 	return RunWindow(inst, c.opt, c.snapshot);
 }

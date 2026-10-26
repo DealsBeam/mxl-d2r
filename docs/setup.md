@@ -73,17 +73,17 @@ base game files are taken from the D2R install and are never committed or packed
       certificate is self-signed, so the check is the thumbprint plus an intact signature (not HashMismatch).
     - Copy the zip contents into the game folder (`D2RLoader.exe`, `D2RCore.dll`, `d2rloader.mpq`, `d2rloader\`).
       The zip has no `mods\` folder; `install_mod.py` creates it.
-11. `py -3 tools/install_mod.py` -> `<game>\mods\MedianXL` (8,802 files, 791 MB, plugin mxl-core.dll included).
+11. `py -3 tools/install_mod.py` -> `<game>\mods\D2R-XL` (8,802 files, 791 MB, plugin mxl-core.dll included).
     It needs `D2RLoader.exe` in the game folder (step 10) and `work/mod` (step 8).
 
 ## By hand
 
 - D2RLoader settings for unattended runs (`<game>\d2rloader\config\d2rloader.toml`):
-  `default_mod = "MedianXL"`, `launch_arguments = "-w -txt"`, `skip_title_screen = true`,
+  `default_mod = "D2R-XL"`, `launch_arguments = "-w -txt"`, `skip_title_screen = true`,
   `check_for_updates = false`, `write_crash_dumps = true`, `developer.enable_console = true`,
   and developer logs enabled for `excel_files`, `bin_validation`, `extension_details`, `archive_mounts`.
   The original is kept as `d2rloader.toml.orig`; `check_for_updates = false` keeps the pinned 1.3.1.
-- `-txt` compiles all 380 tables at start (about 15 s total), this launch only; no manual `d2rl compile MedianXL` is needed.
+- `-txt` compiles all 380 tables at start (about 15 s total), this launch only; no manual `d2rl compile D2R-XL` is needed.
 - mxl-core 0.37.0 loads (ABI 4). Three startup asserts are expected; see [plugin-spec.md](plugin-spec.md).
 - Test characters: none were on this PC (below). Create new ones; read `save-format.md` before editing saves.
 ## Ghidra
@@ -107,7 +107,7 @@ volume serial so the Battle.net session cookie still decrypts):
 ```
 robocopy "C:\Program Files (x86)\Diablo II Resurrected" D:\D2R-93847     /E /MT:8 /XD logs     :: slot 2 (an older copy was already there)
 robocopy "C:\Program Files (x86)\Diablo II Resurrected" D:\D2R-93847-s3  /E /MT:8 /XD logs     :: slot 3 (about 5 minutes)
-py -3 tools/game_slots.py setup          :: modinfo savepath MedianXL-s2 / -s3, toml from slot 1, save folders, D2RLoader-sN.exe
+py -3 tools/game_slots.py setup          :: modinfo savepath D2R-XL-s2 / -s3, toml from slot 1, save folders, D2RLoader-sN.exe
 py -3 tools/install_mod.py --slot all    :: mod data + plugin into every slot (built once, copied)
 py -3 tools/game_slots.py status
 ```
@@ -116,11 +116,18 @@ Other folders: env `MXL_SLOT2_DIR` / `MXL_SLOT3_DIR` (also `MXL_SLOT1_DIR`). `MX
 pointing at a slot folder keeps that slot's save folder. Never run two slots on one folder. A slot needs
 `D2R.exe`, `D2RLoader.exe`, `D2RCore.dll`, `d2rloader.mpq`, `.build.info` and the `Data` folder, which the robocopy gives it.
 
+Rename to D2R-XL (2026-10-26): the mod folder is `mods\D2R-XL` and the save folders `mods\D2R-XL`, `D2R-XL-s2`,
+`D2R-XL-s3` (were `MedianXL`, `MedianXL-s2`, `-s3`). A slot set up before needs, under its lock,
+`py -3 tools/install_mod.py --slot N` (writes `mods\D2R-XL`) and `py -3 tools/game_slots.py setup N` (modinfo savepath,
+`default_mod = "D2R-XL"` in the slot's `d2rloader\config\d2rloader.toml`; slot 1's toml is set by hand or with
+`setup 1`). The old `mods\MedianXL` folder can then be deleted; the old save folders are moved by hand (characters
+are not converted by any tool).
+
 ## Old test characters
 
-No `mxl-manual-backups` folder and no `MedianXL` save folder exist on the game PC: not in `Saved Games\Diablo II Resurrected`
+No `mxl-manual-backups` folder and no `D2R-XL` save folder exist on the game PC: not in `Saved Games\Diablo II Resurrected`
 (only `Backups`, `mods\RMD-MP`, unrelated), OneDrive (empty), Documents or Desktop. They must come from the PC that
-made them, into `Saved Games\Diablo II Resurrected\mods\MedianXL` (the mod's `savepath`).
+made them, into `Saved Games\Diablo II Resurrected\mods\D2R-XL` (the mod's `savepath`).
 
 ## CI
 

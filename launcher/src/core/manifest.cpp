@@ -241,6 +241,14 @@ bool ParseChannel(const std::string& text, Channel& out, std::string& error) {
 	return true;
 }
 
+std::string ChannelReadError(const std::string& channel, const std::string& url, int status, const std::string& transportError) {
+	if (status == 404)
+		return "No release has been published on the " + channel + " channel yet.";
+	if (status > 0)
+		return "The download site answered " + std::to_string(status) + " for " + url;
+	return "Cannot reach the download site (" + url + ")" + (transportError.empty() ? "" : ": " + transportError);
+}
+
 std::string SiteRoot(const std::string& setting) {
 	const char bs = char(92);  // backslash
 	std::string s = setting;

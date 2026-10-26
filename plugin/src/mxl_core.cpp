@@ -1,6 +1,6 @@
 // mxl-core: D2RLoader plugin carrying the D2Sigma behaviour that data alone cannot express (docs/plugin.md).
 //
-// It loads with the MedianXL mod, logs the game build it runs on and adds the console command "mxl". Engine
+// It loads with the D2R-XL mod, logs the game build it runs on and adds the console command "mxl". Engine
 // changes are tied to one game image (RVAs from the dump of the D2R image D2RLoader runs, tools/dump_image.py), so
 // the plugin records which image it expects (the PE header timestamp; it changes with D2R patches and D2RLoader
 // releases) and changes nothing on any other.
@@ -175,10 +175,10 @@ constexpr D2RL::PluginInfo Info {
 	.infoSize    = D2RL::PluginInfoSize,
 	.abiVersion  = D2RL_PLUGIN_ABI_VERSION,
 	.id          = "mxl-core",
-	.name        = "Median XL core",
+	.name        = "D2R-XL core",
 	.version     = PluginVersion,
 	.author      = "mxl-d2r",
-	.description = "D2Sigma behaviour for the Median XL port (skills, formulas, engine limits).",
+	.description = "D2Sigma behaviour for D2R-XL, the Median XL port (skills, formulas, engine limits).",
 	.flags       = D2RL::PluginFlags::Shared | D2RL::PluginFlags::ModScopedOnly | D2RL::PluginFlags::NativeHooks,
 };
 
@@ -582,7 +582,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		if (!ShowWrongBuildNotice(context, g_wrongBuild)) {
 			context->LogWarn("mxl-core: no overlay service, the wrong-build notice is in this log only");
 		}
-		return context->RegisterConsoleCommand("mxl", MxlCommand, "Median XL core plugin status.");
+		return context->RegisterConsoleCommand("mxl", MxlCommand, "D2R-XL core plugin status.");
 	}
 	{
 		ReadOffList();
@@ -1237,7 +1237,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 			context->LogInfo(line);
 		}
 	}
-	return context->RegisterConsoleCommand("mxl", MxlCommand, "Median XL core plugin status.");
+	return context->RegisterConsoleCommand("mxl", MxlCommand, "D2R-XL core plugin status.");
 }
 
 D2RL_PLUGIN_EXPORT void D2RLoaderUnloadPlugin() noexcept {

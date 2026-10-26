@@ -168,7 +168,7 @@ std::string FileSha256(const std::wstring& path, const std::function<void(uint64
 }
 
 std::wstring KnownFolder(int which) {
-	const KNOWNFOLDERID& id = which == 0 ? FOLDERID_LocalAppData : which == 1 ? FOLDERID_SavedGames : FOLDERID_ProgramData;
+	const KNOWNFOLDERID& id = which == 0 ? FOLDERID_LocalAppData : which == 1 ? FOLDERID_SavedGames : which == 3 ? FOLDERID_RoamingAppData : FOLDERID_ProgramData;
 	PWSTR p = nullptr;
 	std::wstring out;
 	if (SUCCEEDED(SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, nullptr, &p)))

@@ -88,9 +88,9 @@ class Base(unittest.TestCase):
             (data / rel).parent.mkdir(parents=True, exist_ok=True)
             (data / rel).write_bytes(body)
         out = self.tmp / f"dist-{version}"
-        mod = out / "stage" / "MedianXL"
+        mod = out / "stage" / "D2R-XL"
         pr.stage(mod, version, self.dll, self.tmp, data_from=data)
-        seven = out / f"MedianXL-D2R-{version}.7z"
+        seven = out / f"D2R-XL-{version}.7z"
         pr.write_7z(mod, seven, self.seven)
         man = pr.manifest(version, pr.file_list(mod), seven, complete, pr.empty_dirs(mod))
         (out / "release-manifest.json").write_text(json.dumps(man, indent=1) + "\n", encoding="utf-8")
@@ -131,13 +131,13 @@ class PublishTests(Base):
         self.assertEqual(man["schemaVersion"], 2)
         self.assertEqual(man["objectsBase"], "objects/")
         self.assertNotIn("zip", man)
-        body = t["releases/1.0.0/MedianXL-D2R-1.0.0.7z"]
-        self.assertEqual(man["archive"], {"format": "7z", "name": "MedianXL-D2R-1.0.0.7z", "size": len(body),
-                                          "sha256": pub.sha256_bytes(body), "path": "releases/1.0.0/MedianXL-D2R-1.0.0.7z"})
+        body = t["releases/1.0.0/D2R-XL-1.0.0.7z"]
+        self.assertEqual(man["archive"], {"format": "7z", "name": "D2R-XL-1.0.0.7z", "size": len(body),
+                                          "sha256": pub.sha256_bytes(body), "path": "releases/1.0.0/D2R-XL-1.0.0.7z"})
         for f in man["files"]:
             self.assertEqual(pub.sha256_bytes(t[pub.object_path(f["sha256"])]), f["sha256"])
         sums = t["releases/1.0.0/SHA256SUMS"].decode().splitlines()
-        self.assertEqual(sorted(sums), sorted([f"{man['archive']['sha256']}  MedianXL-D2R-1.0.0.7z",
+        self.assertEqual(sorted(sums), sorted([f"{man['archive']['sha256']}  D2R-XL-1.0.0.7z",
                                                f"{ch['manifestSha256']}  release-manifest.json",
                                                f"{pub.sha256_bytes(b'notes 1.0.0' + os.linesep.encode())}  RELEASE_NOTES-1.0.0.md"]))
         self.assertFalse([k for k in t if k.endswith(".zip")])
@@ -148,12 +148,12 @@ class PublishTests(Base):
         self.publish("1.0.0", "stable")
         man = json.loads((self.site / "releases/1.0.0/release-manifest.json").read_text())
         out = self.tmp / "unpacked"
-        subprocess.run([self.seven, "x", "-y", f"-o{out}", str(self.site / "releases/1.0.0/MedianXL-D2R-1.0.0.7z")],
+        subprocess.run([self.seven, "x", "-y", f"-o{out}", str(self.site / "releases/1.0.0/D2R-XL-1.0.0.7z")],
                        check=True, capture_output=True)
-        got = pr.file_list(out / "MedianXL")
+        got = pr.file_list(out / "D2R-XL")
         self.assertEqual([(f["path"], f["size"], f["sha256"]) for f in got],
                          [(f["path"], f["size"], f["sha256"]) for f in man["files"]])
-        self.assertTrue((out / "MedianXL" / "d2rloader" / "patches").is_dir(), "emptyDirs")
+        self.assertTrue((out / "D2R-XL" / "d2rloader" / "patches").is_dir(), "emptyDirs")
 
     def test_delta_selection_packs_only_what_the_host_lacks(self):
         self.publish("1.0.0")
@@ -187,7 +187,7 @@ class PublishTests(Base):
         self.assertIsNone(ready["objectsPack"])
         self.assertEqual(sorted(ready["files"]), ["release-manifest.json"])
         self.ingest()
-        self.assertTrue((self.site / "releases/1.0.1/MedianXL-D2R-1.0.1.7z").is_file())
+        self.assertTrue((self.site / "releases/1.0.1/D2R-XL-1.0.1.7z").is_file())
 
     def test_ready_last_then_folder_rename(self):
         t = Recorder(self.site)
@@ -259,7 +259,7 @@ class PublishTests(Base):
         (dist / "release-manifest.json").write_text(json.dumps(man))
         with self.assertRaises(pub.PublishError):
             pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", log=lambda *_: None)
-        seven = dist / "MedianXL-D2R-1.0.0.7z"
+        seven = dist / "D2R-XL-1.0.0.7z"
         seven.write_bytes(seven.read_bytes() + b"!")
         with self.assertRaises(pub.PublishError):
             pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", log=lambda *_: None)
@@ -282,7 +282,7 @@ class PublishTests(Base):
         pub.publish(t, dist, "1.0.0", "test", allow_incomplete=True, log=lambda *_: None)
         self.ingest()
         self.assertEqual(self.channel("test")["version"], "1.0.0")
-        self.assertTrue((self.site / "releases/1.0.0/MedianXL-D2R-1.0.0-nodata.7z").is_file())
+        self.assertTrue((self.site / "releases/1.0.0/D2R-XL-1.0.0-nodata.7z").is_file())
         with self.assertRaises(pub.PublishError):
             pub.promote(t, "1.0.0", "stable", log=lambda *_: None)
 
@@ -299,18 +299,18 @@ class PublishTests(Base):
         (assets / "pack-1.zip").write_bytes(b"pack")
         self.publish("1.0.0", launcher=exe, launcher_version="0.3.0", assets=assets)
         t = tree(self.site)
-        self.assertEqual(t["launcher/0.3.0/MedianXL-Launcher.exe"], b"MZ launcher")
-        self.assertEqual(t["launcher/0.3.0/MedianXL-Launcher.exe.sha256"].decode().split()[0], pub.sha256_file(exe))
+        self.assertEqual(t["launcher/0.3.0/D2R-XL-Launcher.exe"], b"MZ launcher")
+        self.assertEqual(t["launcher/0.3.0/D2R-XL-Launcher.exe.sha256"].decode().split()[0], pub.sha256_file(exe))
         self.assertEqual(t["assets/pack-1.zip"], b"pack")
         man = json.loads(t["releases/1.0.0/release-manifest.json"])
-        self.assertEqual(man["launcher"]["path"], "launcher/0.3.0/MedianXL-Launcher.exe")
+        self.assertEqual(man["launcher"]["path"], "launcher/0.3.0/D2R-XL-Launcher.exe")
         self.assertEqual(man["launcher"]["sha256"], pub.sha256_file(exe))
 
     def test_publish_from_a_stage_folder(self):
         dist = self.make_dist("1.0.0")
         stage = self.tmp / "unpacked"
-        subprocess.run([self.seven, "x", "-y", f"-o{stage}", str(dist / "MedianXL-D2R-1.0.0.7z")], check=True, capture_output=True)
-        pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", source=pub.DirSource(stage / "MedianXL"), log=lambda *_: None)
+        subprocess.run([self.seven, "x", "-y", f"-o{stage}", str(dist / "D2R-XL-1.0.0.7z")], check=True, capture_output=True)
+        pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", source=pub.DirSource(stage / "D2R-XL"), log=lambda *_: None)
         self.ingest()
         self.assertEqual(self.channel("test")["version"], "1.0.0")
 
@@ -403,7 +403,7 @@ class PromoteListGcTests(Base):
 
     def test_gc_removes_unfinished_releases_and_temp_files(self):
         (self.site / "releases/1.4.0").mkdir()
-        (self.site / "releases/1.4.0/MedianXL-D2R-1.4.0.7z").write_bytes(b"half")  # an ingest that died before its manifest
+        (self.site / "releases/1.4.0/D2R-XL-1.4.0.7z").write_bytes(b"half")  # an ingest that died before its manifest
         stale = self.site / "objects/ab" / ("c" * 64 + pub.PART + "1234")
         stale.parent.mkdir(exist_ok=True)
         stale.write_bytes(b"x")
@@ -418,7 +418,7 @@ class PromoteListGcTests(Base):
         self.publish("1.4.0", files={"global/excel/armor.txt": b"x\n"}, launcher=exe, launcher_version="0.9.0")
         self.publish("1.5.0", files={"global/excel/armor.txt": b"y\n"}, launcher=exe, launcher_version="0.9.0")
         pub.gc(self.t, 1, log=lambda *_: None)
-        self.assertTrue((self.site / "launcher/0.9.0/MedianXL-Launcher.exe").exists())
+        self.assertTrue((self.site / "launcher/0.9.0/D2R-XL-Launcher.exe").exists())
 
 
 class VersionTests(unittest.TestCase):

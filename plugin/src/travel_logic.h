@@ -86,9 +86,9 @@ struct Hotkey {
 inline constexpr uint32_t KeyK = 0x4b, KeyL = 0x4c, KeyX = 0x58;
 
 inline constexpr Hotkey Hotkeys[] = {
-    {"mxl_pickup_toggle", "Toggle auto pickup (Median XL)", KeyX},
-    {"mxl_map_reveal", "Reveal the map (Median XL)", KeyL},
-    {"mxl_transmute", "Transmute with the cube open (Median XL)", KeyK},
+    {"mxl_pickup_toggle", "Toggle auto pickup (D2R-XL)", KeyX},
+    {"mxl_map_reveal", "Reveal the map (D2R-XL)", KeyL},
+    {"mxl_transmute", "Transmute with the cube open (D2R-XL)", KeyK},
 };
 inline constexpr int HotkeyCount = static_cast<int>(sizeof(Hotkeys) / sizeof(Hotkeys[0]));
 

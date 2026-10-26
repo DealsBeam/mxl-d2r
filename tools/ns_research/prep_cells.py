@@ -1,8 +1,8 @@
-"""Prepare a slot's installed MedianXL mod for the namespace experiment (reversible: backup dir nsresearch-backup)."""
+"""Prepare a slot's installed D2R-XL mod for the namespace experiment (reversible: backup dir nsresearch-backup)."""
 import json, os, shutil, sys
 slot = sys.argv[1]            # e.g. D:\D2R-93847-s3
-mod = os.path.join(slot, "mods", "MedianXL")
-data = os.path.join(mod, "MedianXL.mpq", "data")
+mod = os.path.join(slot, "mods", "D2R-XL")
+data = os.path.join(mod, "D2R-XL.mpq", "data")
 bk = os.path.join(slot, "nsresearch-backup")
 os.makedirs(bk, exist_ok=True)
 

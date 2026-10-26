@@ -32,7 +32,7 @@ const LoaderFile LoaderFiles[] = {
 const char* LoaderDirs[] = {"mods", "d2rloader/config", "d2rloader/data", "d2rloader/plugins", "d2rloader/logs", "d2rloader/crashes"};
 
 constexpr uint64_t SpareBytes = 3ull << 30;  // the release (about 1.5 GB) plus room for logs and saves
-constexpr const char* MarkerName = "medianxl-copy.json";
+constexpr const char* MarkerName = "d2r-xl-copy.json";
 
 std::string Mb(uint64_t b) { return std::to_string((b + (1 << 19)) >> 20) + " MB"; }
 std::string Gb(uint64_t b) {
@@ -90,7 +90,7 @@ std::wstring Quote(const std::wstring& s) { return L"\"" + s + L"\""; }
 
 Launcher::Launcher(Options o) : opt_(std::move(o)) {
 	if (opt_.dataDir.empty())
-		opt_.dataDir = JoinPath(KnownFolder(0), L"MedianXL");
+		opt_.dataDir = Wide(DefaultDataDir(Utf8(KnownFolder(0))));
 	statePath_ = JoinPath(opt_.dataDir, L"launcher.json");
 	LoadState();
 	if (opt_.site.empty())
@@ -128,7 +128,7 @@ bool Launcher::SaveState() {
 }
 
 std::string Launcher::ModFolder() const {
-	return !feed_.modFolder.empty() ? feed_.modFolder : state_["mod"]["modFolder"].Str("MedianXL");
+	return !feed_.modFolder.empty() ? feed_.modFolder : state_["mod"]["modFolder"].Str("D2R-XL");
 }
 std::wstring Launcher::ModDir() const { return JoinPath(gameDir_, L"mods\\" + Wide(ModFolder())); }
 
@@ -160,18 +160,24 @@ bool Launcher::WriteLaunchConfig(std::string& error) {
 	return true;
 }
 
+bool OfficialMedianXLFolder(const std::wstring& dir) {
+	return OfficialMedianXLPath(Utf8(dir), Utf8(KnownFolder(0)), Utf8(KnownFolder(3)));
+}
+
 std::wstring Launcher::DefaultGameDir(const std::wstring& source) {
 	std::wstring root;
-	uint32_t src = VolumeSerial(source, &root);
-	std::wstring local = JoinPath(opt_.dataDir, L"game");
-	if (!src || VolumeSerial(opt_.dataDir) == src)
-		return local;
-	return JoinPath(root, L"MedianXL\\game");  // same drive as D2R (docs/launcher.md "Drive rule")
+	uint32_t src = VolumeSerial(source, &root);  // same drive as D2R (docs/launcher.md "Drive rule")
+	return Wide(mxl::DefaultGameDir(Utf8(opt_.dataDir), !src || VolumeSerial(opt_.dataDir) == src, Utf8(root)));
 }
 
 bool Launcher::LocationOk(const std::wstring& source, const std::wstring& dir, std::string& error) {
+	if (OfficialMedianXLFolder(dir)) {
+		error = "The D2R-XL folder cannot be inside the official Median XL's folders or a Diablo II folder (" + Utf8(dir) +
+		        "). Pick another folder.";
+		return false;
+	}
 	if (PathUnder(dir, source) || PathUnder(source, dir)) {
-		error = "The Median XL folder must be outside the D2R folder (" + Utf8(source) + ").";
+		error = "The D2R-XL folder must be outside the D2R folder (" + Utf8(source) + ").";
 		return false;
 	}
 	if (dir.size() <= 3) {
@@ -181,7 +187,7 @@ bool Launcher::LocationOk(const std::wstring& source, const std::wstring& dir, s
 	if (!opt_.anyDrive && VolumeSerial(dir) != VolumeSerial(source)) {
 		std::wstring root;
 		VolumeSerial(source, &root);
-		error = "The Median XL folder must be on the same drive as D2R (" + Utf8(root) +
+		error = "The D2R-XL folder must be on the same drive as D2R (" + Utf8(root) +
 		        "): D2R's Battle.net login file only opens from that drive. Pick a folder on " + Utf8(root) + ".";
 		return false;
 	}
@@ -202,10 +208,15 @@ bool Launcher::Prepare(std::string& error) {
 		source_ = InspectD2R(src, opt_.source.empty() ? state_["source_kind"].Str("saved") : "chosen");
 	}
 	if (FileExists(JoinPath(source_.dir, Wide(MarkerName)))) {
-		error = "That folder is a Median XL game copy, not the D2R install. Choose the D2R folder from Battle.net or Steam.";
+		error = "That folder is a D2R-XL game copy, not the D2R install. Choose the D2R folder from Battle.net or Steam.";
 		return false;
 	}
 	gameDir_ = !opt_.gameDir.empty() ? opt_.gameDir : !state_["game_dir"].Str().empty() ? Wide(state_["game_dir"].Str()) : DefaultGameDir(source_.dir);
+	if (OfficialMedianXLFolder(opt_.dataDir) || OfficialMedianXLFolder(gameDir_)) {  // docs/launcher.md "Coexisting with the official Median XL"
+		error = "D2R-XL never uses the official Median XL's folders or a Diablo II folder (" +
+		        Utf8(OfficialMedianXLFolder(opt_.dataDir) ? opt_.dataDir : gameDir_) + "). Choose other folders.";
+		return false;
+	}
 	state_.Set("source", Utf8(source_.dir));
 	state_.Set("source_kind", source_.source);
 	state_.Set("game_dir", Utf8(gameDir_));
@@ -213,9 +224,9 @@ bool Launcher::Prepare(std::string& error) {
 }
 
 std::wstring Launcher::SavesDir() {
-	std::string savepath = "MedianXL/", text, err;
+	std::string savepath = "D2R-XL/", text, err;
 	Json j;
-	if (!gameDir_.empty() && ReadWholeFile(JoinPath(ModDir(), L"MedianXL.mpq\\modinfo.json"), text) && Json::Parse(text, j, err))
+	if (!gameDir_.empty() && ReadWholeFile(JoinPath(ModDir(), Wide(ModFolder()) + L".mpq\\modinfo.json"), text) && Json::Parse(text, j, err))
 		savepath = j["savepath"].Str(savepath);
 	std::wstring w = Wide(savepath);
 	while (!w.empty() && (w.back() == L'/' || w.back() == L'\\'))
@@ -230,14 +241,14 @@ bool Launcher::EnsureCopy(bool verify, std::string& error) {
 	if (complete && !verify) {
 		D2RInstall copy = InspectD2R(gameDir_, "copy");
 		if (copy.build.verdict != BuildVerdict::Ok) {
-			error = "The Median XL game copy is not build " + std::to_string(RequiredBuild) + " (" + copy.build.message + "). Use Repair.";
+			error = "The D2R-XL game copy is not build " + std::to_string(RequiredBuild) + " (" + copy.build.message + "). Use Repair.";
 			return false;
 		}
 		return true;
 	}
 	if (source_.build.verdict != BuildVerdict::Ok) {
 		if (complete) {  // a newer D2R cannot repair the frozen copy, but the copy itself still works
-			Report("D2R is now build " + std::to_string(source_.build.build) + "; the Median XL copy stays at build " +
+			Report("D2R is now build " + std::to_string(source_.build.build) + "; the D2R-XL copy stays at build " +
 			       std::to_string(RequiredBuild) + " and is not compared with it.");
 			return true;
 		}
@@ -275,14 +286,14 @@ bool Launcher::EnsureCopy(bool verify, std::string& error) {
 	}
 	uint64_t free = 0;
 	if (FreeBytes(gameDir_, free) && free < list.bytes - present + SpareBytes) {
-		error = "Not enough disk space for the Median XL game copy: it needs " + Gb(list.bytes - present + SpareBytes) + ", " + Gb(free) +
+		error = "Not enough disk space for the D2R-XL game copy: it needs " + Gb(list.bytes - present + SpareBytes) + ", " + Gb(free) +
 		        " are free on that drive.";
 		return false;
 	}
 	if (!FileExists(marker)) {
 		MakeDirs(gameDir_);
 		Json m = Json::Object();
-		m.Set("made_by", "Median XL launcher").Set("id", RandomId()).Set("source", Utf8(source_.dir)).Set("build", RequiredBuild);
+		m.Set("made_by", "D2R-XL launcher").Set("id", RandomId()).Set("source", Utf8(source_.dir)).Set("build", RequiredBuild);
 		if (!WriteFileAtomic(marker, m.Dump())) {
 			error = "Cannot write into " + Utf8(gameDir_) + ": " + Utf8(LastErrorText(GetLastError()));
 			return false;
@@ -447,10 +458,13 @@ bool Launcher::CheckFeed(std::string& error) {
 	std::string chUrl = siteRoot_ + "channels/" + opt_.channel + ".json";
 	Report("Reading the release channel " + chUrl);
 	std::string text;
-	if (!FetchText(chUrl, text, error, 1u << 20)) {
-		error = "Cannot reach the Median XL download site (" + chUrl + "): " + error;
+	int status = 0;
+	if (!FetchText(chUrl, text, error, 1u << 20, &status)) {
+		Log("channel " + chUrl + ": " + (status ? "HTTP " + std::to_string(status) : std::string("no answer")) + ": " + error);
+		error = ChannelReadError(opt_.channel, chUrl, status, status ? "" : error);
 		return false;
 	}
+	Log("channel " + chUrl + ": HTTP " + std::to_string(status) + ", " + std::to_string(text.size()) + " bytes");
 	Channel ch;
 	if (!ParseChannel(text, ch, error)) {
 		error = "The download site's channel file " + chUrl + " is not usable: " + error;
@@ -471,11 +485,11 @@ bool Launcher::CheckFeed(std::string& error) {
 		if (m.schemaVersion > ManifestSchema) {
 			offer_ = m.launcher;  // the release's own launcher can read it: self-update
 			feed_.launcher = m.launcher;
-			error = "This launcher is too old for Median XL " + m.version + " (its release manifest has format " +
+			error = "This launcher is too old for D2R-XL " + m.version + " (its release manifest has format " +
 			        std::to_string(m.schemaVersion) + ", this launcher reads " + std::to_string(ManifestSchema) +
 			        "). Update the launcher: " + NewLauncherUrl();
 		} else if (m.schemaVersion > 0 && m.schemaVersion < ManifestSchema) {
-			error = "This launcher is too new for the release on the download site (Median XL " + m.version +
+			error = "This launcher is too new for the release on the download site (D2R-XL " + m.version +
 			        ", release manifest format " + std::to_string(m.schemaVersion) + "; this launcher reads " +
 			        std::to_string(ManifestSchema) + "). Try again later, or report it: " + IssuesUrl;
 		} else {
@@ -484,18 +498,18 @@ bool Launcher::CheckFeed(std::string& error) {
 		return false;
 	}
 	if (m.version != ch.version) {
-		error = "The channel names Median XL " + ch.version + " but its manifest is " + m.version + ".";
+		error = "The channel names D2R-XL " + ch.version + " but its manifest is " + m.version + ".";
 		return false;
 	}
 	offer_ = m.launcher;  // a launcher update is possible even when this launcher cannot install the release
 	if (m.d2rBuild != RequiredBuild) {
 		feed_ = m;
-		error = "Median XL " + m.version + " needs D2R build " + std::to_string(m.d2rBuild) + "; this launcher knows build " +
+		error = "D2R-XL " + m.version + " needs D2R build " + std::to_string(m.d2rBuild) + "; this launcher knows build " +
 		        std::to_string(RequiredBuild) + ". Get the new launcher: " + NewLauncherUrl();
 		return false;
 	}
 	if (!m.complete) {
-		error = "The release manifest names Median XL " + m.version + " as incomplete (a test package without game data); it cannot be installed.";
+		error = "The release manifest names D2R-XL " + m.version + " as incomplete (a test package without game data); it cannot be installed.";
 		return false;
 	}
 	// the launcher installs only its own pinned D2RLoader; a release that names another one needs a new launcher
@@ -503,13 +517,13 @@ bool Launcher::CheckFeed(std::string& error) {
 	    (!m.d2rloader.sha256.empty() && m.d2rloader.sha256 != LoaderZipSha256) ||
 	    (!m.d2rloader.signerThumbprint.empty() && m.d2rloader.signerThumbprint != LoaderSigner)) {
 		feed_ = m;
-		error = "Median XL " + m.version + " needs D2RLoader " + m.d2rloader.version + "; this launcher installs " + LoaderVersion +
+		error = "D2R-XL " + m.version + " needs D2RLoader " + m.d2rloader.version + "; this launcher installs " + LoaderVersion +
 		        ". Get the new launcher: " + NewLauncherUrl();
 		return false;
 	}
 	if (!m.launcherMin.empty() && CompareVersions(LauncherVersion, m.launcherMin) < 0) {
 		feed_ = m;
-		error = "Median XL " + m.version + " needs launcher " + m.launcherMin + " or newer (this is " + LauncherVersion +
+		error = "D2R-XL " + m.version + " needs launcher " + m.launcherMin + " or newer (this is " + LauncherVersion +
 		        "). Get it: " + NewLauncherUrl();
 		return false;
 	}
@@ -626,12 +640,12 @@ bool MoveInto(const std::wstring& from, const std::wstring& to) {
 }  // namespace
 
 // docs/release.md "Hosting layout": every changed file is one object, <objectsBase><sha[0:2]>/<sha>, the only way a
-// release is installed. Downloads run in parallel into <game>\medianxl-download\<sha>.part, resume with a Range request
+// release is installed. Downloads run in parallel into <game>\d2r-xl-download\<sha>.part, resume with a Range request
 // (ObjectAttempts tries per object, with a growing pause; 404/403/410 end it at once), are checked (size, sha256) and
 // then renamed into place. On return `fetch` holds what could not be installed; the rest stays installed.
 bool Launcher::InstallObjects(const std::wstring& mod, std::vector<ManifestFile>& fetch, Json& files, std::string& error) {
 	std::vector<ObjectFetch> objs = GroupObjects(fetch);
-	std::wstring tmp = JoinPath(gameDir_, L"medianxl-download");
+	std::wstring tmp = JoinPath(gameDir_, L"d2r-xl-download");
 	if (!MakeDirs(tmp)) {
 		error = "cannot create " + Utf8(tmp);
 		return false;
@@ -755,7 +769,7 @@ bool Launcher::InstallObjects(const std::wstring& mod, std::vector<ManifestFile>
 		ULONGLONG now = GetTickCount64();
 		if (onProgress && now - lastShow >= 500) {
 			lastShow = now;
-			onProgress({"Downloading Median XL " + feed_.version + ": " + std::to_string(doneFiles.load()) + " of " +
+			onProgress({"Downloading D2R-XL " + feed_.version + ": " + std::to_string(doneFiles.load()) + " of " +
 			                std::to_string(fetch.size()) + " files (" + Mb(doneBytes.load()) + " of " + Mb(totalBytes) + ")",
 			            totalBytes ? double(doneBytes.load()) / double(totalBytes) : -1});
 		}
@@ -778,7 +792,7 @@ bool Launcher::InstallObjects(const std::wstring& mod, std::vector<ManifestFile>
 		std::string ignore;
 		RemoveTree(tmp, ignore);  // leftover parts of objects no longer needed
 		Report("Downloaded " + std::to_string(objs.size()) + " objects (" + Mb(totalBytes) + "), installed " + std::to_string(installed) +
-		       " files of Median XL " + feed_.version);
+		       " files of D2R-XL " + feed_.version);
 		return true;
 	}
 	error = cancel.load() ? std::string("cancelled") : std::to_string(failed.size()) + " downloads failed, first: " + firstError;
@@ -793,7 +807,7 @@ bool Launcher::EnsureMod(bool verify, std::string& error) {
 	// plugin's build guard reads); the D2R.exe file of build 93847 carries another one (0x6a6b96a4)
 	Json files = state_["mod_files"].IsObject() ? state_["mod_files"] : Json::Object();
 	uint64_t hashed = 0;
-	Report(verify ? "Checking every installed Median XL file ..." : "Comparing the installed files with release " + feed_.version + " ...");
+	Report(verify ? "Checking every installed D2R-XL file ..." : "Comparing the installed files with release " + feed_.version + " ...");
 	auto current = [&](const std::string& path) -> std::string {
 		std::wstring p = JoinPath(mod, Wide(path));
 		uint64_t size = 0, mtime = 0;
@@ -817,7 +831,7 @@ bool Launcher::EnsureMod(bool verify, std::string& error) {
 		files.Set(r, Json());
 	}
 	if (!plan.remove.empty())
-		Report("Removed " + std::to_string(plan.remove.size()) + " files that are not part of Median XL " + feed_.version);
+		Report("Removed " + std::to_string(plan.remove.size()) + " files that are not part of D2R-XL " + feed_.version);
 	if (!plan.fetch.empty()) {
 		std::vector<ManifestFile> left = plan.fetch;
 		if (!InstallObjects(mod, left, files, error)) {  // the objects are the only way in (docs/release.md)
@@ -832,7 +846,7 @@ bool Launcher::EnsureMod(bool verify, std::string& error) {
 			return false;
 		}
 	} else {
-		Report("Median XL " + feed_.version + " is installed and up to date" + (hashed ? " (" + Mb(hashed) + " checked)" : ""));
+		Report("D2R-XL " + feed_.version + " is installed and up to date" + (hashed ? " (" + Mb(hashed) + " checked)" : ""));
 	}
 	for (const auto& d : feed_.emptyDirs)  // folders the release has without files (d2rloader/patches)
 		if (!MakeDirs(JoinPath(mod, Wide(d)))) {
@@ -856,7 +870,7 @@ bool Launcher::InstallOrUpdate(std::string& error) {
 	if (!Prepare(error) || !CheckFeed(error))
 		return false;
 	if (!ProcessesUnder(gameDir_).empty()) {
-		error = "Median XL is running. Close the game first.";
+		error = "D2R-XL is running. Close the game first.";
 		return false;
 	}
 	return EnsureCopy(false, error) && EnsureLoader(false, error) && EnsureMod(false, error);
@@ -867,7 +881,7 @@ bool Launcher::Repair(std::string& error) {
 	if (!Prepare(error) || !CheckFeed(error))
 		return false;
 	if (!ProcessesUnder(gameDir_).empty()) {
-		error = "Median XL is running. Close the game first.";
+		error = "D2R-XL is running. Close the game first.";
 		return false;
 	}
 	return EnsureCopy(true, error) && EnsureLoader(true, error) && EnsureMod(true, error);
@@ -880,7 +894,7 @@ bool Launcher::CanPlay(std::string* why) {
 		return false;
 	}
 	if (!state_["copy_complete"].Bool() || !LooksLikeD2R(gameDir_)) {
-		if (why) *why = "Median XL is not installed yet. Press Update.";
+		if (why) *why = "D2R-XL is not installed yet. Press Update.";
 		return false;
 	}
 	if (!FileExists(JoinPath(gameDir_, L"D2RLoader.exe")) || !state_["mod"].IsObject()) {
@@ -930,7 +944,7 @@ bool Launcher::Play(std::string& error) {
 		return false;
 	}
 	if (!ProcessesUnder(gameDir_).empty()) {
-		error = "Median XL is already running.";
+		error = "D2R-XL is already running.";
 		return false;
 	}
 	// D2R's options (graphics, sound) live in one Settings.json for every install; keep the player's own once
@@ -992,10 +1006,10 @@ bool Launcher::Play(std::string& error) {
 	}
 	if (ProcessesUnder(gameDir_).empty()) {
 		error = "The game closed right after starting. Logs: " + Utf8(JoinPath(gameDir_, L"d2rloader\\logs")) +
-		        ". If D2R is installed on another drive than the Median XL folder, move the Median XL folder to that drive.";
+		        ". If D2R is installed on another drive than the D2R-XL folder, move the D2R-XL folder to that drive.";
 		return false;
 	}
-	Report("Median XL is running.");
+	Report("D2R-XL is running.");
 	return true;
 }
 
@@ -1005,15 +1019,15 @@ bool Launcher::Uninstall(std::string& error) {
 	gameDir_ = dir;
 	std::wstring saves = SavesDir();  // from the mod's modinfo.json, before it goes
 	if (!dir.empty() && !ProcessesUnder(dir).empty()) {
-		error = "Median XL is running. Close the game first.";
+		error = "D2R-XL is running. Close the game first.";
 		return false;
 	}
 	if (!dir.empty() && DirExists(dir)) {
 		std::wstring marker = JoinPath(dir, Wide(MarkerName));
 		std::string text, err;
 		Json m;
-		if (!ReadWholeFile(marker, text) || !Json::Parse(text, m, err) || m["made_by"].Str() != "Median XL launcher") {
-			error = "Not removing " + Utf8(dir) + ": it has no Median XL launcher marker, so this launcher did not make it.";
+		if (!ReadWholeFile(marker, text) || !Json::Parse(text, m, err) || m["made_by"].Str() != "D2R-XL launcher") {
+			error = "Not removing " + Utf8(dir) + ": it has no D2R-XL launcher marker, so this launcher did not make it.";
 			return false;
 		}
 		if (!state_["copy_id"].Str().empty() && m["id"].Str() != state_["copy_id"].Str()) {
@@ -1024,19 +1038,19 @@ bool Launcher::Uninstall(std::string& error) {
 			error = "Not removing " + Utf8(dir) + ": it overlaps the D2R install.";
 			return false;
 		}
-		Report("Removing the Median XL game copy " + Utf8(dir) + " ...");
+		Report("Removing the D2R-XL game copy " + Utf8(dir) + " ...");
 		if (!RemoveTree(dir, error))
 			return false;
 		std::wstring parent = ParentDir(dir);
-		if (!SamePath(parent, opt_.dataDir) && JoinPath(ParentDir(parent), L"MedianXL") == parent)
-			RemoveDirectoryW(parent.c_str());  // <drive>\MedianXL when empty
+		if (!SamePath(parent, opt_.dataDir) && JoinPath(ParentDir(parent), L"D2R-XL") == parent)
+			RemoveDirectoryW(parent.c_str());  // <drive>\D2R-XL when empty
 	}
 	std::string e2;
 	std::wstring cache = JoinPath(opt_.dataDir, L"cache");
 	if (DirExists(cache))
 		RemoveTree(cache, e2);
 	DeleteFileW(statePath_.c_str());
-	Report("Median XL is uninstalled. Your characters stay in " + Utf8(saves) + "; your D2R settings backup (if any) is in " +
+	Report("D2R-XL is uninstalled. Your characters stay in " + Utf8(saves) + "; your D2R settings backup (if any) is in " +
 	       Utf8(JoinPath(opt_.dataDir, L"backup")) + ".");
 	state_ = Json::Object();
 	return true;
@@ -1048,12 +1062,12 @@ std::string Launcher::StatusText() {
 		return e;
 	out = "D2R: " + Utf8(source_.dir) + " (" + source_.source + ", " + source_.build.message + ")\n";
 	if (state_["copy_complete"].Bool())
-		out += "Median XL folder: " + Utf8(gameDir_) + " (build " + std::to_string(state_["copy_build"].Int()) + ")\n";
+		out += "D2R-XL folder: " + Utf8(gameDir_) + " (build " + std::to_string(state_["copy_build"].Int()) + ")\n";
 	else
-		out += "Median XL folder: " + Utf8(gameDir_) + " (not made yet: needs about " +
+		out += "D2R-XL folder: " + Utf8(gameDir_) + " (not made yet: needs about " +
 		       Gb(state_["copy_bytes"].Int(30ll << 30) + SpareBytes) + ")\n";
 	std::string installed = state_["mod"]["version"].Str();
-	out += "Median XL: " + (installed.empty() ? std::string("not installed") : installed);
+	out += "D2R-XL: " + (installed.empty() ? std::string("not installed") : installed);
 	if (feedChecked_ && !installed.empty() && feed_.version != installed)
 		out += " (update " + feed_.version + " available)";
 	else if (feedChecked_ && !installed.empty())

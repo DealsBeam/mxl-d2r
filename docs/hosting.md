@@ -94,7 +94,7 @@ ssh  -i $HOME\.ssh\mxl_publish mxlup@HOST         # must be refused ("This servi
 ## 3. The ingest script and its systemd units
 
 `tools/dl_ingest.py` (one file, Python standard library and 7-Zip only) checks an upload in `/srv/dl/incoming/<v>/`, moves
-its objects into `/srv/dl/mxl/objects/`, builds `releases/<v>/MedianXL-D2R-<v>.7z` from the objects, writes the release,
+its objects into `/srv/dl/mxl/objects/`, builds `releases/<v>/D2R-XL-<v>.7z` from the objects, writes the release,
 the launcher and the channel file (last), then deletes the upload. Anything that fails a check is refused and left in
 place with a `REFUSED` file (the reason). Details: release.md "Publishing". It writes nothing outside `/srv/dl`.
 
@@ -111,7 +111,7 @@ chown root:root /opt/mxl-dl/dl_ingest.py && chmod 0755 /opt/mxl-dl/dl_ingest.py
 
 cat > /etc/systemd/system/mxl-dl-ingest.service <<'EOF'
 [Unit]
-Description=Median XL downloads: check and publish uploads in /srv/dl/incoming (dl_ingest.py)
+Description=D2R-XL downloads: check and publish uploads in /srv/dl/incoming (dl_ingest.py)
 
 [Service]
 Type=oneshot
@@ -146,7 +146,7 @@ EOF
 
 cat > /etc/systemd/system/mxl-dl-ingest.path <<'EOF'
 [Unit]
-Description=Median XL downloads: watch /srv/dl/incoming for finished uploads
+Description=D2R-XL downloads: watch /srv/dl/incoming for finished uploads
 
 [Path]
 PathChanged=/srv/dl/incoming
@@ -158,7 +158,7 @@ EOF
 
 cat > /etc/systemd/system/mxl-dl-ingest.timer <<'EOF'
 [Unit]
-Description=Median XL downloads: look at /srv/dl/incoming every 15 minutes too (an upload that finished during a run)
+Description=D2R-XL downloads: look at /srv/dl/incoming every 15 minutes too (an upload that finished during a run)
 
 [Timer]
 OnBootSec=5min

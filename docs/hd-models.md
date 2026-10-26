@@ -164,7 +164,7 @@ As a module: `Gr2File.read(bytes)`, `parse_tree(g)` (typed `Obj` tree with `.f` 
   becomes about 320 KB).
 - **Does the engine accept the rewrite? Yes.** Test on slot 1 (ran 2026-10-22, two runs): all 60 zombie `.model` files (head,
   torso, legs, larm x lit/med/hvy x 5 LODs) rewritten by `Writer` (uncompressed, no marshalling) and dropped into
-  `mods/MedianXL/MedianXL.mpq/data/hd/character/enemy/zombie1/`. `cheat mspawn zombie1` in the Blood Moor: no crash, no
+  `mods/D2R-XL/D2R-XL.mpq/data/hd/character/enemy/zombie1/`. `cheat mspawn zombie1` in the Blood Moor: no crash, no
   loader/core errors, zombies draw. Run 1 scaled by 0.6 (not clearly visible at game zoom, treated as inconclusive); run 2 by
   3.0: legs (only `Position.w` changed) are huge and the torso/head are visibly deformed, so **the files are loaded and geometry
   edits take effect**. `VertexScale` in `ExtendedData` alone could not be told apart in the screenshots; the safe rule is to write

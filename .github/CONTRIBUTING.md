@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. Short version: report bugs, send small focused pull requests, and follow Median XL.
+Thanks for helping with D2R-XL. Short version: report bugs, send small focused pull requests, and follow Median XL.
 
 ## Where the code lives
 

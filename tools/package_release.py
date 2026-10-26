@@ -3,10 +3,10 @@
 From a finished build (tools/build.py -> work/mod) and the release plugin (cmake -DMXL_RELEASE=ON: no test harness, built
 here unless --plugin is given) it writes into dist/:
 
-  MedianXL-D2R-<version>.7z      solid LZMA2 7z (-mx7), top folder MedianXL/, the folder tools/install_mod.py writes into
+  D2R-XL-<version>.7z      solid LZMA2 7z (-mx7), top folder D2R-XL/, the folder tools/install_mod.py writes into
                                  <D2R>\\mods:
-                                   MedianXL.mpq/modinfo.json   {"name": "MedianXL", "savepath": "MedianXL/"}
-                                   MedianXL.mpq/data/...       install_mod.build_data (work/mod/data + the install-time merges)
+                                   D2R-XL.mpq/modinfo.json   {"name": "D2R-XL", "savepath": "D2R-XL/"}
+                                   D2R-XL.mpq/data/...       install_mod.build_data (work/mod/data + the install-time merges)
                                    d2rloader/plugins/mxl-core.dll, d2rloader/config/d2rloader.toml, d2rloader/patches/,
                                    d2rloader/metadata.json     (modVersion = <version>, website = the GitHub repo)
                                  The manual download for players, and where tools/publish_release.py reads the file bytes
@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import install_mod  # noqa: E402
 
 ROOT = install_mod.ROOT
-NAME = "MedianXL"
+NAME = "D2R-XL"
 REPO_URL = "https://github.com/Nugwa628/mxl-d2r"
 EXTRACT = ROOT / "extract" / "d2r" / install_mod.D2R_BUILD
 RELEASE_BUILD = ROOT / "build" / "plugin-release"
@@ -108,7 +108,7 @@ def stage(mod: Path, version: str, plugin: Path, game: Path, data_from: Path = N
         install_mod.build_data(data, game)
     install_mod.write_mod_files(mod, NAME, f"{NAME}/", plugin, {
         "modVersion": version, "website": REPO_URL,
-        "description": "Median XL 2.14.4 for Diablo II: Resurrected (build %s) through D2RLoader." % install_mod.D2R_BUILD})
+        "description": "D2R-XL: Median XL 2.14.4 for Diablo II: Resurrected (build %s) through D2RLoader." % install_mod.D2R_BUILD})
 
 
 def drop_blizzard_copies(mod: Path, extract: Path = EXTRACT) -> int:
@@ -164,7 +164,7 @@ def fix_mtimes(mod: Path) -> None:
 
 
 def write_7z(mod: Path, out: Path, sevenzip=None) -> None:
-    """Solid LZMA2 7z of the staged folder, top folder MedianXL/ (empty folders kept). Raises RuntimeError when there is no
+    """Solid LZMA2 7z of the staged folder, top folder D2R-XL/ (empty folders kept). Raises RuntimeError when there is no
     7-Zip or it fails; nothing is left behind then."""
     exe = sevenzip or find_7z()
     if not exe:
@@ -186,7 +186,7 @@ def manifest(version: str, files: list, archive_path: Path, complete: bool, dirs
         "version": version,
         "pluginVersion": plugin_version(),
         "released": datetime.date.today().isoformat(),
-        "complete": complete,  # false: a --no-data build (no MedianXL.mpq/data); not for players
+        "complete": complete,  # false: a --no-data build (no D2R-XL.mpq/data); not for players
         "d2r": D2R,
         "d2rloader": D2RLOADER,
         "launch": LAUNCH,
@@ -202,31 +202,31 @@ def manifest(version: str, files: list, archive_path: Path, complete: bool, dirs
     }
 
 
-UNPACK_7Z = ("Unpack `{archive}` into `<D2R folder>\\mods\\` so that `<D2R folder>\\mods\\MedianXL\\MedianXL.mpq\\modinfo.json` exists\n"
+UNPACK_7Z = ("Unpack `{archive}` into `<D2R folder>\\mods\\` so that `<D2R folder>\\mods\\D2R-XL\\D2R-XL.mpq\\modinfo.json` exists\n"
              "   (Windows 11 opens .7z files; otherwise use 7-Zip, https://www.7-zip.org).")
 
-NOTES = """# Median XL D2R {version}
+NOTES = """# D2R-XL {version}
 
-Median XL 2.14.4 ported to Diablo II: Resurrected through the D2RLoader plugin mxl-core {plugin}.
+D2R-XL is Median XL 2.14.4 (by the Median XL team) ported to Diablo II: Resurrected through the D2RLoader plugin mxl-core {plugin}.
 
 ## Requirements
 
 - Diablo II: Resurrected **build {build}** (D2R {d2rver}). On any other build the plugin installs nothing and shows
-  "Median XL D2R {plugin} needs D2R build {build}; this is <n>".
+  "D2R-XL {plugin} needs D2R build {build}; this is <n>".
 - D2RLoader **{loader}** ({loader_url}, sha256 `{loader_sha}`).
 
 ## Install
 
-With the Median XL launcher (recommended): it keeps its own copy of D2R build {build} with D2RLoader and the mod, so your
+With the D2R-XL launcher (recommended): it keeps its own copy of D2R build {build} with D2RLoader and the mod, so your
 normal D2R install and other mods stay as they are. It reads release-manifest.json and downloads only changed files.
 
 By hand (offline fallback), into a D2R folder at build {build} that has D2RLoader {loader}:
 
 1. {unpack}
-2. In `<D2R folder>\\d2rloader\\config\\d2rloader.toml` set `default_mod = "MedianXL"` and `launch_arguments = "-txt"`.
-3. Start `D2RLoader.exe`. Characters are saved in `Saved Games\\Diablo II Resurrected\\mods\\MedianXL\\`.
-   To update, delete `mods\\MedianXL\\MedianXL.mpq\\data` and unpack the new release; keep your
-   `mods\\MedianXL\\d2rloader\\config\\d2rloader.toml` if you changed it.
+2. In `<D2R folder>\\d2rloader\\config\\d2rloader.toml` set `default_mod = "D2R-XL"` and `launch_arguments = "-txt"`.
+3. Start `D2RLoader.exe`. Characters are saved in `Saved Games\\Diablo II Resurrected\\mods\\D2R-XL\\`.
+   To update, delete `mods\\D2R-XL\\D2R-XL.mpq\\data` and unpack the new release; keep your
+   `mods\\D2R-XL\\d2rloader\\config\\d2rloader.toml` if you changed it.
 
 ## Changes
 
@@ -246,8 +246,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--version", help="release version (default: PluginVersion)")
     ap.add_argument("--plugin", type=Path, help="a release mxl-core.dll (default: build it with -DMXL_RELEASE=ON)")
-    ap.add_argument("--data-from", type=Path, help="copy this finished MedianXL.mpq/data instead of building it")
-    ap.add_argument("--no-data", action="store_true", help="no MedianXL.mpq/data (CI): manifest says complete=false")
+    ap.add_argument("--data-from", type=Path, help="copy this finished D2R-XL.mpq/data instead of building it")
+    ap.add_argument("--no-data", action="store_true", help="no D2R-XL.mpq/data (CI): manifest says complete=false")
     ap.add_argument("--game", type=Path, default=Path(install_mod.DEFAULT_GAME), help="D2R folder read for maps_hd (CASC)")
     ap.add_argument("--out", type=Path, default=ROOT / "dist")
     a = ap.parse_args()
@@ -282,9 +282,9 @@ def main() -> int:
         print("refusing to package test or player files: " + ", ".join(bad[:20]))
         return 1
 
-    for old in a.out.glob("MedianXL-D2R-*.zip"):  # an earlier packager's zip must not sit next to this release
+    for old in a.out.glob("D2R-XL-*.zip"):  # an earlier packager's zip must not sit next to this release
         old.unlink()
-    seven_path = a.out / f"MedianXL-D2R-{version}{'-nodata' if a.no_data else ''}.7z"
+    seven_path = a.out / f"D2R-XL-{version}{'-nodata' if a.no_data else ''}.7z"
     t7 = time.time()
     try:
         write_7z(mod, seven_path, sevenzip)

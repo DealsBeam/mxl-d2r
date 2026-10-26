@@ -1,7 +1,7 @@
 """Column survey: valid medianxl keys in row 1 and a nonexistent key (medianxl:NoSuchKey) in row 2 of each column."""
 import json, os, shutil, sys
 slot = sys.argv[1]
-mod = os.path.join(slot, "mods", "MedianXL"); data = os.path.join(mod, "MedianXL.mpq", "data")
+mod = os.path.join(slot, "mods", "D2R-XL"); data = os.path.join(mod, "D2R-XL.mpq", "data")
 bk = os.path.join(slot, "nsresearch-backup"); os.makedirs(bk, exist_ok=True)
 def backup(path):
     dst = os.path.join(bk, os.path.relpath(path, slot).replace(os.sep, "__"))

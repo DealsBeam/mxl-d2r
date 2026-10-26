@@ -1,18 +1,18 @@
 """Install the generated mod into D2R's mods folder as a D2RLoader-ready folder mod.
 
-<game>/mods/MedianXL/
-  MedianXL.mpq/modinfo.json         {"name": "MedianXL", "savepath": "MedianXL/"}  (own save folder; D2R reads it
+<game>/mods/D2R-XL/
+  D2R-XL.mpq/modinfo.json         {"name": "D2R-XL", "savepath": "D2R-XL/"}  (own save folder; D2R reads it
                                     inside the folder MPQ; a copy also sits at the mod root)
   d2rloader/metadata.json           schemaVersion 1 + "namespace": "medianxl" (Median-only strings, docs/strings-namespace.md;
                                     the folder MPQ needs no (listfile): it is a directory, not a packed archive)
   d2rloader/config/d2rloader.toml   [d2rcore.save_format] mode = "extended" (Median's wider item/stat IDs)
                                     [d2rcore.stash] add_shared_tabs = 7 (Median's stash has 10 pages, D2R 3 normal tabs)
-  MedianXL.mpq/data/...             copy of work/mod/data (folder-style MPQ) + global/dataversionbuild.txt
+  D2R-XL.mpq/data/...             copy of work/mod/data (folder-style MPQ) + global/dataversionbuild.txt
                                     + Median's classic tiles/maps (global/tiles)
 
-Only MedianXL.mpq/data is replaced on reinstall; saves live elsewhere (Saved Games) and are never touched.
+Only D2R-XL.mpq/data is replaced on reinstall; saves live elsewhere (Saved Games) and are never touched.
 tools/package_release.py builds the same folder for a player release (build_data + write_mod_files).
-Usage: python tools/install_mod.py [--game "C:\\Program Files (x86)\\Diablo II Resurrected"] [--name MedianXL]
+Usage: python tools/install_mod.py [--game "C:\\Program Files (x86)\\Diablo II Resurrected"] [--name D2R-XL]
 """
 import argparse
 import json
@@ -87,7 +87,7 @@ def migrate_hotkey_bindings(text: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", default=DEFAULT_GAME)
-    ap.add_argument("--name", default="MedianXL")
+    ap.add_argument("--name", default="D2R-XL")
     ap.add_argument("--slot", default=os.environ.get("MXL_SLOT"), help="game slot 1..3 or 'all' (default MXL_SLOT); overrides --game")
     ap.add_argument("--savepath", help="save folder name written to modinfo.json (default <name>/, slots: <name>-sN/)")
     args = ap.parse_args()
@@ -176,7 +176,7 @@ def build_data(data: Path, game: Path) -> None:
                 shutil.copy2(p, dest)
 
 
-DEV_METADATA = {"modVersion": "0.1.0-dev", "description": "Work-in-progress port of Median XL to D2R.", "website": ""}
+DEV_METADATA = {"modVersion": "0.1.0-dev", "description": "D2R-XL: work-in-progress port of Median XL to D2R.", "website": ""}
 
 
 def write_mod_files(mod: Path, name: str, savepath: str, plugin: Path = PLUGIN, metadata: dict = None) -> None:
@@ -194,7 +194,7 @@ def write_mod_files(mod: Path, name: str, savepath: str, plugin: Path = PLUGIN, 
     (d2rl / "plugins").mkdir(exist_ok=True)
     (d2rl / "patches").mkdir(exist_ok=True)
     meta = {"schemaVersion": 1, "namespace": NAMESPACE,
-            "metadata": {"name": "Median XL (D2R port)", "author": "mxl-d2r", **DEV_METADATA, **(metadata or {})}}
+            "metadata": {"name": "D2R-XL", "author": "mxl-d2r", **DEV_METADATA, **(metadata or {})}}
     (d2rl / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     # The mxl-core plugin (plugin/, built by tools/build_plugin.ps1) loads only with this mod (mod-scoped)
     if plugin.exists():

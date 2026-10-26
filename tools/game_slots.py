@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """Game slots: up to three D2R test instances side by side (docs/testing.md, "Parallel slots").
 
-A slot is a full D2R 3.3 build 93847 folder with D2RLoader and the Median XL mod, its own save folder and its own
+A slot is a full D2R 3.3 build 93847 folder with D2RLoader and the D2R-XL mod, its own save folder and its own
 run lock:
 
-  slot 1  C:\\Program Files (x86)\\Diablo II Resurrected          saves  Saved Games\\Diablo II Resurrected\\mods\\MedianXL
-  slot 2  D:\\D2R-93847                                            saves  ...\\mods\\MedianXL-s2
-  slot 3  D:\\D2R-93847-s3                                         saves  ...\\mods\\MedianXL-s3
+  slot 1  C:\\Program Files (x86)\\Diablo II Resurrected          saves  Saved Games\\Diablo II Resurrected\\mods\\D2R-XL
+  slot 2  D:\\D2R-93847                                            saves  ...\\mods\\D2R-XL-s2
+  slot 3  D:\\D2R-93847-s3                                         saves  ...\\mods\\D2R-XL-s3
 
 Folders can be moved with env MXL_SLOT1/2/3_DIR. Locks are directories under %USERPROFILE%\\mxl-d2r-runs:
 game.lock.<n> (slot 1 also honours the old single game.lock, and takes both). A lock holds an `owner.txt`
@@ -14,7 +14,8 @@ game.lock.<n> (slot 1 also honours the old single game.lock, and takes both). A 
 
 Commands (py -3 tools/game_slots.py ...):
   status                    per slot: folder, running processes, lock, save folder
-  setup [N ...]             make slots ready: modinfo savepath, d2rloader.toml copied from slot 1 (never overwritten)
+  setup [N ...]             make slots ready: modinfo savepath, d2rloader.toml copied from slot 1 (never overwritten),
+                            its default_mod set to D2R-XL
   lock N [OWNER]            take the lock of slot N (exit 1 when held)
   unlock N [OWNER]          release it (only the owner, or with OWNER omitted a stale one)
   install [N ...]           run tools/install_mod.py for those slots (default: all slots that exist)
@@ -32,7 +33,7 @@ import time
 RUNS = os.environ.get("MXL_RUNS") or os.path.join(os.path.expanduser("~"), "mxl-d2r-runs")
 DEFAULTS = {1: r"C:\Program Files (x86)\Diablo II Resurrected", 2: r"D:\D2R-93847", 3: r"D:\D2R-93847-s3"}
 SAVE_ROOT = os.path.join(os.environ.get("USERPROFILE", ""), r"Saved Games\Diablo II Resurrected\mods")
-MOD = "MedianXL"
+MOD = "D2R-XL"
 
 
 def slot_dir(n):
@@ -40,7 +41,7 @@ def slot_dir(n):
 
 
 def save_name(n):
-    """The mod's save folder name inside Saved Games\\Diablo II Resurrected\\mods (slot 1 keeps MedianXL)."""
+    """The mod's save folder name inside Saved Games\\Diablo II Resurrected\\mods (slot 1: D2R-XL, slots 2 and 3: D2R-XL-sN)."""
     return MOD if n == 1 else f"{MOD}-s{n}"
 
 
@@ -223,6 +224,37 @@ def set_savepath(n):
             open(target, "w", encoding="utf-8").write(text)
 
 
+def set_toml_value(text, section, key, value):
+    """`text` with `key = value` in [section]: an existing (or commented template) line is replaced, else the key is
+    added under the header (the section appended when missing)."""
+    lines = text.splitlines()
+    head = f"[{section}]"
+    start = next((i for i, l in enumerate(lines) if l.strip() == head), None)
+    if start is None:
+        return text.rstrip("\n") + f"\n\n{head}\n{key} = {value}\n"
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
+    for i in range(start + 1, end):
+        bare = lines[i].strip().lstrip("#").strip()
+        if bare.startswith(key) and bare[len(key):].lstrip().startswith("="):
+            lines[i] = f"{key} = {value}"
+            break
+    else:
+        lines.insert(start + 1, f"{key} = {value}")
+    return "\n".join(lines) + "\n"
+
+
+def set_default_mod(n):
+    """The slot's own d2rloader.toml ([d2rloader] default_mod) starts this mod (D2RLoader.exe without -mod). A slot set up
+    before the rename to D2R-XL still names MedianXL there."""
+    toml = os.path.join(slot_dir(n), "d2rloader", "config", "d2rloader.toml")
+    if not os.path.exists(toml):
+        return
+    text = open(toml, encoding="utf-8").read()
+    new = set_toml_value(text, "d2rloader", "default_mod", f'"{MOD}"')
+    if new != text:
+        open(toml, "w", encoding="utf-8").write(new)
+
+
 def setup(n):
     game = slot_dir(n)
     if not os.path.exists(os.path.join(game, "D2RLoader.exe")):
@@ -234,6 +266,7 @@ def setup(n):
         if n != 1 and os.path.exists(os.path.join(src, f)) and not os.path.exists(os.path.join(dst, f)):
             shutil.copy2(os.path.join(src, f), os.path.join(dst, f))
     set_savepath(n)
+    set_default_mod(n)
     os.makedirs(save_dir(n), exist_ok=True)
     if n > 1:
         src_exe, dst_exe = os.path.join(game, "D2RLoader.exe"), os.path.join(game, f"D2RLoader-s{n}.exe")

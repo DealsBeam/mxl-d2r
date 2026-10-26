@@ -44,7 +44,7 @@ inline void Message(char* out, size_t outSize, const char* pluginVersion, uint32
 	} else {
 		std::snprintf(found, sizeof(found), "%.40s", buildName);
 	}
-	std::snprintf(out, outSize, "Median XL D2R %s needs D2R build %s; this is %s. The mod's engine changes are off.",
+	std::snprintf(out, outSize, "D2R-XL %s needs D2R build %s; this is %s. The mod's engine changes are off.",
 	              pluginVersion != nullptr ? pluginVersion : "?", ExpectedBuild, found);
 }
 

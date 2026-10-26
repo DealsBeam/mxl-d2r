@@ -16,6 +16,26 @@ std::string Norm(const std::string& rel) {
 	return s;
 }
 
+std::string NormPath(const std::string& p) {  // lower case, '/' separators, no trailing '/'
+	std::string s;
+	for (char c : p)
+		s += c == char(92) ? '/' : char(std::tolower(uint8_t(c)));  // char(92): backslash
+	while (s.size() > 1 && s.back() == '/')
+		s.pop_back();
+	return s;
+}
+
+bool PathIsOrUnder(const std::string& path, const std::string& dir) {
+	std::string p = NormPath(path), d = NormPath(dir);
+	return !d.empty() && (p == d || p.rfind(d + "/", 0) == 0);
+}
+
+std::string Join(const std::string& a, const std::string& b) {
+	if (a.empty())
+		return b;
+	return a.back() == char(92) || a.back() == '/' ? a + b : a + char(92) + b;
+}
+
 bool Under(const std::string& s, const char* dir) {
 	std::string d = dir;
 	return s == d || s.rfind(d + "/", 0) == 0;
@@ -96,7 +116,7 @@ bool ExcludedFromCopy(const std::string& rel) {
 	if (s.find('/') == std::string::npos) {  // top-level files
 		if (s.rfind("d2rloader", 0) == 0)  // D2RLoader.exe, D2RLoader-s2.exe, d2rloader.mpq
 			return true;
-		if (s == "d2rcore.dll" || s == "blz-log.txt" || s == "dxdiag.txt" || s == "medianxl-copy.json")
+		if (s == "d2rcore.dll" || s == "blz-log.txt" || s == "dxdiag.txt" || s == "d2r-xl-copy.json" || s == "medianxl-copy.json")
 			return true;
 		size_t dot = s.rfind('.');
 		std::string ext = dot == std::string::npos ? "" : s.substr(dot);
@@ -177,6 +197,20 @@ std::string GetTomlKey(const std::string& text, const std::string& section, cons
 			return v;
 	}
 	return "";
+}
+
+std::string DefaultDataDir(const std::string& localAppData) { return Join(localAppData, ProductFolder); }
+
+std::string DefaultGameDir(const std::string& dataDir, bool dataDirOnD2RDrive, const std::string& d2rDriveRoot) {
+	return dataDirOnD2RDrive ? Join(dataDir, "game") : Join(Join(d2rDriveRoot, ProductFolder), "game");
+}
+
+bool OfficialMedianXLPath(const std::string& path, const std::string& localAppData, const std::string& roamingAppData) {
+	if (PathIsOrUnder(path, Join(localAppData, "mxl-launcher")) || PathIsOrUnder(path, Join(localAppData, "MedianXL")) ||
+	    PathIsOrUnder(path, Join(roamingAppData, "MedianXL")))
+		return true;
+	std::string p = NormPath(path) + "/";
+	return p.find("/diablo ii/") != std::string::npos;  // the classic game folder, wherever it is
 }
 
 }  // namespace mxl

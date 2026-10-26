@@ -10,7 +10,7 @@ tools/publish_release.py uploads into <root>/incoming/<version>.uploading/ and, 
   release-manifest.json        the release manifest (schemaVersion 2) without "archive": this script builds the 7z
   objects-<sha16>.7z           the objects the host lacked, entries named by their sha256 (absent when it lacked none)
   RELEASE_NOTES-<v>.md         optional
-  MedianXL-Launcher.exe        optional (the manifest's "launcher" names it)
+  D2R-XL-Launcher.exe        optional (the manifest's "launcher" names it)
 
 For every such folder, in version order:
 
@@ -19,7 +19,7 @@ For every such folder, in version order:
   3. The objects 7z is listed first (only plain files named by a sha256 the manifest uses), unpacked into the scratch folder
      incoming/<v>/.work/, and every file's sha256 must equal its name; then they are moved into <site>/objects/<sha[0:2]>/.
   4. Every object the manifest needs must be on the host. Its bytes are read again (sha256) while the player's folder
-     MedianXL/ is linked together from them, and that folder becomes releases/<v>/MedianXL-D2R-<v>.7z (solid LZMA2,
+     D2R-XL/ is linked together from them, and that folder becomes releases/<v>/D2R-XL-<v>.7z (solid LZMA2,
      -mx7, no time stamps), so the big archive never has to come over the uploader's slow line. The manifest gets
      "archive" (name, size, sha256, path).
   5. releases/<v>/ gets the 7z, the notes, release-manifest.json, SHA256SUMS; launcher/<lv>/ the exe and its .sha256.
@@ -50,7 +50,7 @@ READY_SCHEMA = 1
 CHANNEL_SCHEMA = 1
 CHANNELS = ("stable", "test")
 OBJECTS_BASE = "objects/"
-LAUNCHER_NAME = "MedianXL-Launcher.exe"
+LAUNCHER_NAME = "D2R-XL-Launcher.exe"
 MANIFEST_NAME = "release-manifest.json"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -362,7 +362,7 @@ class Ingest:
             raise Refused(f"the release needs {len(missing)} objects the host does not have, e.g. {missing[0]}; "
                           "publish it again (it uploads what is missing)")
 
-        arch_name = f"MedianXL-D2R-{v}{'' if man.get('complete', False) else '-nodata'}.7z"
+        arch_name = f"D2R-XL-{v}{'' if man.get('complete', False) else '-nodata'}.7z"
         arch_path = rel_dir / arch_name
         reuse = old is not None and strip(old) == strip(man) and old.get("archive", {}).get("name") == arch_name and \
             arch_path.is_file() and arch_path.stat().st_size == old["archive"]["size"] and \
@@ -404,7 +404,7 @@ class Ingest:
         log(f"{v}: published ({man['fileCount']} files); incoming/{v} removed")
 
     def build_archive(self, man: dict, work: Path, name: str) -> Path:
-        """The player's MedianXL/ folder linked (or copied) together from the objects, each read again for its sha256, then
+        """The player's D2R-XL/ folder linked (or copied) together from the objects, each read again for its sha256, then
         7-Zipped with the packager's switches."""
         tree = work / "tree"
         top = tree / man["modFolder"]

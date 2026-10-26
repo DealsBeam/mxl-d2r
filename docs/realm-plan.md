@@ -50,7 +50,7 @@ in-game plugins and API server are closed source; plugin behaviour below is from
   [save-format.md](save-format.md)), and the shared stash (`.d2i`; Median's 14 x 14 shared pages).
 - Rejected or failed uploads: keep them in `.realm/pending/` and retry next launch. Server unreachable: show no
   realm characters (same as Reimagined).
-- Read the token from a file outside `mods/MedianXL`, never from the plugin's own config.
+- Read the token from a file outside `mods/D2R-XL`, never from the plugin's own config.
 - Open: hook the game's own save writer, or watch the folder for changes. Hooking is more reliable (we know when a
   save is complete) but needs the address in 3.3.93847.
 
@@ -71,7 +71,7 @@ in-game plugins and API server are closed source; plugin behaviour below is from
 
 ### 7c. Launching (minimum version: no launcher)
 - A small script writes the token file and starts
-  `D2RLoader.exe -mod MedianXL -txt` with the realm savepath.
+  `D2RLoader.exe -mod D2R-XL -txt` with the realm savepath.
 - Later, a launcher (like Reimagined's) that signs in through the browser, installs and checks a signed mod
   package, and pins the D2RLoader and game builds.
 - Every client must run the same mod build. Use a build hash in the API handshake to refuse mismatched clients.

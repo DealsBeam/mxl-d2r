@@ -33,12 +33,12 @@ void Check(bool ok, const char* what) {
 const std::string H1(64, 'a'), H2(64, 'b'), H3(64, 'c'), H4(64, 'd');
 
 std::string ManifestText(const std::string& files, const std::string& extra = "") {
-	return R"({"schemaVersion": 2, "name": "MedianXL", "version": "0.70.0", "pluginVersion": "0.70.0", "complete": true,
+	return R"({"schemaVersion": 2, "name": "D2R-XL", "version": "0.70.0", "pluginVersion": "0.70.0", "complete": true,
 	  "d2r": {"build": "93847", "version": "3.3.0", "imageTimestamp": "0x6ab3782c"},
 	  "d2rloader": {"version": "1.3.1-beta", "url": "https://d2rloader.net/download/D2RLoader-1.3.1-beta.zip", "size": 47652455,
 	                "sha256": "9286C6B5BFF7F1043658411DBEA305FAA9698B6A455E6441668FC6D02C22AAD7", "signerThumbprint": "8001082E968FADAA58BF2F73EFA1810A11D0C28F"},
-	  "launch": {"default_mod": "MedianXL", "launch_arguments": "-txt"}, "modFolder": "MedianXL", "saveFolder": "MedianXL/",
-	  "archive": {"format": "7z", "name": "MedianXL-D2R-0.70.0.7z", "size": 100, "sha256": ")" + H1 + R"("}, "someFutureField": {"x": [1]},
+	  "launch": {"default_mod": "D2R-XL", "launch_arguments": "-txt"}, "modFolder": "D2R-XL", "saveFolder": "D2R-XL/",
+	  "archive": {"format": "7z", "name": "D2R-XL-0.70.0.7z", "size": 100, "sha256": ")" + H1 + R"("}, "someFutureField": {"x": [1]},
 	  "objectsBase": "objects/", "emptyDirs": ["d2rloader/patches"],
 	  "files": [)" + files + "]" + extra + "}";
 }
@@ -79,7 +79,7 @@ void TestJson() {
 }
 
 void TestSafePath() {
-	Check(mxl::SafeRelativePath("MedianXL.mpq/data/global/excel/skills.txt"), "normal path");
+	Check(mxl::SafeRelativePath("D2R-XL.mpq/data/global/excel/skills.txt"), "normal path");
 	Check(!mxl::SafeRelativePath("../x"), "parent refused");
 	Check(!mxl::SafeRelativePath("a/../../x"), "inner parent refused");
 	Check(!mxl::SafeRelativePath("/abs"), "absolute refused");
@@ -99,9 +99,9 @@ void TestManifest() {
 	Check(mxl::ParseManifest(ManifestText(F("a.txt", H1) + "," + F("d2rloader/config/d2rloader.toml", H2),
 	                                      R"(, "preserve": ["d2rloader/config/d2rloader.toml"], "fileCount": 2, "totalSize": 20)"), m, err),
 	      "manifest parses (release.md schemaVersion 2, unknown fields ignored)");
-	Check(m.files.size() == 2 && m.d2rBuild == 93847 && m.modFolder == "MedianXL" && m.preserve.count("d2rloader/config/d2rloader.toml") &&
-	          m.complete && m.imageTimestamp == 0x6ab3782cu && m.launchArguments == "-txt" && m.saveFolder == "MedianXL/" &&
-	          m.archive.name == "MedianXL-D2R-0.70.0.7z" && m.archive.size == 100 && m.d2rloader.size == 47652455 &&
+	Check(m.files.size() == 2 && m.d2rBuild == 93847 && m.modFolder == "D2R-XL" && m.preserve.count("d2rloader/config/d2rloader.toml") &&
+	          m.complete && m.imageTimestamp == 0x6ab3782cu && m.launchArguments == "-txt" && m.saveFolder == "D2R-XL/" &&
+	          m.archive.name == "D2R-XL-0.70.0.7z" && m.archive.size == 100 && m.d2rloader.size == 47652455 &&
 	          m.emptyDirs.size() == 1 && m.emptyDirs[0] == "d2rloader/patches" && m.objectsBase == "objects/" &&
 	          m.d2rloader.sha256 == "9286c6b5bff7f1043658411dbea305faa9698b6a455e6441668fc6d02c22aad7",
 	      "manifest fields");
@@ -116,7 +116,7 @@ void TestManifest() {
 	v1.replace(v1.find(R"("schemaVersion": 2)"), 18, R"("schemaVersion": 1)");
 	Check(!mxl::ParseManifest(v1, m, err) && m.schemaVersion == 1 && m.version == "0.70.0" && m.files.empty(),
 	      "schemaVersion 1 (zip releases) refused");
-	std::string v3 = ManifestText(F("a.txt", H1), R"(, "launcher": {"version": "0.9.0", "path": "launcher/0.9.0/MedianXL-Launcher.exe", "size": 5, "sha256": ")" + H3 + R"("})");
+	std::string v3 = ManifestText(F("a.txt", H1), R"(, "launcher": {"version": "0.9.0", "path": "launcher/0.9.0/D2R-XL-Launcher.exe", "size": 5, "sha256": ")" + H3 + R"("})");
 	v3.replace(v3.find(R"("schemaVersion": 2)"), 18, R"("schemaVersion": 3)");
 	Check(!mxl::ParseManifest(v3, m, err) && m.schemaVersion == 3 && m.launcher.version == "0.9.0" && m.launcher.sha256 == H3,
 	      "schemaVersion 3 refused, its launcher still offered");
@@ -139,11 +139,11 @@ void TestManifest() {
 void TestHosting() {
 	mxl::Manifest m;
 	std::string err;
-	std::string pub = R"(, "launcher": {"version": "0.2.0", "path": "launcher/0.2.0/MedianXL-Launcher.exe", "size": 5, "sha256": ")" + H3 + R"("})";
+	std::string pub = R"(, "launcher": {"version": "0.2.0", "path": "launcher/0.2.0/D2R-XL-Launcher.exe", "size": 5, "sha256": ")" + H3 + R"("})";
 	std::string text = ManifestText(F("a.txt", H1) + "," + F("b/copy.txt", H1) + "," + F("c.txt", H2), pub);
-	text.replace(text.find(R"("name": "MedianXL-D2R)"), 0, R"("path": "releases/0.70.0/MedianXL-D2R-0.70.0.7z", )");
+	text.replace(text.find(R"("name": "D2R-XL-0)"), 0, R"("path": "releases/0.70.0/D2R-XL-0.70.0.7z", )");
 	Check(mxl::ParseManifest(text, m, err), "published manifest parses");
-	Check(m.objectsBase == "objects/" && m.archive.path == "releases/0.70.0/MedianXL-D2R-0.70.0.7z" && m.launcher.version == "0.2.0" &&
+	Check(m.objectsBase == "objects/" && m.archive.path == "releases/0.70.0/D2R-XL-0.70.0.7z" && m.launcher.version == "0.2.0" &&
 	          m.launcher.sha256 == H3 && m.launcher.size == 5,
 	      "objectsBase, archive.path, launcher");
 	mxl::Manifest back;
@@ -170,6 +170,18 @@ void TestHosting() {
 	      "unsafe channel manifest path refused");
 	Check(!mxl::ParseChannel(R"({"schemaVersion": 1, "version": "1", "manifest": "m.json"})", c, err), "channel without sha refused");
 	Check(!mxl::ParseChannel("<html>sign in</html>", c, err), "a login page is not a channel");
+	const std::string chUrl = "https://dl.werdegames.com/mxl/channels/stable.json";
+	Check(mxl::ChannelReadError("stable", chUrl, 404, "") == "No release has been published on the stable channel yet.",
+	      "channel 404: nothing published yet");
+	Check(mxl::ChannelReadError("test", "file:///D:/site/channels/test.json", 404, "cannot open") ==
+	          "No release has been published on the test channel yet.",
+	      "missing channel file on a local site: nothing published yet");
+	Check(mxl::ChannelReadError("stable", chUrl, 503, "") == "The download site answered 503 for " + chUrl, "other status: the site answered it");
+	Check(mxl::ChannelReadError("stable", chUrl, 403, "") == "The download site answered 403 for " + chUrl, "403 is not 'not published'");
+	std::string net = mxl::ChannelReadError("stable", chUrl, 0, "download x: The server name or address could not be resolved (12007)");
+	Check(net.rfind("Cannot reach the download site (" + chUrl + "): ", 0) == 0 && net.find("(12007)") != std::string::npos,
+	      "no answer: cannot reach, with the WinHTTP error");
+	Check(mxl::ChannelReadError("stable", chUrl, 0, "") == "Cannot reach the download site (" + chUrl + ")", "no answer without error text");
 
 	Check(mxl::SiteRoot("https://dl.werdegames.com/mxl") == "https://dl.werdegames.com/mxl/", "site root gets a '/'");
 	Check(mxl::SiteRoot("http://127.0.0.1:8765/") == "http://127.0.0.1:8765/", "site root kept");
@@ -220,8 +232,8 @@ void TestVersions() {
 	Check(mxl::CompareVersions("v0.70.0", "0.70.0") == 0, "leading v");
 	Check(mxl::CompareVersions("1.3.1", "1.3.1-beta") > 0, "release > beta");
 	Check(mxl::CompareVersions("1.3", "1.3.0") == 0, "missing parts are 0");
-	Check(mxl::ResolveUrl("https://github.com/o/r/releases/latest/download/medianxl-manifest.json", "MedianXL-0.70.0.zip") ==
-	          "https://github.com/o/r/releases/latest/download/MedianXL-0.70.0.zip", "relative url");
+	Check(mxl::ResolveUrl("https://github.com/o/r/releases/latest/download/d2r-xl-manifest.json", "D2R-XL-0.70.0.zip") ==
+	          "https://github.com/o/r/releases/latest/download/D2R-XL-0.70.0.zip", "relative url");
 	Check(mxl::ResolveUrl("file:///C:/feed/manifest.json", "x.zip") == "file:///C:/feed/x.zip", "relative file url");
 	Check(mxl::ResolveUrl("http://127.0.0.1:8000/a/m.json", "/b/x.zip") == "http://127.0.0.1:8000/b/x.zip", "host-relative url");
 	Check(mxl::ResolveUrl("https://a/m.json", "https://b/x.zip") == "https://b/x.zip", "absolute url");
@@ -246,7 +258,7 @@ void TestDetect() {
 	auto ok = mxl::CheckBuild("3.3.93847", "3.3.93847");
 	Check(ok.verdict == mxl::BuildVerdict::Ok, "93847 is ok");
 	auto newer = mxl::CheckBuild("3.3.94100", "3.3.93847");
-	Check(newer.verdict == mxl::BuildVerdict::Newer && newer.build == 94100 && newer.message.find("Waiting for a Median XL update") != std::string::npos,
+	Check(newer.verdict == mxl::BuildVerdict::Newer && newer.build == 94100 && newer.message.find("Waiting for a D2R-XL update") != std::string::npos,
 	      "newer build: waiting message (half-updated install counts as newer)");
 	Check(mxl::CheckBuild("3.2.91000", "").verdict == mxl::BuildVerdict::Older, "older build");
 	Check(mxl::CheckBuild("", "").verdict == mxl::BuildVerdict::Unknown, "unknown build");
@@ -343,10 +355,35 @@ void TestCopyFilter() {
 	      "Blizzard's own D2R_loader.dll is copied");
 }
 
+// docs/launcher.md "Coexisting with the official Median XL": the default folders never land in the official one's.
+void TestCoexist() {
+	const std::string bs(1, char(92));
+	const std::string local = "C:" + bs + "Users" + bs + "p" + bs + "AppData" + bs + "Local";
+	const std::string roaming = "C:" + bs + "Users" + bs + "p" + bs + "AppData" + bs + "Roaming";
+	std::string data = mxl::DefaultDataDir(local);
+	Check(data == local + bs + "D2R-XL", "data folder %LOCALAPPDATA%\\D2R-XL");
+	Check(mxl::DefaultGameDir(data, true, "C:" + bs) == data + bs + "game", "game copy under the data folder on D2R's drive");
+	Check(mxl::DefaultGameDir(data, false, "D:" + bs) == "D:" + bs + "D2R-XL" + bs + "game", "game copy <drive>\\D2R-XL\\game elsewhere");
+	for (const std::string& p : {data, mxl::DefaultGameDir(data, true, "C:" + bs), mxl::DefaultGameDir(data, false, "D:" + bs),
+	                             mxl::DefaultGameDir(data, false, "E:/")})
+		Check(!mxl::OfficialMedianXLPath(p, local, roaming), "a default folder is not the official Median XL's");
+	Check(mxl::OfficialMedianXLPath(local + bs + "mxl-launcher", local, roaming) &&
+	          mxl::OfficialMedianXLPath(local + bs + "MXL-Launcher" + bs + "game", local, roaming),
+	      "the official launcher folder is refused");
+	Check(mxl::OfficialMedianXLPath(roaming + "/MedianXL/save", local, roaming) && mxl::OfficialMedianXLPath(local + bs + "MedianXL", local, roaming),
+	      "%APPDATA%\\MedianXL and %LOCALAPPDATA%\\MedianXL are refused");
+	Check(mxl::OfficialMedianXLPath("C:" + bs + "Program Files (x86)" + bs + "Diablo II", local, roaming) &&
+	          mxl::OfficialMedianXLPath("E:" + bs + "Games" + bs + "diablo ii" + bs + "D2R-XL", local, roaming),
+	      "a classic Diablo II folder is refused");
+	Check(!mxl::OfficialMedianXLPath("C:" + bs + "Program Files (x86)" + bs + "Diablo II Resurrected", local, roaming) &&
+	          !mxl::OfficialMedianXLPath(local + bs + "mxl-launcher-x", local, roaming) && !mxl::OfficialMedianXLPath(local + bs + "MedianXL2", local, roaming),
+	      "similar names are not refused");
+}
+
 void TestToml() {
 	std::string t = "# head\n[d2rloader]\n# Launch this mod automatically.\ndefault_mod = \"\"  # comment\ncheck_for_updates = true\n\n[d2rloader.backups]\nenabled = true\n";
-	std::string u = mxl::SetTomlKey(t, "d2rloader", "default_mod", "\"MedianXL\"");
-	Check(mxl::GetTomlKey(u, "d2rloader", "default_mod") == "\"MedianXL\"" && u.find("# comment") != std::string::npos, "replace keeps the comment");
+	std::string u = mxl::SetTomlKey(t, "d2rloader", "default_mod", "\"D2R-XL\"");
+	Check(mxl::GetTomlKey(u, "d2rloader", "default_mod") == "\"D2R-XL\"" && u.find("# comment") != std::string::npos, "replace keeps the comment");
 	u = mxl::SetTomlKey(u, "d2rloader", "check_for_updates", "false");
 	Check(mxl::GetTomlKey(u, "d2rloader", "check_for_updates") == "false", "replace a bool");
 	Check(mxl::GetTomlKey(u, "d2rloader.backups", "enabled") == "true", "other section untouched");
@@ -411,6 +448,7 @@ int main() {
 	TestDetect();
 	TestZip();
 	TestCopyFilter();
+	TestCoexist();
 	TestToml();
 	TestSvg();
 	std::printf("%d checks, %d failures\n", checks, failures);

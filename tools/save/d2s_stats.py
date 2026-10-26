@@ -1,5 +1,5 @@
 import csv, sys
-ISC = r"C:/Program Files (x86)/Diablo II Resurrected/mods/MedianXL/MedianXL.mpq/data/global/excel/itemstatcost.txt"
+ISC = r"C:/Program Files (x86)/Diablo II Resurrected/mods/D2R-XL/D2R-XL.mpq/data/global/excel/itemstatcost.txt"
 rows = list(csv.DictReader(open(ISC, newline=''), delimiter='\t'))
 bits = {}
 for r in rows:

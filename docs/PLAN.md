@@ -28,7 +28,7 @@ The former Sigma schema remainder (armor2/weapons2/misc2, missiles2, itemtypesex
 Next: Phase 2 (install into D2R, `d2rl compile`, first boot).
 
 ## Phase 2: Data port
-- [x] `tools/install_mod.py`: mod installed at `<game>/mods/MedianXL` (folder MPQ, own save folder, extended saves)
+- [x] `tools/install_mod.py`: mod installed at `<game>/mods/D2R-XL` (folder MPQ, own save folder, extended saves)
 - [x] First boot 2026-10-21 (unattended, `-txt` compiles all 380 tables at start; no manual compile needed)
 - [x] Strings, hybrid (2026-10-22): keys D2R has stay native overrides (group 1), Median-only keys move to the D2RLoader `medianxl` namespace (group 2, `medianxl:<key>` in cells, no numeric ids, so no id collisions), the keys that do not fit a fixed-size field stay native (exceptions); plugins read text by key; validate.py checks cells and the plugin's keys. See [strings.md](strings.md), [strings-namespace.md](strings-namespace.md)
 Migrate 94 standard tables, `d2rl init` / `d2rl compile`, boot with `-txt`, enable extended saves.

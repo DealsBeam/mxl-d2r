@@ -27,7 +27,7 @@ constexpr int ManifestSchema = 2;
 // schemaVersion is refused.
 struct Manifest {
 	int schemaVersion = 0;
-	std::string name;           // "MedianXL"
+	std::string name;           // "D2R-XL"
 	std::string version;        // the release, shown to the player
 	std::string pluginVersion;
 	bool complete = false;      // false: a CI package without data, never installed
@@ -40,7 +40,7 @@ struct Manifest {
 	std::string launchDefaultMod;  // launch.default_mod, for the copy's d2rloader.toml
 	std::string launchArguments;   // launch.launch_arguments ("-txt")
 	std::string modFolder;         // the files live in <game>\mods\<modFolder>; the 7z's top folder
-	std::string saveFolder;        // modinfo savepath ("MedianXL/"); the launcher never writes there
+	std::string saveFolder;        // modinfo savepath ("D2R-XL/"); the launcher never writes there
 	std::set<std::string> preserve;  // player-editable: written only when missing
 	std::vector<std::string> emptyDirs;  // folders of the release without files (d2rloader/patches): created
 	struct Archive {               // archive: the 7z for a manual install (the launcher only names it in messages)
@@ -65,6 +65,12 @@ struct Channel {
 	std::string publishedAt;
 };
 bool ParseChannel(const std::string& text, Channel& out, std::string& error);
+
+// The player's message when channels/<channel>.json could not be read. `status` is the HTTP status (0: no answer,
+// i.e. a network / TLS failure or an unreachable host; a file:// site gives 404 for a missing file), `transportError`
+// the WinHTTP error text. 404: nothing published on that channel yet; another status: the site answered it; 0: the
+// site cannot be reached.
+std::string ChannelReadError(const std::string& channel, const std::string& url, int status, const std::string& transportError);
 
 // The launcher's one setting as a URL ending in '/': http(s):// and file:// stay (a '/' is added), a local folder
 // ("D:\site", "\\server\share\mxl") becomes file:///D:/site/.

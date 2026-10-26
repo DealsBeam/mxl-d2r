@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Drive D2R + D2RLoader (Median XL) for unattended smoke checks.
+"""Drive D2R + D2RLoader (D2R-XL) for unattended smoke checks.
 
 Run with `py -3 tools/game_ctl.py <command>`. Commands:
   start                 launch D2RLoader, wait for startup log line and the game window
@@ -46,18 +46,18 @@ SLOT = game_slots.slot_of_game_dir(GAME_DIR) or SLOT
 LOADER_NAME = game_slots.loader_name(GAME_DIR)
 LOADER = os.path.join(GAME_DIR, LOADER_NAME)
 LOADER_LOG = os.path.join(GAME_DIR, r"d2rloader\logs\d2rloader.log")
-MXL_LOG = os.path.join(GAME_DIR, r"mods\MedianXL\d2rloader\logs\mxl-core.log")
+MXL_LOG = os.path.join(GAME_DIR, r"mods\D2R-XL\d2rloader\logs\mxl-core.log")
 CRASH_DIR = os.path.join(GAME_DIR, r"d2rloader\crashes")
 RUNS = os.environ.get("MXL_RUNS") or os.path.join(os.path.expanduser("~"), "mxl-d2r-runs")
 
 
 def _savepath():
-    """This game folder's save folder (modinfo.json savepath; the slot 2 and 3 copies use MedianXL-sN). D2R reads
-    MedianXL.mpq/modinfo.json; a release / launcher install has only that one, so it comes first."""
-    sp = "MedianXL/"
-    for rel in (("MedianXL.mpq", "modinfo.json"), ("modinfo.json",)):
+    """This game folder's save folder (modinfo.json savepath; the slot 2 and 3 copies use D2R-XL-sN). D2R reads
+    D2R-XL.mpq/modinfo.json; a release / launcher install has only that one, so it comes first."""
+    sp = "D2R-XL/"
+    for rel in (("D2R-XL.mpq", "modinfo.json"), ("modinfo.json",)):
         try:
-            sp = json.load(open(os.path.join(GAME_DIR, "mods", "MedianXL", *rel)))["savepath"]
+            sp = json.load(open(os.path.join(GAME_DIR, "mods", "D2R-XL", *rel)))["savepath"]
             break
         except Exception:
             pass
@@ -743,7 +743,7 @@ def harness_switch(on: bool) -> None:
     `tag=s2` (window title "Diablo II: Resurrected [s2]", so other tools never pick this window), `nocookie` (hide
     the cookie instead) and `diag` (env MXL_HARNESS_WORDS sets the words by hand, e.g. "volserial tag=s2 diag").
     Env MXL_CONTROL ("afford hcdeath") also writes those words to mxl-core-off.txt: a control run with those parts left out."""
-    folder = os.path.join(GAME_DIR, "mods", "MedianXL", "d2rloader", "plugins")
+    folder = os.path.join(GAME_DIR, "mods", "D2R-XL", "d2rloader", "plugins")
     p = os.path.join(folder, "mxl-testharness.txt")
     off = os.path.join(folder, "mxl-core-off.txt")
     try:
@@ -785,7 +785,7 @@ def console_bg(cmd, timeout=10):
     return False
 
 
-HARNESS_CONSOLE = os.path.join(GAME_DIR, r"mods\MedianXL\d2rloader\plugins\mxl-testharness-console.txt")
+HARNESS_CONSOLE = os.path.join(GAME_DIR, r"mods\D2R-XL\d2rloader\plugins\mxl-testharness-console.txt")
 
 
 def console_text(cmd, settle=0.6):

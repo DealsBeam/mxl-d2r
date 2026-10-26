@@ -35,7 +35,7 @@ def main():
     if not info or not info[1] or info[1].split()[0] != me:
         print("slot %d: the lock is not held by MXL_RUN=%r (%s): stopping" % (slot, me, info))
         return 2
-    data = Path(game_slots.mod_dir(slot)) / "MedianXL.mpq" / "data"
+    data = Path(game_slots.mod_dir(slot)) / "D2R-XL.mpq" / "data"
     hd_slot = data / "hd"
     hdc_slot = hd_slot / "character"
     hd = wereowl_models.ROOT / "work" / "mod" / "data" / "hd"

@@ -1,7 +1,7 @@
 # Release packaging on the CI server (runner ci-runner, label mxl-cross; docs/release.md). Manual dispatch or a v* tag.
 # The server has no game files (docs/setup.md "CI"), so tools/build.py cannot run here: this job cross-builds the release
-# plugin (-DMXL_RELEASE=ON, no test harness), checks it, and packages it without MedianXL.mpq/data
-# (tools/package_release.py --no-data: MedianXL-D2R-<version>-nodata.7z, release-manifest.json with "complete": false,
+# plugin (-DMXL_RELEASE=ON, no test harness), checks it, and packages it without D2R-XL.mpq/data
+# (tools/package_release.py --no-data: D2R-XL-<version>-nodata.7z, release-manifest.json with "complete": false,
 # release notes skeleton, SHA256SUMS). Releases are .7z only (no zip): the runner needs 7-Zip (Debian: apt install 7zip).
 # The full player release is packaged on the game PC (docs/release.md "Making a release").
 name: Release

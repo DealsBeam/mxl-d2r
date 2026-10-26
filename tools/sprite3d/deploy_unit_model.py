@@ -5,7 +5,7 @@
 <asset dir> holds `data/hd/character/enemy/<new unit dir name>/...` (torso_lod0..4.model, textures/*.texture). The engine only
 loads model files at paths D2R already has (docs/hd-models.md), so <new unit dir name> must be a vanilla unit nobody uses
 (wargoatman). The files are
-copied into `<game>/mods/MedianXL/MedianXL.mpq/data`; for every Median Id the unit JSON `monsters.json` names is edited there:
+copied into `<game>/mods/D2R-XL/D2R-XL.mpq/data`; for every Median Id the unit JSON `monsters.json` names is edited there:
 `torso.model` of the donor unit dir becomes `<new unit dir name>/torso.model` (dependency and entity) and every texture file in
 the asset dir is added to the dependencies. The skeleton, state machine and variant stay the donor's. Only the installed copy
 changes (a reinstall puts the stand-in back); nothing under work/ is touched. The slot must be held (game_slots.py lock).
@@ -21,7 +21,7 @@ import game_slots  # noqa: E402
 
 def main():
     slot, assets, newdir, ids = int(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4:]
-    data = Path(game_slots.mod_dir(slot)) / "MedianXL.mpq" / "data"
+    data = Path(game_slots.mod_dir(slot)) / "D2R-XL.mpq" / "data"
     base = assets / "data"
     for p in base.rglob("*"):
         if p.is_file():
