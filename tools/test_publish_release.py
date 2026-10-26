@@ -1,5 +1,7 @@
-"""tools/publish_release.py and tools/serve_dir.py: dedup, channel last, idempotence, gc safety, the sftp backend (through
-tools/fake_sftp.py) and an end-to-end publish -> HTTP -> sha256 check. No game files, no network, no ssh."""
+"""tools/publish_release.py, tools/dl_ingest.py and tools/serve_dir.py: delta selection, the upload into incoming/ (READY
+last, folder rename), resume after a dropped connection, the server's ingest, promote / list / gc, the sftp backend (through
+tools/fake_sftp.py) and an end-to-end publish -> ingest -> HTTP -> sha256 check. No game files, no network, no ssh. Uses
+7-Zip when the machine has it, else tools/fake_7z.py."""
 import json
 import os
 import shutil
@@ -12,12 +14,26 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
+import dl_ingest
 import package_release as pr
 import publish_release as pub
 import serve_dir
 
 HERE = Path(__file__).resolve().parent
 FAKE_SFTP = [sys.executable, str(HERE / "fake_sftp.py")]
+REAL_7Z = pr.find_7z()
+
+
+def fake_7z_command(folder: Path) -> str:
+    """A one-file command that runs tools/fake_7z.py (the tools call 7-Zip as [exe, args...])."""
+    if sys.platform == "win32":
+        p = folder / "fake7z.cmd"
+        p.write_text(f'@"{sys.executable}" "{HERE / "fake_7z.py"}" %*\r\n')
+    else:
+        p = folder / "fake7z.sh"
+        p.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{HERE / "fake_7z.py"}" "$@"\n')
+        p.chmod(0o755)
+    return str(p)
 
 
 def tree(root: Path) -> dict:
@@ -29,7 +45,7 @@ class Recorder(pub.DirTarget):
 
     def __init__(self, root, fail_at=0):
         super().__init__(root)
-        self.puts, self.fail_at = [], fail_at
+        self.puts, self.fail_at, self.renames = [], fail_at, []
 
     def put_files(self, items):
         for local, rel in items:
@@ -38,22 +54,32 @@ class Recorder(pub.DirTarget):
             self.puts.append(rel)
             super().put_files([(local, rel)])
 
-    def objects_put(self):
-        return [r for r in self.puts if r.startswith("objects/")]
+    def deliver(self, up, final, items, ready, listing):
+        super().deliver(up, final, items, ready, listing)
+        self.renames.append((up, final))
 
 
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        self.seven = REAL_7Z or fake_7z_command(self.tmp)
+        p = mock.patch.object(pub, "find_7z", return_value=self.seven)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(pub, "RETRY_WAIT", 0)
+        p.start()
+        self.addCleanup(p.stop)
         self.dll = self.tmp / "mxl-core.dll"
         self.dll.write_bytes(b"MZ..." + pr.plugin_version().encode() + b"\0...")
-        self.site = self.tmp / "site"
-        self.site.mkdir()
+        self.srv = self.tmp / "srv"  # /srv/dl on the server
+        self.site = self.srv / "mxl"
+        self.incoming = self.srv / "incoming"
+        self.site.mkdir(parents=True)
+        self.incoming.mkdir()
 
-    def make_dist(self, version, files=None, complete=True, archive=False):
-        """A real package_release output (stage, zip, manifest, notes) from a tiny fake data folder. archive: also a .7z
-        (opaque bytes here: publish_release never opens it) named in the manifest."""
+    def make_dist(self, version, files=None, complete=True):
+        """A real package_release output (stage, 7z, manifest, notes) from a tiny fake data folder."""
         data = self.tmp / f"data-{version}"
         shutil.rmtree(data, ignore_errors=True)
         base = {"global/excel/armor.txt": b"Median armor\n", "global/excel/weapons.txt": b"Median weapons\n",
@@ -64,155 +90,188 @@ class Base(unittest.TestCase):
         out = self.tmp / f"dist-{version}"
         mod = out / "stage" / "MedianXL"
         pr.stage(mod, version, self.dll, self.tmp, data_from=data)
-        zip_path = out / f"MedianXL-D2R-{version}.zip"
-        pr.write_zip(mod, zip_path)
         seven = out / f"MedianXL-D2R-{version}.7z"
-        if archive:
-            seven.write_bytes(b"7z\xbc\xaf\x27\x1c fake archive " + version.encode() * 50)
-        man = pr.manifest(version, pr.file_list(mod), zip_path, complete, seven if archive else None)
+        pr.write_7z(mod, seven, self.seven)
+        man = pr.manifest(version, pr.file_list(mod), seven, complete, pr.empty_dirs(mod))
         (out / "release-manifest.json").write_text(json.dumps(man, indent=1) + "\n", encoding="utf-8")
         (out / f"RELEASE_NOTES-{version}.md").write_text(f"notes {version}\n", encoding="utf-8")
         shutil.rmtree(out / "stage")
         return out
 
-    def publish(self, version, channel="test", target=None, files=None, archive=False, **kw):
+    def ingest(self, expect=0):
+        with mock.patch("builtins.print"):
+            rc = dl_ingest.Ingest(self.srv, sevenzip=self.seven).run()
+        self.assertEqual(rc, expect)
+
+    def publish(self, version, channel="test", target=None, files=None, ingest=True, dist=None, **kw):
         target = target or pub.DirTarget(self.site)
-        return pub.publish(target, self.make_dist(version, files, archive=archive), version, channel, log=lambda *_: None, **kw)
+        info = pub.publish(target, dist or self.make_dist(version, files), version, channel, log=lambda *_: None, **kw)
+        if ingest:
+            self.ingest()
+        return info
 
     def channel(self, name):
         return json.loads((self.site / "channels" / f"{name}.json").read_text("utf-8"))
 
+    def ready(self, version):
+        return json.loads((self.incoming / version / "READY").read_text("utf-8"))
+
 
 class PublishTests(Base):
-    def test_layout(self):
-        man_sha = self.publish("1.0.0", "stable")
+    def test_layout_after_the_servers_ingest(self):
+        info = self.publish("1.0.0", "stable")
+        self.assertEqual(info["state"], "uploaded")
         t = tree(self.site)
-        self.assertEqual(json.loads(t["channels/stable.json"])["version"], "1.0.0")
         ch = self.channel("stable")
         self.assertEqual(set(ch), {"schemaVersion", "version", "manifest", "manifestSha256", "publishedAt"})
-        self.assertEqual(ch["schemaVersion"], 1)
+        self.assertEqual((ch["schemaVersion"], ch["version"]), (1, "1.0.0"))
         self.assertEqual(ch["manifest"], "releases/1.0.0/release-manifest.json")
-        self.assertEqual(ch["manifestSha256"], man_sha)
-        self.assertEqual(pub.sha256_bytes(t[ch["manifest"]]), man_sha)
+        self.assertEqual(pub.sha256_bytes(t[ch["manifest"]]), ch["manifestSha256"])
         man = json.loads(t[ch["manifest"]])
+        self.assertEqual(man["schemaVersion"], 2)
         self.assertEqual(man["objectsBase"], "objects/")
-        self.assertEqual(man["schemaVersion"], 1)
-        self.assertEqual(man["zip"]["path"], "releases/1.0.0/MedianXL-D2R-1.0.0.zip")
+        self.assertNotIn("zip", man)
+        body = t["releases/1.0.0/MedianXL-D2R-1.0.0.7z"]
+        self.assertEqual(man["archive"], {"format": "7z", "name": "MedianXL-D2R-1.0.0.7z", "size": len(body),
+                                          "sha256": pub.sha256_bytes(body), "path": "releases/1.0.0/MedianXL-D2R-1.0.0.7z"})
         for f in man["files"]:
             self.assertEqual(pub.sha256_bytes(t[pub.object_path(f["sha256"])]), f["sha256"])
-        self.assertIn("releases/1.0.0/MedianXL-D2R-1.0.0.zip", t)
         sums = t["releases/1.0.0/SHA256SUMS"].decode().splitlines()
-        self.assertIn(f"{pub.sha256_bytes(t[ch['manifest']])}  release-manifest.json", sums)
-        self.assertIn(f"{man['zip']['sha256']}  MedianXL-D2R-1.0.0.zip", sums)
-        self.assertTrue(all(not k.split("/")[-1].count(pub.PART) for k in t), "no temp files left")
+        self.assertEqual(sorted(sums), sorted([f"{man['archive']['sha256']}  MedianXL-D2R-1.0.0.7z",
+                                               f"{ch['manifestSha256']}  release-manifest.json",
+                                               f"{pub.sha256_bytes(b'notes 1.0.0' + os.linesep.encode())}  RELEASE_NOTES-1.0.0.md"]))
+        self.assertFalse([k for k in t if k.endswith(".zip")])
+        self.assertTrue(all(pub.PART not in k for k in t), "no temp files left")
+        self.assertEqual([p.name for p in self.incoming.iterdir() if not p.name.startswith(".")], [], "incoming emptied")
 
-    def test_object_dedup_inside_a_release_and_across_versions(self):
-        t1 = Recorder(self.site)
-        self.publish("1.0.0", target=t1)
+    def test_server_7z_holds_the_release(self):
+        self.publish("1.0.0", "stable")
         man = json.loads((self.site / "releases/1.0.0/release-manifest.json").read_text())
-        self.assertGreater(len(man["files"]), len({f["sha256"] for f in man["files"]}), "fixture has duplicate bytes")
-        self.assertEqual(len(t1.objects_put()), len({f["sha256"] for f in man["files"]}))
-        # 1.1.0 changes one data file: the metadata.json (modVersion) differs anyway; everything else is shared
-        t2 = Recorder(self.site)
-        self.publish("1.1.0", target=t2, files={"global/excel/armor.txt": b"Median armor v2\n",
-                                                "global/excel/weapons.txt": b"Median weapons\n"})
-        self.assertEqual(len(t2.objects_put()), 2, t2.objects_put())  # new armor.txt + new metadata.json; dll, toml, weapons shared
-        have = [p for p in tree(self.site) if p.startswith("objects/")]
-        self.assertEqual(len(have), len(t1.objects_put()) + 2)
+        out = self.tmp / "unpacked"
+        subprocess.run([self.seven, "x", "-y", f"-o{out}", str(self.site / "releases/1.0.0/MedianXL-D2R-1.0.0.7z")],
+                       check=True, capture_output=True)
+        got = pr.file_list(out / "MedianXL")
+        self.assertEqual([(f["path"], f["size"], f["sha256"]) for f in got],
+                         [(f["path"], f["size"], f["sha256"]) for f in man["files"]])
+        self.assertTrue((out / "MedianXL" / "d2rloader" / "patches").is_dir(), "emptyDirs")
 
-    def test_channel_is_written_last(self):
-        t = Recorder(self.site)
-        self.publish("1.0.0", "stable", target=t)
-        self.assertEqual(t.puts[-1], "channels/stable.json")
-        self.assertEqual(sum(1 for p in t.puts if p.startswith("channels/")), 1)
-        i_man = t.puts.index("releases/1.0.0/release-manifest.json")
-        self.assertTrue(all(t.puts.index(o) < i_man for o in t.objects_put()), "manifest after every object")
-        self.assertLess(i_man, len(t.puts) - 1)
+    def test_delta_selection_packs_only_what_the_host_lacks(self):
+        self.publish("1.0.0")
+        objs = {p.name for p in self.site.glob("objects/*/*")}
+        man1 = json.loads((self.site / "releases/1.0.0/release-manifest.json").read_text())
+        self.assertEqual(objs, {f["sha256"] for f in man1["files"]}, "first release: every object, once")
+        # 1.1.0 changes one data file; metadata.json (modVersion) differs anyway; everything else is shared
+        self.publish("1.1.0", files={"global/excel/armor.txt": b"Median armor v2\n", "global/excel/weapons.txt": b"Median weapons\n"},
+                     ingest=False)
+        ready = self.ready("1.1.0")
+        man2 = json.loads((self.incoming / "1.1.0" / "release-manifest.json").read_text())
+        new = {f["sha256"] for f in man2["files"]} - objs
+        self.assertEqual(len(new), 2)
+        self.assertEqual(ready["objectCount"], 2)
+        listing = subprocess.run([self.seven, "l", "-slt", str(self.incoming / "1.1.0" / ready["objectsPack"])],
+                                 capture_output=True, text=True).stdout
+        entries = {ln[7:] for ln in listing.split("----------", 1)[1].splitlines() if ln.startswith("Path = ")}
+        self.assertEqual(entries, new, "the pack holds exactly the missing objects, named by sha256")
+        self.ingest()
+        self.assertEqual({p.name for p in self.site.glob("objects/*/*")}, objs | new)
 
-    def test_died_publish_shows_nothing_and_resumes(self):
-        t = Recorder(self.site, fail_at=3)
-        with self.assertRaises(pub.PublishError):
-            self.publish("1.0.0", "stable", target=t)
-        self.assertFalse((self.site / "channels").exists(), "no channel file after a failed publish")
-        self.assertFalse((self.site / "releases/1.0.0/release-manifest.json").exists())
-        t2 = Recorder(self.site)
-        self.publish("1.0.0", "stable", target=t2)
-        self.assertEqual(self.channel("stable")["version"], "1.0.0")
-        total = len([p for p in tree(self.site) if p.startswith("objects/")])
-        self.assertEqual(len(t2.objects_put()), total - 2, "the objects already uploaded were not sent again")
-
-    def test_rerun_is_safe(self):
+    def test_no_missing_objects_no_pack(self):
+        self.publish("1.0.0")
         dist = self.make_dist("1.0.0")
-        t = pub.DirTarget(self.site)
-        pub.publish(t, dist, "1.0.0", "stable", log=lambda *_: None)
+        man = json.loads((dist / "release-manifest.json").read_text())
+        man["version"] = "1.0.1"
+        (dist / "release-manifest.json").write_text(json.dumps(man))
+        (dist / "RELEASE_NOTES-1.0.0.md").unlink()
+        self.publish("1.0.1", dist=dist, ingest=False)
+        ready = self.ready("1.0.1")
+        self.assertIsNone(ready["objectsPack"])
+        self.assertEqual(sorted(ready["files"]), ["release-manifest.json"])
+        self.ingest()
+        self.assertTrue((self.site / "releases/1.0.1/MedianXL-D2R-1.0.1.7z").is_file())
+
+    def test_ready_last_then_folder_rename(self):
+        t = Recorder(self.site)
+        self.publish("1.0.0", "stable", target=t, ingest=False)
+        up, final = "../incoming/1.0.0.uploading", "../incoming/1.0.0"
+        inc = [p for p in t.puts if p.startswith(up)]
+        self.assertEqual(inc[-1], f"{up}/READY")
+        self.assertEqual(t.renames, [(up, final)])
+        self.assertFalse(self.site.joinpath("channels").exists(), "the publisher never writes the channel itself")
+        self.assertEqual({p.name for p in self.incoming.iterdir()}, {"1.0.0"})
+        self.assertEqual(self.ready("1.0.0")["channel"], "stable")
+
+    def test_waiting_upload_is_not_sent_again(self):
+        dist = self.make_dist("1.0.0")
+        self.publish("1.0.0", dist=dist, ingest=False)
+        r = Recorder(self.site)
+        info = pub.publish(r, dist, "1.0.0", "test", log=lambda *_: None)
+        self.assertEqual(info["state"], "waiting")
+        self.assertEqual(r.puts, [])
+        with self.assertRaises(pub.PublishError):  # other content under the same version, still waiting
+            self.publish("1.0.0", files={"global/excel/armor.txt": b"other\n"}, ingest=False)
+
+    def test_rerun_after_publishing_is_safe(self):
+        dist = self.make_dist("1.0.0")
+        self.publish("1.0.0", "stable", dist=dist)
         before = tree(self.site)
         r = Recorder(self.site)
-        pub.publish(r, dist, "1.0.0", "stable", log=lambda *_: None)
-        self.assertEqual(r.objects_put(), [])
+        info = pub.publish(r, dist, "1.0.0", "stable", log=lambda *_: None)
+        self.assertEqual(info["state"], "published")
+        self.assertEqual(r.puts, ["channels/stable.json"])
         after = tree(self.site)
-        changed = {k for k in before if before[k] != after[k]}
-        self.assertLessEqual(changed, {"channels/stable.json"}, "only publishedAt can move")
         self.assertEqual(set(before), set(after))
+        self.assertLessEqual({k for k in before if before[k] != after[k]}, {"channels/stable.json"}, "only publishedAt moves")
 
     def test_published_version_never_changes(self):
         self.publish("1.0.0")
         with self.assertRaises(pub.PublishError):
-            self.publish("1.0.0", files={"global/excel/armor.txt": b"other\n"})
+            self.publish("1.0.0", files={"global/excel/armor.txt": b"other\n"}, ingest=False)
 
-    def test_wrong_size_object_is_replaced(self):
+    def test_refused_upload_is_reported_and_force_replaces_it(self):
+        dist = self.make_dist("1.0.0")
+        self.publish("1.0.0", "stable", dist=dist, ingest=False)
+        notes = self.incoming / "1.0.0" / "RELEASE_NOTES-1.0.0.md"
+        notes.write_bytes(b"damaged on the way\n")
+        self.ingest(expect=1)
+        self.assertTrue((self.incoming / "1.0.0" / "REFUSED").is_file())
+        with self.assertRaises(pub.PublishError) as e:
+            pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "stable", log=lambda *_: None)
+        self.assertIn("RELEASE_NOTES-1.0.0.md does not match READY", str(e.exception))
+        pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "stable", force=True, log=lambda *_: None)
+        self.ingest()
+        self.assertEqual(self.channel("stable")["version"], "1.0.0")
+
+    def test_object_with_the_wrong_size_is_sent_again(self):
         self.publish("1.0.0")
-        victim = next(p for p in self.site.glob("objects/*/*") if p.stat().st_size > 5)
+        victim = self.site / pub.object_path(pub.sha256_bytes(b"Median armor\n"))  # 1.0.1 has it too
         good = victim.read_bytes()
         victim.write_bytes(good[:3])
-        r = Recorder(self.site)
-        pub.publish(r, self.tmp / "dist-1.0.0", "1.0.0", "test", log=lambda *_: None)
+        dist = self.make_dist("1.0.1")
+        self.publish("1.0.1", dist=dist, ingest=False)
+        self.assertGreaterEqual(self.ready("1.0.1")["objectCount"], 1)
+        self.ingest()
         self.assertEqual(victim.read_bytes(), good)
-        self.assertEqual(len(r.objects_put()), 1)
 
-    def test_zip_content_must_match_the_manifest(self):
+    def test_7z_content_must_match_the_manifest(self):
         dist = self.make_dist("1.0.0")
         man = json.loads((dist / "release-manifest.json").read_text())
         man["files"][0]["sha256"] = "0" * 64
         (dist / "release-manifest.json").write_text(json.dumps(man))
         with self.assertRaises(pub.PublishError):
             pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", log=lambda *_: None)
-        self.assertFalse((self.site / "channels").exists())
-
-    def test_7z_is_uploaded_next_to_the_zip(self):
-        t = Recorder(self.site)
-        self.publish("1.0.0", "stable", target=t, archive=True)
-        body = (self.tmp / "dist-1.0.0" / "MedianXL-D2R-1.0.0.7z").read_bytes()
-        files = tree(self.site)
-        self.assertEqual(files["releases/1.0.0/MedianXL-D2R-1.0.0.7z"], body)
-        man = json.loads(files["releases/1.0.0/release-manifest.json"])
-        self.assertEqual(man["archive"], {"format": "7z", "name": "MedianXL-D2R-1.0.0.7z", "size": len(body),
-                                          "sha256": pub.sha256_bytes(body), "path": "releases/1.0.0/MedianXL-D2R-1.0.0.7z"})
-        self.assertEqual(man["zip"]["path"], "releases/1.0.0/MedianXL-D2R-1.0.0.zip")
-        sums = files["releases/1.0.0/SHA256SUMS"].decode().splitlines()
-        self.assertIn(f"{pub.sha256_bytes(body)}  MedianXL-D2R-1.0.0.7z", sums)
-        self.assertTrue(all(pub.PART not in k for k in files), "no temp files left")
-        self.assertLess(t.puts.index("releases/1.0.0/MedianXL-D2R-1.0.0.7z"), t.puts.index("releases/1.0.0/release-manifest.json"))
-        self.assertEqual(t.puts[-1], "channels/stable.json")
-        r = Recorder(self.site)  # a second run does not send it again
-        pub.publish(r, self.tmp / "dist-1.0.0", "1.0.0", "stable", log=lambda *_: None)
-        self.assertNotIn("releases/1.0.0/MedianXL-D2R-1.0.0.7z", r.puts)
-
-    def test_release_without_7z_has_no_archive(self):
-        self.publish("1.0.0", "stable")
-        man = json.loads((self.site / "releases/1.0.0/release-manifest.json").read_text())
-        self.assertNotIn("archive", man)
-        self.assertFalse(list(self.site.glob("releases/1.0.0/*.7z")))
-
-    def test_7z_named_by_the_manifest_must_be_there_and_match(self):
-        dist = self.make_dist("1.0.0", archive=True)
         seven = dist / "MedianXL-D2R-1.0.0.7z"
         seven.write_bytes(seven.read_bytes() + b"!")
         with self.assertRaises(pub.PublishError):
             pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", log=lambda *_: None)
-        seven.unlink()
+        self.assertEqual(list(self.incoming.iterdir()), [])
+
+    def test_old_schema_is_refused(self):
+        dist = self.make_dist("1.0.0")
+        man = json.loads((dist / "release-manifest.json").read_text())
+        man["schemaVersion"] = 1
+        (dist / "release-manifest.json").write_text(json.dumps(man))
         with self.assertRaises(pub.PublishError):
             pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", log=lambda *_: None)
-        self.assertFalse((self.site / "channels").exists())
 
     def test_incomplete_package_is_not_for_stable(self):
         dist = self.make_dist("1.0.0", complete=False)
@@ -221,7 +280,9 @@ class PublishTests(Base):
             with self.assertRaises(pub.PublishError):
                 pub.publish(t, dist, "1.0.0", log=lambda *_: None, **kw)
         pub.publish(t, dist, "1.0.0", "test", allow_incomplete=True, log=lambda *_: None)
+        self.ingest()
         self.assertEqual(self.channel("test")["version"], "1.0.0")
+        self.assertTrue((self.site / "releases/1.0.0/MedianXL-D2R-1.0.0-nodata.7z").is_file())
         with self.assertRaises(pub.PublishError):
             pub.promote(t, "1.0.0", "stable", log=lambda *_: None)
 
@@ -247,11 +308,23 @@ class PublishTests(Base):
 
     def test_publish_from_a_stage_folder(self):
         dist = self.make_dist("1.0.0")
-        stage = self.tmp / "unzipped"
-        import zipfile
-        zipfile.ZipFile(dist / "MedianXL-D2R-1.0.0.zip").extractall(stage)
+        stage = self.tmp / "unpacked"
+        subprocess.run([self.seven, "x", "-y", f"-o{stage}", str(dist / "MedianXL-D2R-1.0.0.7z")], check=True, capture_output=True)
         pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", source=pub.DirSource(stage / "MedianXL"), log=lambda *_: None)
+        self.ingest()
         self.assertEqual(self.channel("test")["version"], "1.0.0")
+
+    def test_pack_is_cached_for_a_rerun(self):
+        dist = self.make_dist("1.0.0")
+        t = Recorder(self.site, fail_at=1)
+        with mock.patch.object(pub.DirTarget, "deliver", side_effect=pub.PublishError("down")):
+            with self.assertRaises(pub.PublishError):
+                pub.publish(t, dist, "1.0.0", "test", retries=1, log=lambda *_: None)
+        packs = list((dist / "upload" / "1.0.0").glob("objects-set-*.7z"))
+        self.assertEqual(len(packs), 1)
+        logs = []
+        pub.publish(pub.DirTarget(self.site), dist, "1.0.0", "test", log=logs.append)
+        self.assertTrue(any("reused" in ln for ln in logs), logs)
 
 
 class PromoteListGcTests(Base):
@@ -259,7 +332,7 @@ class PromoteListGcTests(Base):
         super().setUp()
         self.t = pub.DirTarget(self.site)
         # 1.0.0 stable, 1.1.0 test, 1.2.0 and 1.3.0 no channel; each version has data of its own plus shared files
-        for i, v in enumerate(("1.0.0", "1.1.0", "1.2.0", "1.3.0")):
+        for v in ("1.0.0", "1.1.0", "1.2.0", "1.3.0"):
             files = {"global/excel/armor.txt": b"shared\n", f"global/excel/only-{v}.txt": f"only {v}\n".encode()}
             self.publish(v, {"1.0.0": "stable", "1.1.0": "test"}.get(v), files=files)
 
@@ -287,7 +360,7 @@ class PromoteListGcTests(Base):
         versions, chans = pub.list_cmd(self.t, out.append)
         self.assertEqual(versions, ["1.0.0", "1.1.0", "1.2.0", "1.3.0"])
         self.assertEqual({k: v["version"] for k, v in chans.items()}, {"stable": "1.0.0", "test": "1.1.0"})
-        self.assertTrue(any("1.0.0" in ln and "stable" in ln for ln in out))
+        self.assertTrue(any("1.0.0" in ln and "stable" in ln and "7z" in ln for ln in out))
 
     def test_gc_never_touches_channel_versions(self):
         expect = self.refs("1.2.0") - self.refs("1.0.0") - self.refs("1.1.0") - self.refs("1.3.0")
@@ -328,9 +401,9 @@ class PromoteListGcTests(Base):
         pub.gc(self.t, 1, log=lambda *_: None)
         self.assertIn("1.2.0", pub.release_versions(self.t))
 
-    def test_gc_removes_unfinished_publishes_and_temp_files(self):
+    def test_gc_removes_unfinished_releases_and_temp_files(self):
         (self.site / "releases/1.4.0").mkdir()
-        (self.site / "releases/1.4.0/MedianXL-D2R-1.4.0.zip").write_bytes(b"half")  # a publish that died before its manifest
+        (self.site / "releases/1.4.0/MedianXL-D2R-1.4.0.7z").write_bytes(b"half")  # an ingest that died before its manifest
         stale = self.site / "objects/ab" / ("c" * 64 + pub.PART + "1234")
         stale.parent.mkdir(exist_ok=True)
         stale.write_bytes(b"x")
@@ -352,6 +425,7 @@ class VersionTests(unittest.TestCase):
     def test_order_and_validation(self):
         vs = ["0.70.0", "0.9.0", "0.70.1", "1.0.0-rc1", "1.0.0", "0.100.0"]
         self.assertEqual(sorted(vs, key=pub.version_key), ["0.9.0", "0.70.0", "0.70.1", "0.100.0", "1.0.0-rc1", "1.0.0"])
+        self.assertEqual(sorted(vs, key=dl_ingest.version_key), sorted(vs, key=pub.version_key))
         self.assertEqual(pub.check_version("v0.70.0"), "0.70.0")
         for bad in ("../x", "1.2", "1.2.3/../../x", "latest", ""):
             with self.assertRaises(SystemExit):
@@ -360,6 +434,7 @@ class VersionTests(unittest.TestCase):
     def test_sftp_target_parse(self):
         t = pub.SftpTarget.parse("sftp://upload@dlhost:2222/mxl/")
         self.assertEqual((t.user, t.host, t.port, t.path), ("upload", "dlhost", 2222, "/mxl"))
+        self.assertEqual(t._abs(pub.INCOMING + "/1.0.0"), "/mxl/../incoming/1.0.0")
         t = pub.SftpTarget.parse("sftp://u@h/~/site")
         self.assertEqual((t.port, t.path), (None, "site"))
         self.assertEqual(t._abs("objects/ab"), "site/objects/ab")
@@ -374,56 +449,74 @@ class VersionTests(unittest.TestCase):
 
 
 class SftpTests(Base):
+    """The chroot as the sftp user sees it: / = srv (holds mxl/ and incoming/)."""
+
     def target(self):
-        return pub.SftpTarget("upload", "example.invalid", 2222, "/mxl", sftp_cmd=FAKE_SFTP)
+        return pub.SftpTarget("mxlup", "example.invalid", 2222, "/mxl", sftp_cmd=FAKE_SFTP)
 
     def setUp(self):
         super().setUp()
-        (self.site / "mxl").mkdir()  # the account's folder exists on the server (docs/hosting.md)
-        p = mock.patch.dict(os.environ, {"FAKE_SFTP_ROOT": str(self.site)})
+        self.log = self.tmp / "sftp.log"
+        p = mock.patch.dict(os.environ, {"FAKE_SFTP_ROOT": str(self.srv), "FAKE_SFTP_LOG": str(self.log)})
         p.start()
         self.addCleanup(p.stop)
 
-    def test_same_result_as_a_dir_target(self):
-        ref = self.tmp / "ref"
-        ref.mkdir()
+    def commands(self):
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def test_same_result_as_a_dir_target_in_two_logins(self):
         dist = self.make_dist("1.0.0")
-        pub.publish(pub.DirTarget(ref), dist, "1.0.0", "stable", log=lambda *_: None)
-        pub.publish(self.target(), dist, "1.0.0", "stable", log=lambda *_: None)
-        a, b = tree(ref), tree(self.site / "mxl")
+        ref = self.tmp / "ref"
+        (ref / "mxl").mkdir(parents=True)
+        (ref / "incoming").mkdir()
+        pub.publish(pub.DirTarget(ref / "mxl"), dist, "1.0.0", "stable", log=lambda *_: None)
+        with mock.patch("builtins.print"):
+            dl_ingest.Ingest(ref, sevenzip=self.seven).run()
+        t = self.target()
+        self.publish("1.0.0", "stable", target=t, dist=dist, ingest=False)
+        self.assertEqual(t.logins, 2, "one login for the state, one for the upload")
+        cmds = [c for c in self.commands() if c != "LOGIN"]
+        self.assertTrue(cmds[-2].startswith('rename "/mxl/../incoming/1.0.0.uploading/READY.part-0"'), cmds[-3:])
+        self.assertEqual(cmds[-1], 'rename "/mxl/../incoming/1.0.0.uploading" "/mxl/../incoming/1.0.0"')
+        self.ingest()
+        a, b = tree(ref / "mxl"), tree(self.site)
         self.assertEqual(set(a), set(b))
         for k in a:
             if k != "channels/stable.json":
                 self.assertEqual(a[k], b[k], k)
-        self.assertEqual(json.loads(b["channels/stable.json"])["manifestSha256"], json.loads(a["channels/stable.json"])["manifestSha256"])
 
-    def test_server_without_posix_rename(self):
-        dist = self.make_dist("1.0.0")
-        with mock.patch.dict(os.environ, {"FAKE_SFTP_LEGACY_RENAME": "1"}):
-            pub.publish(self.target(), dist, "1.0.0", "test", log=lambda *_: None)
-            first = (self.site / "mxl/channels/test.json").read_text()
-            pub.publish(self.target(), self.make_dist("1.0.1"), "1.0.1", "test", log=lambda *_: None)  # channel replaced
-        self.assertEqual(json.loads((self.site / "mxl/channels/test.json").read_text())["version"], "1.0.1")
-        self.assertEqual(json.loads(first)["version"], "1.0.0")
-        self.assertFalse([p for p in tree(self.site) if pub.PART in p], "no temp files left")
+    def test_resume_after_connection_reset(self):
+        dist = self.make_dist("1.0.0", files={f"global/excel/t{i}.txt": os.urandom(3000) for i in range(20)})
+        cut = self.tmp / "cut"
+        cut.write_text("2 4000")  # the first two logins that send more than 4000 bytes die after 4000
+        with mock.patch.dict(os.environ, {"FAKE_SFTP_CUT": str(cut)}):
+            info = self.publish("1.0.0", "stable", target=self.target(), dist=dist, ingest=False)
+        self.assertEqual(info["state"], "uploaded")
+        cmds = self.commands()
+        self.assertEqual(sum(1 for c in cmds if c.startswith("reput ")), 2, "the objects 7z was resumed, twice")
+        pack = self.ready("1.0.0")["objectsPack"]
+        self.assertEqual(pub.sha256_file(self.incoming / "1.0.0" / pack), self.ready("1.0.0")["files"][pack]["sha256"])
+        self.ingest()
+        self.assertEqual(self.channel("stable")["version"], "1.0.0")
 
-    def test_second_run_uploads_no_objects(self):
+    def test_gives_up_after_the_retries(self):
         dist = self.make_dist("1.0.0")
-        pub.publish(self.target(), dist, "1.0.0", "test", log=lambda *_: None)
-        log = self.tmp / "sftp.log"
-        with mock.patch.dict(os.environ, {"FAKE_SFTP_LOG": str(log)}):
-            pub.publish(self.target(), dist, "1.0.0", "test", log=lambda *_: None)
-        puts = [ln for ln in log.read_text().splitlines() if ln.startswith("put ")]
-        self.assertFalse([p for p in puts if "/objects/" in p], puts)
+        cut = self.tmp / "cut"
+        cut.write_text("99 10")
+        with mock.patch.dict(os.environ, {"FAKE_SFTP_CUT": str(cut)}):
+            with self.assertRaises(pub.PublishError) as e:
+                self.publish("1.0.0", "stable", target=self.target(), dist=dist, ingest=False, retries=2)
+        self.assertIn("Run the same command again", str(e.exception))
+        self.assertFalse((self.incoming / "1.0.0").exists(), "no READY folder after a failed upload")
+        self.assertFalse(self.site.joinpath("channels").exists())
 
-    def test_died_session_leaves_no_channel(self):
-        dist = self.make_dist("1.0.0")
-        with mock.patch.dict(os.environ, {"FAKE_SFTP_FAIL_PUT": "4"}):
-            with self.assertRaises(pub.PublishError):
-                pub.publish(self.target(), dist, "1.0.0", "stable", log=lambda *_: None)
-        self.assertFalse((self.site / "mxl/channels").exists())
-        pub.publish(self.target(), dist, "1.0.0", "stable", log=lambda *_: None)
-        self.assertEqual(json.loads((self.site / "mxl/channels/stable.json").read_text())["version"], "1.0.0")
+    def test_existing_objects_are_listed_in_one_login(self):
+        self.publish("1.0.0", target=self.target())
+        self.log.unlink()
+        t = self.target()
+        info = self.publish("1.1.0", target=t, files={"global/excel/armor.txt": b"v2\n"}, ingest=False)
+        self.assertEqual(t.logins, 2)
+        self.assertEqual(info["objects"], 2)
 
     def test_list_and_gc_over_sftp(self):
         for v, ch in (("1.0.0", "stable"), ("1.1.0", None), ("1.2.0", None)):
@@ -481,63 +574,48 @@ class ServeAndVerifyTests(Base):
             self.assertEqual(self.get(base + "..%2f..%2fetc/passwd")[0], 404)
             self.assertEqual(self.get(base + "%2e%2e/x")[0], 404)
 
-    def test_end_to_end_publish_serve_verify(self):
-        """publish -> HTTP (Range capable) -> channel, manifest, every object checked by sha256, as the launcher will."""
+    def test_end_to_end_publish_ingest_serve_verify(self):
+        """publish -> ingest -> HTTP (Range capable) -> channel, manifest, every object and the 7z checked, as the launcher will."""
         self.publish("1.0.0", "stable")
         self.publish("1.1.0", "test", files={"global/excel/armor.txt": b"new\n"})
         with serve_dir.running(self.site) as base:
             n = pub.verify_url(base, "stable", log=lambda *_: None)
             self.assertGreaterEqual(n, 4)
             pub.verify_url(base, "test", log=lambda *_: None)
-            # what the launcher does by hand
+            pub.verify_url(base, "stable", sample=1, log=lambda *_: None)
             ch = json.loads(urllib.request.urlopen(base + "channels/stable.json").read())
-            raw = urllib.request.urlopen(base + ch["manifest"]).read()
-            self.assertEqual(pub.sha256_bytes(raw), ch["manifestSha256"])
-            man = json.loads(raw)
-            for f in man["files"]:
-                body = urllib.request.urlopen(base + man["objectsBase"] + f["sha256"][:2] + "/" + f["sha256"]).read()
-                self.assertEqual(pub.sha256_bytes(body), f["sha256"], f["path"])
-                self.assertEqual(len(body), f["size"])
-            zbody = urllib.request.urlopen(base + man["zip"]["path"]).read()
-            self.assertEqual(pub.sha256_bytes(zbody), man["zip"]["sha256"])
-            # a corrupted object is caught
-            obj = self.site / pub.object_path(man["files"][0]["sha256"])  # an object of the stable release
+            man = json.loads(urllib.request.urlopen(base + ch["manifest"]).read())
+            seven = self.site / man["archive"]["path"]
+            good = seven.read_bytes()
+            seven.write_bytes(good[:-1] + bytes([good[-1] ^ 1]))  # same size, other bytes: only the hash notices
+            with self.assertRaises(pub.PublishError):
+                pub.verify_url(base, "stable", log=lambda *_: None)
+            seven.write_bytes(good)
+            obj = self.site / pub.object_path(man["files"][0]["sha256"])  # a corrupted object is caught
             obj.write_bytes(obj.read_bytes() + b"!")
             with self.assertRaises(pub.PublishError):
                 pub.verify_url(base, "stable", log=lambda *_: None)
 
-    def test_verify_checks_the_7z(self):
-        self.publish("1.0.0", "stable", archive=True)
-        with serve_dir.running(self.site) as base:
-            pub.verify_url(base, "stable", log=lambda *_: None)
-            pub.verify_url(base, "stable", sample=1, log=lambda *_: None)
-            seven = self.site / "releases/1.0.0/MedianXL-D2R-1.0.0.7z"
-            good = seven.read_bytes()
-            seven.write_bytes(good[:-1] + b"?")  # same size, other bytes: only the hash notices
-            with self.assertRaises(pub.PublishError):
-                pub.verify_url(base, "stable", log=lambda *_: None)
-            pub.verify_url(base, "stable", sample=1, log=lambda *_: None)
-            seven.write_bytes(good[:-1])
-            for kw in ({}, {"sample": 1}):
-                with self.assertRaises(pub.PublishError):
-                    pub.verify_url(base, "stable", log=lambda *_: None, **kw)
-
+    @unittest.skipUnless(REAL_7Z, "package_release.py needs 7-Zip")
     def test_end_to_end_with_a_real_package_release_run(self):
-        """package_release.py --no-data (what CI does) -> publish --allow-incomplete -> serve -> verify."""
+        """package_release.py --no-data (what CI does) -> publish --allow-incomplete -> ingest -> serve -> verify."""
         out = self.tmp / "dist"
         r = subprocess.run([sys.executable, "-I", str(HERE / "package_release.py"), "--no-data", "--plugin", str(self.dll),
                             "--version", "0.0.1", "--out", str(out)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         argv = ["publish", "--version", "0.0.1", "--channel", "test", "--dist", str(out), "--allow-incomplete",
                 "--target", f"dir:{self.site}"]
-        self.assertEqual(pub.main(argv), 0)
-        self.assertEqual(pub.main(argv), 0, "second run")
-        self.assertEqual(pub.main(["list", "--target", f"dir:{self.site}"]), 0)
-        with serve_dir.running(self.site) as base:
-            self.assertEqual(pub.main(["verify", "--url", base, "--channel", "test"]), 0)
-        self.assertEqual(pub.main(["promote", "0.0.1", "--channel", "stable", "--target", f"dir:{self.site}"]), 1,
-                         "incomplete -> not stable")
-        self.assertEqual(pub.main(["gc", "--keep", "1", "--target", f"dir:{self.site}"]), 0)
+        with mock.patch("builtins.print"):
+            self.assertEqual(pub.main(argv), 0)
+            self.assertEqual(pub.main(argv), 0, "second run: waiting for the server")
+            self.assertEqual(dl_ingest.main(["--root", str(self.srv), "--7z", self.seven]), 0)
+            self.assertEqual(pub.main(argv), 0, "third run: published already")
+            self.assertEqual(pub.main(["list", "--target", f"dir:{self.site}"]), 0)
+            with serve_dir.running(self.site) as base:
+                self.assertEqual(pub.main(["verify", "--url", base, "--channel", "test"]), 0)
+            self.assertEqual(pub.main(["promote", "0.0.1", "--channel", "stable", "--target", f"dir:{self.site}"]), 1,
+                             "incomplete -> not stable")
+            self.assertEqual(pub.main(["gc", "--keep", "1", "--target", f"dir:{self.site}"]), 0)
 
 
 if __name__ == "__main__":

@@ -58,8 +58,7 @@ Advanced fallback (manual install): each release also has a `.7z` file (`MedianX
 `MedianXL/` folder (`MedianXL.mpq/` and `d2rloader/`). Windows 11 opens .7z files; otherwise use
 [7-Zip](https://www.7-zip.org). It is unpacked into the `mods` folder of a D2R + D2RLoader 1.3.1 install at build 93847
 that you maintain yourself. Steps and the file layout are in [docs/release.md](docs/release.md). Use it only if you know
-why you need it; it does change that install. (The release also holds a zip of the same files; that one is the launcher's
-own fallback, not something to download.)
+why you need it; it does change that install.
 
 ## Reporting bugs
 

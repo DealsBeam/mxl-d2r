@@ -12,16 +12,16 @@ into a local site folder in the download host's layout, and tools/serve_dir.py s
   --append    add a line to a text file (a changed file)
   --remove    drop a file
 
-Everything else in the manifest (d2r, d2rloader, launch, preserve, ...) is the source's. The zip is written the way
-package_release writes it (sorted entries, one timestamp, top folder MedianXL/).
+Everything else in the manifest (d2r, d2rloader, launch, preserve, ...) is the source's. The 7z is written the way
+package_release writes it (tools/package_release.py write_7z, top folder MedianXL/); needs 7-Zip.
 """
 import argparse
 import datetime
 import json
 import shutil
 import sys
+import subprocess
 import tempfile
-import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,15 +31,18 @@ import package_release as pr  # noqa: E402
 def derive(a) -> int:
     src = Path(a.src)
     man = json.loads((src / "release-manifest.json").read_text("utf-8"))
-    zips = list(src.glob("MedianXL-D2R-*.zip"))
-    if len(zips) != 1:
-        print(f"{src}: expected one MedianXL-D2R-*.zip, found {len(zips)}")
+    archives = list(src.glob("MedianXL-D2R-*.7z"))
+    if len(archives) != 1:
+        print(f"{src}: expected one MedianXL-D2R-*.7z, found {len(archives)}")
+        return 1
+    sevenzip = pr.find_7z()
+    if not sevenzip:
+        print(pr.NO_7Z)
         return 1
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=out) as tmp:
-        with zipfile.ZipFile(zips[0]) as z:
-            z.extractall(tmp)
+        subprocess.run([sevenzip, "x", "-y", "-bd", f"-o{tmp}", str(archives[0])], check=True, capture_output=True)
         mod = Path(tmp) / pr.NAME
         if a.savepath:
             info = mod / "MedianXL.mpq" / "modinfo.json"
@@ -57,13 +60,14 @@ def derive(a) -> int:
                 f.write(text + "\n")
         for rel in a.remove:
             (mod / rel).unlink()
-        zip_path = out / f"MedianXL-D2R-{a.version}.zip"
-        pr.write_zip(mod, zip_path)
-        files = pr.file_list(mod)
+        archive = out / f"MedianXL-D2R-{a.version}.7z"
+        pr.write_7z(mod, archive, sevenzip)
+        files, dirs = pr.file_list(mod), pr.empty_dirs(mod)
     man.update({
         "version": a.version,
         "released": datetime.date.today().isoformat(),
-        "zip": {"name": zip_path.name, "size": zip_path.stat().st_size, "sha256": pr.sha256(zip_path)},
+        "archive": {"format": "7z", "name": archive.name, "size": archive.stat().st_size, "sha256": pr.sha256(archive)},
+        "emptyDirs": dirs,
         "fileCount": len(files),
         "totalSize": sum(f["size"] for f in files),
         "files": files,
@@ -73,7 +77,7 @@ def derive(a) -> int:
     notes = out / f"RELEASE_NOTES-{a.version}.md"
     notes.write_text(f"# Median XL D2R {a.version}\n\nTest release derived from {man.get('version')} for the launcher tests.\n",
                      encoding="utf-8")
-    (out / "SHA256SUMS").write_text("".join(f"{pr.sha256(p)}  {p.name}\n" for p in (zip_path, man_path, notes)), encoding="utf-8")
+    (out / "SHA256SUMS").write_text("".join(f"{pr.sha256(p)}  {p.name}\n" for p in (archive, man_path, notes)), encoding="utf-8")
     print(f"{out}: {a.version}, {len(files)} files ({len(a.put)} put, {len(a.append)} changed, {len(a.remove)} removed)")
     return 0
 

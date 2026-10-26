@@ -1,8 +1,9 @@
 # Release packaging on the CI server (runner ci-runner, label mxl-cross; docs/release.md). Manual dispatch or a v* tag.
 # The server has no game files (docs/setup.md "CI"), so tools/build.py cannot run here: this job cross-builds the release
 # plugin (-DMXL_RELEASE=ON, no test harness), checks it, and packages it without MedianXL.mpq/data
-# (tools/package_release.py --no-data: MedianXL-D2R-<version>-nodata.zip, release-manifest.json with "complete": false,
-# release notes skeleton, SHA256SUMS). The full player zip is packaged on the game PC (docs/release.md "Making a release").
+# (tools/package_release.py --no-data: MedianXL-D2R-<version>-nodata.7z, release-manifest.json with "complete": false,
+# release notes skeleton, SHA256SUMS). Releases are .7z only (no zip): the runner needs 7-Zip (Debian: apt install 7zip).
+# The full player release is packaged on the game PC (docs/release.md "Making a release").
 name: Release
 
 on:
@@ -26,6 +27,10 @@ jobs:
           cmake -S plugin -B build-release -DCMAKE_TOOLCHAIN_FILE="$PWD/plugin/cmake/xwin-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release -DMXL_RELEASE=ON
           cmake --build build-release -j6 --target mxl_core
           ls -la build-release/mxl-core.dll
+      - name: 7-Zip on the runner (a release is a .7z only)
+        run: |
+          command -v 7zz || command -v 7z || command -v 7za || command -v 7zr || {
+            echo "no 7-Zip on this runner: install it (Debian/Ubuntu: apt install 7zip) - package_release.py writes .7z only"; exit 1; }
       - name: Packager unit tests
         run: cd tools && python3 -m unittest test_package_release
       - name: Package

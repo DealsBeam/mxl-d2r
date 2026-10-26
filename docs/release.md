@@ -3,7 +3,8 @@
 Owner decision 2026-10-26: the only supported install path is our own launcher (lane pub-launcher). It keeps a private
 copy of D2R build 93847 with D2RLoader 1.3.1 and the mod inside, so the player's real D2R install and their other mods
 are never touched. Mod managers (D2RMM and others) and Nexus are not supported. For a manual / offline install the
-release has a `.7z` (the zip is the launcher's own per-file fallback, not a player download).
+release has a `.7z`. Owner decision 2026-10-26: **no zip files**, 7z only; the launcher installs from single-file
+objects ("Hosting layout") and has no archive fallback.
 
 ## What a release is
 
@@ -11,24 +12,22 @@ release has a `.7z` (the zip is the launcher's own per-file fallback, not a play
 
 | File | What |
 |---|---|
-| `release-manifest.json` | the launcher's feed (format below). `tools/publish_release.py` copies it to the download host ("Hosting layout") |
-| `MedianXL-D2R-<version>.zip` | top folder `MedianXL/`, unzipped into `<D2R>\mods\` it is the folder `tools/install_mod.py` writes. Deflate; the launcher reads single entries from it by HTTP byte range when an object download fails. Not offered to players |
-| `MedianXL-D2R-<version>.7z` | the same folder and content as one solid LZMA2 7z (`-mx7`, multithreaded): the manual download for players. Release 0.69.0: zip 483 MB, 7z 355 MB. Written when 7-Zip is found (`C:\Program Files\7-Zip\7z.exe`, else `7z` / `7zz` / `7za` / `7zr` on PATH); without it the packager prints a warning and the release has only the zip. `--no-7z` skips it on purpose, `--no-data` (CI) never writes it |
+| `release-manifest.json` | the launcher's feed (format below). `tools/publish_release.py` sends it to the download host ("Hosting layout") |
+| `MedianXL-D2R-<version>.7z` | top folder `MedianXL/`, unpacked into `<D2R>\mods\` it is the folder `tools/install_mod.py` writes. One solid LZMA2 7z (`-mx7`, multithreaded): the manual download for players. Release 0.69.0: 355 MB (the zip it replaces was 483 MB). Needs 7-Zip (`C:\Program Files\7-Zip\7z.exe`, else `7z` / `7zz` / `7za` / `7zr` on PATH): without it the packager stops with an error before doing anything. `--no-data` (CI) writes `MedianXL-D2R-<version>-nodata.7z` |
 | `RELEASE_NOTES-<version>.md` | skeleton: requirements, install steps; fill in Changes / Known issues by hand |
-| `SHA256SUMS` | sha256 of the files above that exist: zip, 7z, manifest, notes (`sha256sum -c` format) |
+| `SHA256SUMS` | sha256 of the 7z, the manifest and the notes (`sha256sum -c` format) |
 
-Why both: a solid 7z is about 27% smaller than the zip, but one entry cannot be read out of it without unpacking the
-blocks before it, which the launcher's fallback needs. `-mx9` is no smaller than `-mx7` on this data and takes longer.
+`-mx9` is no smaller than `-mx7` on this data and takes longer. The download host builds its own copy of this 7z from
+the objects (tools/dl_ingest.py, "Hosting layout"), so the 355 MB never go over the uploader's line.
 
-Reproducibility: the zip is byte-reproducible (sorted entries, one timestamp, fixed attributes). The 7z is written from the
-sorted staging folder with all three time stamps off (`-mtm=off -mtc=off -mta=off`) and the staged files' mtimes set to
+Reproducibility: the 7z is written from the sorted staging folder with all three time stamps off (`-mtm=off -mtc=off -mta=off`) and the staged files' mtimes set to
 2026-01-01, so the same input gives the same bytes on the same machine with the same 7-Zip version (checked by
 `tools/test_package_release.py`, and on the 0.69.0 data, see "Tested"). It is not byte-reproducible across machines or
 7-Zip versions: `-mmt=on` splits the LZMA2 stream by the number of threads (0.69.0 with 2 threads: 353,685,822 bytes, other
-sha256), and 7-Zip versions may encode differently. The manifest records the sha256 of the file that was published;
-`files[]` (the content) does not depend on any of this.
+sha256), and 7-Zip versions may encode differently. The published manifest records the sha256 of the 7z the server
+built; `files[]` (the content) does not depend on any of this.
 
-Layout of the mod folder (the zip's `MedianXL/`, the manifest's paths):
+Layout of the mod folder (the 7z's `MedianXL/`, the manifest's paths):
 
 ```
 MedianXL.mpq/modinfo.json          {"name": "MedianXL", "savepath": "MedianXL/"}
@@ -59,16 +58,18 @@ What never goes in (package_release refuses or leaves it out):
 The default dev build is unchanged (`tools/build_plugin.ps1` -> `build/plugin/Release`, harness compiled in, off unless
 `mxl-testharness.txt` exists). The release build goes to `build/plugin-release/Release`.
 
-## Release manifest (schemaVersion 1)
+## Release manifest (schemaVersion 2)
 
 Simple JSON, one object. The launcher must reject a `schemaVersion` it does not know. New fields may be added within
-schemaVersion 1 (ignore unknown fields); a change of meaning or a removed field raises schemaVersion. `package_release.py`
-writes the fields below except `objectsBase`, `zip.path`, `archive.path` and `launcher`, which `publish_release.py` adds
-(optional, schemaVersion stays 1). `archive` is itself optional: only packages that have a `.7z` carry it.
+schemaVersion 2 (ignore unknown fields); a change of meaning or a removed field raises schemaVersion. 2 (2026-10-26)
+removed `zip` (and with it the launcher's zip fallback) and added `archive` (the 7z) and `emptyDirs`; a schema 1 manifest
+is refused by this launcher ("too new for the release"), a schema 3 one by a launcher of today ("too old": it offers the
+manifest's `launcher` as a self-update). `package_release.py` writes the fields below except `objectsBase` and `launcher`
+(added by `publish_release.py`) and `archive.path` (the server's ingest, which also replaces `archive` by the 7z it built).
 
 ```json
 {
- "schemaVersion": 1,
+ "schemaVersion": 2,
  "name": "MedianXL",
  "version": "0.70.0",
  "pluginVersion": "0.70.0",
@@ -82,10 +83,9 @@ writes the fields below except `objectsBase`, `zip.path`, `archive.path` and `la
  "modFolder": "MedianXL",
  "saveFolder": "MedianXL/",
  "preserve": ["d2rloader/config/d2rloader.toml"],
- "zip": {"name": "MedianXL-D2R-0.70.0.zip", "size": 512345678, "sha256": "...",
-         "path": "releases/0.70.0/MedianXL-D2R-0.70.0.zip"},
  "archive": {"format": "7z", "name": "MedianXL-D2R-0.70.0.7z", "size": 372345678, "sha256": "...",
              "path": "releases/0.70.0/MedianXL-D2R-0.70.0.7z"},
+ "emptyDirs": ["d2rloader/patches"],
  "objectsBase": "objects/",
  "launcher": {"version": "0.3.0", "path": "launcher/0.3.0/MedianXL-Launcher.exe", "size": 12345678, "sha256": "..."},
  "fileCount": 8802,
@@ -108,28 +108,30 @@ writes the fields below except `objectsBase`, `zip.path`, `archive.path` and `la
 | `saveFolder` | characters live in `Saved Games/Diablo II Resurrected/mods/<saveFolder>` (modinfo.json `savepath`); the launcher never writes there |
 | `preserve` | files the player may edit: write them only when missing, never overwrite |
 | `files` | the complete mod folder, sorted by path. Update = for each entry, download when the local file is missing or its size / sha256 differ; then delete local files under the mod folder that are not listed (except `preserve` entries, and `d2rloader/logs/`, which D2RLoader writes) |
-| `zip` | the same content as one archive (fallback / first install); `zip.path` is where the host has it |
-| `archive` | (optional) the same content as a solid `.7z` for manual installs: `format` `"7z"`, `name`, `size`, `sha256`; `archive.path` is where the host has it. The launcher does not read it (it ignores the field) |
-| `objectsBase` | (published manifests) where the file bytes are, relative to the site root: `objects/`. The bytes of `files[i]` are at `<root>/<objectsBase><sha256[0:2]>/<sha256>` |
+| `emptyDirs` | folders of the mod folder that hold no file (`d2rloader/patches`): the launcher creates them, the 7z has them |
+| `archive` | the same content as a solid `.7z` for manual installs: `format` `"7z"`, `name`, `size`, `sha256`; `archive.path` is where the host has it. The launcher only names it in messages; it never downloads it |
+| `objectsBase` | (published manifests, required by the launcher) where the file bytes are, relative to the site root: `objects/`. The bytes of `files[i]` are at `<root>/<objectsBase><sha256[0:2]>/<sha256>` |
 | `launcher` | (published manifests, optional) the launcher build published with this release: `version`, `path` relative to the site root, `size`, `sha256` |
 
-## Hosting layout (tools/publish_release.py)
+## Hosting layout (tools/publish_release.py, tools/dl_ingest.py)
 
 Owner decision 2026-10-26: the release files live on our own server, not on GitHub (the forge needs a sign-in for
-everything). A plain static HTTPS host serves one folder; the planned root URL is `https://dl.werdegames.com/mxl/`
-("the site root" below; the launcher takes it as its one setting). Setting it up: docs/hosting.md.
+everything). A static HTTPS host serves one folder; the root URL is `https://dl.werdegames.com/mxl/` ("the site root"
+below; the launcher takes it as its one setting). Setting it up: docs/hosting.md.
 
 ```
 channels/<channel>.json                   what a channel (stable, test) points to; the only file the launcher polls
-releases/<v>/release-manifest.json        the packager's manifest + objectsBase, zip.path, archive.path, launcher
-releases/<v>/MedianXL-D2R-<v>.zip         the launcher's per-file fallback (the --no-data CI package keeps its -nodata name)
-releases/<v>/MedianXL-D2R-<v>.7z          the manual download for players (when the manifest has "archive")
-releases/<v>/SHA256SUMS                   sha256 of the zip, the 7z, the manifest, the notes (sha256sum -c format)
+releases/<v>/release-manifest.json        the packager's manifest + objectsBase, launcher, and the server's archive entry
+releases/<v>/MedianXL-D2R-<v>.7z          the manual download for players, built on the server (-nodata.7z for a CI package)
+releases/<v>/SHA256SUMS                   sha256 of the 7z, the manifest, the notes (sha256sum -c format)
 releases/<v>/RELEASE_NOTES-<v>.md
 objects/<sha256[0:2]>/<sha256>            the raw bytes of a file, named by its sha256; shared by every version
 launcher/<v>/MedianXL-Launcher.exe       and MedianXL-Launcher.exe.sha256
 assets/<files>                            the asset pack (lane pub-assets)
 ```
+
+Next to the site root, not served: `incoming/` (on the server `/srv/dl/incoming`, the site is `/srv/dl/mxl`), where
+uploads wait for the server's check.
 
 Channel file (`schemaVersion` 1, rules as for the manifest):
 
@@ -141,20 +143,51 @@ Channel file (`schemaVersion` 1, rules as for the manifest):
 What the launcher does (all URLs are `<root>/` + the relative path):
 
 1. `GET channels/<channel>.json` (the host sends `Cache-Control: no-cache`); reject an unknown `schemaVersion`.
-2. `GET <manifest>`; its sha256 must equal `manifestSha256` (this also detects a half-updated host or a stale cache).
+2. `GET <manifest>`; its sha256 must equal `manifestSha256` (this also detects a half-updated host or a stale cache);
+   `schemaVersion` must be 2.
 3. For each entry of `files` that is missing locally or differs in size / sha256: `GET <objectsBase><sha[0:2]>/<sha>`, check
-   size and sha256 of what arrived, then move it into place. Objects never change, so a partial download can be resumed
-   with a `Range` request and a cache may keep them forever. Several entries with the same sha256 are one download.
-4. Fallback when objects fail: the zip at `zip.path`, checked against `zip.sha256`.
+   size and sha256 of what arrived, then move it into place. Objects never change, so a partial download is resumed
+   with a `Range` request and a cache may keep them forever. Several entries with the same sha256 are one download. Each
+   object is tried 5 times (resumed, with a growing pause); then the install stops with "Download failed ... try again",
+   and what was installed so far stays (the next Update continues from there). There is no other source.
+4. Files under the mod folder that the release does not list are removed (except `preserve` and D2RLoader's logs);
+   `emptyDirs` are created; the state file records the release.
 5. Launcher self-update: `launcher.version` / `.path` / `.sha256` of the channel's manifest.
 
-Rules the publisher keeps, which the launcher can rely on:
+### Publishing: a delta upload, checked and finished on the server
 
-- The channel file is written last, after every object, the zip, the 7z and the manifest are on the host and were listed again; a
-  half-finished publish is never visible. Every file is uploaded under a temp name and renamed.
-- A published version never changes (`releases/<v>/` and the objects it names). A new build is a new version.
-- Objects are only added by `publish`; `gc --keep N` removes releases older than the newest N and the objects only they used,
-  and never a version a channel points to.
+The uploader's line is slow (about 160 KB/s up) and every SSH login costs seconds, so `publish` sends only what the host
+lacks, packed, in as few logins as possible, and the server does everything else:
+
+1. One login lists `objects/` (only the prefix folders the release uses), the release folder and `incoming/`.
+2. The objects the host lacks (or has with another size) go into one solid 7z (`-mx7`), entries named by their sha256:
+   `objects-<sha256 of the 7z, 16 hex>.7z`. It is kept in `dist/upload/<v>/` so a re-run sends the same bytes.
+3. One login uploads, into `incoming/<v>.uploading/`: that 7z, the manifest (without `archive`, plus `objectsBase` and
+   `launcher`), the notes and the launcher exe. Each under a temp name and renamed; the 7z under the fixed name
+   `<name>.part-0`, continued with `reput` when a dropped connection left part of it. Then `READY` (JSON: version, channel,
+   size and sha256 of every file, the 7z's name, `force`), **last**, and the folder is renamed to `incoming/<v>/`. When the
+   connection drops, the upload is retried (5 times, a growing pause), each time resuming the 7z; when all fail, running
+   the same command again resumes.
+4. On the server, a systemd path unit sees the rename and runs `tools/dl_ingest.py` as the upload user. It checks every
+   file against `READY`, the manifest (schema 2, safe paths, sizes), lists the objects 7z before unpacking it (plain files
+   named by a sha256 the manifest uses, with that size; no folders, links or other names), unpacks it into
+   `incoming/<v>/.work/`, checks every object's sha256 against its name and moves them into `objects/`. Every object the
+   manifest names must then be on the host. It links the player's `MedianXL/` folder together from the objects (each one
+   hashed again) and packs `releases/<v>/MedianXL-D2R-<v>.7z` with the packager's switches, writes the notes, the manifest
+   (with `archive` of that 7z), `SHA256SUMS`, `launcher/<lv>/`, and the channel file **last**. Then it deletes
+   `incoming/<v>/` and `*.part-*` files older than an hour anywhere in the site (leftovers of dead uploads).
+5. Anything that fails a check is refused: nothing is published, the reason goes to the journal and to
+   `incoming/<v>/REFUSED`, the folder stays for a look, and the next `publish` of that version says why
+   (`publish --force` deletes it and uploads again). `dl_ingest.py --retry <v>` tries a refused upload again.
+
+Rules the launcher can rely on:
+
+- The channel file is written last, after the objects, the 7z and the manifest are in place; a half-finished publish is
+  never visible. Every file is written under a temp name and renamed.
+- A published version never changes (`releases/<v>/` and the objects it names): the ingest refuses another manifest under
+  a published version unless the upload says `force` (`publish --force`). A new build is a new version.
+- Objects are only added by the ingest; `gc --keep N` removes releases older than the newest N and the objects only they
+  used, and never a version a channel points to.
 
 ```
 py -3 tools/publish_release.py publish --version 0.70.0 --channel test --target sftp://user@host/mxl [--launcher EXE] [--assets DIR]
@@ -162,19 +195,24 @@ py -3 tools/publish_release.py promote 0.70.0 --channel stable --target ...
 py -3 tools/publish_release.py list | gc --keep 3 [--dry-run] --target ...
 py -3 tools/publish_release.py verify --url https://dl.werdegames.com/mxl/ --channel stable   # fetch + sha256 over HTTPS
 py -3 tools/serve_dir.py <folder>                                                              # local Range-capable test host
+python3 tools/dl_ingest.py --root <folder that holds incoming/ and mxl/> [--retry VERSION]     # what the server runs
 ```
 
-`publish` reads the file bytes from the packager's zip (the staging folder is deleted after packaging), checks every file
-against the manifest while extracting it, and refuses a `complete: false` package for the stable channel
-(`--allow-incomplete` lets one onto `test`). Targets: `dir:<path>` (a local folder: tests, or a run on the server) and
-`sftp://user@host[:port]/<path>` (OpenSSH `sftp`, key login, no shell needed on the server). `tools/test_publish_release.py`
-covers dedup, channel-last, resume after a dead upload, gc safety, the sftp backend (against `tools/fake_sftp.py`) and a
-publish -> `serve_dir.py` -> sha256 round trip.
+`publish` reads the file bytes from the packager's 7z (the staging folder is deleted after packaging; it unpacks it once
+into `dist/upload/<v>/`), checks every object against the manifest while packing, and refuses a `complete: false` package
+for the stable channel (`--allow-incomplete` lets one onto `test`). It answers with one of: uploaded (the server takes it
+from there, usually within a minute plus the time to build the 7z), waiting (an upload of this version is already in
+`incoming/`), or published already (then it only sets the channel). `promote` and `gc` write the site directly
+(the channel file, deletes). Targets: `dir:<path>` (a local folder: tests, or a run on the server; `<path>/../incoming`
+is the incoming folder) and `sftp://user@host[:port]/<path>` (OpenSSH `sftp`, key login, no shell needed on the server).
+`verify` downloads the channel, the manifest, every object (or `--sample N` of them) and the 7z and checks every sha256.
 
-The `.7z` goes to `releases/<v>/` next to the zip when the manifest has an `archive` entry (same temp-name-then-rename upload,
-not sent again when the host has a file of the same size). `publish` refuses when the manifest names a `.7z` that is not in
-`dist/` or does not match `archive.size` / `archive.sha256`. `verify` also downloads `archive.path` and checks its size and
-sha256 (with `--sample` only the `Content-Length`: it is the biggest file of the release).
+Tests: `tools/test_publish_release.py` (delta selection, READY last and the folder rename, two sftp logins for a
+publish, resume after a dropped connection, a refused upload and `--force`, gc safety, the sftp backend against
+`tools/fake_sftp.py`, publish -> ingest -> `serve_dir.py` -> `verify`) and `tools/test_dl_ingest.py` (every refusal: a
+damaged file, an object with a wrong sha256, a missing object, an entry that is no object, a link, a file READY does not
+list, bad paths, old schema; the channel written last; re-runs; temp-file cleanup; the 7z it builds equals the packager's).
+Both use 7-Zip when it is installed, else `tools/fake_7z.py`.
 
 ## Wrong game build
 
@@ -206,8 +244,9 @@ game: no other D2R build is installed here; the decision is covered by the unit 
 
 CI (`.forgejo/workflows/release.yml`, runner `mxl-cross`, manual dispatch or tag `v*`): no game files on the
 server, so it cannot run tools/build.py. It cross-builds the release DLL, runs the packager's unit tests and
-`package_release.py --no-data`, and keeps `dist/` as the artifact `mxl-d2r-release` (`MedianXL-D2R-<v>-nodata.zip`,
-manifest with `"complete": false`). It checks that the release plugin builds and packs; the player zip comes from the game PC.
+`package_release.py --no-data`, and keeps `dist/` as the artifact `mxl-d2r-release` (`MedianXL-D2R-<v>-nodata.7z`,
+manifest with `"complete": false`; the runner needs 7-Zip, the job checks for it first). It checks that the release plugin
+builds and packs; the player release comes from the game PC.
 No GitHub workflow uses a self-hosted runner.
 
 ## Manual install (fallback)
@@ -215,8 +254,7 @@ No GitHub workflow uses a self-hosted runner.
 Into a D2R folder at build 93847 that has D2RLoader 1.3.1-beta (docs/setup.md step 10):
 
 1. Unpack `MedianXL-D2R-<version>.7z` into `<D2R folder>\mods\` (Windows 11 opens .7z files; otherwise use
-   [7-Zip](https://www.7-zip.org)): `<D2R folder>\mods\MedianXL\MedianXL.mpq\modinfo.json` must exist. (A release made
-   on a machine without 7-Zip has only the zip; its notes then say "Unzip".)
+   [7-Zip](https://www.7-zip.org)): `<D2R folder>\mods\MedianXL\MedianXL.mpq\modinfo.json` must exist.
 2. In `<D2R folder>\d2rloader\config\d2rloader.toml` (written by D2RLoader at its first start) set
    `default_mod = "MedianXL"` and `launch_arguments = "-txt"`.
 3. Start `D2RLoader.exe`. Saves: `Saved Games\Diablo II Resurrected\mods\MedianXL\`.

@@ -33,13 +33,18 @@ void Check(bool ok, const char* what) {
 const std::string H1(64, 'a'), H2(64, 'b'), H3(64, 'c'), H4(64, 'd');
 
 std::string ManifestText(const std::string& files, const std::string& extra = "") {
-	return R"({"schemaVersion": 1, "name": "MedianXL", "version": "0.70.0", "pluginVersion": "0.70.0", "complete": true,
+	return R"({"schemaVersion": 2, "name": "MedianXL", "version": "0.70.0", "pluginVersion": "0.70.0", "complete": true,
 	  "d2r": {"build": "93847", "version": "3.3.0", "imageTimestamp": "0x6ab3782c"},
 	  "d2rloader": {"version": "1.3.1-beta", "url": "https://d2rloader.net/download/D2RLoader-1.3.1-beta.zip", "size": 47652455,
 	                "sha256": "9286C6B5BFF7F1043658411DBEA305FAA9698B6A455E6441668FC6D02C22AAD7", "signerThumbprint": "8001082E968FADAA58BF2F73EFA1810A11D0C28F"},
 	  "launch": {"default_mod": "MedianXL", "launch_arguments": "-txt"}, "modFolder": "MedianXL", "saveFolder": "MedianXL/",
-	  "zip": {"name": "MedianXL-D2R-0.70.0.zip", "size": 100, "sha256": ")" + H1 + R"("}, "someFutureField": {"x": [1]},
+	  "archive": {"format": "7z", "name": "MedianXL-D2R-0.70.0.7z", "size": 100, "sha256": ")" + H1 + R"("}, "someFutureField": {"x": [1]},
+	  "objectsBase": "objects/", "emptyDirs": ["d2rloader/patches"],
 	  "files": [)" + files + "]" + extra + "}";
+}
+std::string Without(std::string text, const std::string& part) {
+	size_t at = text.find(part);
+	return at == std::string::npos ? text : text.erase(at, part.size());
 }
 std::string F(const std::string& path, const std::string& sha, int size = 10) {
 	return R"({"path": ")" + path + R"(", "size": )" + std::to_string(size) + R"(, "sha256": ")" + sha + R"("})";
@@ -93,10 +98,11 @@ void TestManifest() {
 	std::string err;
 	Check(mxl::ParseManifest(ManifestText(F("a.txt", H1) + "," + F("d2rloader/config/d2rloader.toml", H2),
 	                                      R"(, "preserve": ["d2rloader/config/d2rloader.toml"], "fileCount": 2, "totalSize": 20)"), m, err),
-	      "manifest parses (release.md schemaVersion 1, unknown fields ignored)");
+	      "manifest parses (release.md schemaVersion 2, unknown fields ignored)");
 	Check(m.files.size() == 2 && m.d2rBuild == 93847 && m.modFolder == "MedianXL" && m.preserve.count("d2rloader/config/d2rloader.toml") &&
 	          m.complete && m.imageTimestamp == 0x6ab3782cu && m.launchArguments == "-txt" && m.saveFolder == "MedianXL/" &&
-	          m.zipName == "MedianXL-D2R-0.70.0.zip" && m.d2rloader.size == 47652455 &&
+	          m.archive.name == "MedianXL-D2R-0.70.0.7z" && m.archive.size == 100 && m.d2rloader.size == 47652455 &&
+	          m.emptyDirs.size() == 1 && m.emptyDirs[0] == "d2rloader/patches" && m.objectsBase == "objects/" &&
 	          m.d2rloader.sha256 == "9286c6b5bff7f1043658411dbea305faa9698b6a455e6441668fc6d02c22aad7",
 	      "manifest fields");
 	Check(!mxl::ParseManifest(ManifestText(F("a.txt", H1), R"(, "fileCount": 3)"), m, err), "fileCount mismatch refused");
@@ -105,32 +111,48 @@ void TestManifest() {
 	Check(!mxl::ParseManifest(ManifestText(F("a.txt", "xyz")), m, err), "manifest with a bad sha refused");
 	Check(!mxl::ParseManifest(ManifestText(F("a.txt", H1) + "," + F("A.TXT", H2)), m, err), "case-insensitive duplicate refused");
 	Check(!mxl::ParseManifest(ManifestText(""), m, err), "empty file list refused");
-	Check(!mxl::ParseManifest(R"({"schemaVersion": 2})", m, err), "unknown schemaVersion refused");
+	// schema 1 (the zip) is too old, 3 too new; both refused, with what the caller needs for its message
+	std::string v1 = ManifestText(F("a.txt", H1));
+	v1.replace(v1.find(R"("schemaVersion": 2)"), 18, R"("schemaVersion": 1)");
+	Check(!mxl::ParseManifest(v1, m, err) && m.schemaVersion == 1 && m.version == "0.70.0" && m.files.empty(),
+	      "schemaVersion 1 (zip releases) refused");
+	std::string v3 = ManifestText(F("a.txt", H1), R"(, "launcher": {"version": "0.9.0", "path": "launcher/0.9.0/MedianXL-Launcher.exe", "size": 5, "sha256": ")" + H3 + R"("})");
+	v3.replace(v3.find(R"("schemaVersion": 2)"), 18, R"("schemaVersion": 3)");
+	Check(!mxl::ParseManifest(v3, m, err) && m.schemaVersion == 3 && m.launcher.version == "0.9.0" && m.launcher.sha256 == H3,
+	      "schemaVersion 3 refused, its launcher still offered");
+	Check(!mxl::ParseManifest(R"({"schemaVersion": 3})", m, err) && m.schemaVersion == 3 && m.launcher.path.empty(), "bare future schema refused");
+	std::string noObjects = ManifestText(F("a.txt", H1));
+	noObjects.replace(noObjects.find(R"("objectsBase": "objects/", )"), 27, "");
+	Check(!mxl::ParseManifest(noObjects, m, err), "manifest without objectsBase refused (objects are the only install path)");
+	std::string dirs = ManifestText(F("a.txt", H1));
+	dirs.replace(dirs.find("d2rloader/patches"), 17, "../x");
+	Check(!mxl::ParseManifest(dirs, m, err) && err.find("emptyDirs") != std::string::npos, "unsafe emptyDirs refused");
 	Check(!mxl::ParseManifest(R"({"schema": 1})", m, err), "old draft format refused");
 	mxl::Manifest back;
 	mxl::ParseManifest(ManifestText(F("a.txt", H1), R"(, "preserve": ["a.txt"])"), m, err);
 	Check(mxl::ParseManifest(mxl::ManifestToJson(m).Dump(), back, err) && back.files.size() == 1 && back.files[0].sha256 == H1 &&
-	          back.imageTimestamp == m.imageTimestamp && back.preserve.count("a.txt") && back.d2rBuild == 93847 && back.complete,
+	          back.imageTimestamp == m.imageTimestamp && back.preserve.count("a.txt") && back.d2rBuild == 93847 && back.complete &&
+	          back.emptyDirs == m.emptyDirs && back.archive.name == m.archive.name && back.archive.sha256 == H1,
 	      "manifest round trip (state file)");
 }
 
 void TestHosting() {
 	mxl::Manifest m;
 	std::string err;
-	std::string pub = R"(, "objectsBase": "objects/", "launcher": {"version": "0.2.0", "path": "launcher/0.2.0/MedianXL-Launcher.exe", "size": 5, "sha256": ")" + H3 + R"("})";
+	std::string pub = R"(, "launcher": {"version": "0.2.0", "path": "launcher/0.2.0/MedianXL-Launcher.exe", "size": 5, "sha256": ")" + H3 + R"("})";
 	std::string text = ManifestText(F("a.txt", H1) + "," + F("b/copy.txt", H1) + "," + F("c.txt", H2), pub);
-	text.replace(text.find(R"("name": "MedianXL-D2R)"), 0, R"("path": "releases/0.70.0/MedianXL-D2R-0.70.0.zip", )");
+	text.replace(text.find(R"("name": "MedianXL-D2R)"), 0, R"("path": "releases/0.70.0/MedianXL-D2R-0.70.0.7z", )");
 	Check(mxl::ParseManifest(text, m, err), "published manifest parses");
-	Check(m.objectsBase == "objects/" && m.zipPath == "releases/0.70.0/MedianXL-D2R-0.70.0.zip" && m.launcher.version == "0.2.0" &&
+	Check(m.objectsBase == "objects/" && m.archive.path == "releases/0.70.0/MedianXL-D2R-0.70.0.7z" && m.launcher.version == "0.2.0" &&
 	          m.launcher.sha256 == H3 && m.launcher.size == 5,
-	      "objectsBase, zip.path, launcher");
+	      "objectsBase, archive.path, launcher");
 	mxl::Manifest back;
-	Check(mxl::ParseManifest(mxl::ManifestToJson(m).Dump(), back, err) && back.objectsBase == "objects/" && back.zipPath == m.zipPath &&
+	Check(mxl::ParseManifest(mxl::ManifestToJson(m).Dump(), back, err) && back.objectsBase == "objects/" && back.archive.path == m.archive.path &&
 	          back.launcher.path == m.launcher.path,
 	      "published fields round trip");
-	Check(!mxl::ParseManifest(ManifestText(F("a.txt", H1), R"(, "objectsBase": "../x/")"), m, err), "unsafe objectsBase refused");
-	Check(!mxl::ParseManifest(ManifestText(F("a.txt", H1), R"(, "objectsBase": "objects")"), m, err), "objectsBase without '/' refused");
-	Check(!mxl::ParseManifest(ManifestText(F("a.txt", H1), R"(, "objectsBase": "https://evil/")"), m, err), "absolute objectsBase refused");
+	Check(!mxl::ParseManifest(Without(ManifestText(F("a.txt", H1), R"(, "objectsBase": "../x/")"), R"("objectsBase": "objects/", )"), m, err), "unsafe objectsBase refused");
+	Check(!mxl::ParseManifest(Without(ManifestText(F("a.txt", H1), R"(, "objectsBase": "objects")"), R"("objectsBase": "objects/", )"), m, err), "objectsBase without '/' refused");
+	Check(!mxl::ParseManifest(Without(ManifestText(F("a.txt", H1), R"(, "objectsBase": "https://evil/")"), R"("objectsBase": "objects/", )"), m, err), "absolute objectsBase refused");
 	Check(mxl::ObjectPath("objects/", H2) == "objects/bb/" + H2, "object path");
 	auto groups = mxl::GroupObjects({{"a.txt", 10, H1}, {"b/copy.txt", 10, H1}, {"c.txt", 7, H2}});
 	Check(groups.size() == 2 && groups[0].sha256 == H1 && groups[0].paths.size() == 2 && groups[0].paths[1] == "b/copy.txt" &&
@@ -304,17 +326,6 @@ void TestZip() {
 	Check(mxl::LocalHeaderSize(z.data(), z.size()) == 35, "local header size");
 	std::vector<uint8_t> notZip(30, 0);
 	Check(!mxl::FindZipTail(notZip, notZip.size(), tail, err), "no end record in junk");
-
-	// ranges: entries at 0,100,200,1000,5000; cd at 6000
-	std::vector<mxl::ZipEntry> all(5);
-	uint64_t offs[] = {0, 100, 200, 1000, 5000};
-	for (int i = 0; i < 5; ++i) all[size_t(i)].offset = offs[i];
-	auto r = mxl::PlanRanges(all, {0, 1, 3, 4}, 6000, 0);
-	Check(r.size() == 2 && r[0].begin == 0 && r[0].end == 200 && r[0].entries.size() == 2 && r[1].begin == 1000 && r[1].end == 6000 &&
-	          r[1].entries.size() == 2,
-	      "ranges: neighbours merged, a skipped entry splits");
-	r = mxl::PlanRanges(all, {0, 3}, 6000, 1000);
-	Check(r.size() == 1 && r[0].begin == 0 && r[0].end == 5000, "ranges: small gaps merged");
 }
 
 void TestCopyFilter() {

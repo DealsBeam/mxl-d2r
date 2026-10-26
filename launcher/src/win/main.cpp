@@ -21,7 +21,9 @@ const wchar_t* Usage =
 	L"  --channel NAME   release channel: stable (default) or test\n"
 	L"  --source DIR     the D2R folder to copy (default: found via Battle.net / Steam)\n"
 	L"  --game-dir DIR   the Median XL game copy (default: on the D2R drive)\n"
-	L"  --any-drive      allow a game copy on another drive than D2R\n"
+#ifdef MXL_LAUNCHER_TEST_OPTIONS
+	L"  --any-drive      test builds only: allow a game copy on another drive than D2R\n"
+#endif
 	L"  --args \"...\"     more game arguments, e.g. -w\n"
 	L"  --background     start the game without taking the foreground (tests)\n"
 	L"  --loader-url URL another source of the pinned D2RLoader zip (its sha256 is still checked)\n";
@@ -51,7 +53,9 @@ Cli ParseArgs() {
 		else if (a == L"--channel") c.opt.channel = Utf8(next());
 		else if (a == L"--source") c.opt.source = next();
 		else if (a == L"--game-dir") c.opt.gameDir = next();
-		else if (a == L"--any-drive") c.opt.anyDrive = true;
+#ifdef MXL_LAUNCHER_TEST_OPTIONS
+		else if (a == L"--any-drive") c.opt.anyDrive = true;  // never in a player build (cmake -DMXL_LAUNCHER_TEST_OPTIONS=ON)
+#endif
 		else if (a == L"--args") c.opt.extraArgs = next();
 		else if (a == L"--background") c.opt.background = true;
 		else if (a == L"--loader-url") c.opt.loaderUrl = Utf8(next());

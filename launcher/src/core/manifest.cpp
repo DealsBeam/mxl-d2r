@@ -56,12 +56,23 @@ bool ParseManifest(const std::string& text, Manifest& out, std::string& error) {
 		return false;
 	Manifest m;
 	m.schemaVersion = int(j["schemaVersion"].Int());
-	if (m.schemaVersion != 1) {
-		error = "unsupported release manifest schemaVersion " + std::to_string(m.schemaVersion);
+	m.version = j["version"].Str();
+	m.launcher.version = j["launcher"]["version"].Str();
+	m.launcher.path = j["launcher"]["path"].Str();
+	m.launcher.size = uint64_t(j["launcher"]["size"].Int());
+	m.launcher.sha256 = Lower(j["launcher"]["sha256"].Str());
+	if (!m.launcher.path.empty() && !SafeRelativePath(m.launcher.path))
+		m.launcher = {};
+	if (m.schemaVersion != ManifestSchema) {
+		error = "release manifest schemaVersion " + std::to_string(m.schemaVersion) + ", this launcher reads " +
+		        std::to_string(ManifestSchema);
+		out = Manifest{};
+		out.schemaVersion = m.schemaVersion;
+		out.version = m.version;
+		out.launcher = m.launcher;
 		return false;
 	}
 	m.name = j["name"].Str();
-	m.version = j["version"].Str();
 	m.pluginVersion = j["pluginVersion"].Str();
 	m.complete = j["complete"].Bool();
 	const Json& d2r = j["d2r"];
@@ -79,15 +90,11 @@ bool ParseManifest(const std::string& text, Manifest& out, std::string& error) {
 	m.launchArguments = j["launch"]["launch_arguments"].Str();
 	m.modFolder = j["modFolder"].Str(m.name);
 	m.saveFolder = j["saveFolder"].Str();
-	m.zipName = j["zip"]["name"].Str();
-	m.zipPath = j["zip"]["path"].Str();
+	m.archive.name = j["archive"]["name"].Str();
+	m.archive.path = j["archive"]["path"].Str();
+	m.archive.size = uint64_t(j["archive"]["size"].Int());
+	m.archive.sha256 = Lower(j["archive"]["sha256"].Str());
 	m.objectsBase = j["objectsBase"].Str();
-	m.launcher.version = j["launcher"]["version"].Str();
-	m.launcher.path = j["launcher"]["path"].Str();
-	m.launcher.size = uint64_t(j["launcher"]["size"].Int());
-	m.launcher.sha256 = Lower(j["launcher"]["sha256"].Str());
-	m.zipSize = uint64_t(j["zip"]["size"].Int());
-	m.zipSha256 = Lower(j["zip"]["sha256"].Str());
 	m.launcherMin = j["launcherMin"].Str();
 	if (m.modFolder.empty() || !SafeRelativePath(m.modFolder) || m.modFolder.find('/') != std::string::npos) {
 		error = "bad modFolder";
@@ -99,14 +106,21 @@ bool ParseManifest(const std::string& text, Manifest& out, std::string& error) {
 		std::string q = dir && !p.empty() && p.back() == '/' ? p.substr(0, p.size() - 1) : p;
 		return q.empty() ? false : SafeRelativePath(q);
 	};
-	if ((!m.objectsBase.empty() && (m.objectsBase.back() != '/' || !relOk(m.objectsBase, true))) ||
-	    (!m.zipPath.empty() && !relOk(m.zipPath, false)) || (!m.launcher.path.empty() && !relOk(m.launcher.path, false))) {
-		error = "bad objectsBase, zip.path or launcher.path";
+	if (m.objectsBase.empty() || m.objectsBase.back() != '/' || !relOk(m.objectsBase, true) ||
+	    (!m.archive.path.empty() && !relOk(m.archive.path, false))) {
+		error = "missing or bad objectsBase, or a bad archive.path";
 		return false;
 	}
-	if (m.version.empty() || m.d2rBuild <= 0 || m.zipName.empty()) {
-		error = "the manifest lacks version, d2r.build or zip.name";
+	if (m.version.empty() || m.d2rBuild <= 0) {
+		error = "the manifest lacks version or d2r.build";
 		return false;
+	}
+	for (const Json& d : j["emptyDirs"].items()) {
+		if (!SafeRelativePath(d.Str())) {
+			error = "unsafe path in emptyDirs: \"" + d.Str() + "\"";
+			return false;
+		}
+		m.emptyDirs.push_back(d.Str());
 	}
 	std::set<std::string> seen;
 	uint64_t total = 0;
@@ -174,13 +188,18 @@ Json ManifestToJson(const Manifest& m) {
 	for (const auto& k : m.preserve)
 		keep.Push(k);
 	j.Set("preserve", keep);
-	Json zip = Json::Object();
-	zip.Set("name", m.zipName).Set("size", m.zipSize).Set("sha256", m.zipSha256);
-	if (!m.zipPath.empty())
-		zip.Set("path", m.zipPath);
-	j.Set("zip", zip);
-	if (!m.objectsBase.empty())
-		j.Set("objectsBase", m.objectsBase);
+	Json dirs = Json::Array();
+	for (const auto& d : m.emptyDirs)
+		dirs.Push(d);
+	j.Set("emptyDirs", dirs);
+	if (!m.archive.name.empty()) {
+		Json a = Json::Object();
+		a.Set("format", std::string("7z")).Set("name", m.archive.name).Set("size", m.archive.size).Set("sha256", m.archive.sha256);
+		if (!m.archive.path.empty())
+			a.Set("path", m.archive.path);
+		j.Set("archive", a);
+	}
+	j.Set("objectsBase", m.objectsBase);
 	if (!m.launcher.version.empty()) {
 		Json l = Json::Object();
 		l.Set("version", m.launcher.version).Set("path", m.launcher.path).Set("size", m.launcher.size).Set("sha256", m.launcher.sha256);

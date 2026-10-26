@@ -15,6 +15,11 @@ set(MXL_LAUNCHER_VERSION "" CACHE STRING "override the launcher version (tests o
 if(MXL_LAUNCHER_VERSION)
 	target_compile_definitions(mxl_launcher PRIVATE MXL_LAUNCHER_VERSION="${MXL_LAUNCHER_VERSION}")
 endif()
+# Test-only switches (--any-drive) exist only in a build made with -DMXL_LAUNCHER_TEST_OPTIONS=ON, never in a player build.
+option(MXL_LAUNCHER_TEST_OPTIONS "build the test-only command line switches (--any-drive)" OFF)
+if(MXL_LAUNCHER_TEST_OPTIONS)
+	target_compile_definitions(mxl_launcher PRIVATE MXL_LAUNCHER_TEST_OPTIONS)
+endif()
 # Signing is a separate, later step (docs/launcher.md "Release and signing"): the build leaves the unsigned exe and its
 # sha256 side by side.
 add_custom_command(TARGET mxl_launcher POST_BUILD

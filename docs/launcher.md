@@ -3,7 +3,8 @@
 Goal (owner, 2026-10-26): "people should be able to use this mod without having to change anything else". The
 launcher, `MedianXL-Launcher.exe` (source in `launcher/`), is the only supported install path. D2RMM, other mod
 managers and Nexus are neither used nor supported (docs/release.md); the launcher's job toward them is never to
-disturb them. The release's `.7z` is the manual-install fallback (the zip is only this launcher's per-file fallback).
+disturb them. The release's `.7z` is the manual-install fallback; the launcher itself installs from single-file objects only
+(there is no zip any more, owner decision 2026-10-26).
 
 What the player does: download one exe, run it, press **Play**. The first start makes a **private copy** of their
 D2R install. The pinned D2RLoader and the Median XL release go into that copy only. Their own D2R folder, their other
@@ -107,7 +108,8 @@ So:
 - the default is `%LOCALAPPDATA%\MedianXL\game` when that is on the D2R drive, else `<D2R drive>\MedianXL\game`;
 - a folder the player picks on another volume is **refused**, with a message that says why (volume serials are
   compared, so another partition of the same disk counts as another volume);
-- `--any-drive` lifts the rule, for tests only;
+- `--any-drive` lifts the rule; it exists only in a test build (`cmake -DMXL_LAUNCHER_TEST_OPTIONS=ON`), a player build
+  does not know the switch;
 - no volume-serial shim and nothing that touches Battle.net's session data is shipped (owner decision, 2026-10-26).
 
 **Battle.net does not need to be running or logged in.** The slots start with Battle.net closed. What D2R needs is an
@@ -174,17 +176,20 @@ forge needs a sign-in for everything). The layout is lane pub-publish's (docs/re
 1. `GET channels/<channel>.json`: schemaVersion 1, `version`, `manifest`, `manifestSha256`. A login page or other
    HTML is "not usable", not a crash.
 2. `GET <manifest>`; its sha256 must equal `manifestSha256` ("the site may be in the middle of an update"), and its
-   `version` must be the channel's.
+   `version` must be the channel's. Its `schemaVersion` must be 2: a newer one says "This launcher is too old for
+   Median XL <v>" and offers the manifest's `launcher` as a self-update; an older one (the zip releases) says "This
+   launcher is too new for the release on the download site".
 3. The install plan (below). For each missing or different file: `GET <objectsBase><sha[0:2]>/<sha>`. Files with the
    same content are one download. Eight workers, each with its own WinHTTP session (keep-alive). Every object goes
    to `<game>\medianxl-download\<sha>.part`, is resumed with a Range request when a part is already there, is checked
-   (size, sha256; a bad one is deleted and fetched again, up to three tries), and is then renamed into place
-   (`MoveFileEx` with replace; for a second path with the same content a copy goes through `.mxlpart`). The download
-   folder is removed when everything is in place.
-4. Objects that fail (404, three bad tries) fall back to the release zip at `zip.path`: its central directory and the
-   wanted entries are fetched by byte range (entries less than 1 MB apart are merged), inflated, checked (CRC,
-   sha256) and written through `.mxlpart`. A server that ignores Range (answers 200) still works: the bytes before
-   each wanted offset are skipped.
+   (size, sha256; a bad one is deleted and fetched again), and is then renamed into place (`MoveFileEx` with
+   replace; for a second path with the same content a copy goes through `.mxlpart`). The download folder is removed
+   when everything is in place.
+4. Each object gets 5 tries (`ObjectAttempts`), resumed each time, with a pause of 2, 4, 8, 16 s between them; a 404,
+   403 or 410 ends it at once. When objects still fail, the install stops with "Download failed: N of M files could
+   not be downloaded (...). Check your connection and try again: the K files already downloaded are kept." There is
+   no other source (no zip). The next Update or Repair continues from what is installed and from the `.part` files.
+   `emptyDirs` of the manifest (`d2rloader/patches`) are created.
 5. The state file `launcher.json` gets the installed manifest and size / mtime / sha256 of every installed file
    (saved every 5 s during a download, so an interrupted install continues where it stopped).
 6. `launcher` in the manifest (when published with one): a newer launcher is offered as a self-update (below).
@@ -229,9 +234,10 @@ How the launcher uses the manifest's fields:
 - Update rule, as docs/release.md says: fetch every entry whose file is missing or whose size / sha256 differ, then
   delete every file under the mod folder that the release does not list, except `preserve` entries,
   `d2rloader/logs/` and `d2rloader/crashes/`. Crash reports are also D2RLoader output; proposed for docs/release.md.
-- `objectsBase`, `zip.path`, `launcher.path` must be safe relative paths under the site root (`objectsBase` ends in
-  `/`); an absolute URL is refused.
-- `launcherMin` (optional, a launcher-lane addition within schemaVersion 1): the oldest launcher that may install
+- `objectsBase` is required (it is the only install path); `objectsBase`, `archive.path`, `launcher.path` must be safe
+  relative paths under the site root (`objectsBase` ends in `/`); an absolute URL is refused. `emptyDirs` entries must
+  be safe paths too.
+- `launcherMin` (optional, a launcher-lane addition within the schema): the oldest launcher that may install
   the release; an older one says "download the new launcher".
 
 ### Window and CLI
@@ -263,27 +269,28 @@ Work runs on a worker thread. At start the launcher reads the channel and says w
 
 ```
 MedianXL-Launcher.exe --cli status|detect|install|update|repair|play|uninstall|self-update
-    [--data-dir DIR] [--site URL|DIR] [--channel stable|test] [--source D2R_DIR] [--game-dir DIR] [--any-drive]
+    [--data-dir DIR] [--site URL|DIR] [--channel stable|test] [--source D2R_DIR] [--game-dir DIR]
     [--args "-w"] [--background] [--loader-url file:///...]
 ```
 
-The exe is a GUI-subsystem program. From PowerShell use `Start-Process -NoNewWindow -Wait`, because `& exe` does not
+(`--any-drive` only in a test build, see "Drive rule".) The exe is a GUI-subsystem program. From PowerShell use `Start-Process -NoNewWindow -Wait`, because `& exe` does not
 wait. Note that `-Wait` also waits for the game that `play` started.
 
 Build: `cmake -S launcher -B build/launcher -A x64 && cmake --build build/launcher --config Release` gives a 2 MB
 static exe (1.5 MB of it the art): C++20, no runtime to install, WinHTTP (TLS 1.2 / 1.3, no HTTPS-to-HTTP redirects), `asInvoker` (never
 asks for admin), long paths, per-monitor DPI. CI (`.forgejo/workflows/ci.yml`) has two jobs: `launcher` cross-builds
 the exe with `plugin/cmake/xwin-toolchain.cmake`, and `launcher-tests` runs `launcher/tests` with g++ on Linux. The
-portable core (`launcher/src/core`: sha256, JSON, manifest and plan, inflate, zip, detection parsing, copy filter,
+portable core (`launcher/src/core`: sha256, JSON, manifest and plan, inflate and zip (for the D2RLoader zip), detection parsing, copy filter,
 TOML, SVG paths) has no Windows headers. `launcher/res/launcher.rc` includes no SDK header either, so llvm-rc needs none.
 
 ## Testing
 
-- Unit tests: `launcher/tests/core_tests.cpp`, 123 checks: release-manifest parsing (docs/release.md format, unknown
-  fields, count checks, the published fields `objectsBase` / `zip.path` / `launcher` and their refusals), channel files
+- Unit tests: `launcher/tests/core_tests.cpp`, 125 checks: release-manifest parsing (docs/release.md schema 2, unknown
+  fields, count checks, `emptyDirs`, the published fields `objectsBase` / `archive.path` / `launcher` and their
+  refusals, schema 1 and 3 refused with the launcher entry still read, no `objectsBase` refused), channel files
   (schema, unsafe paths, an HTML login page), site roots and object paths, grouping of same-content files, the install
   plan (fetch / remove unlisted / preserve / D2RLoader output kept), versions and URLs, `.build.info` / vdf / acf
-  parsing and the build verdict, zip / inflate / range planning, the copy filter, TOML edits, SVG path data (relative
+  parsing and the build verdict, zip directory / inflate, the copy filter, TOML edits, SVG path data (relative
   commands, numbers run together, S / Q to cubics, refusals) and every embedded icon.
 - Self-update (2026-10-26): a 0.1.1 build (`-DMXL_LAUNCHER_VERSION=0.1.1`) signed with a throw-away certificate
   through `sign_launcher.py`, published with `publish_release.py --launcher` next to a `--no-data` package on the
@@ -345,9 +352,21 @@ TOML, SVG paths) has no Windows headers. `launcher/res/launcher.rc` includes no 
   - **One byte of `median.json` changed → Repair**: one object request; the file is back to the manifest's sha256;
     nothing else touched.
   - Also: a half-downloaded `.part` resumed with one `206` request; an object missing on the site (404) fell back to the
-    zip (HEAD plus 3 ranged requests); a channel with a wrong `manifestSha256` was refused with a clear message; a local
-    folder as `--site` works.
+    zip (HEAD plus 3 ranged requests; that fallback is gone since, see below); a channel with a wrong `manifestSha256`
+    was refused with a clear message; a local folder as `--site` works.
   - Cleanup: uninstall, the test save folder (own character only), the site, the server and the copy removed.
+- **7z only, server ingest** (2026-10-26, slot 2 locked, the player build without `--any-drive`, the normal drive
+  rule: source `D:\D2R-93847`, copy on D:, harness words `volserial tag=s2`):
+  - Site: `package_release.py` 0.69.0 (the 7z: 355 MB), `launcher_testsite.py derive` as `0.69.1-lt1` and `-lt2` (as
+    above, savepath `MedianXL-7z/`), each sent with `publish_release.py --target dir:<srv>/mxl` (objects 7z plus
+    manifest into `incoming/`) and published by `tools/dl_ingest.py`; served by `serve_dir.py` on localhost.
+  - **Full install**: copy 27.6 GB in 39 s, then 8,509 objects (1,053 MB), 10,474 files, in 30 s; the server log
+    has exactly 8,509 object requests. **Play → `game_checks all mxl` PASS**, 0 cursor or focus changes.
+  - **`promote 0.69.1-lt2` → Update**: channel, manifest and 3 object requests for the 4 new or changed files;
+    `lt/dummy2.txt` removed (with the two harness logs). **`mxl` PASS** again.
+  - **One byte of `armor.txt` flipped, size and mtime kept → Repair**: one object request (that file's sha256); the
+    file is back to the manifest's hash.
+  - Cleanup: uninstall, the test save folder (own character only), the server and the scratch folder removed.
 
 To run a check on a launcher-started game:
 
@@ -423,7 +442,7 @@ application. Nothing in the build has to change for any of them (above).
 
 ## Open questions for the owner
 
-1. (Decided: same volume only, no shim.) Whether to drop `--any-drive` from the player build.
+1. (Decided: same volume only, no shim; `--any-drive` is gone from the player build, test builds only.)
 2. Steam installs are untested on a real Steam D2R (none on the game PC).
 3. The cookie / volume-serial behaviour is D2RLoader's. A future D2RLoader or D2R build could change it; the pin
    makes that our choice, not a surprise.

@@ -468,7 +468,19 @@ bool Launcher::CheckFeed(std::string& error) {
 	}
 	Manifest m;
 	if (!ParseManifest(text, m, error)) {
-		error = "The release manifest is damaged: " + error;
+		if (m.schemaVersion > ManifestSchema) {
+			offer_ = m.launcher;  // the release's own launcher can read it: self-update
+			feed_.launcher = m.launcher;
+			error = "This launcher is too old for Median XL " + m.version + " (its release manifest has format " +
+			        std::to_string(m.schemaVersion) + ", this launcher reads " + std::to_string(ManifestSchema) +
+			        "). Update the launcher: " + NewLauncherUrl();
+		} else if (m.schemaVersion > 0 && m.schemaVersion < ManifestSchema) {
+			error = "This launcher is too new for the release on the download site (Median XL " + m.version +
+			        ", release manifest format " + std::to_string(m.schemaVersion) + "; this launcher reads " +
+			        std::to_string(ManifestSchema) + "). Try again later, or report it: " + IssuesUrl;
+		} else {
+			error = "The release manifest is damaged: " + error;
+		}
 		return false;
 	}
 	if (m.version != ch.version) {
@@ -613,9 +625,10 @@ bool MoveInto(const std::wstring& from, const std::wstring& to) {
 
 }  // namespace
 
-// docs/release.md "Hosting layout" step 3: every changed file is one object, <objectsBase><sha[0:2]>/<sha>. Downloads
-// run in parallel into <game>\medianxl-download\<sha>.part, resume with a Range request, are checked (size, sha256)
-// and then renamed into place. On return `fetch` holds what could not be installed.
+// docs/release.md "Hosting layout": every changed file is one object, <objectsBase><sha[0:2]>/<sha>, the only way a
+// release is installed. Downloads run in parallel into <game>\medianxl-download\<sha>.part, resume with a Range request
+// (ObjectAttempts tries per object, with a growing pause; 404/403/410 end it at once), are checked (size, sha256) and
+// then renamed into place. On return `fetch` holds what could not be installed; the rest stays installed.
 bool Launcher::InstallObjects(const std::wstring& mod, std::vector<ManifestFile>& fetch, Json& files, std::string& error) {
 	std::vector<ObjectFetch> objs = GroupObjects(fetch);
 	std::wstring tmp = JoinPath(gameDir_, L"medianxl-download");
@@ -637,7 +650,9 @@ bool Launcher::InstallObjects(const std::wstring& mod, std::vector<ManifestFile>
 	auto one = [&](HttpSession& http, const ObjectFetch& o, std::string& err) -> bool {
 		std::string url = ResolveUrl(siteRoot_, ObjectPath(feed_.objectsBase, o.sha256));
 		std::wstring part = JoinPath(tmp, Wide(o.sha256) + L".part");
-		for (int attempt = 0; attempt < 3; ++attempt) {
+		for (int attempt = 0; attempt < ObjectAttempts; ++attempt) {
+			for (int waited = 0; attempt && waited < (1000 << attempt) && !cancel.load(); waited += 100)
+				Sleep(100);  // 2, 4, 8, 16 s between attempts: a dropped line often comes back
 			if (cancel.load()) {
 				err = "cancelled";
 				return false;
@@ -770,148 +785,6 @@ bool Launcher::InstallObjects(const std::wstring& mod, std::vector<ManifestFile>
 	return false;
 }
 
-// The release zip (docs/release.md step 4, the fallback): its central directory and then only the byte ranges of the
-// wanted entries are fetched (a server without Range sends the whole file; its bytes are skipped as needed).
-bool Launcher::InstallFromZip(const std::wstring& mod, const std::vector<ManifestFile>& fetch, Json& files, std::string& error) {
-	std::string url = !feed_.zipPath.empty() ? ResolveUrl(siteRoot_, feed_.zipPath) : ResolveUrl(manifestUrl_, feed_.zipName);
-	uint64_t zipSize = 0;
-	if (!FetchSize(url, zipSize, error)) {
-		error = "Cannot reach the release package: " + error;
-		return false;
-	}
-	if (feed_.zipSize && zipSize != feed_.zipSize) {
-		error = "The release package has " + std::to_string(zipSize) + " bytes, the release manifest says " + std::to_string(feed_.zipSize);
-		return false;
-	}
-	uint64_t fetchBytes = 0;
-	for (const auto& f : fetch)
-		fetchBytes += f.size;
-	Report(std::to_string(fetch.size()) + " files to install (" + Mb(fetchBytes) + ") from " + url);
-	uint64_t tailLen = zipSize < 70000 ? zipSize : 70000;
-	std::vector<uint8_t> tail;
-	FetchResult fr = Fetch(url, zipSize - tailLen, tailLen, [&](const uint8_t* p, size_t n) { tail.insert(tail.end(), p, p + n); return true; });
-	ZipTail zt;
-	if (!fr.ok || !FindZipTail(tail, zipSize, zt, error)) {
-		error = "Cannot read the release package directory: " + (fr.ok ? error : fr.error);
-		return false;
-	}
-	std::vector<uint8_t> cd;
-	fr = Fetch(url, zt.cdOffset, zt.cdSize, [&](const uint8_t* p, size_t n) { cd.insert(cd.end(), p, p + n); return true; });
-	std::vector<ZipEntry> entries;
-	if (!fr.ok || !ParseCentralDirectory(cd.data(), cd.size(), zt.entries, entries, error)) {
-		error = "Cannot read the release package directory: " + (fr.ok ? error : fr.error);
-		return false;
-	}
-	std::sort(entries.begin(), entries.end(), [](const ZipEntry& a, const ZipEntry& b) { return a.offset < b.offset; });
-	std::map<std::string, size_t> byName;
-	for (size_t i = 0; i < entries.size(); ++i)
-		byName[entries[i].name] = i;
-	std::string prefix = feed_.modFolder + "/";  // the zip's top folder (docs/release.md)
-	std::vector<size_t> wanted;
-	std::map<size_t, const ManifestFile*> fileOf;
-	for (const auto& f : fetch) {
-		auto it = byName.find(prefix + f.path);
-		if (it == byName.end()) {
-			error = "The release package lacks " + prefix + f.path;
-			return false;
-		}
-		const ZipEntry& e = entries[it->second];
-		if (e.size != f.size || (e.method != 0 && e.method != 8) || (e.flags & 1)) {
-			error = "The release package entry " + e.name + " does not match the release manifest (size, method or encryption)";
-			return false;
-		}
-		wanted.push_back(it->second);
-		fileOf[it->second] = &f;
-	}
-	auto ranges = PlanRanges(entries, wanted, zt.cdOffset, 1u << 20);
-	uint64_t totalRange = 0, doneRange = 0;
-	for (const auto& r : ranges)
-		totalRange += r.end - r.begin;
-	size_t installed = 0;
-	ULONGLONG lastSave = GetTickCount64();
-	for (const auto& r : ranges) {
-		std::vector<uint8_t> buf;
-		size_t start = 0;  // bytes of buf already used
-		uint64_t pos = r.begin;  // file offset of buf[start]
-		size_t next = 0;
-		std::string werr;
-		auto sink = [&](const uint8_t* p, size_t n) -> bool {
-			buf.insert(buf.end(), p, p + n);
-			doneRange += n;
-			while (next < r.entries.size()) {
-				const ZipEntry& e = entries[r.entries[next]];
-				if (e.offset > pos) {  // bytes between wanted entries
-					size_t drop = size_t(std::min<uint64_t>(e.offset - pos, buf.size() - start));
-					start += drop;
-					pos += drop;
-					if (e.offset > pos)
-						break;
-				}
-				size_t avail = buf.size() - start;
-				size_t hs = avail >= 30 ? LocalHeaderSize(buf.data() + start, avail) : 0;
-				if (avail >= 30 && !hs) {
-					werr = "bad local header for " + e.name;
-					return false;
-				}
-				if (!hs || avail < hs + e.compSize)
-					break;
-				const ManifestFile& f = *fileOf[r.entries[next]];
-				const uint8_t* d = buf.data() + start + hs;
-				std::vector<uint8_t> data;
-				if (e.method == 0)
-					data.assign(d, d + e.compSize);
-				else if (!Inflate(d, size_t(e.compSize), data, size_t(e.size))) {
-					werr = "cannot unpack " + e.name;
-					return false;
-				}
-				if (Crc32(data.data(), data.size()) != e.crc || Sha256Hex(data.data(), data.size()) != f.sha256) {
-					werr = "downloaded " + f.path + " does not match the release manifest (sha256)";
-					return false;
-				}
-				std::wstring dst = JoinPath(mod, Wide(f.path));
-				if (!WriteFileAtomic(dst, data.data(), data.size())) {
-					werr = "cannot write " + Utf8(dst) + ": " + Utf8(LastErrorText(GetLastError()));
-					return false;
-				}
-				uint64_t size = 0, mtime = 0;
-				FileSize(dst, size, &mtime);
-				Json rec = Json::Object();
-				rec.Set("size", size).Set("mtime", std::to_string(mtime)).Set("sha256", f.sha256);
-				files.Set(f.path, rec);
-				++installed;
-				start += hs + size_t(e.compSize);
-				pos += hs + e.compSize;
-				++next;
-			}
-			if (start > (8u << 20) && start * 2 > buf.size()) {
-				buf.erase(buf.begin(), buf.begin() + std::ptrdiff_t(start));
-				start = 0;
-			}
-			ULONGLONG now = GetTickCount64();
-			if (now - lastSave > 5000) {  // resume point: what is installed so far
-				lastSave = now;
-				state_.Set("mod_files", files);
-				SaveState();
-				if (onProgress)
-					onProgress({"Installing Median XL " + feed_.version + ": " + std::to_string(installed) + " of " + std::to_string(fetch.size()) +
-					                " files (" + Mb(doneRange) + " of " + Mb(totalRange) + ")",
-					            totalRange ? double(doneRange) / double(totalRange) : -1});
-			}
-			return !cancel.load();
-		};
-		FetchResult res = Fetch(url, r.begin, r.end - r.begin, sink);
-		if (!res.ok || !werr.empty() || next != r.entries.size()) {
-			state_.Set("mod_files", files);
-			SaveState();
-			error = "Installing Median XL stopped: " + (!werr.empty() ? werr : !res.ok ? res.error : "the download ended early") +
-			        ". Update again to continue where it stopped.";
-			return false;
-		}
-	}
-	Report("Installed " + std::to_string(installed) + " files of Median XL " + feed_.version + " from the release zip");
-	return true;
-}
-
 bool Launcher::EnsureMod(bool verify, std::string& error) {
 	if (!feedChecked_ && !CheckFeed(error))
 		return false;
@@ -947,24 +820,25 @@ bool Launcher::EnsureMod(bool verify, std::string& error) {
 		Report("Removed " + std::to_string(plan.remove.size()) + " files that are not part of Median XL " + feed_.version);
 	if (!plan.fetch.empty()) {
 		std::vector<ManifestFile> left = plan.fetch;
-		bool ok = false;
-		if (!feed_.objectsBase.empty()) {
-			ok = InstallObjects(mod, left, files, error);
-			if (!ok && !cancel.load() && !left.empty())
-				Report("Single-file downloads failed (" + error + "); trying the release zip for the other " + std::to_string(left.size()) + " files");
-		}
-		if (!ok && !cancel.load())
-			ok = InstallFromZip(mod, left, files, error);
-		if (!ok) {
+		if (!InstallObjects(mod, left, files, error)) {  // the objects are the only way in (docs/release.md)
 			state_.Set("mod_files", files);
 			SaveState();
 			if (cancel.load())
 				error = "Stopped. Update again to continue where it stopped.";
+			else
+				error = "Download failed: " + std::to_string(left.size()) + " of " + std::to_string(plan.fetch.size()) +
+				        " files could not be downloaded (" + error + "). Check your connection and try again: the " +
+				        std::to_string(plan.fetch.size() - left.size()) + " files already downloaded are kept.";
 			return false;
 		}
 	} else {
 		Report("Median XL " + feed_.version + " is installed and up to date" + (hashed ? " (" + Mb(hashed) + " checked)" : ""));
 	}
+	for (const auto& d : feed_.emptyDirs)  // folders the release has without files (d2rloader/patches)
+		if (!MakeDirs(JoinPath(mod, Wide(d)))) {
+			error = "Cannot create " + Utf8(JoinPath(mod, Wide(d)));
+			return false;
+		}
 	Json clean = Json::Object();  // drop records of files that are gone
 	for (const auto& [k, v] : files.members())
 		if (v.IsObject())

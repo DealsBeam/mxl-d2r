@@ -99,25 +99,4 @@ size_t LocalHeaderSize(const uint8_t* p, size_t avail) {
 	return 30 + size_t(U16(p + 26)) + U16(p + 28);
 }
 
-std::vector<ByteRange> PlanRanges(const std::vector<ZipEntry>& all, const std::vector<size_t>& wanted, uint64_t cdOffset, uint64_t gap) {
-	std::vector<size_t> w = wanted;
-	std::sort(w.begin(), w.end());
-	std::vector<ByteRange> out;
-	for (size_t idx : w) {
-		uint64_t begin = all[idx].offset;
-		uint64_t end = idx + 1 < all.size() ? all[idx + 1].offset : cdOffset;  // the entry runs up to the next one
-		if (!out.empty() && begin <= out.back().end + gap) {
-			out.back().end = std::max(out.back().end, end);
-			out.back().entries.push_back(idx);
-		} else {
-			ByteRange r;
-			r.begin = begin;
-			r.end = end;
-			r.entries.push_back(idx);
-			out.push_back(std::move(r));
-		}
-	}
-	return out;
-}
-
 }  // namespace mxl

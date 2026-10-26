@@ -1,26 +1,25 @@
-"""Player release of the port: the launcher's feed (release-manifest.json) and a zip for manual / offline install.
+"""Player release of the port: the launcher's feed (release-manifest.json) and a .7z for manual / offline install.
 
 From a finished build (tools/build.py -> work/mod) and the release plugin (cmake -DMXL_RELEASE=ON: no test harness, built
 here unless --plugin is given) it writes into dist/:
 
-  MedianXL-D2R-<version>.zip     top folder MedianXL/, the folder tools/install_mod.py writes into <D2R>\\mods:
+  MedianXL-D2R-<version>.7z      solid LZMA2 7z (-mx7), top folder MedianXL/, the folder tools/install_mod.py writes into
+                                 <D2R>\\mods:
                                    MedianXL.mpq/modinfo.json   {"name": "MedianXL", "savepath": "MedianXL/"}
                                    MedianXL.mpq/data/...       install_mod.build_data (work/mod/data + the install-time merges)
                                    d2rloader/plugins/mxl-core.dll, d2rloader/config/d2rloader.toml, d2rloader/patches/,
                                    d2rloader/metadata.json     (modVersion = <version>, website = the GitHub repo)
-  MedianXL-D2R-<version>.7z      the same folder as a solid LZMA2 7z (-mx7, about 3/4 of the zip's size): the manual download
-                                 for players. The zip stays: the launcher's per-file fallback reads single entries from it by
-                                 HTTP byte range, which a solid 7z cannot serve. Needs 7-Zip (skipped with a warning when it
-                                 is missing, and with --no-7z / --no-data).
-  release-manifest.json          schemaVersion 1: version, required D2R build, required D2RLoader + sha256, every file of
-                                 the mod folder with size and sha256 (docs/release.md "Release manifest")
+                                 The manual download for players, and where tools/publish_release.py reads the file bytes
+                                 from. There is no zip (owner decision 2026-10-26). Needs 7-Zip: the run stops without it.
+  release-manifest.json          schemaVersion 2: version, required D2R build, required D2RLoader + sha256, every file of
+                                 the mod folder with size and sha256, the 7z as "archive" (docs/release.md "Release manifest")
   RELEASE_NOTES-<version>.md     skeleton: requirements and install steps, to be filled in
-  SHA256SUMS                     of the zip, the 7z, the manifest and the notes
+  SHA256SUMS                     of the 7z, the manifest and the notes
 
 Nothing else goes in: no test harness files, test configs, saves or logs (checked), and no file that is a byte copy of one in
 extract/ (Blizzard's own files: D2R reads those from its own install).
 
-  py -3 tools/package_release.py [--version 0.70.0] [--plugin DLL] [--data-from DIR] [--game DIR] [--out dist] [--no-7z]
+  py -3 tools/package_release.py [--version 0.70.0] [--plugin DLL] [--data-from DIR] [--game DIR] [--out dist]
   py -3 tools/package_release.py --no-data --plugin build/mxl-core.dll   (CI: no game files there; plugin + config only)
 Version: --version, else PluginVersion of plugin/src/mxl_core.cpp.
 """
@@ -34,7 +33,6 @@ import shutil
 import subprocess
 import sys
 import time
-import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -55,11 +53,14 @@ D2RLOADER = {"version": "1.3.1-beta", "url": "https://d2rloader.net/download/D2R
 LAUNCH = {"default_mod": NAME, "launch_arguments": "-txt"}
 # The player's own settings: the launcher writes these only when they are missing (docs/release.md).
 PRESERVE = ["d2rloader/config/d2rloader.toml"]
-ZIP_TIME = (2026, 1, 1, 0, 0, 0)  # one timestamp for every entry: the same input gives the same zip
+SCHEMA = 2  # 2: the 7z ("archive") replaced the zip; the launcher installs from objects only (docs/release.md)
+STAMP = (2026, 1, 1, 0, 0, 0)  # the staged files' mtime
 # 7z: LZMA2, one solid block, multithreaded. No time stamps go in the archive (-mtm/-mtc/-mta off) and the staged files get
-# ZIP_TIME as mtime anyway; the same input gives the same bytes with the same 7-Zip build (docs/release.md).
+# STAMP as mtime anyway; the same input gives the same bytes with the same 7-Zip build (docs/release.md).
 SEVENZ_ARGS = ["a", "-t7z", "-m0=lzma2", "-mx=7", "-ms=on", "-mmt=on", "-mtm=off", "-mtc=off", "-mta=off", "-bd", "-y"]
 SEVENZ_NAMES = ("7z", "7zz", "7za", "7zr")
+NO_7Z = ("no 7-Zip found (Program Files\\7-Zip\\7z.exe, or 7z / 7zz / 7za / 7zr on PATH). A release is a .7z only: install "
+         "7-Zip (https://www.7-zip.org; Debian / Ubuntu: apt install 7zip) and run again")
 
 FORBIDDEN = re.compile(r"(^|/)(mxl-testharness[^/]*|mxl-core-off\.txt|input-bindings\.toml|imgui\.ini|debugsettings\.json)$"
                        r"|\.(d2s|d2i|d2x|d2rl|ctc|ctl|key|map|ma\d|log|dmp|pdb|orig)$", re.I)  # saves: D2R and D2RLoader sidecars
@@ -136,6 +137,11 @@ def file_list(mod: Path) -> list:
             for p in sorted(mod.rglob("*"), key=lambda q: q.relative_to(mod).as_posix()) if p.is_file()]
 
 
+def empty_dirs(mod: Path) -> list:
+    """Folders with nothing in them (d2rloader/patches): listed in the manifest, so the server builds the same 7z."""
+    return sorted(p.relative_to(mod).as_posix() for p in mod.rglob("*") if p.is_dir() and not any(p.iterdir()))
+
+
 def find_7z():
     """The 7-Zip command line: 7-Zip\\7z.exe under Program Files, else 7z / 7zz / 7za / 7zr on PATH. None when there is none."""
     for var in ("ProgramFiles", "ProgramFiles(x86)"):
@@ -151,20 +157,18 @@ def find_7z():
 
 
 def fix_mtimes(mod: Path) -> None:
-    """Every staged file and folder gets ZIP_TIME as its mtime."""
-    t = time.mktime(ZIP_TIME + (0, 0, -1))
+    """Every staged file and folder gets STAMP as its mtime."""
+    t = time.mktime(STAMP + (0, 0, -1))
     for p in [mod, *mod.rglob("*")]:
         os.utime(p, (t, t))
 
 
-def write_7z(mod: Path, out: Path, sevenzip=None) -> bool:
-    """Solid LZMA2 7z of the staged folder, top folder MedianXL/ (empty folders kept). False, with a warning, when there is
-    no 7-Zip; a 7-Zip that fails raises."""
+def write_7z(mod: Path, out: Path, sevenzip=None) -> None:
+    """Solid LZMA2 7z of the staged folder, top folder MedianXL/ (empty folders kept). Raises RuntimeError when there is no
+    7-Zip or it fails; nothing is left behind then."""
     exe = sevenzip or find_7z()
     if not exe:
-        print(f"warning: no 7-Zip found (Program Files\\7-Zip\\7z.exe, or 7z / 7zz / 7za on PATH): {out.name} is not written, "
-              "the release has only the zip (install 7-Zip, or pass --no-7z to skip the 7z on purpose)")
-        return False
+        raise RuntimeError(NO_7Z)
     fix_mtimes(mod)
     out.unlink(missing_ok=True)  # `7z a` would add to an existing archive
     r = subprocess.run([exe, *SEVENZ_ARGS, str(out.resolve()), mod.name], cwd=mod.parent, capture_output=True, text=True,
@@ -172,29 +176,12 @@ def write_7z(mod: Path, out: Path, sevenzip=None) -> bool:
     if r.returncode != 0 or not out.is_file():
         out.unlink(missing_ok=True)
         raise RuntimeError(f"7-Zip failed ({r.returncode}): {(r.stdout + r.stderr).strip()[-600:]}")
-    return True
 
 
-def write_zip(mod: Path, out: Path) -> None:
-    """Deterministic zip: sorted entries, one timestamp, top folder MedianXL/ (empty folders kept: d2rloader/patches)."""
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-        for p in sorted(mod.rglob("*"), key=lambda q: q.relative_to(mod).as_posix()):
-            arc = f"{NAME}/" + p.relative_to(mod).as_posix()
-            if p.is_dir():
-                if not any(p.iterdir()):
-                    z.writestr(zipfile.ZipInfo(arc + "/", ZIP_TIME), b"")
-                continue
-            info = zipfile.ZipInfo(arc, ZIP_TIME)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o644 << 16
-            with open(p, "rb") as f, z.open(info, "w") as w:
-                shutil.copyfileobj(f, w, 1 << 20)
-
-
-def manifest(version: str, files: list, zip_path: Path, complete: bool, archive_path: Path = None) -> dict:
-    """archive_path: the .7z next to the zip, when there is one. The launcher ignores the "archive" entry."""
+def manifest(version: str, files: list, archive_path: Path, complete: bool, dirs=()) -> dict:
+    """archive_path: the .7z. The launcher installs from the objects (docs/release.md), never from the archive."""
     return {
-        "schemaVersion": 1,
+        "schemaVersion": SCHEMA,
         "name": NAME,
         "version": version,
         "pluginVersion": plugin_version(),
@@ -206,9 +193,9 @@ def manifest(version: str, files: list, zip_path: Path, complete: bool, archive_
         "modFolder": NAME,  # the paths below are relative to <D2R>/mods/<modFolder>/
         "saveFolder": f"{NAME}/",  # under Saved Games/Diablo II Resurrected/mods/ (modinfo.json savepath)
         "preserve": PRESERVE,
-        "zip": {"name": zip_path.name, "size": zip_path.stat().st_size, "sha256": sha256(zip_path)},
-        **({"archive": {"format": "7z", "name": archive_path.name, "size": archive_path.stat().st_size,
-                        "sha256": sha256(archive_path)}} if archive_path is not None else {}),  # the manual download
+        "archive": {"format": "7z", "name": archive_path.name, "size": archive_path.stat().st_size,
+                    "sha256": sha256(archive_path)},  # the manual download
+        "emptyDirs": list(dirs),  # folders the 7z holds although no file is in them (d2rloader/patches)
         "fileCount": len(files),
         "totalSize": sum(f["size"] for f in files),
         "files": files,
@@ -217,8 +204,6 @@ def manifest(version: str, files: list, zip_path: Path, complete: bool, archive_
 
 UNPACK_7Z = ("Unpack `{archive}` into `<D2R folder>\\mods\\` so that `<D2R folder>\\mods\\MedianXL\\MedianXL.mpq\\modinfo.json` exists\n"
              "   (Windows 11 opens .7z files; otherwise use 7-Zip, https://www.7-zip.org).")
-UNPACK_ZIP = ("Unzip `{archive}` into `<D2R folder>\\mods\\` so that `<D2R folder>\\mods\\MedianXL\\MedianXL.mpq\\modinfo.json` "
-              "exists.")
 
 NOTES = """# Median XL D2R {version}
 
@@ -263,7 +248,6 @@ def main() -> int:
     ap.add_argument("--plugin", type=Path, help="a release mxl-core.dll (default: build it with -DMXL_RELEASE=ON)")
     ap.add_argument("--data-from", type=Path, help="copy this finished MedianXL.mpq/data instead of building it")
     ap.add_argument("--no-data", action="store_true", help="no MedianXL.mpq/data (CI): manifest says complete=false")
-    ap.add_argument("--no-7z", action="store_true", help="no .7z, only the zip (--no-data never writes one)")
     ap.add_argument("--game", type=Path, default=Path(install_mod.DEFAULT_GAME), help="D2R folder read for maps_hd (CASC)")
     ap.add_argument("--out", type=Path, default=ROOT / "dist")
     a = ap.parse_args()
@@ -271,6 +255,10 @@ def main() -> int:
     version = (a.version or plugin_version()).lstrip("v")
     if version != plugin_version():
         print(f"note: release {version}, plugin PluginVersion {plugin_version()}")
+    sevenzip = find_7z()
+    if not sevenzip:  # before the long part of the run
+        print(f"error: {NO_7Z}")
+        return 1
     if not a.no_data and a.data_from is None and not (install_mod.SRC / "global" / "excel").exists():
         print("work/mod/data is missing: run tools/build.py first")
         return 1
@@ -294,34 +282,28 @@ def main() -> int:
         print("refusing to package test or player files: " + ", ".join(bad[:20]))
         return 1
 
-    suffix = "-nodata" if a.no_data else ""
-    zip_path = a.out / f"MedianXL-D2R-{version}{suffix}.zip"
-    write_zip(mod, zip_path)
-    seven_path = a.out / f"MedianXL-D2R-{version}.7z"
-    seven_path.unlink(missing_ok=True)  # never leave the 7z of an earlier run next to a new zip
+    for old in a.out.glob("MedianXL-D2R-*.zip"):  # an earlier packager's zip must not sit next to this release
+        old.unlink()
+    seven_path = a.out / f"MedianXL-D2R-{version}{'-nodata' if a.no_data else ''}.7z"
     t7 = time.time()
     try:
-        have_7z = not a.no_data and not a.no_7z and write_7z(mod, seven_path)
+        write_7z(mod, seven_path, sevenzip)
     except RuntimeError as e:
-        print(e)
+        print(f"error: {e}")
         return 1
     t7 = time.time() - t7
     files = file_list(mod)
     man_path = a.out / "release-manifest.json"
-    man_path.write_text(json.dumps(manifest(version, files, zip_path, not a.no_data, seven_path if have_7z else None),
-                                   indent=1) + "\n", encoding="utf-8")
+    man_path.write_text(json.dumps(manifest(version, files, seven_path, not a.no_data, empty_dirs(mod)), indent=1) + "\n",
+                        encoding="utf-8")
     notes = a.out / f"RELEASE_NOTES-{version}.md"
     notes.write_text(NOTES.format(version=version, plugin=plugin_version(), build=D2R["build"], d2rver=D2R["version"],
                                   loader=D2RLOADER["version"], loader_url=D2RLOADER["url"], loader_sha=D2RLOADER["sha256"],
-                                  unpack=(UNPACK_7Z if have_7z else UNPACK_ZIP).format(
-                                      archive=(seven_path if have_7z else zip_path).name)), encoding="utf-8")
-    sums = "".join(f"{sha256(p)}  {p.name}\n" for p in (zip_path, *([seven_path] if have_7z else []), man_path, notes))
-    (a.out / "SHA256SUMS").write_text(sums, encoding="utf-8")
+                                  unpack=UNPACK_7Z.format(archive=seven_path.name)), encoding="utf-8")
+    (a.out / "SHA256SUMS").write_text("".join(f"{sha256(p)}  {p.name}\n" for p in (seven_path, man_path, notes)), encoding="utf-8")
     shutil.rmtree(a.out / "stage")
-    print(f"{zip_path.name}: {len(files)} files, {sum(f['size'] for f in files) / 1e6:.0f} MB unpacked, "
-          f"{zip_path.stat().st_size / 1e6:.0f} MB zipped"
-          + (f", {seven_path.stat().st_size / 1e6:.0f} MB as 7z ({t7:.0f} s)" if have_7z else "")
-          + f"; {man_path.name}, {notes.name}, SHA256SUMS in {a.out}")
+    print(f"{seven_path.name}: {len(files)} files, {sum(f['size'] for f in files) / 1e6:.0f} MB unpacked, "
+          f"{seven_path.stat().st_size / 1e6:.0f} MB as 7z ({t7:.0f} s); {man_path.name}, {notes.name}, SHA256SUMS in {a.out}")
     return 0
 
 

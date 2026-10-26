@@ -19,8 +19,12 @@ struct ManifestFile {
 	std::string sha256;
 };
 
-// release-manifest.json, schemaVersion 1, as lane pub-release defines it (docs/release.md "Release manifest").
-// Unknown fields are ignored; an unknown schemaVersion is refused.
+// The release manifest schema this launcher reads. 2: the release is a 7z (built on the server) and the launcher
+// installs from the objects only; schema 1 (the zip) is gone.
+constexpr int ManifestSchema = 2;
+
+// release-manifest.json, schemaVersion 2 (docs/release.md "Release manifest"). Unknown fields are ignored; another
+// schemaVersion is refused.
 struct Manifest {
 	int schemaVersion = 0;
 	std::string name;           // "MedianXL"
@@ -35,14 +39,15 @@ struct Manifest {
 	} d2rloader;
 	std::string launchDefaultMod;  // launch.default_mod, for the copy's d2rloader.toml
 	std::string launchArguments;   // launch.launch_arguments ("-txt")
-	std::string modFolder;         // the files live in <game>\mods\<modFolder>; the zip's top folder
+	std::string modFolder;         // the files live in <game>\mods\<modFolder>; the 7z's top folder
 	std::string saveFolder;        // modinfo savepath ("MedianXL/"); the launcher never writes there
 	std::set<std::string> preserve;  // player-editable: written only when missing
-	std::string zipName;           // the release zip's file name
-	std::string zipPath;           // zip.path (published manifests): the zip relative to the site root
-	uint64_t zipSize = 0;
-	std::string zipSha256;
-	std::string objectsBase;       // published manifests: files[i] is at <root><objectsBase><sha[0:2]>/<sha> ("objects/")
+	std::vector<std::string> emptyDirs;  // folders of the release without files (d2rloader/patches): created
+	struct Archive {               // archive: the 7z for a manual install (the launcher only names it in messages)
+		std::string name, path, sha256;  // path: relative to the site root (published manifests)
+		uint64_t size = 0;
+	} archive;
+	std::string objectsBase;       // required: files[i] is at <root><objectsBase><sha[0:2]>/<sha> ("objects/")
 	struct LauncherRef {           // launcher (published manifests, optional): the launcher published with the release
 		std::string version, path, sha256;
 		uint64_t size = 0;
@@ -77,7 +82,9 @@ struct ObjectFetch {
 std::vector<ObjectFetch> GroupObjects(const std::vector<ManifestFile>& files);
 
 // Parse and check a manifest. Every path must pass SafeRelativePath, sha256 must be 64 hex digits, fileCount /
-// totalSize (when given) must match the list.
+// totalSize (when given) must match the list, objectsBase must be there. When schemaVersion is not ManifestSchema it
+// returns false with out.schemaVersion, out.version and out.launcher set (so the caller can say "too old / too new"
+// and still offer the launcher that the release names).
 bool ParseManifest(const std::string& text, Manifest& out, std::string& error);
 Json ManifestToJson(const Manifest& m);
 

@@ -2,11 +2,15 @@
 of tools/publish_release.py without a server. The folder is $FAKE_SFTP_ROOT; remote paths ("/mxl/objects/ab") are taken
 inside it. Behaves like sftp batch mode: echoes `sftp> <command>`, a failing command ends the run with exit 1 unless the
 line starts with '-'; `ls` of a missing folder prints `Can't ls: "<path>" not found` on stderr; `ls -ln` prints long lines;
-`rename` replaces an existing target (posix-rename). Commands: ls mkdir put get rename rm rmdir. Not a security boundary.
+`rename` replaces an existing target (posix-rename) and also moves folders; `reput` appends to an existing remote file
+(OpenSSH: it fails when the remote file is missing or not smaller). Commands: ls mkdir put reput get rename rm rmdir. Not a
+security boundary.
 
   FAKE_SFTP_ROOT=DIR FAKE_SFTP_FAIL_PUT=N py -3 tools/fake_sftp.py -b - ... user@host
 FAKE_SFTP_LEGACY_RENAME=1: rename refuses to replace (a server without posix-rename).
-FAIL_PUT=N: the N-th put of the run fails (to test a publish that dies half-way); FAKE_SFTP_LOG=FILE appends every command.
+FAIL_PUT=N: the N-th put of the run fails (to test a publish that dies half-way); FAKE_SFTP_LOG=FILE appends every command
+(and a line "LOGIN" per run). FAKE_SFTP_CUT=FILE: a counter file "N K": the run whose put/reput moves more than K bytes in
+total writes the first K and then drops the connection (like a reset), N times; the file counts N down.
 """
 import os
 import shutil
@@ -48,6 +52,15 @@ def main():
     fail_put = int(os.environ.get("FAKE_SFTP_FAIL_PUT", "0"))
     log = os.environ.get("FAKE_SFTP_LOG")
     puts = 0
+    if log:
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("LOGIN\n")
+    cut = os.environ.get("FAKE_SFTP_CUT")
+    budget = None
+    if cut and Path(cut).is_file():
+        n, k = (int(x) for x in Path(cut).read_text().split())
+        if n > 0:
+            budget = k
 
     def real(p):
         return root.joinpath(*[x for x in p.split("/") if x])
@@ -86,7 +99,7 @@ def main():
                     err = f"Couldn't create directory: Failure"
                 else:
                     p.mkdir()
-            elif cmd == "put":
+            elif cmd in ("put", "reput"):
                 puts += 1
                 dest = real(args[1])
                 if fail_put and puts == fail_put:
@@ -95,8 +108,25 @@ def main():
                     sys.exit(1)
                 if not dest.parent.is_dir():
                     err = f"remote open(\"{args[1]}\"): No such file or directory"
+                elif cmd == "reput" and not dest.is_file():
+                    err = f"stat remote: No such file or directory"
+                elif cmd == "reput" and dest.stat().st_size >= Path(args[0]).stat().st_size:
+                    err = "destination file bigger or same size as source file"
                 else:
-                    shutil.copyfile(args[0], dest)
+                    data = Path(args[0]).read_bytes()
+                    start = dest.stat().st_size if cmd == "reput" else 0
+                    chunk = data[start:]
+                    if budget is not None and len(chunk) > budget:
+                        with open(dest, "ab" if cmd == "reput" else "wb") as f:
+                            f.write(chunk[:budget])
+                        n, k = (int(x) for x in Path(cut).read_text().split())
+                        Path(cut).write_text(f"{n - 1} {k}")  # counted only when a connection is really cut
+                        print("client_loop: send disconnect: Connection reset by peer", file=sys.stderr, flush=True)
+                        sys.exit(255)
+                    if budget is not None:
+                        budget -= len(chunk)
+                    with open(dest, "ab" if cmd == "reput" else "wb") as f:
+                        f.write(chunk)
             elif cmd == "get":
                 src = real(args[0])
                 if not src.is_file():
@@ -105,8 +135,10 @@ def main():
                     shutil.copyfile(src, args[1])
             elif cmd == "rename":
                 a, b = real(args[0]), real(args[1])
-                if not a.is_file():
+                if not a.exists():
                     err = "Couldn't rename file: No such file or directory"
+                elif a.is_dir() and b.exists():
+                    err = "Couldn't rename file: Failure"
                 elif os.environ.get("FAKE_SFTP_LEGACY_RENAME") and b.exists():
                     err = "Couldn't rename file: Failure"  # SFTP v3 rename does not replace
                 else:
