@@ -39,7 +39,7 @@ graphics). Everything after that is driven by what breaks in game.
 ## 3. The data pipeline (Phase 1-2)
 
 ```
-python tools/mpq_extract.py      # mod MPQs        -> assets/median/ (committed, Git LFS)
+python tools/mpq_extract.py      # mod MPQs        -> assets/median/ (the asset pack: tools/asset_pack.py build, docs/setup.md step 4)
 python tools/casc_extract.py     # D2R baseline    -> extract/d2r/<build>/   (tables in excel/ and excel/base/)
 python tools/build.py            # names, formulas, mod tables, strings, migration, art/UI steps, validation -> work/mod/
 python tools/install_mod.py      # -> <game>/mods/<Mod> (folder mod, plugin DLL included)

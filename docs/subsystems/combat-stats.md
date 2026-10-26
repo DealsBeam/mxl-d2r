@@ -261,5 +261,5 @@ Evidence available in this repository (no classic extraction required):
   (`0x14e7294`) and hireling panel (`0x14f4686`) get the same immediate change. Off word **combat** disables
   these existing patches and the other combat rules; the existing `mxl` combat line reports the four clamp sites (`4/4 clamps`).
 
-The input tree is labelled 2.14.4 in `assets/median/README.md`, while its `version.mxl` says 2.14.6. This report
+The input tree is labelled 2.14.4 in `docs/assets-median.md`, while its `version.mxl` says 2.14.6. This report
 uses the checked-in data and the recorded D2Sigma audit; it does not infer a different cap from that label mismatch.

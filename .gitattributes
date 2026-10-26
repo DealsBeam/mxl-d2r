@@ -1,4 +1,0 @@
-# HD models, textures and other custom art: stored with Git LFS (docs/hd-models.md "Assets in the repo")
-assets/** filter=lfs diff=lfs merge=lfs -text
-assets/**/*.md -filter -diff -merge text
-assets/**/*.json -filter -diff -merge text
