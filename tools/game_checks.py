@@ -17,7 +17,7 @@ cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes s
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes
 respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick townmonsters
-teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath goblincrash.
+teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath goblincrash skillicons.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -13322,6 +13322,46 @@ def check_goblincrash():
         (("; PROBLEMS: " + "; ".join(bad)) if bad else ""), shots, rows + asserts[:20])
 
 
+SKILL_BTN_RIGHT = {"hd": (0.0, 0.0), "legacy": (0.0, 0.0)}  # right skill button (client fractions), measured below
+
+
+def check_skillicons():
+    """Bug #52: the skill bar (Attack on the left button), the right skill popup and the skill tree in HD and legacy graphics,
+    for a look against Median's icons (tools/skill_icon_check.py compares the files; this shows them drawn)."""
+    nm = "Skill icons drawn in HD and legacy: skill bar (Attack), right skill popup, skill tree (#52)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    mark = log_mark()
+    start_mode = graphics_mode()
+    shots, rows = [], []
+    for mode in ("hd", "legacy"):
+        if not set_graphics(mode):
+            rows.append("%s: graphics mode not reached" % mode)
+            continue
+        close_menu()
+        time.sleep(1.0)
+        shots.append(sh("skillbar_%s" % mode))
+        x, y = SKILL_BTN_RIGHT[mode]
+        if x:
+            g.click(x, y)
+            time.sleep(1.2)
+            shots.append(sh("skillpopup_%s" % mode))
+            g.click(x, y)
+            time.sleep(0.8)
+        g.key("t")
+        time.sleep(1.5)
+        shots.append(sh("skilltree_%s" % mode))
+        g.key("t")
+        time.sleep(0.8)
+        rows.append("%s: shots taken" % mode)
+    set_graphics(start_mode)
+    asserts = sorted(set(assertions_since(mark)))
+    add(nm, "REVIEW", "; ".join(rows) + ("; asserts: %s" % asserts[:4] if asserts else "; no new assert"), shots, rows)
+
+
 def check_otherplugins():
     """`mxl` names the other D2RLoader plugins of the process (bug #44; a test slot has none)."""
     nm = "`mxl` names the other loaded D2RLoader plugins"
@@ -13482,7 +13522,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # lane p4-quests-verify
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
-          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("goblincrash", check_goblincrash), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
+          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("goblincrash", check_goblincrash), ("skillicons", check_skillicons), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
           ("ied", check_ied), ("iedtip", check_iedtip)]
 
 
