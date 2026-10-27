@@ -462,6 +462,34 @@ class Validator:
                         self.add("error", "strings", "Key", f"unqualified record with an id ({where}): it defines "
                                  f"medianxl:{key}, not D2R's {key}; an override is `d2r:{key}` without id", "-", key)
 
+    def hit6_spawns(self) -> None:
+        """Missile server hit 6 spawns monstats row sHitPar1 at the hit point. Median's cell is a Median row number; the built
+        cell must be that monster's migrated ID (txt_migrate, docs/bugs.md #42: the Den of Evil boss's bone spear spawned an
+        unrelated dummy row)."""
+        mis = self.data.table("missiles")
+        idmap_path = ROOT / "work" / "named" / "idmap.json"
+        median_path = ROOT / "assets" / "median" / "2_txt" / "missiles.txt"
+        if not mis or not idmap_path.exists() or not median_path.exists():
+            return
+        idmap = json.loads(idmap_path.read_text(encoding="utf-8"))
+        monster = {e["row"]: e["id"] for e in idmap["monstats"]}
+        median_row = {e["name"]: e["row"] for e in idmap["missiles"]}
+        with open(median_path, encoding="utf-8", errors="replace") as f:
+            mh = f.readline().rstrip("\r\n").split("\t")
+            mp1 = mh.index("sHitPar1")
+            median = [line.rstrip("\r\n").split("\t") for line in f]
+        h, rows = mis
+        sh, p1 = h.index("pSrvHitFunc"), h.index("sHitPar1")
+        for r in rows:
+            if len(r) <= max(sh, p1) or r[sh].strip() != "6" or r[0] not in median_row:
+                continue
+            src = median[median_row[r[0]]] if median_row[r[0]] < len(median) else None
+            if src is None or len(src) <= mp1 or not src[mp1].isdigit():
+                continue
+            want = monster.get(int(src[mp1]), int(src[mp1]))
+            if r[p1].strip() != str(want):
+                self.add("error", "missiles", "sHitPar1", f"hit 6 spawns monstats row {r[p1]}, Median's row {src[mp1]} is ID {want}", r[0], r[p1])
+
     def engine_rules(self) -> None:
         """Rules D2R asserts on at load time that the field schema does not express."""
         d = self.data
@@ -509,6 +537,7 @@ class Validator:
             for name, n in counts.items():
                 if n > MAX_ITEMS_PER_SET:
                     self.add("error", "setitems", "set", f"set has {n} items (D2R allows {MAX_ITEMS_PER_SET})", name, str(n))
+        self.hit6_spawns()
         # monstats: MonStatsEx is required
         ms = d.table("monstats")
         if ms:

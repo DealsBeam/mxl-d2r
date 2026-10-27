@@ -56,6 +56,7 @@
 #include "unique_carry.h"
 #include "unique_limits.h"
 #include "goblins.h"
+#include "sound_guard.h"
 #include "monster_ai.h"
 #include "monster_looks.h"
 #include "hirelings.h"
@@ -131,6 +132,7 @@ char g_questsReport[192] = "off: not the expected game image";
 char g_quests2Report[224] = "off: not the expected game image";
 char g_lockoutReport[192] = "off: not the expected game image";
 char g_goblinsReport[192] = "off: not the expected game image";
+char g_soundGuardReport[160] = "off: not the expected game image";
 char g_monsterAiReport[192] = "off: not the expected game image";
 char g_monsterLooksReport[256] = "off: not the expected game image";
 char g_npcReport[256] = "off: not the expected game image";
@@ -206,7 +208,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 char g_wrongBuild[256] = "";  // the message for a player on another build, empty on build 93847
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock mediantowns statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard otherplugins
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock mediantowns statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard otherplugins soundguard
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -465,6 +467,12 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		char status[160] = "";
 		GoblinsStatus(status, sizeof(status));
 		std::snprintf(line, sizeof(line), "goblins %s | %s", g_goblinsReport, status);
+		Say(command, line);
+	}
+	{
+		char status[160] = "";
+		SoundGuardStatus(status, sizeof(status));
+		std::snprintf(line, sizeof(line), "sound guard %s | %s", g_soundGuardReport, status);
 		Say(command, line);
 	}
 	{
@@ -949,6 +957,15 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 				InstallGoblins(context, g_goblinsReport, sizeof(g_goblinsReport));
 			}
 			std::snprintf(line, sizeof(line), "mxl-core: goblins %s", g_goblinsReport);
+			context->LogInfo(line);
+		}
+		{
+			if (Off("soundguard")) {
+				std::snprintf(g_soundGuardReport, sizeof(g_soundGuardReport), "%s", OffNote);
+			} else {
+				InstallSoundGuard(context, g_soundGuardReport, sizeof(g_soundGuardReport));
+			}
+			std::snprintf(line, sizeof(line), "mxl-core: sound guard %s", g_soundGuardReport);
 			context->LogInfo(line);
 		}
 		{

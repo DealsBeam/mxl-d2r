@@ -12966,7 +12966,9 @@ DEN_OF_EVIL = 8
 # Skill1 SkeletonRaise; its minion enslaved_demon (2834, bighead) brings skeleton_warrior_5 (2832).
 DEN_BOSS = 2833
 DEN_BOSS_PARTY = (2834, 2832)
-DEN_BOSS_RAISE = (158, 14)  # its Skill1 SkeletonRaise, Sk1mode seq_skeletonraise (the SQ sequence mode)
+DEN_BOSS_RAISE = (158, 14)
+DEN_HIT_SPAWNS = (2835, 2818)  # the bone spear's server hit 6 spawns sHitPar1: 2835 corrupted_necromancer_17 (the glacial spike trap)
+DEN_WRONG_SPAWN = 2818  # ... and before the txt_migrate fix it was Median's row number 2818 = D2R's flying_polar_buffalo_error_110  # its Skill1 SkeletonRaise, Sk1mode seq_skeletonraise (the SQ sequence mode)
 
 
 def graphics_mode():
@@ -13032,9 +13034,11 @@ def _spawn_near(cls, st):
     return False
 
 
-def _den_fight(mode, seconds, rows, bad, shots):
-    """One round: the boss (the Den's own when it is in reach, else spawned with its party) attacks the god-mode player for `seconds`,
-    then it is killed. The game must stay up and the boss must die."""
+def _den_fight(mode, seconds, rows, bad, shots, mortal=False, coldres=None):
+    """One round: the boss (the Den's own when it is in reach, else spawned with its party) attacks the player for `seconds`, then it
+    is killed. The game must stay up and the boss must die. `mortal`: god mode is off for the fight, so the boss's bone spear and its
+    glacial spike sub missile really hit and hurt the character (the player report of bug #42); the round ends early when the
+    character dies. `coldres`: the character's cold resistance (stat 43) for the fight, e.g. 0 or -100."""
     goto(1)
     close_menu()
     if not set_graphics(mode):
@@ -13058,10 +13062,36 @@ def _den_fight(mode, seconds, rows, bad, shots):
     if boss is None:
         bad.append("%s: no boss (class %d) in reach and the spawn made none" % (mode, DEN_BOSS))
         return
+    res0 = stat_of(H("stat player 43")[1])
+    if coldres is not None:
+        H("stat player 43 set %d" % coldres)
+    if mortal:
+        full = stat_of(H("stat player 7")[1])  # each mortal round starts at full life
+        if full:
+            H("stat player 6 set %d" % full)
+        god(False)
+    p0 = hstate()["player"]
+    life0 = _life_of(p0)
+    life_min, hits, died, seen_classes = life0, 0, None, set()
     H("moveto %d" % boss["id"])
     t0, seen_modes, raised = time.time(), set(), None
     while time.time() - t0 < seconds:
         time.sleep(2.0)
+        if mortal:
+            if not g.game_pids():
+                bad.append("%s: the game died %.0f s into the mortal fight (%s; %d life drops seen, life %s of %s)" % (
+                    mode, time.time() - t0, how, hits, life_min, life0))
+                return
+            st_m = hstate()
+            p = st_m["player"]
+            seen_classes.update(m.get("class") for m in st_m["mons"] if m.get("class") in DEN_HIT_SPAWNS)
+            life = _life_of(p)
+            if life is not None and life_min is not None and life < life_min:
+                hits += 1
+                life_min = life
+            if p and player_dead(p):
+                died = time.time() - t0
+                break
         if raised is None and time.time() - t0 > seconds / 2:  # its Skill1 needs a corpse: kill one of the party, then make it cast
             minion = next((m for m in hstate()["mons"] if m.get("class") in DEN_BOSS_PARTY and m.get("mode") not in (0, 12)), None)
             if minion:
@@ -13076,7 +13106,30 @@ def _den_fight(mode, seconds, rows, bad, shots):
         for m in st["mons"]:
             if m.get("id") == boss["id"]:
                 seen_modes.add(m.get("mode"))
-    shots.append(sh("denboss_%s" % mode))
+    shots.append(sh("denboss_%s%s" % (mode, "_mortal" if mortal else "")))
+    hurt = ""
+    if mortal:
+        hurt = ", mortal (cold resist %s): %d life drops, life %s -> %s of %s%s, bone spear hit spawns seen %s" % (
+            coldres if coldres is not None else res0, hits, life0, life_min, life0, ", died after %.0f s" % died if died is not None else "",
+            sorted(seen_classes))
+        if DEN_WRONG_SPAWN in seen_classes:
+            bad.append("%s: the bone spear's hit spawned monster %d (sHitPar1 still Median's row number)" % (mode, DEN_WRONG_SPAWN))
+        if not hits:
+            bad.append("%s: the mortal character was never hurt (the hit path did not run)" % mode)
+        if died is not None:
+            time.sleep(3.0)
+            if not g.game_pids():
+                bad.append("%s: the game died after the character's death" % mode)
+                return
+            revive_if_dead()
+            god(True)
+            if coldres is not None and res0 is not None:
+                H("stat player 43 set %d" % res0)
+            rows.append("%s: boss %s id %s%s; boss not killed (the character died first)" % (mode, how, boss["id"], hurt))
+            return
+        god(True)
+    if coldres is not None and res0 is not None:
+        H("stat player 43 set %d" % res0)
     H("kill %d" % boss["id"])
     time.sleep(2.0)
     if not game_alive():
@@ -13085,15 +13138,22 @@ def _den_fight(mode, seconds, rows, bad, shots):
     alive = [m for m in hstate()["mons"] if m.get("id") == boss["id"] and m.get("mode") not in (0, 12)]
     if alive:
         bad.append("%s: the boss is still alive after `kill`" % mode)
-    rows.append("%s: boss %s id %s, %d s next to the player, %s, modes seen %s, killed %s" % (
-        mode, how, boss["id"], seconds, raised or "SkeletonRaise not cast", sorted(x for x in seen_modes if x is not None), "yes" if not alive else "NO"))
+    rows.append("%s: boss %s id %s, %d s next to the player%s, %s, modes seen %s, killed %s" % (
+        mode, how, boss["id"], seconds, hurt, raised or "SkeletonRaise not cast", sorted(x for x in seen_modes if x is not None), "yes" if not alive else "NO"))
     clean_area()
+
+
+def _life_of(p):
+    try:
+        return int(str((p or {}).get("life", "")).split("/")[0])
+    except ValueError:
+        return None
 
 
 def check_denboss():
     """Bug #42: hard crash at the Den of Evil boss. The boss (class 2833) attacks a god-mode player for MXL_DENBOSS_SECS seconds (default 30)
     in HD and in legacy graphics (G), then it is killed: the game must stay up (no new crash report), the boss must die, no new assert."""
-    nm = "Den of Evil boss (bug #42): it fights for a while in HD and legacy graphics, no crash, killable"
+    nm = "Den of Evil boss (bug #42): it fights a mortal character in HD and legacy graphics (cold resist as is, 0, -100), no crash"
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
     secs = int(os.environ.get("MXL_DENBOSS_SECS", "30"))
@@ -13105,12 +13165,17 @@ def check_denboss():
     rows, bad, shots = [], [], []
     goto(1)
     start_mode = graphics_mode()
-    for mode in ("hd", "legacy"):
-        _den_fight(mode, secs, rows, bad, shots)
-        if not game_alive():
+    # mortal rounds (bug #42 reopened: the player was hit by the cold missile; god mode never runs that path); MXL_DENBOSS_GOD=1 adds
+    # the old god-mode rounds for a long soak
+    plan = [("hd", True, None), ("legacy", True, None), ("hd", True, 0), ("legacy", True, -100)]
+    if os.environ.get("MXL_DENBOSS_GOD") == "1":
+        plan += [("hd", False, None), ("legacy", False, None)]
+    for mode, mortal, coldres in plan:
+        _den_fight(mode, secs, rows, bad, shots, mortal, coldres)
+        if not g.game_pids():
             break
-    if len([r for r in rows if "killed yes" in r]) < 2 and not bad:
-        bad.append("not both graphics modes were fought")
+    if len(rows) < len(plan) and not bad:
+        bad.append("not every round was fought")
     if game_alive():
         goto(1)
         set_graphics(start_mode)
@@ -13234,9 +13299,21 @@ def check_goblincrash():
         goto(1)
         set_graphics(start_mode)
         god(False)
-        norow = re.search(r"(\d+) without a monstats row", hstate()["plugin"])
+        plugin = hstate()["plugin"]
+        norow = re.search(r"(\d+) without a monstats row", plugin)
         if norow and int(norow.group(1)) > 0:
             bad.append("%s goblin rolls found no monstats row (a table did not load)" % norow.group(1))
+        # Bugs #42 / #46: a monster sound id outside sounds.txt crashed the client in 0xd8c70; the plugin's sound guard skips it.
+        # MXL_SOUNDGUARD_TEST=1 (dev DLL) feeds the goblins' Neutral sound as -1, so the guard must have skipped some.
+        skipped = re.search(r"(\d+) bad sound ids skipped[^|]*", plugin)
+        if skipped:
+            rows.append("sound guard: " + skipped.group(0).strip())
+            n = int(skipped.group(1))
+            if os.environ.get("MXL_SOUNDGUARD_TEST") == "1":
+                if n == 0:
+                    bad.append("MXL_SOUNDGUARD_TEST=1 but the sound guard skipped nothing")
+            elif n > 0:
+                bad.append("%d monster sound ids were outside sounds.txt (a sounds table did not load)" % n)
     crashes = [c for c in (sorted(os.listdir(g.CRASH_DIR)) if os.path.isdir(g.CRASH_DIR) else []) if c not in crashes0]
     if crashes:
         bad.append("new crash files: %s" % crashes[:4])
