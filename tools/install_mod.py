@@ -5,9 +5,7 @@
                                     inside the folder MPQ; a copy also sits at the mod root)
   d2rloader/metadata.json           schemaVersion 1 + "namespace": "medianxl" (Median-only strings, docs/strings-namespace.md;
                                     the folder MPQ needs no (listfile): it is a directory, not a packed archive)
-  d2rloader/config/d2rloader.toml   [d2rcore.save_format] mode = "extended" (Median's wider item/stat IDs);
-                                    [d2rloader.advanced] suppress_global_extensions = true (no game-wide plugins
-                                    or patches while D2R-XL runs: an old global mxl-core.dll, docs/bugs.md #53 / #44)
+  d2rloader/config/d2rloader.toml   [d2rcore.save_format] mode = "extended" (Median's wider item/stat IDs)
                                     [d2rcore.stash] add_shared_tabs = 7 (Median's stash has 10 pages, D2R 3 normal tabs)
   D2R-XL.mpq/data/...             copy of work/mod/data (folder-style MPQ) + global/dataversionbuild.txt
                                     + Median's classic tiles/maps (global/tiles)
@@ -207,18 +205,12 @@ def write_mod_files(mod: Path, name: str, savepath: str, plugin: Path = PLUGIN, 
     toml = d2rl / "config" / "d2rloader.toml"
     if not toml.exists():  # never overwrite a config someone edited
         toml.write_text('[d2rcore.save_format]\nmode = "extended"\n', encoding="utf-8")
-    # only these keys are ours to add; the rest of an edited config stays as it is (a key set by hand too)
+    # only this key is ours to add; the rest of an edited config stays as it is
     text = toml.read_text(encoding="utf-8")
     added = ensure_toml_key(text, "d2rcore.stash", "add_shared_tabs", str(max(0, STASH_PAGES - VANILLA_SHARED_TABS)))
     if added != text:
+        toml.write_text(added, encoding="utf-8")
         print(f"d2rloader.toml: add_shared_tabs = {STASH_PAGES - VANILLA_SHARED_TABS} (Median's {STASH_PAGES} stash pages)")
-    # D2RLoader 1.3.1: "Stop global plugins and patches from loading. Mod plugins and patches are still controlled by
-    # allow_mod_extensions." A stray <D2R>\d2rloader\plugins\mxl-core.dll (#53) or a global gameplay plugin (#44) stays out.
-    suppressed = ensure_toml_key(added, "d2rloader.advanced", "suppress_global_extensions", "true")
-    if suppressed != added:
-        print("d2rloader.toml: suppress_global_extensions = true (game-wide plugins and patches do not load with D2R-XL)")
-    if suppressed != text:
-        toml.write_text(suppressed, encoding="utf-8")
 
 
 def finish_install(game: Path, name: str, savepath: str, mod: Path, mpq: Path, data: Path) -> int:

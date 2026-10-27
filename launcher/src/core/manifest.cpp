@@ -77,6 +77,7 @@ bool ParseManifest(const std::string& text, Manifest& out, std::string& error) {
 	m.complete = j["complete"].Bool();
 	const Json& d2r = j["d2r"];
 	m.d2rBuild = d2r["build"].IsString() ? std::atoi(d2r["build"].Str().c_str()) : int(d2r["build"].Int());
+	m.d2rVersion = d2r["version"].Str();
 	std::string ts = d2r["imageTimestamp"].Str();
 	if (!ts.empty())
 		m.imageTimestamp = uint32_t(std::strtoul(ts.c_str(), nullptr, 0));
@@ -111,8 +112,8 @@ bool ParseManifest(const std::string& text, Manifest& out, std::string& error) {
 		error = "missing or bad objectsBase, or a bad archive.path";
 		return false;
 	}
-	if (m.version.empty() || m.d2rBuild <= 0) {
-		error = "the manifest lacks version or d2r.build";
+	if (m.version.empty() || (m.d2rBuild <= 0 && m.d2rVersion.empty())) {
+		error = "the manifest lacks version or d2r.version";
 		return false;
 	}
 	for (const Json& d : j["emptyDirs"].items()) {

@@ -254,17 +254,20 @@ void TestDetect() {
 	Check(mxl::BuildInfoVersion(real) == "3.3.93847", "real .build.info of build 93847");
 	Check(mxl::BuildNumber("3.3.93847") == 93847 && mxl::BuildNumber("1.0.0.93847") == 93847 && mxl::BuildNumber("") == 0, "build numbers");
 
+	// The requirement is the game version (major.minor), never the build number (D2RLoader's author, 2026-10-27).
+	Check(mxl::GameVersion("3.3.93847") == "3.3" && mxl::GameVersion("3.3.0") == "3.3" && mxl::GameVersion("1.0.0.93847") == "1.0" &&
+	          mxl::GameVersion("").empty() && mxl::GameVersion("93847").empty(), "game version is major.minor");
 	auto ok = mxl::CheckBuild("3.3.93847", "3.3.93847");
-	Check(ok.verdict == mxl::BuildVerdict::Ok, "93847 is ok");
-	auto newer = mxl::CheckBuild("3.3.94100", "3.3.93847");
-	Check(newer.verdict == mxl::BuildVerdict::Newer && newer.build == 94100 && newer.message.find("Waiting for a D2R-XL update") != std::string::npos,
-	      "newer build: waiting message (half-updated install counts as newer)");
-	Check(mxl::CheckBuild("3.2.91000", "").verdict == mxl::BuildVerdict::Older, "older build");
-	auto steam = mxl::CheckBuild("", "3.3.94995");  // Steam: no .build.info, the same program as 93847 (bugs.md #41)
-	Check(steam.verdict == mxl::BuildVerdict::Ok && steam.build == 94995 && steam.message.find("same game program") != std::string::npos,
-	      "Steam 94995 runs the 93847 program");
-	Check(mxl::CheckBuild("", "3.3.94995", 95000).verdict != mxl::BuildVerdict::Ok, "the equivalence is only for 93847");
-	Check(mxl::CheckBuild("", "").verdict == mxl::BuildVerdict::Unknown, "unknown build");
+	Check(ok.verdict == mxl::BuildVerdict::Ok && ok.version == "3.3" && ok.build == 93847, "3.3.93847 is ok");
+	auto steam = mxl::CheckBuild("", "3.3.94995");  // Steam: no .build.info, another 3.3 build (bugs.md #41)
+	Check(steam.verdict == mxl::BuildVerdict::Ok && steam.build == 94995, "any 3.3 build is ok (Steam 94995)");
+	Check(mxl::CheckBuild("3.3.99999", "").verdict == mxl::BuildVerdict::Ok, "a later 3.3 hotfix build is ok");
+	auto newer = mxl::CheckBuild("3.4.95000", "3.3.93847");
+	Check(newer.verdict == mxl::BuildVerdict::Newer && newer.message.find("Waiting for a D2R-XL update") != std::string::npos,
+	      "3.4: waiting message (.build.info decides)");
+	Check(mxl::CheckBuild("3.2.91000", "").verdict == mxl::BuildVerdict::Older, "older version");
+	Check(mxl::CheckBuild("3.10.1", "").verdict == mxl::BuildVerdict::Newer, "3.10 is newer than 3.3");
+	Check(mxl::CheckBuild("", "").verdict == mxl::BuildVerdict::Unknown, "unknown version");
 	Check(mxl::CheckBuild("", "3.3.93847").verdict == mxl::BuildVerdict::Ok, "exe version alone");
 
 	std::string vdf = R"("libraryfolders"

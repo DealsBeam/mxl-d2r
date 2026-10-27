@@ -482,9 +482,9 @@ void RunAction(int id) {
 			return;
 	}
 	if (id == IdInstall && g.view.build.verdict != BuildVerdict::Ok) {  // allowed, after a clear warning
-		std::wstring q = L"Your D2R is " + (g.view.build.build ? L"build " + std::to_wstring(g.view.build.build) : std::wstring(L"of an unknown build")) +
-		                 L", but D2R-XL works only on build " + std::to_wstring(g.view.requiredBuild) +
-		                 L". It will not start until D2R is at that build.\n\nInstall D2R-XL anyway?";
+		std::wstring q = L"Your D2R is " + (g.view.build.version.empty() ? std::wstring(L"of an unknown version") : L"version " + Wide(g.view.build.version)) +
+		                 L", but D2R-XL works only on D2R " + Wide(g.view.requiredVersion) +
+		                 L". It will not start until D2R is at that version.\n\nInstall D2R-XL anyway?";
 		if (MessageBoxW(g.wnd, q.c_str(), L"D2R-XL Downloader", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
 			return;
 	}

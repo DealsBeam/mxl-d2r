@@ -283,7 +283,7 @@ Launcher::View Launcher::Inspect() {
 	std::string e;
 	v.feedOk = feedChecked_;
 	v.latest = feed_.version;
-	v.requiredBuild = feed_.d2rBuild ? feed_.d2rBuild : RequiredBuild;
+	v.requiredVersion = !GameVersion(feed_.d2rVersion).empty() ? GameVersion(feed_.d2rVersion) : std::string(RequiredGameVersion);
 	v.loaderNeeded = !feed_.d2rloader.version.empty() ? feed_.d2rloader.version : LoaderVersionDefault;
 	const Json& legacy = state_["legacy"];
 	if (legacy.IsObject() && !legacy["dir"].Str().empty()) {
@@ -301,7 +301,7 @@ Launcher::View Launcher::Inspect() {
 	v.d2rDir = d2rDir_;
 	v.d2rSource = d2rSource_;
 	D2RInstall d = InspectD2R(d2rDir_, d2rSource_);
-	v.build = CheckBuild(d.infoVersion, d.exeVersion, v.requiredBuild);
+	v.build = CheckBuild(d.infoVersion, d.exeVersion, v.requiredVersion);
 	std::wstring loader = JoinPath(d2rDir_, L"D2RLoader.exe");
 	if (FileExists(loader))
 		v.loaderFound = ExeFileVersion(loader);
@@ -338,12 +338,13 @@ std::string Launcher::StatusText(const View& v) const {
 	std::string out;
 	if (!v.d2rFound)
 		return "!D2R not found: press D2R folder and choose the Diablo II Resurrected folder.";
-	std::string build = v.build.build ? "build " + std::to_string(v.build.build) : "build unknown";
+	std::string found = v.build.version.empty() ? "version unknown"
+	                                            : v.build.version + (v.build.build ? ", build " + std::to_string(v.build.build) : "");
 	if (v.build.verdict == BuildVerdict::Ok)
-		out += "D2R: " + Utf8(v.d2rDir) + " (" + build + ")\n";
+		out += "D2R: " + Utf8(v.d2rDir) + " (" + found + ")\n";
 	else
-		out += "!D2R " + build + ": D2R-XL needs " + std::to_string(v.requiredBuild) +
-		       (v.build.verdict == BuildVerdict::Newer ? ". Wait for a D2R-XL update." : ". Update D2R in Battle.net.") + "\n";
+		out += "!D2R " + found + ": D2R-XL needs D2R " + v.requiredVersion +
+		       (v.build.verdict == BuildVerdict::Newer ? ". Wait for a D2R-XL update." : ". Update D2R in Battle.net or Steam.") + "\n";
 	if (v.loaderOk)
 		out += "D2RLoader: " + v.loaderFound + " (OK)\n";
 	else if (v.loaderFound.empty())
