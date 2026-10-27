@@ -5,6 +5,7 @@
 
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace mxl {
@@ -232,6 +233,15 @@ bool OfficialMedianXLPath(const std::string& path, const std::string& localAppDa
 		return true;
 	std::string p = NormPath(path) + "/";
 	return p.find("/diablo ii/") != std::string::npos;  // the classic game folder, wherever it is
+}
+
+bool IsGameProcessName(const std::string& exe) {
+	size_t slash = exe.find_last_of(R"(\/)");
+	std::string n = exe.substr(slash == std::string::npos ? 0 : slash + 1);
+	for (char& ch : n)
+		ch = char(std::tolower(static_cast<unsigned char>(ch)));
+	auto ends = [&](const char* tail) { size_t k = std::strlen(tail); return n.size() >= k && n.compare(n.size() - k, k, tail) == 0; };
+	return n == "d2r.exe" || (n.rfind("d2rloader", 0) == 0 && ends(".exe"));
 }
 
 }  // namespace mxl

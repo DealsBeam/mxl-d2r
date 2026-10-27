@@ -54,4 +54,8 @@ std::string GetTomlKey(const std::string& text, const std::string& section, cons
 // segment named "Diablo II"). Case-insensitive, '\' or '/'.
 bool OfficialMedianXLPath(const std::string& path, const std::string& localAppData, const std::string& roamingAppData);
 
+// True for the game's own processes, which hold the mod's files: D2R.exe and D2RLoader*.exe (case-insensitive, file name
+// or full path). Not the downloader, Battle.net's "Diablo II Resurrected Launcher.exe" or BlizzardError.exe.
+bool IsGameProcessName(const std::string& exe);
+
 }  // namespace mxl

@@ -462,6 +462,19 @@ void TestSevenZip() {
 }
 
 // docs/launcher.md "Coexisting with the official Median XL": the default folders never land in the official one's.
+void TestGameProcessName() {
+	Check(mxl::IsGameProcessName("D2R.exe"), "D2R.exe is the game");
+	Check(mxl::IsGameProcessName(R"(C:\Program Files (x86)\Diablo II Resurrected\d2r.EXE)"), "full path, any case");
+	Check(mxl::IsGameProcessName("D2RLoader.exe"), "D2RLoader.exe is the game");
+	Check(mxl::IsGameProcessName("D2RLoader-s2.exe"), "a slot's renamed loader is the game");
+	Check(!mxl::IsGameProcessName("D2R-XL-Downloader.exe"), "the downloader is not the game");
+	Check(!mxl::IsGameProcessName("D2R-XL-Launcher.exe"), "the 0.1.x launcher is not the game");
+	Check(!mxl::IsGameProcessName("Diablo II Resurrected Launcher.exe"), "Battle.net's launcher is not the game");
+	Check(!mxl::IsGameProcessName("BlizzardError.exe"), "the crash reporter is not the game");
+	Check(!mxl::IsGameProcessName("D2R.exe.bak"), "not an exe name");
+	Check(!mxl::IsGameProcessName(""), "empty");
+}
+
 void TestCoexist() {
 	const std::string bs(1, char(92));
 	const std::string local = "C:" + bs + "Users" + bs + "p" + bs + "AppData" + bs + "Local";
@@ -553,6 +566,7 @@ int main() {
 	TestPaths();
 	TestSevenZip();
 	TestCoexist();
+	TestGameProcessName();
 	TestToml();
 	TestSvg();
 	std::printf("%d checks, %d failures\n", checks, failures);

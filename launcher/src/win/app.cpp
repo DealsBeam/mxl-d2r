@@ -527,8 +527,8 @@ bool Launcher::SelfUpdate(std::string& error) {
 // folder writable. Then the marker goes in first, so a folder the downloader wrote into always carries it.
 bool Launcher::PrepareTarget(std::string& error) {
 	foreign_ = false;
-	if (!ProcessesUnder(d2rDir_).empty()) {
-		error = "D2R or D2RLoader is running from " + Utf8(d2rDir_) + ". Close the game first.";
+	if (auto running = ProcessesUnder(d2rDir_); !running.empty()) {
+		error = Utf8(running.front().exe.substr(running.front().exe.find_last_of(LR"(\/)") + 1)) + " is running from " + Utf8(d2rDir_) + ". Close the game first.";
 		return false;
 	}
 	std::wstring mod = ModDir();
@@ -1124,8 +1124,8 @@ bool Launcher::Uninstall(std::string& error) {
 		        ") of this installation, so the downloader did not install it.";
 		return false;
 	}
-	if (!ProcessesUnder(d2rDir_).empty()) {
-		error = "D2R or D2RLoader is running from " + Utf8(d2rDir_) + ". Close the game first.";
+	if (auto running = ProcessesUnder(d2rDir_); !running.empty()) {
+		error = Utf8(running.front().exe.substr(running.front().exe.find_last_of(LR"(\/)") + 1)) + " is running from " + Utf8(d2rDir_) + ". Close the game first.";
 		return false;
 	}
 	if (!PathUnder(mod, JoinPath(d2rDir_, L"mods")) || SamePath(mod, JoinPath(d2rDir_, L"mods"))) {

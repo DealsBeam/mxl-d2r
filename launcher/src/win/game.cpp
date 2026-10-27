@@ -1,6 +1,7 @@
 #include "game.h"
 
 #include "util.h"
+#include "../core/paths.h"
 
 #include <windows.h>
 #include <softpub.h>
@@ -195,7 +196,13 @@ std::vector<GameProcess> ProcessesUnder(const std::wstring& dir) {
 		return out;
 	PROCESSENTRY32W pe{};
 	pe.dwSize = sizeof(pe);
+	const DWORD self = GetCurrentProcessId();
 	for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe)) {
+		// Only the game counts: D2R.exe and D2RLoader*.exe (slots run renamed copies like D2RLoader-s2.exe). The
+		// downloader itself (players do save it into the D2R folder), Battle.net's "Diablo II Resurrected Launcher.exe",
+		// BlizzardError.exe and the like do not hold the mod's files.
+		if (pe.th32ProcessID == self || !IsGameProcessName(Utf8(pe.szExeFile)))
+			continue;
 		HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
 		if (!p)
 			continue;
