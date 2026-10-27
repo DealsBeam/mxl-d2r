@@ -74,6 +74,8 @@ there load with every mod) and from the mod folders. D2R-XL will add the feature
 `mxl` console command lists the other plugins it finds (`other plugins: ...`), and so does `d2rloader/logs/d2rloader.log`
 (the `[PLUGIN]` lines).
 
+What changed in each version: [CHANGELOG.md](CHANGELOG.md) (also on the [Releases](https://github.com/Nugwa628/mxl-d2r/releases) page).
+
 ## Reporting bugs
 
 Open an issue on [GitHub](https://github.com/Nugwa628/mxl-d2r/issues/new/choose) and pick a form:
