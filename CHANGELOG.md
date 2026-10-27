@@ -8,6 +8,10 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
 
 ## D2R-XL
 
+### 0.69.13 (2026-10-27)
+- **Fixed: Abyss Knights use their void blast again** instead of only hitting in melee. As in Median, the Guardian Spirit,
+  the Mana Tide and Elemental totems, and the Sinner, Frostwalker and Glowing Fungus summons also fight as ranged pets. ([#59](docs/bugs.md))
+
 ### 0.69.12 (2026-10-27)
 - **Fixed: Night Hawks explode again.** A hawk that hits now dies and explodes, as in Median. ([#58](docs/bugs.md))
 - **Median's "cast on death" effects work.** Monsters with a death effect (248 rows in Median's monster property table)

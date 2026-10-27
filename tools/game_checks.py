@@ -2535,7 +2535,9 @@ def check_abyssknight():
     """Bug #59: the Necromancer's Abyss Knights (skill abyss_knight, the plugin's multi-summon srvdofunc 172; monster abyss_knight,
     AI NecroPet, Skill1 abyss_knight_skill in mode S1) hit in melee and never used their AoE (abyss_knight_skill, srvdofunc 28,
     missile abyss_knight_skill_missile). Summons them in the Blood Moor, puts monsters a few yards away for 25 s, samples the
-    knights' modes (4 attack1 = melee, 8 skill1 = the AoE) and counts the skill's missiles."""
+    knights' modes (4 attack1 = melee, 8 skill1 = the AoE) and counts the skill's missiles. The cause: D2Sigma marks pets of a
+    multi-summon skill with Param7 as ranged pets (AI control +0x14), which sends NecroPet to its ranged branch; mxl-core does it
+    in sigma_skills.cpp (off word `rangedpets`). With `MXL_CONTROL=rangedpets` the knights must melee as before (no skill1)."""
     nm = "Abyss Knights use their ranged AoE (bug #59): skill1 mode and abyss_knight_skill_missile while monsters stand at range"
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
@@ -2546,6 +2548,7 @@ def check_abyssknight():
     if sid is None or kcls is None or mis is None:
         return add(nm, "FAIL", "no abyss_knight skill / monstats row / abyss_knight_skill_missile row")
     rows, bad, log = [], [], []
+    control = _ctl("rangedpets")
     cls0 = hstate()["player"].get("class") or 0
     H("class 2")  # Necromancer
     try:
@@ -2595,9 +2598,12 @@ def check_abyssknight():
                 line = "forced cast: %s | %s" % (" | ".join(fl[-1:]), next((l for l in ml2 if l.startswith("missiles live=")), ""))
                 rows.append(line[:400])
                 log.append(line)
-        if not nmis:
+        if control:
+            if s1 or not a1:
+                bad.append("control (rangedpets off): expected melee only, got skill1 %d / attack1 %d samples" % (s1, a1))
+        elif not nmis:
             bad.append("no abyss_knight_skill_missile was made")
-        if s1 == 0:
+        elif s1 == 0:
             bad.append("the knights never entered skill1 (the AoE)")
         elif a1 > s1:
             bad.append("melee (%d samples) outweighs the AoE (%d samples)" % (a1, s1))
@@ -2608,7 +2614,8 @@ def check_abyssknight():
     finally:
         god(False)
         H("class %d" % cls0)
-    add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:2400], [sh("abyssknight")], log)
+    add(nm + (" CONTROL (rangedpets off)" if control else ""), "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:2400],
+        [sh("abyssknight")], log)
 
 
 def check_warprevisit():

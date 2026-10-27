@@ -1336,3 +1336,15 @@ Data only (tools/txt_migrate.py `raven_counts`), no plugin change, no version bu
 | nodurabilityui | no repair button at Charsi, no durability line | **PASS** (`checks-20261027-122117-s2`; #39 as Median) |
 
 Also run: `py -3 tools/validate.py` (errors 0, rotw warnings 102 as before), `py -3 tools/test_game_checks_names.py`.
+
+### Lane abyss-knight (2026-10-27): bug #59, Abyss Knights melee (plugin 0.69.13)
+
+Necromancer AbyssKnt, Abyss Knight level 20, monsters spawned 9 yards away, the knights' modes sampled for 25 s.
+
+| Check | What | Result |
+|---|---|---|
+| abyssknight (new) | knights in skill1 (8, the void blast) more often than attack1 (4), `abyss_knight_skill_missile` made; with `MXL_CONTROL=rangedpets` melee only | before the fix (0.69.10 code, dev): modes {1: 58, 2: 81, 4: 101}, 0 missiles; a forced `mcast` in S1 made the missile (the skill works, the AI never picked it). Dev slot 2: **PASS** `checks-20261027-180606-s2` {1: 101, 2: 38, 8: 93}, 65 missiles; control **PASS** `checks-20261027-180946-s2` {1: 65, 2: 78, 4: 89}, 0 missiles. Release install (tools/release_install.py, slot 2, dev DLL): **PASS** `checks-20261027-181233-s2` {1: 95, 2: 14, 8: 115}, 71 missiles; control **PASS** `checks-20261027-181404-s2` {4: 108}, 0 missiles |
+| mxl | `ranged pets on (marked N)` line | **PASS** (all four runs) |
+
+Also run: `py -3 tools/validate.py` (errors 0), the twelve C++ test executables (all pass), `compileall`, `check_public.py`.
+Each launch leaves a first-chance access violation report in `d2rloader\crashes` (3733 bytes). It came with the pre-fix plugin too and the game kept running.

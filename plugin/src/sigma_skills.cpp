@@ -140,6 +140,33 @@ auto SrvDoMissileBarrage(Game* game, Unit* unit, int32_t skillId, int32_t level)
 	return 1;
 }
 
+// D2Sigma's sumskill loop (0x10067940, called only by 153) first marks the pet as a ranged pet when the summon skill's
+// Param7 is set: AI control +0x14 = 1, +0x18 = 0 (1.13), here +0x44 / +0x48 (D2R's control is 0x30 bigger in front).
+// NecroPet (AI 67, D2R think 0x5c1400 = 1.13 0x6fc3e900) then takes its ranged branch (0x5c1b20 = 0x6fc3e3d0) instead of
+// the melee one that only attacks in A1: Abyss Knight (bug #59), Guardian Spirit, the Mana Tide and Elemental totems,
+// Sinner, Frostwalker, Glowing Fungus. Off word: rangedpets.
+constexpr int SkParam7 = 0x1d0;       // int32 Param7 (Param1 at 0x1b8)
+constexpr int UnitDataPtr = 0x10;     // monster data
+constexpr int MonAiControl = 0x30;    // monster data -> AI control
+constexpr int AiCtlRanged = 0x44;     // int32: NecroPet's branch
+constexpr int AiCtlRangedArg = 0x48;
+bool g_rangedPets = true;
+long g_rangedPetsSet = 0;
+
+auto MarkRangedPet(Unit* pet, const uint8_t* skill) noexcept -> void {
+	if (!g_rangedPets || At<int32_t>(skill, SkParam7) == 0 || At<int32_t>(pet, d2r::UnitType) != 1) {
+		return;
+	}
+	uint8_t* data = At<uint8_t*>(pet, UnitDataPtr);
+	uint8_t* ctl = data != nullptr ? At<uint8_t*>(data, MonAiControl) : nullptr;
+	if (ctl == nullptr) {
+		return;
+	}
+	*reinterpret_cast<int32_t*>(ctl + AiCtlRanged) = 1;
+	*reinterpret_cast<int32_t*>(ctl + AiCtlRangedArg) = 0;
+	++g_rangedPetsSet;
+}
+
 // D2Sigma 153 (0x100ad720) -> 172: several pets per cast. min(calc2, petmax) pets of the skill's summon/summode/
 // pettype; at the skill target when it lies within aurarangecalc (a squared distance) of the caster, else at the
 // caster. blood_skeleton, ice_elementals, fire_elementals, the Barbarian spirits, the totems and 35 more.
@@ -190,6 +217,7 @@ auto SrvDoMultiSummon(Game* game, Unit* unit, int32_t skillId, int32_t level) no
 		d2r::api.setPetLevel(game, unit, pet, 0, level);
 		ScalePet(game, unit, pet, skillId, level);
 		d2r::api.petSkillStats(game, unit, pet, skillId, level, At<int32_t>(unit, d2r::UnitArg12c), 0);
+		MarkRangedPet(pet, skill);
 		d2r::api.addPetToParty(game, pet, 0, At<int32_t>(unit, d2r::UnitArg130));
 	}
 	return 1;
@@ -733,4 +761,13 @@ auto SigmaSkillCounters(long* fanCasts, long* fanMeleeHits, long* hammerCasts, l
 
 auto SigmaSkillCount() noexcept -> int {
 	return static_cast<int>(sizeof(Functions) / sizeof(Functions[0]) + sizeof(ClientFunctions) / sizeof(ClientFunctions[0]) + 5);
+}
+
+auto SetRangedPets(bool on) noexcept -> void {
+	g_rangedPets = on;
+}
+
+auto RangedPetCounts(long* set) noexcept -> bool {
+	*set = g_rangedPetsSet;
+	return g_rangedPets;
 }

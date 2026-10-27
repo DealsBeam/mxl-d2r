@@ -92,7 +92,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.69.12";
+constexpr const char* PluginVersion = "0.69.13";
 constexpr uint32_t ExpectedImage = build_guard::ExpectedImage;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 #ifdef MXL_RELEASE
 constexpr const char* BuildKind = "release";  // cmake -DMXL_RELEASE=ON: no test harness compiled in
@@ -211,7 +211,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 char g_wrongBuild[256] = "";  // the message for a player on another build, empty on build 93847
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock mediantowns statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard otherplugins envguard soundguard deathevent
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock mediantowns statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard otherplugins envguard soundguard deathevent rangedpets
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -549,6 +549,12 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		Say(command, line);
 	}
 	{
+		long set = 0;
+		const bool on = RangedPetCounts(&set);
+		std::snprintf(line, sizeof(line), "ranged pets %s (marked %ld)", on ? "on" : "off: left out by mxl-core-off.txt", set);
+		Say(command, line);
+	}
+	{
 		long starts = 0, reduced = 0, shared = 0, dropped = 0, monsters = 0;
 		char report[360];
 		if (CooldownCounts(&starts, &reduced, &shared, &dropped, &monsters)) {
@@ -829,6 +835,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		}
 		std::snprintf(line, sizeof(line), "mxl-core: calc codes %s", g_calcReport);
 		context->LogInfo(line);
+		SetRangedPets(!Off("rangedpets"));
 		if (Off("skills")) {
 			std::snprintf(g_skillsReport, sizeof(g_skillsReport), " %s", OffNote);
 		} else {

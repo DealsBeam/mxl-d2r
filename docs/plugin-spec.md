@@ -106,6 +106,19 @@ caster. After each pet: `0x100683d0` (D2Hirelings.cpp, Median's minion scaling; 
 D2R `0x58d950`), `0x10049c00(owner, 0x200b, 1)` (D2Achievements.cpp counter; skipped). The plugin also sets the pet
 level with D2R's `0x55fb50` as D2R's Raise Skeleton does (level = the owner's level, as D2Sigma's step 2).
 
+**Ranged pets** (mxl-core 0.69.13, bug #59, off word `rangedpets`). `0x10067940` first checks the summon skill's Param7
+(1.13c +0x160, D2R +0x1d0). When it is set, the pet's AI control (1.13c monster data +0x28; D2R unit +0x10 -> +0x30) gets
++0x14 = 1, +0x18 = 0 (D2R +0x44 / +0x48: D2R's control is 0x30 longer in front, e.g. 1.13c +0x1c is D2R +0x4c).
+NecroPet (AI 67; think 1.13c `0x6fc3e900` = D2R `0x5c1400`) branches on that field. When it is 0, NecroPet takes the
+melee branch (`0x6fc3e640` = `0x5c1080`), which attacks only in A1. When it is 1, it takes the ranged branch
+(`0x6fc3e3d0` = `0x5c1b20`). Skills on 153 with Param7 set:
+- Abyss Knight (Skill1 on S1)
+- Guardian Spirit
+- Mana Tide Totem and Elemental Totem
+- Summon Sinner, Frostwalker and Glowing Fungus
+
+`mxl` prints `ranged pets on (marked N)`.
+
 **Minion scaling** (`0x100683d0` (game, owner, pet, skill, level); mxl-core 0.15.0, `pet_scaling.cpp`). 1.13c skills
 record: calc1 +0x138, Param3/4/5 +0x150/+0x154/+0x158 (D2R +0x1c0/+0x1c4/+0x1c8). D2Common 10887 sets a unit stat
 (D2R `0x2f7d10`), 10551 adds (D2R `0x2f34f0`).
