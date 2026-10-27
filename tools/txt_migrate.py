@@ -1764,7 +1764,12 @@ class Migrator:
           mlvl (a per-skill number) and skcn (a per-skill formula: Specialization bonuses, skills that lock each
           other) come from skills2 (work/formulas/skill_caps.txt, tools/formula.py) and are written in; skcp (items'
           "+N to the maximum level of this skill") stays as a skillcalc row the mxl-core plugin answers.
-        - rightskill: D2Sigma's own skill picker ignored it, D2R's honours it; active class skills get 1.
+        - rightskill: D2Sigma's own skill picker ignored it, D2R's honours it; active class skills get 1, and so do
+          the active innate skills charstats.txt gives every class (Skill 1-10 / StartSkill: Median's rows have no
+          charclass, so the class rule misses them; D2R's own rows such as Kick keep theirs). Without it
+          bend_the_shadows (the Necromancer's warp) could only be the left skill, where its TargetableOnly turns a
+          click on the ground into a walk and Quick Cast does nothing (bug #57), and mana_shield,
+          titan_s_fortitude, mark_of_the_wild_2 and vindicate_2 (neither column set) could not be selected at all.
         - srvdofunc 153-171 are D2Sigma's added skill functions, but D2R's own table (0x238ea00, 191 slots, bound
           0xbe) already uses 153-171 for its newer skills. They move to the free slots 172-190 (+19), where the
           mxl-core plugin installs D2Sigma's functions (docs/plugin-spec.md); until it does, those skills do
@@ -1831,6 +1836,10 @@ class Migrator:
             d2r_clt = {(r[0], r[dh.index("cltdofunc")]) for r in drows}
             d2r_start = {(r[0], r[dh.index("srvstfunc")]) for r in drows}
             sp, ml, cc = h.index("skpoints"), h.index("maxlvl"), h.index("charclass")
+            ch, crows = read_tsv(p.with_name("charstats.txt")) if p.with_name("charstats.txt").exists() else ([], [])
+            innate = {r[i] for r in crows for i, k in enumerate(ch)
+                      if (k.startswith("Skill ") or k == "StartSkill") and i < len(r) and r[i]}
+            d2r_names = {r[0] for r in drows}
             c9, c10 = h.index("calc9"), h.index("calc10")
             rs, pa, do = h.index("rightskill"), h.index("passive"), h.index("srvdofunc")
             arc, cdo = h.index("aurarangecalc"), h.index("cltdofunc")
@@ -1873,7 +1882,7 @@ class Migrator:
                     n_stop += 1
                 if r[cdo] in clt_stop and r[cs] in ("", "0"):
                     r[cs] = clt_stop[r[cdo]]
-                if r[cc] and r[pa] != "1" and r[rs] in ("", "0"):
+                if (r[cc] or (r[0] in innate and r[0] not in d2r_names)) and r[pa] != "1" and r[rs] in ("", "0"):
                     r[rs] = "1"
                     n_right += 1
                 if r[cdo] in clt_moved and (r[0], r[cdo]) not in d2r_clt:
@@ -1911,7 +1920,7 @@ class Migrator:
             write_tsv(p, h, rows)
             if bank == "base":
                 self.report.append(f"\nskills (D2Sigma rules): {n_cap} skpoints formulas with Median's skill caps "
-                                   f"written in (mlvl, skcn; skcp from the plugin);{n_right} active class skills -> rightskill 1; "
+                                   f"written in (mlvl, skcn; skcp from the plugin);{n_right} active class and innate skills -> rightskill 1; "
                                    f"{n_moved} skills with D2Sigma srvdofunc {sigma_first}-{sigma_last} -> +{shift}; "
                                    f"{n_ranged} teleports with a range / layered buffs -> 179/174/180; "
                                    f"{n_start} skills with D2Sigma srvstfunc 30 / 66 -> 71 / 72; "

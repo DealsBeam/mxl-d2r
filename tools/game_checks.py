@@ -9115,6 +9115,81 @@ def check_teleportgold():
     add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
 
 
+def check_bendshadows():
+    """Bend the Shadows (bug #57): the Necromancer's innate warp (charstats Skill 6; skill 1449 = Median 1377, srvdofunc 27 ->
+    plugin slot 179 SrvDoRangedTeleport, range 14, 25 mana, cooldown group 1). Its row is leftskill-only with TargetableOnly 1, so
+    as a left skill a plain click on the ground walks and Quick Cast does nothing; D2Sigma's skill picker ignored left/rightskill, so
+    in Median it also sat on the right button, where a ground click casts. txt_migrate gives the active innate skills rightskill 1.
+    Checks: the server cast moves the character to the point (the effect); the game selects it as the right skill; a right click on the
+    ground (background mouse) warps and costs mana; Shift + left click warps too (a left click on a monster is logged only); the other innate skills
+    that had neither column (mana_shield, titan_s_fortitude, mark_of_the_wild_2, vindicate_2) can be selected as the right skill."""
+    name = "Bend the Shadows: the Necromancer's warp, on the right button too (#57)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    fight_ready()
+    kill_all_near()
+    rows, bad, log = [], [], []
+    cls0 = hstate()["player"].get("class", 4)
+    H("setskill 1449 1")
+    H("class 2")  # the Necromancer, whose innate skill it is; a level-1 Necromancer has 75 mana, the cost is 25
+    setstat("player", 9, 200 * 256)
+
+    def warp(label, fn, want=True, wait=0.6):
+        """Cooldown cleared and mana full, then `fn`; the character must (or must not) move and pay the mana."""
+        H("stat player 359 1449 set 0")
+        setstat("player", 8, 200 * 256)
+        time.sleep(0.3)
+        p0 = hstate()["player"]
+        out = fn(p0)
+        time.sleep(wait)
+        p1 = hstate()["player"]
+        a, b = (p0["x"], p0["y"]), (p1["x"], p1["y"])
+        dist = ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+        rows.append("%s: %s -> %s (%.0f) %s" % (label, a, b, dist, out))
+        if want and dist < 2:
+            bad.append("%s: the character did not move" % label)
+        time.sleep(2.5)  # the cooldown of group 1 (55 frames) and the cast mode run out
+        return a, b, out
+
+    H("skill left 1449")
+    usable = _skill_usable(1449)
+    rows.append("usable code %s" % usable)
+    if usable != 0:
+        bad.append("skill 1449 is not usable (code %s)" % usable)
+    for dx, dy in ((10, 0), (0, 10)):
+        a, b, out = warp("server cast at +%d,+%d" % (dx, dy), lambda p0: " | ".join(H("cast 1449 %d %d" % (p0["x"] + dx, p0["y"] + dy))[1])[-90:])
+        if b != (a[0] + dx, a[1] + dy):
+            bad.append("server cast at +%d,+%d: arrived at %s, not the point" % (dx, dy, b))
+    right = " ".join(H("skill right 1449")[1])
+    rows.append("right skill: %s" % right[-60:])
+    if "active now 1449" not in right:
+        bad.append("the game does not take Bend the Shadows as the right skill: %s" % right[-80:])
+    else:
+        _a, _b, r = warp("right click on the ground", lambda p0: _ground_click(0.62, 0.45, False, "right"))
+        if not r or r[4] - r[5] < 20 * 256:
+            bad.append("right click on the ground: no mana paid (modewatch %s)" % (r,))
+    warp("Shift + left click on the ground", lambda p0: _ground_click(0.62, 0.45, True))
+    mid = spawn_id(5)
+    if mid is not None:
+        time.sleep(1.0)
+        st = hstate()
+        mons = [m for m in st["mons"] if m["id"] == mid]
+        if mons:
+            fx, fy = _mon_screen(st["player"], mons[0])
+            warp("left click on a monster (information: the cursor can miss a walking zombie)", lambda p0: _ground_click(fx / 1600, fy / 900, False), want=False)
+    for sid, sname in ((1633, "mana_shield"), (1270, "titan_s_fortitude"), (1363, "mark_of_the_wild_2"), (1547, "vindicate_2")):
+        H("setskill %d 1" % sid)
+        line = " ".join(H("skill right %d" % sid)[1])
+        rows.append("%s as the right skill: %s" % (sname, line[-40:]))
+        if "active now %d" % sid not in line:
+            bad.append("%s (%d) cannot be selected as the right skill" % (sname, sid))
+    H("skill right 0")
+    H("skill left 0")
+    H("class %d" % cls0)
+    log += rows
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+
 def _skill_usable(skill):
     """`h skills` -> the usable code of one skill (0 usable, 1 not enough mana, ...) or None."""
     for ln in H("skills")[1]:
@@ -9284,7 +9359,7 @@ def _modewatch():
     return tuple(int(x) for x in m.groups()) if m else None
 
 
-def _ground_click(fx, fy, shift):
+def _ground_click(fx, fy, shift, button="left"):
     """One left click on the ground in the game window (background input; Shift held as a window message state), watched by
     `modewatch`: the player unit's attack / walk modes and the lowest mana during the following second."""
     h = g.need_window()
@@ -9295,7 +9370,7 @@ def _ground_click(fx, fy, shift):
         g._set_mods(("shift",))
         g._post_key(h, "shift", False)
         time.sleep(0.1)
-    g.click_bg(fx, fy)
+    g.click_bg(fx, fy, button)
     time.sleep(1.0)
     if shift:
         g._post_key(h, "shift", True)
@@ -13792,7 +13867,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
           ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("goblincrash", check_goblincrash), ("skillicons", check_skillicons), ("releasetables", check_releasetables), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
-          ("ied", check_ied), ("iedtip", check_iedtip)]
+          ("ied", check_ied), ("iedtip", check_iedtip), ("bendshadows", check_bendshadows)]
 
 
 def write_report(extra=""):
