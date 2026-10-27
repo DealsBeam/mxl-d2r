@@ -65,6 +65,15 @@ Manual install: each release also has a `.7z` file (`D2R-XL-<version>.7z`, about
 into the `mods` folder of your D2R install and follow step 3. Steps and the file layout are in
 [docs/release.md](docs/release.md).
 
+## Known conflicts
+
+D2R-XL does not support other gameplay plugins for D2RLoader. Plugins that change skills, missiles, vendors or quests
+(for example **pSpell**, **vendor refresh** plugins and **Qual-Kehk** plugins) hook the same game code as D2R-XL's core
+plugin and can crash the game. Disable them while you play D2R-XL: remove them from `<D2R>\d2rloader\plugins` (plugins
+there load with every mod) and from the mod folders. D2R-XL will add the features of these plugins itself later. The
+`mxl` console command lists the other plugins it finds (`other plugins: ...`), and so does `d2rloader/logs/d2rloader.log`
+(the `[PLUGIN]` lines).
+
 ## Reporting bugs
 
 Open an issue on [GitHub](https://github.com/Nugwa628/mxl-d2r/issues/new/choose) and pick a form:

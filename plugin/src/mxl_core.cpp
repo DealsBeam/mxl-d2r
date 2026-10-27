@@ -76,8 +76,10 @@
 #include "collide_types.h"
 #include "skill_starts.h"
 #include "whirlwind.h"
+#include "other_plugins_logic.h"
 
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <cctype>
 #include <cstddef>
@@ -87,7 +89,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.69.5";
+constexpr const char* PluginVersion = "0.69.6";
 constexpr uint32_t ExpectedImage = build_guard::ExpectedImage;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 #ifdef MXL_RELEASE
 constexpr const char* BuildKind = "release";  // cmake -DMXL_RELEASE=ON: no test harness compiled in
@@ -204,7 +206,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 char g_wrongBuild[256] = "";  // the message for a player on another build, empty on build 93847
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock mediantowns statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock mediantowns statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard otherplugins
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -250,6 +252,56 @@ void Say(const D2RL::ConsoleCommandContext* command, const char* text) noexcept 
 	HarnessEcho(text);
 }
 
+// The other D2RLoader plugins loaded into this process (modules under a ...\d2rloader\plugins\ folder, mod or game-wide;
+// other_plugins_logic.h). Read when `mxl` runs: the game-wide plugins load after the mod's, so at our load they are not there yet.
+void OtherPlugins(char* out, size_t n) noexcept {
+	std::snprintf(out, n, "other plugins: none");
+	HMODULE self = nullptr;
+	GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	                   reinterpret_cast<LPCWSTR>(&OtherPlugins), &self);
+	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+	if (snap == INVALID_HANDLE_VALUE) {
+		std::snprintf(out, n, "other plugins: not readable (module snapshot failed, error %lu)", GetLastError());
+		return;
+	}
+	MODULEENTRY32W me{};
+	me.dwSize = sizeof(me);
+	int found = 0;
+	size_t len = std::strlen("other plugins:");
+	for (BOOL ok = Module32FirstW(snap, &me); ok; ok = Module32NextW(snap, &me)) {
+		char path[MAX_PATH * 3];
+		char label[160];
+		if (me.hModule == self || WideCharToMultiByte(CP_UTF8, 0, me.szExePath, -1, path, sizeof(path), nullptr, nullptr) <= 0 ||
+		    !other_plugins::Label(path, label, sizeof(label))) {
+			continue;
+		}
+		const int w = std::snprintf(out + len, len < n ? n - len : 0, "%s %s", found ? "," : "", label);
+		len += w > 0 ? static_cast<size_t>(w) : 0;
+		++found;
+		if (len >= n) {
+			break;
+		}
+	}
+	CloseHandle(snap);
+	if (found == 0) {
+		std::snprintf(out, n, "other plugins: none");
+	}
+}
+
+// Start-up log line of the other plugins: D2RLoader loads the game-wide plugins after the mod's, so a one-shot thread waits
+// until the loader is done (its plugin list is in d2rloader.log too).
+DWORD WINAPI LogOtherPluginsLater(LPVOID) {
+	Sleep(15000);
+	char line[384];
+	OtherPlugins(line, sizeof(line));
+	if (g_context != nullptr) {
+		char msg[400];
+		std::snprintf(msg, sizeof(msg), "mxl-core: %s", line);
+		g_context->LogInfo(msg);
+	}
+	return 0;
+}
+
 auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* command, void* userData) noexcept
 	-> D2RL::ConsoleCommandResult {
 	(void)client;
@@ -263,6 +315,11 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 	              ExpectedImage, BuildMatches(g_context) ? "match" : "MISMATCH, hooks off",
 	              static_cast<unsigned long long>(g_context->exeBase));
 	Say(command, line);
+	if (!Off("otherplugins")) {
+		OtherPlugins(line, sizeof(line));
+		Say(command, line);
+		g_context->LogInfo(line);  // also in mxl-core.log, for crash reports
+	}
 	if (g_wrongBuild[0] != '\0') {
 		Say(command, g_wrongBuild);
 		return D2RL::ConsoleCommandResult::Handled;  // nothing below was installed
@@ -586,6 +643,11 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	}
 	{
 		ReadOffList();
+		if (!Off("otherplugins")) {
+			if (HANDLE t = CreateThread(nullptr, 0, LogOtherPluginsLater, nullptr, 0, nullptr)) {
+				CloseHandle(t);
+			}
+		}
 		if (g_offList[0] != '\0') {
 			std::snprintf(line, sizeof(line), "mxl-core: mxl-core-off.txt leaves out: %s", g_offList);
 			context->LogInfo(line);

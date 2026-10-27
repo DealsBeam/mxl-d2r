@@ -12936,6 +12936,180 @@ def check_morphdeath():
     add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad), [], log)
 
 
+# ------------------------------------------------------------------ bug #42: the Den of Evil boss (lane den-crash)
+
+DEN_OF_EVIL = 8
+# Median's superunique in Corpsefire's slot (superuniques row 40 `CorruptedNecro`): monstats corrupted_necromancer_16 (class 2833, code #I,
+# HD stand-in skmage_cold1 x2.1: the "Leoric" look), A1 missile corrupted_necromancer_16_mi (bone spear, sub missile: glacial spikes),
+# Skill1 SkeletonRaise; its minion enslaved_demon (2834, bighead) brings skeleton_warrior_5 (2832).
+DEN_BOSS = 2833
+DEN_BOSS_PARTY = (2834, 2832)
+DEN_BOSS_RAISE = (158, 14)  # its Skill1 SkeletonRaise, Sk1mode seq_skeletonraise (the SQ sequence mode)
+
+
+def graphics_mode():
+    """'legacy' when the capture is pillarboxed (legacy graphics draw 4:3 with black side bars), else 'hd'. Only reliable in a lit
+    area (the town): in a dark cave HD's own edges are black too."""
+    import numpy as np
+    a = grab()
+    h, w, _ = a.shape
+    bars = np.concatenate([a[:, : w // 10], a[:, w - w // 10:]], axis=1)
+    return "legacy" if float(bars.mean()) < 6.0 else "hd"
+
+
+def set_graphics(mode, tries=3):
+    """G toggles legacy / HD graphics (a posted key, background mode). Call it in the town (see graphics_mode)."""
+    for _ in range(tries):
+        if graphics_mode() == mode:
+            return True
+        g.press_bg("g", hold=0.1)
+        time.sleep(4.0)
+    return graphics_mode() == mode
+
+
+def game_alive():
+    return bool(g.game_pids()) and hstate()["ok"]
+
+
+def _den_find_boss(seconds):
+    """Crawl through the Den of Evil until its own superunique is within `h state`'s reach: run to the nearest monster, kill it, repeat
+    (the monsters of the next rooms come into reach as the player goes); when none is in reach, run a stretch in one of eight directions."""
+    t0 = time.time()
+    st = hstate()
+    dirs = [(40, 0), (0, 40), (-40, 0), (0, -40), (30, 30), (-30, -30), (30, -30), (-30, 30)]
+    k = 0
+    while time.time() - t0 < seconds and st["ok"]:
+        boss = [m for m in st["mons"] if m.get("class") == DEN_BOSS]
+        if boss:
+            return boss[0], st
+        live = [m for m in st["mons"] if not m.get("npc") and m.get("mode") not in (0, 12)]
+        if live:
+            far = max(live, key=lambda m: m.get("dist", 0))  # the farthest one in reach pulls the player on into new rooms
+            H("moveto %d" % far["id"])
+            time.sleep(3.0)
+            for m in live:
+                H("kill %d" % m["id"])
+        else:
+            p = st["player"]
+            dx, dy = dirs[k % len(dirs)]
+            k += 1
+            H("move %d %d" % (p.get("x", 0) + dx, p.get("y", 0) + dy))
+            time.sleep(3.0)
+        st = hstate()
+    boss = [m for m in st["mons"] if m.get("class") == DEN_BOSS]
+    return (boss[0] if boss else None), st
+
+
+def _spawn_near(cls, st):
+    """`h spawn` at the first free spot around the player (the default spot, 6 right / 6 down, can be outside the room by a wall)."""
+    p = st["player"]
+    for dx, dy in ((6, 6), (-6, 6), (6, -6), (-6, -6), (4, 0), (0, 4), (-4, 0), (0, -4), (10, 0), (0, 10), (-10, 0), (0, -10)):
+        ok, _l = H("spawn %d 1 %d %d" % (cls, p.get("x", 0) + dx, p.get("y", 0) + dy))
+        if ok:
+            return True
+    return False
+
+
+def _den_fight(mode, seconds, rows, bad, shots):
+    """One round: the boss (the Den's own when it is in reach, else spawned with its party) attacks the god-mode player for `seconds`,
+    then it is killed. The game must stay up and the boss must die."""
+    goto(1)
+    close_menu()
+    if not set_graphics(mode):
+        rows.append("%s: G did not switch the graphics (the town capture says %s)" % (mode, graphics_mode()))
+        return
+    shots.append(sh("denboss_town_%s" % mode))
+    if goto(DEN_OF_EVIL)["player"].get("area") != DEN_OF_EVIL:
+        bad.append("%s: the character did not reach the Den of Evil" % mode)
+        return
+    boss, st = _den_find_boss(int(os.environ.get("MXL_DENBOSS_SEARCH", "30")))
+    how = "the Den's own superunique"
+    if boss is None:
+        known = {m.get("id") for m in st["mons"]}
+        _spawn_near(DEN_BOSS, st)
+        for c in DEN_BOSS_PARTY:
+            _spawn_near(c, st)
+        time.sleep(2.0)
+        st = hstate()
+        boss = next((m for m in st["mons"] if m.get("class") == DEN_BOSS and m.get("id") not in known), None)
+        how = "spawned (class %d and its party %s)" % (DEN_BOSS, list(DEN_BOSS_PARTY))
+    if boss is None:
+        bad.append("%s: no boss (class %d) in reach and the spawn made none" % (mode, DEN_BOSS))
+        return
+    H("moveto %d" % boss["id"])
+    t0, seen_modes, raised = time.time(), set(), None
+    while time.time() - t0 < seconds:
+        time.sleep(2.0)
+        if raised is None and time.time() - t0 > seconds / 2:  # its Skill1 needs a corpse: kill one of the party, then make it cast
+            minion = next((m for m in hstate()["mons"] if m.get("class") in DEN_BOSS_PARTY and m.get("mode") not in (0, 12)), None)
+            if minion:
+                H("kill %d" % minion["id"])
+                time.sleep(1.0)
+            ok, l_c = H("mcast %d %d unit %d" % (DEN_BOSS_RAISE[0], DEN_BOSS_RAISE[1], boss["id"]))
+            raised = "SkeletonRaise cast %s" % ("answered" if ok else "refused (%s)" % " ".join(l_c)[-80:])
+        if not game_alive():
+            bad.append("%s: the game died %.0f s into the fight (%s)" % (mode, time.time() - t0, how))
+            return
+        st = hstate()
+        for m in st["mons"]:
+            if m.get("id") == boss["id"]:
+                seen_modes.add(m.get("mode"))
+    shots.append(sh("denboss_%s" % mode))
+    H("kill %d" % boss["id"])
+    time.sleep(2.0)
+    if not game_alive():
+        bad.append("%s: the game died at the kill" % mode)
+        return
+    alive = [m for m in hstate()["mons"] if m.get("id") == boss["id"] and m.get("mode") not in (0, 12)]
+    if alive:
+        bad.append("%s: the boss is still alive after `kill`" % mode)
+    rows.append("%s: boss %s id %s, %d s next to the player, %s, modes seen %s, killed %s" % (
+        mode, how, boss["id"], seconds, raised or "SkeletonRaise not cast", sorted(x for x in seen_modes if x is not None), "yes" if not alive else "NO"))
+    clean_area()
+
+
+def check_denboss():
+    """Bug #42: hard crash at the Den of Evil boss. The boss (class 2833) attacks a god-mode player for MXL_DENBOSS_SECS seconds (default 30)
+    in HD and in legacy graphics (G), then it is killed: the game must stay up (no new crash report), the boss must die, no new assert."""
+    nm = "Den of Evil boss (bug #42): it fights for a while in HD and legacy graphics, no crash, killable"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    secs = int(os.environ.get("MXL_DENBOSS_SECS", "30"))
+    revive_if_dead()
+    enable_debug()
+    crashes0 = sorted(os.listdir(g.CRASH_DIR)) if os.path.isdir(g.CRASH_DIR) else []
+    mark = log_mark()
+    god(True)
+    rows, bad, shots = [], [], []
+    goto(1)
+    start_mode = graphics_mode()
+    for mode in ("hd", "legacy"):
+        _den_fight(mode, secs, rows, bad, shots)
+        if not game_alive():
+            break
+    if len([r for r in rows if "killed yes" in r]) < 2 and not bad:
+        bad.append("not both graphics modes were fought")
+    if game_alive():
+        goto(1)
+        set_graphics(start_mode)
+        god(False)
+    crashes = [c for c in (sorted(os.listdir(g.CRASH_DIR)) if os.path.isdir(g.CRASH_DIR) else []) if c not in crashes0]
+    if crashes:
+        bad.append("new crash files: %s" % crashes[:4])
+    asserts = sorted(set(assertions_since(mark)))
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(rows) + ("; asserts in d2rloader.log: %s" % asserts[:4] if asserts else "; no new assert") +
+        (("; PROBLEMS: " + "; ".join(bad)) if bad else ""), shots, rows)
+
+
+def check_otherplugins():
+    """`mxl` names the other D2RLoader plugins of the process (bug #44; a test slot has none)."""
+    nm = "`mxl` names the other loaded D2RLoader plugins"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    line = _mxl_line("other plugins")
+    add(nm, "PASS" if line.startswith("other plugins:") else "FAIL", line or "no `other plugins` line in `mxl`")
+
+
 def check_transguard():
     """Crash guard on D2R's unit translation event handler 0x775fc0 (plugin/src/translation_guard.cpp, docs/bugs.md #34): the hook is on,
     it has seen events of the game(s) so far, and a probe event with the payload word of the crash reports (0x8000003F0) is skipped."""
@@ -13073,7 +13247,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # lane p4-quests-verify
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
-          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard),
+          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("otherplugins", check_otherplugins),
           ("ied", check_ied), ("iedtip", check_iedtip)]
 
 
