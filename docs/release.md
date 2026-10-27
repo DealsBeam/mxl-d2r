@@ -268,6 +268,9 @@ game: no other D2R build is installed here; the decision is covered by the unit 
    3. Run `py -3 tools/github_release.py <version> --commit <full sha of that commit on GitHub main> --latest`, plus
       `--downloader <exe>` when a new downloader ships. The release notes are the CHANGELOG section and the download
       links. The 7z stays on files.werdegames.com and is not attached.
+   4. Make the **forge** release the same way: `MXL_FORGE_TOKEN=<forge token> py -3 tools/github_release.py <version>
+      --forge --commit <full sha of the forge's own commit> [--downloader <exe>]`. The forge's history is not scrubbed,
+      so its commit ids differ from GitHub's.
 
 CI (`.forgejo/workflows/release.yml`, runner `mxl-cross`, manual dispatch or tag `v*`): no game files on the
 server, so it cannot run tools/build.py. It cross-builds the release DLL, runs the packager's unit tests and
