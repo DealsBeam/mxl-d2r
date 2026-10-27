@@ -45,7 +45,7 @@ rows D2R's stop function 1).
 
 | Column | Median slot | Moves to | Where it runs |
 |---|---|---|---|
-| srvdofunc | 153-171 (D2Sigma's added functions) | +19 = 172-190 | mxl-core plugin (docs/plugin-spec.md "Skill server functions"); free: 175, 181, 182, 183, 186-189 |
+| srvdofunc | 153-171 (D2Sigma's added functions) | +19 = 172-190 | mxl-core plugin (docs/plugin-spec.md "Skill server functions"); 175 = D2Sigma 156 since bug #58; free: 181, 182, 183, 186-189 |
 | srvdofunc | 155 (town_portal), 160, 161, 167 | 109 (D2R's itemless Town Portal, on purpose), 124, 121, 58 | D2R native; `town_portal` -> 109 stays, it is the one Median row that may use 109 |
 | srvstfunc | 30, 66 | 71, 72 | plugin `skill_starts.cpp` |
 | cltdofunc | 97, 98, 99; 15, 11, 95, 22 | 110, 111, 112; 19, 15, 111, 113 | plugin client slots / D2R's equivalents |

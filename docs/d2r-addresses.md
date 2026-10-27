@@ -8,7 +8,9 @@ Item events (lane p4ev, 2026-10-22; docs/subsystems/items-xp.md section 5b):
 | event dispatch wrapper | exe `0x44d570` | `(game, event, unitA, unitB, arg5)`; kill = 9, thorns 2 / 3, open wounds / crushing blow 5 / 6 |
 | core handler table | D2RCore `0x630260` | slot = itemeventfunc; handler `(game, event, unit, other, arg5, code64, a7, a8, a9)`; 15 `0x3d12b0`, 16 `0x3d1310` (a `jmp`), 33 `0x3d19b0` and 34 `0x3d1a20` are forwarders that return 0 |
 | exe handler table | exe `0x238e5c0`, ids 1..40 | 6 `0x582b20` (thorns), 11 `0x582d30`, 12 `0x5828d0`, 15 `0x584170`, 16 `0x583150`, 20 `0x583b30` (cast), 28 `0x583a70` (life), 32 `0x42eea0`, 33 `0x42f300`, 34 `0x51f7b0`; code is `(stat << 16) \| layer` |
-| itemstatcost records | `*(exe + 0x2a9a580 + 16) + 0x1258`, stride `0x144` | event words `+0x44 / +0x46`, function words `+0x48 / +0x4a` |r the blocked hooks (lane d2r-addresses, 2026-10-21)
+| itemstatcost records | `*(exe + 0x2a9a580 + 16) + 0x1258`, stride `0x144` | event words `+0x44 / +0x46`, function words `+0x48 / +0x4a` |
+| unit death function | exe `0x44db20` | `(game, victim, killer or null, flag)`; returns at once for a monster in mode 0 / 12 or a player in mode 0 / 17; flag 1 takes a player's pet off the list (`0x4ffb90`); hooked by `death_event.cpp` (D2Sigma event 14 = D2R events row 18, bug #58) |
+| monster owner | exe `0x4a53c0` | `(unit)` -> owner unit (monster data `+0x30` -> `+0x60/+0x68/+0x6c`), null without one; 1.13c `0x6fc41260` |r the blocked hooks (lane d2r-addresses, 2026-10-21)
 
 All addresses are **RVAs** in the D2R image (`D2RLoader_6ab3782c_dump.exe` memory layout; file offset == RVA, base
 `0x140000000`), x64 Microsoft ABI (rcx, rdx, r8, r9, then stack at `[rsp+0x20]...` at the callee's entry).

@@ -22,7 +22,7 @@ Use [test-sessions.md](test-sessions.md) to run these checks by character.
 
 | Since | What | How to test | Expected |
 |---|---|---|---|
-| 0.69.11 (lane equip-crash) | **Circlet crash on pickup / wear, bugs #49 (Tiara) and #55 (Coronet)**: D2R's fixed item type ids moved to Median's (plugin/src/item_type_ids.cpp, off word `typeids`; tools/item_type_ids.py) | `MXL_SLOT=<n> MXL_RUN=<lock> MXL_CHAR=<throwaway> py -3 tools/game_checks.py all mxl typeids equipall` with `MXL_EQUIP_MODE=ground MXL_EQUIP_ONLY=<circlet codes> MXL_EQUIP_QUALS=3,4` (pick up from the ground to the cursor and wear; and with the inventory flag, which puts the item on at once when the head is empty) or `MXL_EQUIP_MODE=packet` (every head base and unique by 0x19 / 0x1a); `MXL_GRAPHICS=legacy`, `MXL_CHAR_CLASS=<class>` for a new character of another class. By hand: pick up and wear a Tiara / Coronet; socket a rune into a circlet; drink a mana potion from the belt | `mxl`: `item type ids on: 25 of 25 ...`; `typeids` PASS (a Thul rune goes into a circlet's socket, the circlet is worn); `equipall` PASS, the game survives every item (another class's helms are refused as expected). Control (`typeids` in mxl-core-off.txt): wearing or picking up a circlet asserts `UnitGetType(hUnit) == UNIT_ITEM` (ItemMode.cpp:676) and the game dies or hangs. Run on slot 2 with the dev and the release install (Barbarian HD, Sorceress legacy). |
+| 0.69.15 (lane equip-crash) | **Circlet crash on pickup / wear, bugs #49 (Tiara) and #55 (Coronet)**: D2R's fixed item type ids moved to Median's (plugin/src/item_type_ids.cpp, off word `typeids`; tools/item_type_ids.py) | `MXL_SLOT=<n> MXL_RUN=<lock> MXL_CHAR=<throwaway> py -3 tools/game_checks.py all mxl typeids equipall` with `MXL_EQUIP_MODE=ground MXL_EQUIP_ONLY=<circlet codes> MXL_EQUIP_QUALS=3,4` (pick up from the ground to the cursor and wear; and with the inventory flag, which puts the item on at once when the head is empty) or `MXL_EQUIP_MODE=packet` (every head base and unique by 0x19 / 0x1a); `MXL_GRAPHICS=legacy`, `MXL_CHAR_CLASS=<class>` for a new character of another class. By hand: pick up and wear a Tiara / Coronet; socket a rune into a circlet; drink a mana potion from the belt | `mxl`: `item type ids on: 25 of 25 ...`; `typeids` PASS (a Thul rune goes into a circlet's socket, the circlet is worn); `equipall` PASS, the game survives every item (another class's helms are refused as expected). Control (`typeids` in mxl-core-off.txt): wearing or picking up a circlet asserts `UnitGetType(hUnit) == UNIT_ITEM` (ItemMode.cpp:676) and the game dies or hangs. Run on slot 2 with the dev and the release install (Barbarian HD, Sorceress legacy). |
 | 0.69.9 (lane goblin-crash) | **Den boss / goblin sound crash, bugs #42 / #46** (plugin/src/sound_guard.cpp, off word `soundguard`; tools/txt_migrate.py hit-6 spawns; tools/validate.py `hit6_spawns`; check `denboss` now mortal) | `MXL_SLOT=3 MXL_RUN=<lock> MXL_CHAR=<throwaway> py -3 tools/game_checks.py all mxl goblincrash denboss` (`MXL_DENBOSS_GOD=1` adds god-mode soak rounds; `MXL_SOUNDGUARD_TEST=1` on a dev DLL feeds the goblins' Neutral sound as -1, =2 reproduces the crash) | PASS: `goblincrash` shows `sound guard: 0 bad sound ids skipped`; `denboss` fights the boss mortal in HD and legacy (cold resist as is, 0, -100), the bone spear spawns 2835 (never 2818), the player lives, no crash file. Tell me: whether Median monster sounds play (goblin chatter) and your d2rloader.log `Loading sound data tables` lines |
 | 0.69.9 (lane goblin-crash) | **Treasure goblin crash, bug #46** (check `goblincrash`, tools/game_checks.py; plugin/src/goblins.cpp: monstats row check before the spawn, `goblin <id> rolled ... spawning` log line before the spawn call) | `MXL_SLOT=3 MXL_RUN=<lock> MXL_GOBLINS_FORCE=1 py -3 tools/game_checks.py all mxl goblincrash` on a developer install and on a release install (downloader `--cli install`, `launch_arguments` without `-txt`, save folder `D2R-XL-sN/`, dev DLL swapped in) | PASS: in HD and legacy six goblin types spawn, run 20 s, cast their curse (2580) and Submerge (2582), die, and the plugin roll spawns one; no crash file, no new assert, `0 without a monstats row`. Tell me: on your install, the last mxl-core.log lines before any goblin crash |
 | 0.69.8 (lane env-guard) | **Which build runs, bug #53** (plugin/src/env_guard_logic.h, off word `envguard`; check `envguard`), and the mod toml's `[d2rloader.advanced] suppress_global_extensions = true` (tools/install_mod.py) | `MXL_SLOT=<n> MXL_RUN=<lock> MXL_CHAR=<throwaway> py -3 tools/game_checks.py all mxl envguard otherplugins`; to see the warning: copy the dev mxl-core.dll into `<slot D2R>\d2rloader\plugins` (with and without suppress_global_extensions), start, run `mxl` | normal slot: first `mxl` line ends `| mod D2R-XL | file <slot>\mods\D2R-XL\d2rloader\plugins\mxl-core.dll`, `environment ok`. With the global copy and suppress on: d2rloader.log loads no global plugin, `environment ok`. With suppress off: about 15 s after the start mxl-core.log has `environment WARNING: ... a second copy ...` and the red line shows at the top. **Not run yet** (slots 2 and 3 were busy). |
@@ -348,6 +348,20 @@ First run (lane release-install, 2026-10-27, slot 2): releases 0.69.5 and 0.69.6
 `tooltiptext`, `specialtext` PASS, `orbtips` REVIEW with complete tooltips (Gheed's shelf and inventory), also in legacy
 graphics (inventory). D2RLoader logs "Compiled 188 tables from TXT ... 38 game, 150 mod" without `-txt` too. The
 release DLL alone (`--release-dll`) installs every part including "item text on". Bugs #38 / #45 did not reproduce.
+
+`releasetables` (bugs #42 / #46, lane sounds-bin): the sounds table the game loaded (`mxl` sound guard line `sounds.txt N
+rows (D2R-XL 12449)`) has the installed mod's row count, the Median-only `treasuregoblin_neutral_1` (row 12214) is inside
+it, d2rloader.log's sound step of this start compiled the mod's `sounds.txt` with that many rows, and the installed
+`objtype.txt` files equal work/mod's (D2RLoader compiles objtype in neither mode). To see a player's first start, move
+`<slot>\d2rloader\data\compiler` aside before the run (D2RLoader then builds its base snapshot and loads D2R's 11913
+sound rows: `releasetables` FAILs and names it; `goblincrash` crashed before 0.69.15 and now passes with the skipped ids
+listed, because the `mxl` line says `NOT D2R-XL's table`) and put it back afterwards. Runs 2026-10-27 on
+the live release 0.69.8 with this lane's dev DLL (then labelled 0.69.10, 0.69.15 after the merge), no `-txt`: first start (snapshot moved aside) `releasetables` FAIL
+"loaded sounds table 11913 rows ... base snapshot built in this start" and the plugin's warning in mxl-core.log
+(checks-20261027-164906-s3); normal start `mxl releasetables goblincrash denboss` all PASS (checks-20261027-165028-s3). With every sound record
+lookup guarded (0.69.15 follow-up, release 0.69.10, slot 3): first start `mxl goblincrash denboss` PASS and no crash,
+`releasetables` FAIL by design (checks-20261027-171557-s3); normal start all PASS (`denboss` on the rerun,
+checks-20261027-172425-s3 / checks-20261027-173418-s3).
 
 ## Harness commands (gameplay without input; plugin/src/harness_cmds.cpp)
 
@@ -1323,3 +1337,15 @@ Data only (tools/txt_migrate.py `raven_counts`), no plugin change, no version bu
 | nodurabilityui | no repair button at Charsi, no durability line | **PASS** (`checks-20261027-122117-s2`; #39 as Median) |
 
 Also run: `py -3 tools/validate.py` (errors 0, rotw warnings 102 as before), `py -3 tools/test_game_checks_names.py`.
+
+### Lane abyss-knight (2026-10-27): bug #59, Abyss Knights melee (plugin 0.69.13)
+
+Necromancer AbyssKnt, Abyss Knight level 20, monsters spawned 9 yards away, the knights' modes sampled for 25 s.
+
+| Check | What | Result |
+|---|---|---|
+| abyssknight (new) | knights in skill1 (8, the void blast) more often than attack1 (4), `abyss_knight_skill_missile` made; with `MXL_CONTROL=rangedpets` melee only | before the fix (0.69.10 code, dev): modes {1: 58, 2: 81, 4: 101}, 0 missiles; a forced `mcast` in S1 made the missile (the skill works, the AI never picked it). Dev slot 2: **PASS** `checks-20261027-180606-s2` {1: 101, 2: 38, 8: 93}, 65 missiles; control **PASS** `checks-20261027-180946-s2` {1: 65, 2: 78, 4: 89}, 0 missiles. Release install (tools/release_install.py, slot 2, dev DLL): **PASS** `checks-20261027-181233-s2` {1: 95, 2: 14, 8: 115}, 71 missiles; control **PASS** `checks-20261027-181404-s2` {4: 108}, 0 missiles |
+| mxl | `ranged pets on (marked N)` line | **PASS** (all four runs) |
+
+Also run: `py -3 tools/validate.py` (errors 0), the twelve C++ test executables (all pass), `compileall`, `check_public.py`.
+Each launch leaves a first-chance access violation report in `d2rloader\crashes` (3733 bytes). It came with the pre-fix plugin too and the game kept running.

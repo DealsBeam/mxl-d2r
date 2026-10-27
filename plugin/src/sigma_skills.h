@@ -12,3 +12,7 @@ auto SigmaSkillCount() noexcept -> int;
 // What the wrapped slots 41 / 73 did since the game started (harness verb `skillstats`): melee hits thrown before the
 // scatter, hammer casts that took srvmissileb / c.
 auto SigmaSkillCounters(long* fanCasts, long* fanMeleeHits, long* hammerCasts, long* hammerSwaps) noexcept -> void;
+// The multi-summon (slot 172) marks pets of a skill with Param7 as ranged pets, as D2Sigma does (NecroPet's ranged
+// branch, bug #59). Off word: rangedpets. RangedPetCounts returns whether it is on and how many pets it marked.
+auto SetRangedPets(bool on) noexcept -> void;
+auto RangedPetCounts(long* set) noexcept -> bool;

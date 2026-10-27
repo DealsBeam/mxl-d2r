@@ -17,7 +17,7 @@ cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes s
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes
 respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick townmonsters
-teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath goblincrash skillicons.
+teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath goblincrash skillicons releasetables.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -2440,6 +2440,182 @@ def check_summonlife():
         H("class %d" % cls0)
         god(False)
     add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:2400], [sh("summonlife")], log)
+
+
+def check_nighthawks():
+    """Bug #58: the Necromancer's Night Hawks (srvdofunc 172 multi-summon, monster night_hawk) dive at a monster and explode. Median
+    has no monster skill for it: the hawk's monprop casts skills_374 on attack (stat 195, srvdofunc 156 -> slot 175, the plugin's
+    "pet dies": the hawk is taken off the pet list and killed) and skills_373 on death (stat 271 = D2Sigma's event 14, raised by
+    death_event.cpp on the victim of every death): missile 5444, the explosion with damage. Summons hawks next to a spawned monster
+    with a large life pool and follows them: PASS when hawks appear, die at the monster, the explosion missile is seen, the monster
+    loses life and the `mxl` death event line counts raised events. With `deathevent` off (MXL_CONTROL) the hawks still die but no
+    explosion missile may appear."""
+    nm = "Night Hawks explode on contact (bug #58): hawks die at the monster, explosion missile 5444, damage"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    by_name, t, h = _skill_ids_by_name()
+    sid, hawk = by_name.get("night_hawks"), _monstats_class("night_hawk")
+    boom = t[1:][[r[0] for r in t[1:]].index("skills_373")][h.index("srvmissile")] if "skills_373" in [r[0] for r in t[1:]] else ""
+    mt = _tsv(os.path.join(BUILT_EXCEL, "missiles.txt"))
+    mrow = {r[0]: i for i, r in enumerate(mt[1:]) if r and r[0]}
+    if sid is None or hawk is None or boom not in mrow:
+        return add(nm, "BLOCKED", "night_hawks %s, night_hawk %s, skills_373 missile %r not in the built tables" % (sid, hawk, boom))
+    boom_id = mrow[boom]
+    control = "death event off: left out" in mxl_text()
+    notes, bad, log = [], [], []
+    cls0 = hstate()["player"].get("class") or 0
+    H("class 2")  # Necromancer
+    try:
+        fight_ready()
+        kill_all_near()
+        god(True)
+        tid = tough_target(18)
+        if tid is None:
+            return add(nm, "BLOCKED", "no monster spawned")
+        time.sleep(2)
+        life0 = next((m.get("life") for m in hstate()["mons"] if m.get("id") == tid), None)
+        H("asserttrace on")
+        H("asserttrace clear")
+        H("setskill %d 10" % sid)
+        H("missiles reset")
+        ids, alive_max, t0, life_min, gone = set(), 0, time.time(), life0, False
+        casts = 0
+        while time.time() - t0 < 20:
+            if casts < 3:  # the hawks can reach the monster and explode within a second: the listing runs between the casts
+                H("stat player 9 set %d" % (5000 << 8))
+                H("stat player 8 set %d" % (5000 << 8))
+                ok, cl = H("cast %d self" % sid)
+                log.extend(cl[:2])
+                casts += 1
+            mons = hstate()["mons"]
+            hawks = [m for m in mons if m.get("class") == hawk and m.get("mode") not in (0, 12)]
+            ids.update(m["id"] for m in hawks)
+            alive_max = max(alive_max, len(hawks))
+            target = next((m for m in mons if m.get("id") == tid), None)
+            if target is None or target.get("mode") in (0, 12):
+                gone = True  # the explosions killed it (or it left the 40-unit listing)
+            elif target.get("life") is not None and (life_min is None or target["life"] < life_min):
+                life_min = target["life"]
+            if casts >= 3 and ids and not hawks:
+                break
+            time.sleep(0.2 if casts < 3 else 1.0)
+        mons = hstate()["mons"]
+        alive = [m for m in mons if m.get("class") == hawk and m.get("mode") not in (0, 12)]
+        asserts = sorted(set(a[0][:40] for a in assert_lines(H("asserttrace show")[1])))
+        seen_text = " ".join(H("missiles")[1])
+        classes = {int(c): int(n) for c, n in re.findall(r"class (\d+) x(\d+)", seen_text)}
+        deaths = re.search(r"death event (.*?)\(deaths (\d+), raised (\d+), event (-?\d+)\)", mxl_text())
+        notes.append("hawks seen %d (most at once %d), alive after 20 s %d; monster %s life %s -> lowest %s%s; explosion missile %d (%s) x%d; missiles %s; %s; asserts during the fight: %s" % (
+            len(ids), alive_max, len(alive), tid, life0, life_min, " then dead / gone" if gone else "", boom_id, boom,
+            classes.get(boom_id, 0), classes, deaths.group(0) if deaths else "no death event line", asserts or "none"))
+        if not ids:
+            bad.append("no hawk appeared")
+        elif len(alive) == len(ids):
+            bad.append("no hawk died (skills_374 / slot 175)")
+        if control:
+            if classes.get(boom_id):
+                bad.append("control: explosion missile seen with deathevent off")
+        else:
+            if not classes.get(boom_id):
+                bad.append("no explosion missile %d" % boom_id)
+            if life0 is None or (not gone and (life_min is None or life_min >= life0)):
+                bad.append("the monster lost no life")
+            if not deaths or int(deaths.group(3)) < 1:
+                bad.append("death event raised no event")
+        for m in alive:
+            H("kill %d" % m["id"])
+        H("kill %d" % tid)
+    finally:
+        god(False)
+        H("class %d" % cls0)
+    add(nm + (" CONTROL (deathevent off)" if control else ""), "PASS" if not bad else "FAIL", "; ".join(bad + notes)[:2400], [sh("nighthawks")], log)
+
+
+def check_abyssknight():
+    """Bug #59: the Necromancer's Abyss Knights (skill abyss_knight, the plugin's multi-summon srvdofunc 172; monster abyss_knight,
+    AI NecroPet, Skill1 abyss_knight_skill in mode S1) hit in melee and never used their AoE (abyss_knight_skill, srvdofunc 28,
+    missile abyss_knight_skill_missile). Summons them in the Blood Moor, puts monsters a few yards away for 25 s, samples the
+    knights' modes (4 attack1 = melee, 8 skill1 = the AoE) and counts the skill's missiles. The cause: D2Sigma marks pets of a
+    multi-summon skill with Param7 as ranged pets (AI control +0x14), which sends NecroPet to its ranged branch; mxl-core does it
+    in sigma_skills.cpp (off word `rangedpets`). With `MXL_CONTROL=rangedpets` the knights must melee as before (no skill1)."""
+    nm = "Abyss Knights use their ranged AoE (bug #59): skill1 mode and abyss_knight_skill_missile while monsters stand at range"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    by_name, _t, _h = _skill_ids_by_name()
+    sid, kcls = by_name.get("abyss_knight"), _monstats_class("abyss_knight")
+    mt = _tsv(os.path.join(BUILT_EXCEL, "missiles.txt"))
+    mis = next((i for i, r in enumerate(mt[1:]) if r and r[0] == "abyss_knight_skill_missile"), None)
+    if sid is None or kcls is None or mis is None:
+        return add(nm, "FAIL", "no abyss_knight skill / monstats row / abyss_knight_skill_missile row")
+    rows, bad, log = [], [], []
+    control = _ctl("rangedpets")
+    cls0 = hstate()["player"].get("class") or 0
+    H("class 2")  # Necromancer
+    try:
+        fight_ready()
+        god(True)
+        H("setskill %d 20" % sid)
+        H("stat player 9 set %d" % (5000 << 8))
+        H("stat player 8 set %d" % (5000 << 8))
+        ok, cl = H("cast %d self" % sid)
+        log.extend(cl[:3])
+        time.sleep(1.5)
+        knights = [m for m in hstate()["mons"] if m.get("class") == kcls and m.get("mode") not in (0, 12)]
+        if not knights:
+            return add(nm, "FAIL", "no Abyss Knight appeared (cast %s: %s)" % ("OK" if ok else "FAIL", " | ".join(cl[-1:])), [], log)
+        p = hstate()["player"]
+        px, py = p.get("x") or 0, p.get("y") or 0
+        H("missiles reset")
+        modes, t0 = {}, time.time()
+        while time.time() - t0 < 25:
+            st = hstate()
+            foes = [m for m in st["mons"] if m.get("class") != kcls and not m.get("npc") and m.get("mode") not in (0, 12)
+                    and m.get("dist", 99) < 25]
+            if len(foes) < 2:
+                _ok, sl = H("spawn 3 3 %d %d" % (px + 9, py + 9)) if px else H("spawn 3 3")
+                log.extend(sl[:1])
+            for m in st["mons"]:
+                if m.get("class") == kcls:
+                    modes[m.get("mode")] = modes.get(m.get("mode"), 0) + 1
+            time.sleep(0.25)
+        _ok, ml = H("missiles")
+        summary = next((l for l in ml if l.startswith("missiles live=")), "")
+        seen = re.search(r"class %d x(\d+)" % mis, summary)
+        nmis = int(seen.group(1)) if seen else 0
+        line = "%d knight(s), mode samples %s (4 attack1 melee, 8 skill1 AoE), missile %d seen %d | %s" % (
+            len(knights), dict(sorted(modes.items())), mis, nmis, summary[:300])
+        rows.append(line)
+        log.append(line)
+        s1, a1 = modes.get(8, 0), modes.get(4, 0) + modes.get(5, 0)
+        if not nmis or s1 == 0:  # tell a broken skill from an AI that never picks it: one forced cast in mode S1
+            kn = next((m for m in hstate()["mons"] if m.get("class") == kcls), None)
+            ksid = by_name.get("abyss_knight_skill")
+            if kn and ksid is not None:
+                H("missiles reset")
+                _ok, fl = H("mcast %d 8 unit %d" % (ksid, kn["id"]))
+                time.sleep(1.5)
+                _ok, ml2 = H("missiles")
+                line = "forced cast: %s | %s" % (" | ".join(fl[-1:]), next((l for l in ml2 if l.startswith("missiles live=")), ""))
+                rows.append(line[:400])
+                log.append(line)
+        if control:
+            if s1 or not a1:
+                bad.append("control (rangedpets off): expected melee only, got skill1 %d / attack1 %d samples" % (s1, a1))
+        elif not nmis:
+            bad.append("no abyss_knight_skill_missile was made")
+        elif s1 == 0:
+            bad.append("the knights never entered skill1 (the AoE)")
+        elif a1 > s1:
+            bad.append("melee (%d samples) outweighs the AoE (%d samples)" % (a1, s1))
+        for m in hstate()["mons"]:
+            if m.get("class") == kcls:
+                H("kill %d" % m["id"])
+        kill_all_near()
+    finally:
+        god(False)
+        H("class %d" % cls0)
+    add(nm + (" CONTROL (rangedpets off)" if control else ""), "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:2400],
+        [sh("abyssknight")], log)
 
 
 def check_warprevisit():
@@ -8939,6 +9115,81 @@ def check_teleportgold():
     add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
 
 
+def check_bendshadows():
+    """Bend the Shadows (bug #57): the Necromancer's innate warp (charstats Skill 6; skill 1449 = Median 1377, srvdofunc 27 ->
+    plugin slot 179 SrvDoRangedTeleport, range 14, 25 mana, cooldown group 1). Its row is leftskill-only with TargetableOnly 1, so
+    as a left skill a plain click on the ground walks and Quick Cast does nothing; D2Sigma's skill picker ignored left/rightskill, so
+    in Median it also sat on the right button, where a ground click casts. txt_migrate gives the active innate skills rightskill 1.
+    Checks: the server cast moves the character to the point (the effect); the game selects it as the right skill; a right click on the
+    ground (background mouse) warps and costs mana; Shift + left click warps too (a left click on a monster is logged only); the other innate skills
+    that had neither column (mana_shield, titan_s_fortitude, mark_of_the_wild_2, vindicate_2) can be selected as the right skill."""
+    name = "Bend the Shadows: the Necromancer's warp, on the right button too (#57)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    revive_if_dead()
+    fight_ready()
+    kill_all_near()
+    rows, bad, log = [], [], []
+    cls0 = hstate()["player"].get("class", 4)
+    H("setskill 1449 1")
+    H("class 2")  # the Necromancer, whose innate skill it is; a level-1 Necromancer has 75 mana, the cost is 25
+    setstat("player", 9, 200 * 256)
+
+    def warp(label, fn, want=True, wait=0.6):
+        """Cooldown cleared and mana full, then `fn`; the character must (or must not) move and pay the mana."""
+        H("stat player 359 1449 set 0")
+        setstat("player", 8, 200 * 256)
+        time.sleep(0.3)
+        p0 = hstate()["player"]
+        out = fn(p0)
+        time.sleep(wait)
+        p1 = hstate()["player"]
+        a, b = (p0["x"], p0["y"]), (p1["x"], p1["y"])
+        dist = ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+        rows.append("%s: %s -> %s (%.0f) %s" % (label, a, b, dist, out))
+        if want and dist < 2:
+            bad.append("%s: the character did not move" % label)
+        time.sleep(2.5)  # the cooldown of group 1 (55 frames) and the cast mode run out
+        return a, b, out
+
+    H("skill left 1449")
+    usable = _skill_usable(1449)
+    rows.append("usable code %s" % usable)
+    if usable != 0:
+        bad.append("skill 1449 is not usable (code %s)" % usable)
+    for dx, dy in ((10, 0), (0, 10)):
+        a, b, out = warp("server cast at +%d,+%d" % (dx, dy), lambda p0: " | ".join(H("cast 1449 %d %d" % (p0["x"] + dx, p0["y"] + dy))[1])[-90:])
+        if b != (a[0] + dx, a[1] + dy):
+            bad.append("server cast at +%d,+%d: arrived at %s, not the point" % (dx, dy, b))
+    right = " ".join(H("skill right 1449")[1])
+    rows.append("right skill: %s" % right[-60:])
+    if "active now 1449" not in right:
+        bad.append("the game does not take Bend the Shadows as the right skill: %s" % right[-80:])
+    else:
+        _a, _b, r = warp("right click on the ground", lambda p0: _ground_click(0.62, 0.45, False, "right"))
+        if not r or r[4] - r[5] < 20 * 256:
+            bad.append("right click on the ground: no mana paid (modewatch %s)" % (r,))
+    warp("Shift + left click on the ground", lambda p0: _ground_click(0.62, 0.45, True))
+    mid = spawn_id(5)
+    if mid is not None:
+        time.sleep(1.0)
+        st = hstate()
+        mons = [m for m in st["mons"] if m["id"] == mid]
+        if mons:
+            fx, fy = _mon_screen(st["player"], mons[0])
+            warp("left click on a monster (information: the cursor can miss a walking zombie)", lambda p0: _ground_click(fx / 1600, fy / 900, False), want=False)
+    for sid, sname in ((1633, "mana_shield"), (1270, "titan_s_fortitude"), (1363, "mark_of_the_wild_2"), (1547, "vindicate_2")):
+        H("setskill %d 1" % sid)
+        line = " ".join(H("skill right %d" % sid)[1])
+        rows.append("%s as the right skill: %s" % (sname, line[-40:]))
+        if "active now %d" % sid not in line:
+            bad.append("%s (%d) cannot be selected as the right skill" % (sname, sid))
+    H("skill right 0")
+    H("skill left 0")
+    H("class %d" % cls0)
+    log += rows
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad + rows), [], log)
+
 def _skill_usable(skill):
     """`h skills` -> the usable code of one skill (0 usable, 1 not enough mana, ...) or None."""
     for ln in H("skills")[1]:
@@ -9108,7 +9359,7 @@ def _modewatch():
     return tuple(int(x) for x in m.groups()) if m else None
 
 
-def _ground_click(fx, fy, shift):
+def _ground_click(fx, fy, shift, button="left"):
     """One left click on the ground in the game window (background input; Shift held as a window message state), watched by
     `modewatch`: the player unit's attack / walk modes and the lowest mana during the following second."""
     h = g.need_window()
@@ -9119,7 +9370,7 @@ def _ground_click(fx, fy, shift):
         g._set_mods(("shift",))
         g._post_key(h, "shift", False)
         time.sleep(0.1)
-    g.click_bg(fx, fy)
+    g.click_bg(fx, fy, button)
     time.sleep(1.0)
     if shift:
         g._post_key(h, "shift", True)
@@ -13573,15 +13824,21 @@ def check_goblincrash():
         norow = re.search(r"(\d+) without a monstats row", plugin)
         if norow and int(norow.group(1)) > 0:
             bad.append("%s goblin rolls found no monstats row (a table did not load)" % norow.group(1))
-        # Bugs #42 / #46: a monster sound id outside sounds.txt crashed the client in 0xd8c70; the plugin's sound guard skips it.
-        # MXL_SOUNDGUARD_TEST=1 (dev DLL) feeds the goblins' Neutral sound as -1, so the guard must have skipped some.
+        # Bugs #42 / #46: a monster sound id outside sounds.txt crashed the client (0xd8c70, 0xda4a0); the plugin's sound guard
+        # skips it. MXL_SOUNDGUARD_TEST=1 (dev DLL) feeds the goblins' Neutral sound as -1, so the guard must have skipped some.
+        # On the start that builds D2RLoader's base compiler snapshot the game has D2R's own sounds table (`NOT D2R-XL's table`):
+        # every Median sound is -1 there, skips are expected and the check only asks that the game stays up (releasetables
+        # FAILs that start).
         skipped = re.search(r"(\d+) bad sound ids skipped[^|]*", plugin)
+        short = "NOT D2R-XL's table" in plugin
         if skipped:
             rows.append("sound guard: " + skipped.group(0).strip())
             n = int(skipped.group(1))
             if os.environ.get("MXL_SOUNDGUARD_TEST") == "1":
                 if n == 0:
                     bad.append("MXL_SOUNDGUARD_TEST=1 but the sound guard skipped nothing")
+            elif n > 0 and short:
+                rows.append("%d sound ids skipped: the loaded sounds table is not D2R-XL's (snapshot start), the game stayed up" % n)
             elif n > 0:
                 bad.append("%d monster sound ids were outside sounds.txt (a sounds table did not load)" % n)
     crashes = [c for c in (sorted(os.listdir(g.CRASH_DIR)) if os.path.isdir(g.CRASH_DIR) else []) if c not in crashes0]
@@ -13590,6 +13847,93 @@ def check_goblincrash():
     asserts = sorted(set(assertions_since(mark)))
     add(nm, "PASS" if not bad else "FAIL", "; ".join(rows) + ("; asserts in d2rloader.log: %s" % asserts[:4] if asserts else "; no new assert") +
         (("; PROBLEMS: " + "; ".join(bad)) if bad else ""), shots, rows + asserts[:20])
+
+
+def _tsv_rows(path):
+    """Data rows of a .txt table (lines after the header, blank lines left out), or None when the file is missing."""
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="latin-1") as f:
+        lines = [ln.rstrip("\r\n") for ln in f]
+    return [ln for ln in lines[1:] if ln.strip()]
+
+
+def _last_start(log):
+    """d2rloader.log from the last `D2R command line:` on (the start of the running game)."""
+    i = log.rfind("D2R command line:")
+    return log[i:] if i >= 0 else log
+
+
+def check_releasetables():
+    """Bugs #42 / #46: the tables of the running start equal D2R-XL's. Meant for a release install (tools/release_install.py,
+    no -txt), works on any install. sounds: the table the game loaded (`mxl` sound guard line; the plugin reads 0x3b20c0) has
+    as many rows as the installed mod's sounds.txt (12449, the plugin's ModSoundRows), the Median-only sound
+    treasuregoblin_neutral_1 is a row inside it, and d2rloader.log's sound step compiled the mod's sounds.txt with that many
+    rows (not so on the start that builds D2RLoader's base compiler snapshot). objtype: D2R has no objtype.bin and D2RLoader
+    compiles objtype.txt in neither mode (with or without -txt), so the installed objtype.txt files must equal the built
+    data's (work/mod/data, when present)."""
+    nm = "Release tables: the loaded sounds table is D2R-XL's, objtype as built (bugs #42 / #46)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    rows, bad = [], []
+    excel = os.path.join(g.GAME_DIR, "mods", "D2R-XL", "D2R-XL.mpq", "data", "global", "excel")
+    built = os.path.join(MOD_DATA, "global", "excel")
+    sounds = _tsv_rows(os.path.join(excel, "sounds.txt"))
+    if sounds is None:
+        return add(nm, "FAIL", "no sounds.txt in %s" % excel)
+    names = [ln.split("\t", 1)[0] for ln in sounds]
+    ours = _tsv_rows(os.path.join(built, "sounds.txt"))
+    if ours is not None and len(ours) != len(sounds):
+        bad.append("installed sounds.txt has %d rows, the built data %d" % (len(sounds), len(ours)))
+    line = _mxl_line("sound guard")
+    m = re.search(r"sounds\.txt (\d+) rows \(D2R-XL (\d+)\)", line)
+    if m is None:
+        return add(nm, "FAIL", "no sounds.txt row count in `mxl`: %s" % line[:200])
+    loaded, expected = int(m.group(1)), int(m.group(2))
+    rows.append("loaded sounds table %d rows, installed sounds.txt %d, plugin ModSoundRows %d" % (loaded, len(sounds), expected))
+    if loaded != len(sounds):
+        bad.append("the game loaded %d sound rows, the mod has %d (D2R's own table has 11913)" % (loaded, len(sounds)))
+    if expected != len(sounds):
+        bad.append("plugin ModSoundRows %d differs from the mod's %d rows (update sound_guard.h)" % (expected, len(sounds)))
+    probe = "treasuregoblin_neutral_1"
+    idx = names.index(probe) if probe in names else -1
+    rows.append("%s is row %d" % (probe, idx))
+    if idx < 11913 or idx >= loaded:
+        bad.append("%s (row %d) is not a Median-only row inside the loaded table" % (probe, idx))
+    skipped = re.search(r"(\d+) bad sound ids skipped", line)
+    if skipped and int(skipped.group(1)) > 0 and os.environ.get("MXL_SOUNDGUARD_TEST") is None:
+        bad.append("the sound guard skipped %s sound ids" % skipped.group(1))
+    log = _last_start(g._read_from(g.LOADER_LOG, 0))
+    cmd = re.search(r"D2R command line: \S+ (.*)", log)
+    rows.append("start args: %s" % (cmd.group(1).strip() if cmd else "?"))
+    step = re.search(r"Loading sound data tables(.*?)Sound data tables loaded", log, re.S)
+    if step is None:
+        bad.append("no sound step in d2rloader.log")
+    else:
+        mod = re.findall(r"compiled mod\s+global/excel/sounds\.txt.*?table: (\d+) rows", step.group(1), re.S)
+        snap = "Preparing base compiler snapshot" in step.group(1)
+        rows.append("sound step: the mod's sounds.txt compiled %s%s" % (("with %s rows" % "/".join(mod)) if mod else "never",
+                                                                       "; base snapshot built in this start" if snap else ""))
+        if not mod or any(int(r) != len(sounds) for r in mod):
+            bad.append("d2rloader.log: the sound step did not compile the mod's sounds.txt with %d rows%s" %
+                       (len(sounds), " (D2RLoader built its base snapshot in this start; the next start loads it)" if snap else ""))
+    for rel in ("objtype.txt", "base/objtype.txt"):
+        inst = os.path.join(excel, *rel.split("/"))
+        if not os.path.isfile(inst):
+            bad.append("no %s in the installed mod" % rel)
+            continue
+        ref = os.path.join(built, *rel.split("/"))
+        if os.path.isfile(ref):
+            with open(inst, "rb") as a, open(ref, "rb") as b:
+                same = a.read() == b.read()
+            rows.append("%s %s the built data" % (rel, "equals" if same else "DIFFERS from"))
+            if not same:
+                bad.append("installed %s differs from the built data" % rel)
+        else:
+            rows.append("%s %d rows (no built data here to compare)" % (rel, len(_tsv_rows(inst))))
+    compiled = re.findall(r"compiled (?:mod|game)\s+global/excel/(?:base/)?objtype\.txt", log)
+    rows.append("objtype compiled in this start: %d times" % len(compiled))
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(rows) + (("; PROBLEMS: " + "; ".join(bad)) if bad else ""), [], rows)
 
 
 SKILL_BTN_RIGHT = {"hd": (0.0, 0.0), "legacy": (0.0, 0.0)}  # right skill button (client fractions), measured below
@@ -13741,7 +14085,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("vendororbs", check_vendororbs), ("summonlife", check_summonlife), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
+          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("vendororbs", check_vendororbs), ("summonlife", check_summonlife), ("nighthawks", check_nighthawks), ("abyssknight", check_abyssknight), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
@@ -13792,8 +14136,8 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # lane p4-quests-verify
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
-          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("goblincrash", check_goblincrash), ("skillicons", check_skillicons), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
-          ("ied", check_ied), ("iedtip", check_iedtip),
+          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("goblincrash", check_goblincrash), ("skillicons", check_skillicons), ("releasetables", check_releasetables), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
+          ("ied", check_ied), ("iedtip", check_iedtip), ("bendshadows", check_bendshadows),
           # bugs #49 / #55
           ("equipall", check_equipall), ("typeids", check_typeids)]
 

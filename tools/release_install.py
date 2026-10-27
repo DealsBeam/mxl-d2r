@@ -76,8 +76,16 @@ def manifest(channel):
 
 
 def downloader(man, folder):
-    """The release's own downloader (manifest `launcher`), checked against its sha256, in its own folder."""
-    l = man["launcher"]
+    """The release's own downloader (manifest `launcher`), checked against its sha256, in its own folder. A release
+    published without a `launcher` entry (0.69.5, 0.69.10) falls back to this checkout's built downloader, which is what
+    players already have; with neither, it stops before anything on the slot is touched."""
+    l = man.get("launcher")
+    if not l:
+        built = os.path.join(ROOT, "build", "launcher", "Release", "D2R-XL-Downloader.exe")
+        if os.path.isfile(built):
+            print(f"release {man['version']} lists no downloader: using the built one, {built}")
+            return built
+        raise SystemExit(f"release {man['version']} lists no downloader and none is built here: pass --downloader <exe>")
     os.makedirs(folder, exist_ok=True)
     exe = os.path.join(folder, os.path.basename(l["path"]))
     if not os.path.exists(exe) or sha256(exe) != l["sha256"]:
@@ -113,6 +121,7 @@ def install(n, channel, exe=None, release_dll=False):
     man = manifest(channel)
     print(f"release {man['version']} (plugin {man['pluginVersion']}), launch keys {man['launch']}")
     os.makedirs(st, exist_ok=True)
+    exe = exe or downloader(man, os.path.join(st, "downloader"))  # before the slot is touched: a failure here changes nothing
     if os.path.exists(os.path.join(st, "release-install.json")):
         print("slot already holds a release install: the backup stays as it is, the release is installed again")
         shutil.rmtree(mod, ignore_errors=True)
@@ -123,7 +132,6 @@ def install(n, channel, exe=None, release_dll=False):
         if os.path.isdir(mod):
             os.replace(mod, os.path.join(bak, MOD))  # same volume: a rename, not a 1.2 GB copy
         shutil.copy2(toml_path(n), os.path.join(bak, "d2rloader.toml"))
-    exe = exe or downloader(man, os.path.join(st, "downloader"))
     cmd = [exe, "--cli", "install", "--game-dir", game_slots.slot_dir(n), "--data-dir", os.path.join(st, "data")]
     print(" ".join(cmd))
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")

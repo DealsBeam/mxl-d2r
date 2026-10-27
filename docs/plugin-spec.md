@@ -18,7 +18,7 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 | 153 (-> 172) | 0x100ad720 | 40 | blood_skeleton, ice_elementals, fire_elementals, summon_familiars — **plugin** (multi-summon) |
 | 154 (-> 173) | 0x100aafa0 | 3 | mysterious_companion_skill, judgementwander_2_skill — **plugin** (red portal to the Median level calc1, the keys' routine; 0.21.0) |
 | 155 (-> D2R 109) | 0x100ab090 | 1 | **town_portal** (see below) |
-| 156 (-> 175) | 0x100aaee0 | 1 | skills_374 — not ported (two D2Game calls; hidden skill) |
+| 156 (-> 175) | 0x100aaee0 | 1 | skills_374 — **plugin** (pet dies: the Night Hawks after their hit, see "Death event 14"; bug #58) |
 | 157 (-> 176) | 0x100aca50 | 25 | catapult_shot, overkill, diseased_cattle, hail_of_stones — **plugin** (barrage) |
 | 158 (-> 177) | 0x100acc50 | 74 | DeathMaul, MegademonInferno, CountessFirewall, egg_trap — **plugin** (missile row) |
 | 159 (-> 178) | 0x100aa7e0 | 15 | spiral_dance, heaven_s_fury, crucify_2, barrier_strike — **plugin** (strike burst) |
@@ -105,6 +105,19 @@ otherwise, when aurarangecalc is non-zero and the skill target lies within it (s
 caster. After each pet: `0x100683d0` (D2Hirelings.cpp, Median's minion scaling; below), `0x10067940` (the skill's aura/passive stats on the pet; D2R `0x55ef80`), `0x10042740` (party/AI;
 D2R `0x58d950`), `0x10049c00(owner, 0x200b, 1)` (D2Achievements.cpp counter; skipped). The plugin also sets the pet
 level with D2R's `0x55fb50` as D2R's Raise Skeleton does (level = the owner's level, as D2Sigma's step 2).
+
+**Ranged pets** (mxl-core 0.69.13, bug #59, off word `rangedpets`). `0x10067940` first checks the summon skill's Param7
+(1.13c +0x160, D2R +0x1d0). When it is set, the pet's AI control (1.13c monster data +0x28; D2R unit +0x10 -> +0x30) gets
++0x14 = 1, +0x18 = 0 (D2R +0x44 / +0x48: D2R's control is 0x30 longer in front, e.g. 1.13c +0x1c is D2R +0x4c).
+NecroPet (AI 67; think 1.13c `0x6fc3e900` = D2R `0x5c1400`) branches on that field. When it is 0, NecroPet takes the
+melee branch (`0x6fc3e640` = `0x5c1080`), which attacks only in A1. When it is 1, it takes the ranged branch
+(`0x6fc3e3d0` = `0x5c1b20`). Skills on 153 with Param7 set:
+- Abyss Knight (Skill1 on S1)
+- Guardian Spirit
+- Mana Tide Totem and Elemental Totem
+- Summon Sinner, Frostwalker and Glowing Fungus
+
+`mxl` prints `ranged pets on (marked N)`.
 
 **Minion scaling** (`0x100683d0` (game, owner, pet, skill, level); mxl-core 0.15.0, `pet_scaling.cpp`). 1.13c skills
 record: calc1 +0x138, Param3/4/5 +0x150/+0x154/+0x158 (D2R +0x1c0/+0x1c4/+0x1c8). D2Common 10887 sets a unit stat
@@ -207,6 +220,25 @@ Median's own aura pulse built from C++ callbacks: aura stats onto units with aur
 D2R's generic stat aura is srvdofunc 65, but Median's auras use aurafilter 1 where vanilla uses e.g. 73731, and
 D2Sigma's callback does its own target selection: a plain remap to 65 could put an enemy aura (Holy Freeze) on the
 caster's party. Needs the callback's rules first.
+
+### 156: pet dies (`0x100aaee0`) and death event 14 — slot 175 (`sigma_skills.cpp`), `death_event.cpp` (off word `deathevent`); bug #58
+
+The Night Hawks (monster `night_hawk` / `night_hawk_2`) have no monster skill: their monprop gives them stat 195
+(item_skillonattack) 100 % skills_374 (port 446) and stat 271 (D2R name `item_mana_bytime`, event `events_14`, function
+30) 100 % skills_373 (port 445: missile 5444, the explosion with damage; `night_hawk_2` has both as stat 195).
+
+- **156** (`0x100aaee0`): with a level >= 1, gets the caster's owner (1.13c `0x6fc41260`, the AI owner) and calls the
+  1.13c pet removal `0x6fcb7b50` with the kill flag: the pet leaves its owner's list and dies (`0x6fcb77e0` -> the unit death
+  function with no killer). Port: D2R's owner lookup `0x4a53c0(unit)`, then the unit death function
+  `0x44db20(game, unit, null, 1)`, which with flag 1 takes a player's pet off the list itself (`0x4ffb90`).
+- **Event 14**: Median's events.txt has two rows more than 1.13c (ev14, ev15). D2Sigma's wrapper `0x10057930` of the 1.13c
+  unit death function `0x6fcfeee0` raises event 14 (`mov edx, 0xe`) with the victim and the killer before the death runs; all
+  17 calls of `0x6fcfeee0` in D2Game are redirected to the wrapper, so every death raises it. Stat 271 (Median's "cast on death",
+  248 monprop rows: the hawks, death novas of many monsters) listens to it. txt_migrate keeps the row as D2R events row 18
+  (`events_14`), which D2R never raises. `death_event.cpp` hooks `0x44db20` (entry 24 bytes, no rip-relative operand) and
+  raises the event id of stat 271's itemstatcost record (`+0x44`) through the dispatch wrapper `0x44d570(game, event,
+  victim, killer, 0)` first. Difference: a unit already in its death / dead mode (the modes `0x44db20` returns on) gets no
+  second event. `mxl` line `death event on (... deaths, raised, event 18)`; check `nighthawks`.
 
 ## Client skill functions (skills.txt `cltdofunc`)
 

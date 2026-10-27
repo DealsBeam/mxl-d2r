@@ -8,6 +8,27 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
 
 ## D2R-XL
 
+### 0.69.14 (2026-10-27)
+- **Fixed: Bend the Shadows** (the Necromancer's innate warp) can go on the **right** mouse button again, where a click on
+  the ground casts it. The other innate skills that could not be selected at all (Mana Shield, Titan's Fortitude, Mark of
+  the Wild, Vindicate) can now be put on a button too. ([#57](docs/bugs.md))
+
+### 0.69.13 (2026-10-27)
+- **Fixed: Abyss Knights use their void blast again** instead of only hitting in melee. As in Median, the Guardian Spirit,
+  the Mana Tide and Elemental totems, and the Sinner, Frostwalker and Glowing Fungus summons also fight as ranged pets. ([#59](docs/bugs.md))
+
+### 0.69.12 (2026-10-27)
+- **Fixed: Night Hawks explode again.** A hawk that hits now dies and explodes, as in Median. ([#58](docs/bugs.md))
+- **Median's "cast on death" effects work.** Monsters with a death effect (248 rows in Median's monster property table)
+  now cast it when they die; before, none of them did.
+
+### 0.69.11 (2026-10-27)
+- **Fixed the remaining goblin / Den boss crash.** It happened on D2RLoader's very first start after installing or
+  updating D2RLoader or D2R: on that start D2RLoader builds its table cache and loads only D2R's own sounds, so Median's
+  sounds were missing. Every sound lookup is now guarded, so that start no longer crashes. ([#42, #46](docs/bugs.md))
+- On that first start a notice asks you to **close the game and start it again**. Median's own sounds are silent until
+  then, and play normally from the second start on.
+
 ### 0.69.10 (2026-10-27)
 - **Fixed skill icons:** **Attack** and about 86 other shared skill icons (Throw, Unsummon and more) showed the icon
   next to theirs. A few class skills (Reckoning of Zerae, Batstrike, Pneumatic Burst, Shadow Flow) had the wrong
@@ -21,8 +42,7 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
   now skips such sounds instead of crashing. ([#42, #46](docs/bugs.md))
 - **Fixed:** missiles that summon a monster on hit (406 Median missiles) summoned the wrong monster, e.g. the Den of Evil
   boss's bone spear. ([#42](docs/bugs.md))
-- Known: player installs started without `-txt` still use D2R's own sound table, so Median-only sounds are silent. A fix
-  is in progress.
+- (Corrected in 0.69.11: the silent sounds came from D2RLoader's first start, not from `-txt`.)
 
 ### 0.69.8 (2026-10-27)
 - Released with **Downloader 0.2.5**.

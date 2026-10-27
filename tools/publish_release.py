@@ -641,8 +641,17 @@ def publish(target: Target, dist: Path, version: str, channel, source=None, laun
 
     up, final = f"{INCOMING}/{version}.uploading", f"{INCOMING}/{version}"
     man_rel = f"releases/{version}/{MANIFEST_NAME}"
-    listings, files = target.snapshot(object_dirs(objs) + [up, final], [man_rel, f"{final}/READY", f"{final}/REFUSED",
-                                                                                  f"{final}/{MANIFEST_NAME}"])
+    for attempt in range(retries + 1):  # the inventory is one long SFTP session: a dropped connection is retried too
+        try:
+            listings, files = target.snapshot(object_dirs(objs) + [up, final],
+                                              [man_rel, f"{final}/READY", f"{final}/REFUSED", f"{final}/{MANIFEST_NAME}"])
+            break
+        except PublishError as e:
+            if attempt == retries:
+                raise PublishError(f"reading what the host has failed {retries + 1} times, last: {e}")
+            wait = RETRY_WAIT * (attempt + 1)
+            log(f"reading the host's objects failed ({str(e)[-200:]}); again in {wait} s ({attempt + 2} of {retries + 1})")
+            time.sleep(wait)
     have = objects_from_listings(listings, objs)
     missing = {s: v for s, v in objs.items() if have.get(s) != v[0]}
     old = files[man_rel]
