@@ -32,7 +32,8 @@ Expect bugs. Please report them (below).
 
 ## Requirements
 
-- Your own copy of **Diablo II: Resurrected** (PC, Battle.net), build **93847**. Nothing from Blizzard is distributed here.
+- Your own copy of **Diablo II: Resurrected** (PC, Battle.net), build **93847**. The Steam build (94995) is not supported
+  yet ([docs/bugs.md](docs/bugs.md) #41). Nothing from Blizzard is distributed here.
 - **D2RLoader 1.3.1** from [d2rloader.net](https://d2rloader.net/), installed in your D2R folder.
 - Windows 10 or 11, and about **1.6 GB of free disk space** (1.2 GB for the mod, plus the 355 MB download while it
   installs).
@@ -41,10 +42,13 @@ Expect bugs. Please report them (below).
 
 1. Install **D2RLoader 1.3.1** from https://d2rloader.net/ into your D2R folder (it puts `D2RLoader.exe` next to
    `D2R.exe`).
-2. Download the **D2R-XL Downloader** (`D2R-XL-Downloader.exe`) from https://dl.werdegames.com/mxl/ (the link is also
-   on the [Releases](https://github.com/Nugwa628/mxl-d2r/releases) page), run it and press **Install**. It finds your
-   D2R folder (or use **D2R folder** to pick it) and puts the mod in `<D2R folder>\mods\D2R-XL`. Run it again later
-   and press **Update** for a new version, or **Repair** if a file got damaged.
+2. Download the **D2R-XL Downloader**:
+   **https://files.werdegames.com/mxl/launcher/0.2.2/D2R-XL-Downloader.exe**
+   Run it and press **Install**.
+   - It finds your D2R folder; use **D2R folder** to pick it if it guesses wrong. It puts the mod in `<D2R folder>\mods\D2R-XL`.
+   - Run it again later and press **Update** for a new version, or **Repair** if a file got damaged.
+   - The downloader updates itself, so an older link still works.
+   - It is not code-signed yet, so Chrome may call it "suspicious" (open the downloads list and choose to keep the file) and Windows may show "Windows protected your PC" (**More info → Run anyway**).
 3. **How to play:** start `D2RLoader.exe` in your D2R folder. The first time, click the gear on the character screen,
    set **Default Mod** to **D2R-XL**, Apply, and start D2RLoader again. From then on D2RLoader starts D2R-XL directly.
 
@@ -54,7 +58,9 @@ download or change D2RLoader, D2R or other mods. D2R-XL characters are saved in 
 in `Program Files` and Windows refuses the write, the downloader says so: run it as administrator. Details:
 [docs/launcher.md](docs/launcher.md).
 
-Manual install: each release also has a `.7z` file (`D2R-XL-<version>.7z`, about 355 MB) with a `D2R-XL/` folder
+Manual install: each release also has a `.7z` file (`D2R-XL-<version>.7z`, about 355 MB, at
+`https://files.werdegames.com/mxl/releases/<version>/D2R-XL-<version>.7z`, e.g.
+[0.69.4](https://files.werdegames.com/mxl/releases/0.69.4/D2R-XL-0.69.4.7z)) with a `D2R-XL/` folder
 (`D2R-XL.mpq/` and `d2rloader/`). Windows 11 opens .7z files; otherwise use [7-Zip](https://www.7-zip.org). Unpack it
 into the `mods` folder of your D2R install and follow step 3. Steps and the file layout are in
 [docs/release.md](docs/release.md).
