@@ -92,7 +92,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.69.13";
+constexpr const char* PluginVersion = "0.69.14";
 constexpr uint32_t ExpectedImage = build_guard::ExpectedImage;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 #ifdef MXL_RELEASE
 constexpr const char* BuildKind = "release";  // cmake -DMXL_RELEASE=ON: no test harness compiled in

@@ -8,6 +8,11 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
 
 ## D2R-XL
 
+### 0.69.14 (2026-10-27)
+- **Fixed: Bend the Shadows** (the Necromancer's innate warp) can go on the **right** mouse button again, where a click on
+  the ground casts it. The other innate skills that could not be selected at all (Mana Shield, Titan's Fortitude, Mark of
+  the Wild, Vindicate) can now be put on a button too. ([#57](docs/bugs.md))
+
 ### 0.69.13 (2026-10-27)
 - **Fixed: Abyss Knights use their void blast again** instead of only hitting in melee. As in Median, the Guardian Spirit,
   the Mana Tide and Elemental totems, and the Sinner, Frostwalker and Glowing Fungus summons also fight as ranged pets. ([#59](docs/bugs.md))
