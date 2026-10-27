@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Create (or update) a GitHub release for a D2R-XL version from its CHANGELOG.md section (docs/release.md step 5).
+"""Create (or update) a GitHub or Forgejo release for a D2R-XL version from its CHANGELOG.md section (docs/release.md step 5).
+
+  --forge: the release goes to the forge (git.werdegames.com, WerdeGames/mxl-d2r) through its API instead, with the
+  token from $MXL_FORGE_TOKEN; --commit is then the FORGE's commit (its history is not scrubbed, so ids differ).
 
   py -3 tools/github_release.py 0.69.6 --commit <sha on GitHub main> [--downloader build/launcher/Release/D2R-XL-Downloader.exe]
                                        [--repo Nugwa628/mxl-d2r] [--latest] [--dry-run]
@@ -11,7 +14,12 @@ because 355 MB over the developer's uplink is too slow. --downloader attaches th
 docs/release.md. Needs the GitHub CLI (`gh`), logged in.
 """
 import argparse
+import json
+import os
 import re
+import urllib.error
+import urllib.request
+import uuid
 import subprocess
 import sys
 import tempfile
@@ -43,6 +51,45 @@ def release_body(version: str, section: str, downloader_version: str = "") -> st
     return "\n".join(lines) + "\n"
 
 
+FORGE_API = "https://git.werdegames.com/api/v1/repos/WerdeGames/mxl-d2r"
+
+
+def forge(method, path, token, body=None, data=None, ctype="application/json"):
+    req = urllib.request.Request(FORGE_API + path, method=method, data=data if data is not None else
+                                 (json.dumps(body).encode() if body is not None else None),
+                                 headers={"Authorization": f"token {token}", "Content-Type": ctype, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        raw = r.read()
+    return json.loads(raw) if raw else None
+
+
+def forge_release(version, commit, body, downloader, latest, token):
+    tag = f"v{version}"
+    try:
+        rel = forge("GET", f"/releases/tags/{tag}", token)
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        rel = None
+    fields = {"name": f"D2R-XL {version}", "body": body, "draft": False, "prerelease": False}
+    if rel:
+        rel = forge("PATCH", f"/releases/{rel['id']}", token, fields)
+    else:
+        rel = forge("POST", "/releases", token, {**fields, "tag_name": tag, "target_commitish": commit})
+    if downloader:
+        for a in rel.get("assets") or []:
+            if a["name"] == downloader.name:
+                forge("DELETE", f"/releases/{rel['id']}/assets/{a['id']}", token)
+        b = uuid.uuid4().hex
+        crlf = "\r\n"
+        head = (f"--{b}{crlf}Content-Disposition: form-data; name=\"attachment\"; filename=\"{downloader.name}\"{crlf}"
+                f"Content-Type: application/octet-stream{crlf}{crlf}")
+        data = head.encode() + downloader.read_bytes() + f"{crlf}--{b}--{crlf}".encode()
+        forge("POST", f"/releases/{rel['id']}/assets?name={downloader.name}", token, data=data,
+              ctype=f"multipart/form-data; boundary={b}")
+    return rel["html_url"]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("version")
@@ -52,6 +99,7 @@ def main() -> int:
     ap.add_argument("--downloader-version", default="", help="its version, for the link (default: read from the exe)")
     ap.add_argument("--latest", action="store_true", help="mark as the latest release")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--forge", action="store_true", help="release on the forge (token in $MXL_FORGE_TOKEN), not GitHub")
     a = ap.parse_args()
 
     dv = a.downloader_version
@@ -63,6 +111,12 @@ def main() -> int:
     tag = f"v{a.version}"
     if a.dry_run:
         print(f"{tag} on {a.commit}\n\n{body}")
+        return 0
+    if a.forge:
+        token = os.environ.get("MXL_FORGE_TOKEN", "")
+        if not token:
+            raise SystemExit("MXL_FORGE_TOKEN is not set")
+        print(forge_release(a.version, a.commit, body, a.downloader, a.latest, token))
         return 0
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write(body)
