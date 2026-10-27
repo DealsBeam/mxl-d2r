@@ -13278,8 +13278,9 @@ def _equip_by_packets_id(iid, x, y, loc):
 
 
 def _equip_from_ground(args, loc, to_pack):
-    """As a player finds it: `item <args> ground`, picked up with packet 0x16 (to the cursor, or with the to-inventory flag
-    into the backpack and then lifted with 0x19), then worn with 0x1a. (worn, lines)."""
+    """As a player finds it: `item <args> ground`, picked up with packet 0x16 to the cursor and worn with 0x1a, or with the
+    to-inventory flag (a plain click): D2R puts the item on straight away when its body location is empty (item mode 1; the
+    owner's Coronet of bug #55), else into the backpack, from where it is lifted (0x19) and worn (0x1a). (worn, lines)."""
     ok, lines = H("item %s ground" % args)
     m = re.search(r"id=(\d+)", " ".join(lines))
     if not ok or not m:
@@ -13297,6 +13298,8 @@ def _equip_from_ground(args, loc, to_pack):
     if to_pack:
         it = None
         for _ in range(6):  # the player walks the last steps first
+            if any(x.get("id") == iid and x.get("page") == 255 for x in hstate()["items"]):
+                return True, lines + ["put on by the pickup itself (empty body location)"]
             # the backpack copy can carry a new unit id: take the item of that code that was not there before
             it = next((x for x in hstate()["items"] if x.get("page") == 0 and (x.get("id") == iid or (
                 x.get("code") == code and x.get("id") not in before))), None)
@@ -13310,7 +13313,7 @@ def _equip_from_ground(args, loc, to_pack):
             held = held_item()
             release_held_item()
             H("remove %s 1" % args.split()[0])
-            return False, lines + ["the pickup into the backpack did not land (item %d mode %s, cursor %s)" % (iid, f2.get("mode"), held)]
+            return False, lines + ["the pickup with the inventory flag did not land (item %d mode %s, cursor %s)" % (iid, f2.get("mode"), held)]
         lines.append("picked up into the backpack at %s,%s" % (it.get("x"), it.get("y")))
         H("pkt 19 " + _le(iid, it.get("x", 0), it.get("y", 0), 0))
         time.sleep(0.4)
@@ -13347,8 +13350,8 @@ def check_equipall():
     if mode == "packet":
         nm += ", by the player's packets 0x19 / 0x1a"
     elif mode == "ground":  # each item twice: ground -> cursor -> body, and ground -> backpack -> cursor -> body
-        nm += ", picked up from the ground (0x16 to the cursor / into the backpack) and worn (0x1a)"
-        targets = [(lb + via, a, l) for lb, a, l in targets for via in (" (ground to cursor)", " (ground to backpack)")]
+        nm += ", picked up from the ground (0x16 to the cursor, then 0x1a / with the inventory flag: put on at once)"
+        targets = [(lb + via, a, l) for lb, a, l in targets for via in (" (ground to cursor)", " (ground to inventory)")]
     p = hstate()["player"]
     goto(1)  # a town: no monster interrupts
     if packet:  # the body packet checks the requirements (a level 1 test character wears nothing magic): level, Str, Dex well above
@@ -13364,7 +13367,7 @@ def check_equipall():
     for label, args, l in targets:
         g.log("EQUIPALL wearing %s (%s)" % (label, args))
         if mode == "ground":
-            ok, lines = _equip_from_ground(args, l, label.endswith("backpack)"))
+            ok, lines = _equip_from_ground(args, l, label.endswith("inventory)"))
         elif packet:
             ok, lines = _equip_by_packets(args, l)
         else:
