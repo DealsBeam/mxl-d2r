@@ -2,7 +2,7 @@
 """Create (or update) a GitHub or Forgejo release for a D2R-XL version from its CHANGELOG.md section (docs/release.md step 5).
 
   --forge: the release goes to the forge (git.werdegames.com, WerdeGames/mxl-d2r) through its API instead, with the
-  token from $MXL_FORGE_TOKEN; --commit is then the FORGE's commit (its history is not scrubbed, so ids differ).
+  token from $MXL_FORGE_TOKEN or ~/.mxl-d2r/forge_token; --commit is then the FORGE's commit (its history is not scrubbed, so ids differ).
 
   py -3 tools/github_release.py 0.69.6 --commit <sha on GitHub main> [--downloader build/launcher/Release/D2R-XL-Downloader.exe]
                                        [--repo Nugwa628/mxl-d2r] [--latest] [--dry-run]
@@ -114,8 +114,11 @@ def main() -> int:
         return 0
     if a.forge:
         token = os.environ.get("MXL_FORGE_TOKEN", "")
+        tok_file = Path.home() / ".mxl-d2r" / "forge_token"  # a forge access token (repository + issue), outside the repo
+        if not token and tok_file.is_file():
+            token = tok_file.read_text(encoding="utf-8").strip()
         if not token:
-            raise SystemExit("MXL_FORGE_TOKEN is not set")
+            raise SystemExit("no forge token: set MXL_FORGE_TOKEN or save one in ~/.mxl-d2r/forge_token")
         print(forge_release(a.version, a.commit, body, a.downloader, a.latest, token))
         return 0
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:

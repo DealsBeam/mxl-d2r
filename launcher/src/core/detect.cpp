@@ -1,6 +1,8 @@
 #include "detect.h"
 
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <sstream>
 
@@ -154,42 +156,53 @@ bool AcfIsD2R(const std::string& acf) {
 	       dir == "diablo ii resurrected";
 }
 
-bool SameProgram(int build, int required) {
-	if (build == required)
-		return true;
-	if (required != RequiredBuild)
-		return false;
-	for (int b : SameProgramBuilds)
-		if (build == b)
-			return true;
-	return false;
+std::string GameVersion(const std::string& version) {
+	int major = 0, minor = 0;
+	size_t i = 0, n = version.size();
+	auto num = [&](int& out) {
+		size_t start = i;
+		while (i < n && version[i] >= '0' && version[i] <= '9')
+			out = out * 10 + (version[i++] - '0');
+		return i > start;
+	};
+	while (i < n && !(version[i] >= '0' && version[i] <= '9'))
+		++i;
+	if (!num(major) || i >= n || version[i] != '.')
+		return "";
+	++i;
+	if (!num(minor))
+		return "";
+	return std::to_string(major) + "." + std::to_string(minor);
 }
 
-BuildCheck CheckBuild(const std::string& infoVersion, const std::string& exeVersion, int required) {
+static int CompareGameVersions(const std::string& a, const std::string& b) {
+	int am = 0, an = 0, bm = 0, bn = 0;
+	am = std::atoi(a.c_str()); an = a.find('.') == std::string::npos ? 0 : std::atoi(a.c_str() + a.find('.') + 1);
+	bm = std::atoi(b.c_str()); bn = b.find('.') == std::string::npos ? 0 : std::atoi(b.c_str() + b.find('.') + 1);
+	return am != bm ? (am < bm ? -1 : 1) : (an == bn ? 0 : (an < bn ? -1 : 1));
+}
+
+BuildCheck CheckBuild(const std::string& infoVersion, const std::string& exeVersion, const std::string& required) {
 	BuildCheck c;
-	int info = BuildNumber(infoVersion), exe = BuildNumber(exeVersion);
-	if (!info && !exe) {
+	c.build = BuildNumber(!infoVersion.empty() ? infoVersion : exeVersion);
+	c.version = GameVersion(!infoVersion.empty() ? infoVersion : exeVersion);
+	if (c.version.empty())
+		c.version = GameVersion(exeVersion);
+	std::string shown = c.version.empty() ? std::string() : "D2R " + c.version + (c.build ? " (build " + std::to_string(c.build) + ")" : "");
+	if (c.version.empty()) {
 		c.message = "Cannot read the D2R version (.build.info and D2R.exe)";
 		return c;
 	}
-	c.build = info ? info : exe;
-	if (info && exe && info != exe) {
-		c.build = info > exe ? info : exe;  // half-updated install: the newer one decides
-	}
-	if (c.build == required) {
+	int cmp = CompareGameVersions(c.version, required);
+	if (cmp == 0) {
 		c.verdict = BuildVerdict::Ok;
-		c.message = "D2R build " + std::to_string(c.build);
-	} else if (SameProgram(c.build, required)) {
-		c.verdict = BuildVerdict::Ok;
-		c.message = "D2R build " + std::to_string(c.build) + " (the same game program as " + std::to_string(required) + ")";
-	} else if (c.build > required) {
+		c.message = shown;
+	} else if (cmp > 0) {
 		c.verdict = BuildVerdict::Newer;
-		c.message = "D2R-XL needs D2R build " + std::to_string(required) + "; this D2R is build " + std::to_string(c.build) +
-		            ". Waiting for a D2R-XL update for the new build.";
+		c.message = "D2R-XL needs D2R " + required + "; this is " + shown + ". Waiting for a D2R-XL update for the new version.";
 	} else {
 		c.verdict = BuildVerdict::Older;
-		c.message = "D2R-XL needs D2R build " + std::to_string(required) + "; this D2R is build " + std::to_string(c.build) +
-		            ". Update D2R in Battle.net or Steam first.";
+		c.message = "D2R-XL needs D2R " + required + "; this is " + shown + ". Update D2R in Battle.net or Steam first.";
 	}
 	return c;
 }

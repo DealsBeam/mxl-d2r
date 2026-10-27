@@ -78,6 +78,7 @@
 #include "skill_starts.h"
 #include "whirlwind.h"
 #include "other_plugins_logic.h"
+#include "env_guard_logic.h"
 
 #include <windows.h>
 #include <tlhelp32.h>
@@ -90,7 +91,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.69.8";
+constexpr const char* PluginVersion = "0.69.9";
 constexpr uint32_t ExpectedImage = build_guard::ExpectedImage;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 #ifdef MXL_RELEASE
 constexpr const char* BuildKind = "release";  // cmake -DMXL_RELEASE=ON: no test harness compiled in
@@ -208,7 +209,7 @@ auto BuildMatches(const D2RL::PluginContext* context) noexcept -> bool {
 char g_wrongBuild[256] = "";  // the message for a player on another build, empty on build 93847
 
 // Diagnosis switch: mxl-core-off.txt next to the DLL lists parts to leave out (any of: cltdostub states levels calc skills
-// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock mediantowns statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard otherplugins soundguard
+// items missiles mana townmana durability durabilitytip repairui quantity potionamounts stamina manaregen autoid skilldmg restrict heat trophy itemstat whirlwind wwproc cube craftflags clientmsg quests quests2 lockout goblins medianai namecolors monsterautomap spawnoverlays npc reqgates hirelings mercrevive monlevel playersx normaltc leash throne questxp questrewards wpauto mapreveal hotkeys skilltree combat damagered statcols itemevents nocorpse respawnwait corpsepickup cooldowns props runewords xp partyxp classlock ethereal sockets dyes; "trace" turns the bug #22 state trace on, "statesfix" turns the states fix on (off by default since 0.35.0), dyes mapmem; infopanels bufficons stashpages gamble hitfloor recast slowfloor uniquelimits uniquecarry vendorstock npcheal tplock mediantowns statclick respecbuffs afford teleportgold hcdeath reqlevel soulstealer transguard otherplugins envguard soundguard
 // "keepcurrent" leaves the current-states array in place), separated by spaces, commas or lines.
 char g_offList[256] = "";
 
@@ -290,10 +291,104 @@ void OtherPlugins(char* out, size_t n) noexcept {
 	}
 }
 
+// Which mxl-core runs, from where, for which mod (docs/bugs.md #53, env_guard_logic.h): an old copy in the game-wide
+// plugins folder, or D2RLoader's default_mod naming another mod folder, runs another build than the one installed.
+char g_selfPath[MAX_PATH * 3] = "";
+char g_envReport[1024] = "ok";  // the `environment` line of `mxl`
+
+void ModulePathUtf8(HMODULE module, char* out, size_t n) noexcept {
+	wchar_t w[MAX_PATH * 2] = L"";
+	const DWORD len = GetModuleFileNameW(module, w, static_cast<DWORD>(sizeof(w) / sizeof(w[0])));
+	if (len == 0 || WideCharToMultiByte(CP_UTF8, 0, w, -1, out, static_cast<int>(n), nullptr, nullptr) <= 0) {
+		out[0] = '\0';
+	}
+}
+
+// Other modules of this process that are mxl-core too (file mxl-core*.dll, or D2RLoaderGetPluginInfo with id "mxl-core");
+// `first` gets the path of the first one.
+auto OtherInstances(char* first, size_t n) noexcept -> int {
+	first[0] = '\0';
+	HMODULE self = nullptr;
+	GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	                   reinterpret_cast<LPCWSTR>(&OtherInstances), &self);
+	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+	if (snap == INVALID_HANDLE_VALUE) {
+		return 0;
+	}
+	MODULEENTRY32W me{};
+	me.dwSize = sizeof(me);
+	int found = 0;
+	for (BOOL ok = Module32FirstW(snap, &me); ok; ok = Module32NextW(snap, &me)) {
+		char path[MAX_PATH * 3];
+		if (me.hModule == self || WideCharToMultiByte(CP_UTF8, 0, me.szExePath, -1, path, sizeof(path), nullptr, nullptr) <= 0) {
+			continue;
+		}
+		const char* slash = std::strrchr(path, '\\');
+		const char* file = slash != nullptr ? slash + 1 : path;
+		const char* id = nullptr;
+		if (other_plugins::PluginDirAt(path) >= 0) {  // only D2RLoader plugins are asked for their info
+			using GetInfo = const D2RL::PluginInfo* (*)();
+			if (auto get = reinterpret_cast<GetInfo>(reinterpret_cast<void*>(GetProcAddress(me.hModule, "D2RLoaderGetPluginInfo")))) {
+				const D2RL::PluginInfo* info = get();
+				if (info != nullptr && info->infoSize >= offsetof(D2RL::PluginInfo, id) + sizeof(info->id)) {
+					id = info->id;
+				}
+			}
+		}
+		if (env_guard::IsOurModule(file, id) && found++ == 0) {
+			std::snprintf(first, n, "%s", path);
+		}
+	}
+	CloseHandle(snap);
+	return found;
+}
+
+// Checks and reports: the log, `mxl`, and the screen notice unless the build guard already shows one.
+void CheckEnvironment(bool atLoad) noexcept {
+	if (g_context == nullptr) {
+		return;
+	}
+	char game[MAX_PATH * 3];
+	ModulePathUtf8(nullptr, game, sizeof(game));
+	if (char* slash = std::strrchr(game, '\\')) {
+		*slash = '\0';
+	}
+	char other[MAX_PATH * 3];
+	const int others = OtherInstances(other, sizeof(other));
+	const char* mod = g_context->activeMod;
+	const env_guard::Verdict v = env_guard::Check(g_selfPath, game, mod, others);
+	char detail[sizeof(g_envReport)];
+	env_guard::Detail(detail, sizeof(detail), v, g_selfPath, mod, other);
+	std::snprintf(g_envReport, sizeof(g_envReport), "%s", v.Ok() ? "ok" : detail);
+	if (v.Ok()) {
+		if (!atLoad) {
+			g_context->LogInfo("mxl-core: environment ok (no second mxl-core after the game-wide plugins loaded)");
+		}
+		return;
+	}
+	char line[sizeof(g_envReport) + 32];
+	std::snprintf(line, sizeof(line), "mxl-core: environment %s", detail);
+	g_context->LogWarn(line);
+	if (g_wrongBuild[0] == '\0') {
+		char notice[256];
+		env_guard::Notice(notice, sizeof(notice), v, PluginVersion, mod);
+		if (!ShowNotice(g_context, notice)) {
+			g_context->LogWarn("mxl-core: no overlay service, the environment warning is in this log only");
+		}
+	}
+}
+
 // Start-up log line of the other plugins: D2RLoader loads the game-wide plugins after the mod's, so a one-shot thread waits
-// until the loader is done (its plugin list is in d2rloader.log too).
+// until the loader is done (its plugin list is in d2rloader.log too). The environment check runs again then: a stray
+// game-wide mxl-core loads only after this one.
 DWORD WINAPI LogOtherPluginsLater(LPVOID) {
 	Sleep(15000);
+	if (!Off("envguard")) {
+		CheckEnvironment(false);
+	}
+	if (Off("otherplugins")) {
+		return 0;
+	}
 	char line[384];
 	OtherPlugins(line, sizeof(line));
 	if (g_context != nullptr) {
@@ -312,11 +407,21 @@ auto MxlCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext* co
 		return D2RL::ConsoleCommandResult::Failed;
 	}
 	char line[384];
-	std::snprintf(line, sizeof(line), "mxl-core %s (%s) | D2R %s | image 0x%08x (expects 0x%08x, %s) | exe base 0x%llx",
-	              PluginVersion, BuildKind, g_context->buildVersion ? g_context->buildVersion : "?", ImageStamp(g_context),
-	              ExpectedImage, BuildMatches(g_context) ? "match" : "MISMATCH, hooks off",
-	              static_cast<unsigned long long>(g_context->exeBase));
-	Say(command, line);
+	{
+		char first[384 + sizeof(g_selfPath)];
+		std::snprintf(first, sizeof(first), "mxl-core %s (%s) | D2R %s | image 0x%08x (expects 0x%08x, %s) | exe base 0x%llx | mod %s | file %s",
+		              PluginVersion, BuildKind, g_context->buildVersion ? g_context->buildVersion : "?", ImageStamp(g_context),
+		              ExpectedImage, BuildMatches(g_context) ? "match" : "MISMATCH, hooks off",
+		              static_cast<unsigned long long>(g_context->exeBase), g_context->activeMod ? g_context->activeMod : "?",
+		              g_selfPath[0] ? g_selfPath : "?");
+		Say(command, first);
+		char env[sizeof(g_envReport) + 16];
+		std::snprintf(env, sizeof(env), "environment %s", Off("envguard") ? "off: left out by mxl-core-off.txt" : g_envReport);
+		Say(command, env);
+		if (std::strcmp(g_envReport, "ok") != 0) {
+			g_context->LogWarn(env);
+		}
+	}
 	if (!Off("otherplugins")) {
 		OtherPlugins(line, sizeof(line));
 		Say(command, line);
@@ -634,15 +739,23 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		return false;
 	}
 	g_context = context;
-	char line[256];
-	std::snprintf(line, sizeof(line), "mxl-core %s loaded (mod %s, D2R %s, image 0x%08x%s)", PluginVersion,
+	{
+		HMODULE self = nullptr;
+		GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		                   reinterpret_cast<LPCWSTR>(&ModulePathUtf8), &self);
+		ModulePathUtf8(self, g_selfPath, sizeof(g_selfPath));
+	}
+	char line[256 + sizeof(g_selfPath)];
+	std::snprintf(line, sizeof(line), "mxl-core %s loaded (mod %s, D2R %s, image 0x%08x%s) from %s", PluginVersion,
 	              context->activeMod ? context->activeMod : "?", context->buildVersion ? context->buildVersion : "?",
-	              ImageStamp(context), BuildMatches(context) ? "" : "; not the expected image, engine hooks stay off");
+	              ImageStamp(context), BuildMatches(context) ? "" : "; not the expected image, engine hooks stay off",
+	              g_selfPath[0] ? g_selfPath : "?");
 	context->LogInfo(line);
 	if (!BuildMatches(context)) {
 		// Another game build: no hook, patch or harness at all (their addresses are build 93847's). Say why, and keep `mxl`.
 		build_guard::Message(g_wrongBuild, sizeof(g_wrongBuild), PluginVersion, ImageStamp(context),
 		                     BuildName(context));
+		CheckEnvironment(true);  // logged and in `mxl`; the screen keeps the wrong-build notice
 		context->LogError(g_wrongBuild);
 		if (!ShowWrongBuildNotice(context, g_wrongBuild)) {
 			context->LogWarn("mxl-core: no overlay service, the wrong-build notice is in this log only");
@@ -651,7 +764,10 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	}
 	{
 		ReadOffList();
-		if (!Off("otherplugins")) {
+		if (!Off("envguard")) {
+			CheckEnvironment(true);
+		}
+		if (!Off("otherplugins") || !Off("envguard")) {
 			if (HANDLE t = CreateThread(nullptr, 0, LogOtherPluginsLater, nullptr, 0, nullptr)) {
 				CloseHandle(t);
 			}

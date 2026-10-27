@@ -58,4 +58,43 @@ bool OfficialMedianXLPath(const std::string& path, const std::string& localAppDa
 // or full path). Not the downloader, Battle.net's "Diablo II Resurrected Launcher.exe" or BlizzardError.exe.
 bool IsGameProcessName(const std::string& exe);
 
+// ---- The player's D2R around the mod folder (docs/bugs.md #53): D2RLoader can start another build than the one the
+// downloader installed. Its game-wide config names the mod it starts, and a copy of our plugin in another plugins
+// folder loads too.
+
+// The game-wide config D2RLoader reads at start, relative to the D2R folder.
+constexpr const char* LoaderConfigRel = R"(d2rloader\config\d2rloader.toml)";
+// A TOML string value without its quotes (`"D2R-XL"` or `'D2R-XL'` -> `D2R-XL`); other text as it is.
+std::string TomlUnquote(const std::string& value);
+
+struct DefaultModCheck {
+	bool ok = false;             // default_mod names our mod folder (case-insensitive, like Windows folder names)
+	bool configMissing = false;  // no game-wide d2rloader.toml (D2RLoader never ran, or is not installed)
+	std::string mod;             // the mod D2RLoader starts ("" when default_mod is missing or empty)
+};
+// `text`: the game-wide d2rloader.toml (`exists` false when there is none); `ourMod`: "D2R-XL".
+DefaultModCheck CheckDefaultMod(const std::string& text, bool exists, const std::string& ourMod);
+// The status line ("" when ok): which mod D2RLoader starts instead of ours.
+std::string DefaultModWarning(const DefaultModCheck& c, const std::string& ourMod);
+// The config with default_mod set to `ourMod`; every other line stays as it is.
+std::string SetDefaultMod(const std::string& text, const std::string& ourMod);
+
+// True for a DLL that is (a copy of) our plugin: the file name mxl-core*.dll, or its version resource says D2R-XL
+// (ProductName "D2R-XL", or a FileDescription naming mxl-core or "D2R-XL core"). Empty strings: no version resource.
+bool IsOurPluginFile(const std::string& fileName, const std::string& productName, const std::string& fileDescription);
+
+enum class PluginPlace {
+	None,      // not in a D2RLoader plugins folder
+	GameWide,  // <D2R>\d2rloader\plugins\...: loads with every mod
+	OtherMod,  // <D2R>\mods\<other>\d2rloader\plugins\...: loads when D2RLoader starts that mod
+	OurMod     // <D2R>\mods\<ourMod>\d2rloader\plugins\...: the installed one
+};
+// `rel`: a DLL's path relative to the D2R folder ('\' or '/'); `mod` gets the mod folder for OtherMod / OurMod.
+PluginPlace PluginPlaceOf(const std::string& rel, const std::string& ourMod, std::string* mod = nullptr);
+// The warning for a copy of our plugin outside mods\<ourMod> ("" for OurMod / None). `path`: the file as shown to the
+// player (the CLI and the question before moving it); `brief`: the short form of the window's status panel.
+std::string StrayPluginWarning(const std::string& path, PluginPlace place, const std::string& mod, bool brief = false);
+// Where a stray plugin is moved (never deleted): <dataDir>\removed\<date>\<rel>; `date` like "2026-10-27".
+std::string RemovedPluginPath(const std::string& dataDir, const std::string& date, const std::string& rel);
+
 }  // namespace mxl

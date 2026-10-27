@@ -31,7 +31,8 @@ struct Manifest {
 	std::string version;        // the release, shown to the player
 	std::string pluginVersion;
 	bool complete = false;      // false: a CI package without data, never installed
-	int d2rBuild = 0;           // d2r.build: the build the game copy must be at (93847)
+	int d2rBuild = 0;           // d2r.build: the build the plugin's addresses were taken from (93847); shown only
+	std::string d2rVersion;     // d2r.version ("3.3.0"): its major.minor ("3.3") is what the player's D2R must be
 	uint32_t imageTimestamp = 0;  // d2r.imageTimestamp: of the unpacked image in memory, not the file (0 = not given)
 	struct Loader {
 		std::string version, url, sha256, signerThumbprint;

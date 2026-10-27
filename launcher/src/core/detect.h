@@ -7,14 +7,15 @@
 
 namespace mxl {
 
-constexpr int RequiredBuild = 93847;  // D2R 3.3 build the port is made for (docs/d2r-baseline.md)
-// Other build numbers that run the very same game program, so the plugin works there too. Steam's D2R 3.3.94995 unpacks
-// to the same image as Battle.net's 93847 (PE timestamp 0x6ab3782c in memory; a player's mxl-core.log on Steam,
-// docs/bugs.md #41). The packed D2R.exe files differ, so this is known per build, not computed. The plugin still checks
-// the image at run time and stays off on any other one (plugin/src/build_guard_logic.h).
-constexpr int SameProgramBuilds[] = {94995};
-// True for RequiredBuild itself and for a build of SameProgramBuilds when `required` is RequiredBuild.
-bool SameProgram(int build, int required = RequiredBuild);
+// The game version D2R-XL needs: major.minor of D2R's version ("3.3" of "3.3.93847"). Never the build number: builds of
+// one game version differ by platform (Steam 3.3.94995, Battle.net 3.3.93847) and hotfix, and D2RLoader supports the
+// game version (D2RLoader's author, 2026-10-27). The plugin itself still checks the game image at run time and stays off
+// on one it was not made for (plugin/src/build_guard_logic.h).
+constexpr const char* RequiredGameVersion = "3.3";
+constexpr int RequiredBuild = 93847;  // the build the plugin's addresses were taken from (docs/d2r-baseline.md); info only
+
+// "major.minor" of a version string: "3.3.93847" -> "3.3", "3.3.0" -> "3.3", "1.0.0.93847" -> "1.0"; "" when none.
+std::string GameVersion(const std::string& version);
 
 // .build.info of a Blizzard (CASC) install: '|' separated, first line "Name!TYPE:n|...". Returns the "Version" of
 // the active row ("3.3.93847"), or "" when there is none.
@@ -36,10 +37,12 @@ enum class BuildVerdict { Ok, Older, Newer, Unknown };
 struct BuildCheck {
 	BuildVerdict verdict = BuildVerdict::Unknown;
 	int build = 0;
+	std::string version;  // the game version found ("3.3"), "" when unknown
 	std::string message;  // one line for the status bar
 };
-// `infoVersion` from .build.info, `exeVersion` the file version of D2R.exe ("" when unreadable). Both must name the
-// required build when present; .build.info is the one Battle.net updates first.
-BuildCheck CheckBuild(const std::string& infoVersion, const std::string& exeVersion, int required = RequiredBuild);
+// `infoVersion` from .build.info, `exeVersion` the file version of D2R.exe ("" when unreadable). The game version
+// (major.minor) of .build.info (else of D2R.exe) must equal `required` ("3.3"); the build number is only shown.
+BuildCheck CheckBuild(const std::string& infoVersion, const std::string& exeVersion,
+                      const std::string& required = RequiredGameVersion);
 
 }  // namespace mxl

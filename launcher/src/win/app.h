@@ -5,16 +5,18 @@
 
 #include "../core/json.h"
 #include "../core/manifest.h"
+#include "../core/paths.h"
 #include "game.h"
 
 #include <atomic>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace mxl {
 
 #ifndef MXL_LAUNCHER_VERSION
-#define MXL_LAUNCHER_VERSION "0.2.3"  // the downloader version; CMake reads it from here for the version resource
+#define MXL_LAUNCHER_VERSION "0.2.5"  // the downloader version; CMake reads it from here for the version resource
                                       // (cmake -DMXL_LAUNCHER_VERSION=x.y.z overrides both, for tests of the self-update)
 #endif
 constexpr const char* LauncherVersion = MXL_LAUNCHER_VERSION;
@@ -61,7 +63,7 @@ public:
 		std::wstring d2rDir;
 		std::string d2rSource;   // "Battle.net", "Steam", "default folder", "chosen", "saved"
 		BuildCheck build;        // against the release's d2r.build (RequiredBuild until the feed is read)
-		int requiredBuild = RequiredBuild;
+		std::string requiredVersion = RequiredGameVersion;  // "3.3": the release's d2r.version, major.minor
 		std::string loaderFound;   // D2RLoader.exe's file version, "" when missing
 		std::string loaderNeeded;  // the release's d2rloader.version
 		bool loaderOk = false;
@@ -73,9 +75,23 @@ public:
 		bool legacyCopy = false;   // a 0.1.x private game copy is still on disk (offered for removal once)
 		std::wstring legacyDir;
 		bool legacyOffered = false;
+		// docs/bugs.md #53: what D2RLoader really starts. Its game-wide default_mod (checked when D2RLoader or its
+		// config is there), and copies of our plugin in the game-wide or another mod's plugins folder.
+		bool defaultModChecked = false;
+		DefaultModCheck defaultMod;
+		std::wstring loaderConfig;  // <D2R>\d2rloader\config\d2rloader.toml
+		struct StrayPlugin {
+			std::wstring path;
+			std::string rel;  // relative to the D2R folder
+			PluginPlace place = PluginPlace::None;
+			std::string mod;  // OtherMod: its folder
+		};
+		std::vector<StrayPlugin> strayPlugins;
 	};
 	View Inspect();
 	std::string StatusText(const View& v) const;
+	// The #53 warnings in full (the CLI's status, the questions before fixing them); empty when all is well.
+	std::vector<std::string> EnvironmentWarnings(const View& v) const;
 	std::wstring ModDir() const;     // <D2R>\mods\D2R-XL ("" before a D2R folder is known)
 	std::wstring D2RDir() const { return d2rDir_; }
 	bool SetD2RDir(const std::wstring& dir, std::string& error);  // the player's choice (Browse); saved in the state
@@ -88,6 +104,11 @@ public:
 	// The 0.1.x launcher's private game copy (d2r-xl-copy.json marker matching the state): delete it, and its cache.
 	bool RemoveLegacyCopy(std::string& error);
 	void DeclineLegacyCopy();  // asked once: remember the answer
+	// docs/bugs.md #53, each after the player said yes. FixDefaultMod sets only default_mod = "D2R-XL" in D2RLoader's
+	// game-wide config (the one write outside mods\D2R-XL); RemoveStrayPlugins moves every copy of our plugin outside
+	// mods\D2R-XL into <data>\removed\<date>\ (never deleted).
+	bool FixDefaultMod(std::string& error);
+	bool RemoveStrayPlugins(std::string& error);
 	bool ForeignModFolder() const { return foreign_; }  // set by an install that stopped to ask
 	void SetReplace(bool replace) { opt_.replace = replace; }  // the player said yes
 
