@@ -353,10 +353,14 @@ rows (D2R-XL 12449)`) has the installed mod's row count, the Median-only `treasu
 it, d2rloader.log's sound step of this start compiled the mod's `sounds.txt` with that many rows, and the installed
 `objtype.txt` files equal work/mod's (D2RLoader compiles objtype in neither mode). To see a player's first start, move
 `<slot>\d2rloader\data\compiler` aside before the run (D2RLoader then builds its base snapshot and loads D2R's 11913
-sound rows: `releasetables` FAILs and names it, `goblincrash` crashes) and put it back afterwards. Runs 2026-10-27 on
+sound rows: `releasetables` FAILs and names it; `goblincrash` crashed before 0.69.11 and now passes with the skipped ids
+listed, because the `mxl` line says `NOT D2R-XL's table`) and put it back afterwards. Runs 2026-10-27 on
 the live release 0.69.8 with this lane's dev DLL (then labelled 0.69.10, 0.69.11 after the merge), no `-txt`: first start (snapshot moved aside) `releasetables` FAIL
 "loaded sounds table 11913 rows ... base snapshot built in this start" and the plugin's warning in mxl-core.log
-(checks-20261027-164906-s3); normal start `mxl releasetables goblincrash denboss` all PASS (checks-20261027-165028-s3).
+(checks-20261027-164906-s3); normal start `mxl releasetables goblincrash denboss` all PASS (checks-20261027-165028-s3). With every sound record
+lookup guarded (0.69.11 follow-up, release 0.69.10, slot 3): first start `mxl goblincrash denboss` PASS and no crash,
+`releasetables` FAIL by design (checks-20261027-171557-s3); normal start all PASS (`denboss` on the rerun,
+checks-20261027-172425-s3 / checks-20261027-173418-s3).
 
 ## Harness commands (gameplay without input; plugin/src/harness_cmds.cpp)
 

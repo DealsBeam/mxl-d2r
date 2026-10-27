@@ -13303,15 +13303,21 @@ def check_goblincrash():
         norow = re.search(r"(\d+) without a monstats row", plugin)
         if norow and int(norow.group(1)) > 0:
             bad.append("%s goblin rolls found no monstats row (a table did not load)" % norow.group(1))
-        # Bugs #42 / #46: a monster sound id outside sounds.txt crashed the client in 0xd8c70; the plugin's sound guard skips it.
-        # MXL_SOUNDGUARD_TEST=1 (dev DLL) feeds the goblins' Neutral sound as -1, so the guard must have skipped some.
+        # Bugs #42 / #46: a monster sound id outside sounds.txt crashed the client (0xd8c70, 0xda4a0); the plugin's sound guard
+        # skips it. MXL_SOUNDGUARD_TEST=1 (dev DLL) feeds the goblins' Neutral sound as -1, so the guard must have skipped some.
+        # On the start that builds D2RLoader's base compiler snapshot the game has D2R's own sounds table (`NOT D2R-XL's table`):
+        # every Median sound is -1 there, skips are expected and the check only asks that the game stays up (releasetables
+        # FAILs that start).
         skipped = re.search(r"(\d+) bad sound ids skipped[^|]*", plugin)
+        short = "NOT D2R-XL's table" in plugin
         if skipped:
             rows.append("sound guard: " + skipped.group(0).strip())
             n = int(skipped.group(1))
             if os.environ.get("MXL_SOUNDGUARD_TEST") == "1":
                 if n == 0:
                     bad.append("MXL_SOUNDGUARD_TEST=1 but the sound guard skipped nothing")
+            elif n > 0 and short:
+                rows.append("%d sound ids skipped: the loaded sounds table is not D2R-XL's (snapshot start), the game stayed up" % n)
             elif n > 0:
                 bad.append("%d monster sound ids were outside sounds.txt (a sounds table did not load)" % n)
     crashes = [c for c in (sorted(os.listdir(g.CRASH_DIR)) if os.path.isdir(g.CRASH_DIR) else []) if c not in crashes0]

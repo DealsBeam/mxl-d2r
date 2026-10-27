@@ -162,10 +162,10 @@ sounds tables into the snapshot ("compiled game ... sounds.txt", no "compiled mo
 11913 sound rows while the gameplay step compiles the mod's monsounds as usual: every D2R-XL sound name is -1. Reproduced
 on slot 2 / 3 with the release install (snapshot folder moved aside): without `-txt` and **with** `-txt` alike, the
 goblins' Neutral sound was -1 and the game crashed at the first goblin (`D2R.exe+0xDA4A0` once the 0.69.9 sound guard
-covered `0xd8c70`). The next start validates the snapshot ("Validated the current base compiler snapshot"), compiles
+covered `0xd8c70`; 0.69.11 guards every sound record lookup, and that start no longer crashes, docs/bugs.md #46). The next start validates the snapshot ("Validated the current base compiler snapshot"), compiles
 the mod's 12449 rows and `goblincrash` passes. So neither `-txt` nor shipped BINs is the fix (a `.bin` in the mod would
 switch D2RLoader to a "custom BIN set" that must be complete, and the snapshot start ignores the mod anyway): the player
-has to start the game once more. Plugin 0.69.11 checks the loaded sounds table after every table load (D2RLoader's
+has to start the game once more to hear D2R-XL's sounds. Plugin 0.69.11 checks the loaded sounds table after every table load (D2RLoader's
 DataTablesLoaded listener) and, below D2R-XL's 12449 rows, logs a warning, shows `NOT D2R-XL's table` in the `mxl`
 sound guard line and draws "D2R-XL: D2RLoader built its table cache on this start and the mod's sounds did not load.
 Close the game and start it again." at the top of the screen. The how-to-play steps already restart D2RLoader once

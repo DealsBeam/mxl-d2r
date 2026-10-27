@@ -65,8 +65,8 @@ The plugin warns in the game too (a red line at the top of the screen, and `envi
 console line, which also shows the mod name and the plugin's own file).
 
 **"D2RLoader built its table cache on this start and the mod's sounds did not load."** The first start after installing
-or updating D2RLoader (or D2R) prepares D2RLoader's table cache and loads D2R's own sounds, so D2R-XL's sounds are missing
-and some monsters (treasure goblins) crash the game. Close the game and start D2RLoader again; from then on it is right.
+or updating D2RLoader (or D2R) prepares D2RLoader's table cache and loads D2R's own sounds, so D2R-XL's sounds are silent
+in that session. Close the game and start D2RLoader again; from then on it is right.
 
 The downloader writes only `mods\D2R-XL` (and its own settings and log in `%LOCALAPPDATA%\D2R-XL`); it does not
 download or change D2RLoader, D2R or other mods, except the two fixes above, each only after you say yes. D2R-XL characters are saved in their own folder
