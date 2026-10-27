@@ -2234,6 +2234,31 @@ class Migrator:
 
     _median_values: dict[tuple[str, str], set[str]] = {}
 
+    def align_item_types(self, rows: list[list[str]], drows_all: list[list[str]], kcol: int, m_keys: set[str]) -> list[list[str]]:
+        """itemtypes (bug #50): D2R's code tests item types by number (0x373890 with constants: 75 rune, 77 hpot, 82 wpot,
+        84 mcha, 96 gem4, ...), its loader skipping the "Expansion" row. D2R's table has `warl` at 67; Median's rows lack
+        it, so every type from 67 on was one below D2R's number (a rune failed the rune test and its gems.txt mods were
+        never applied, a circlet passed it). Each D2R row Median lacks goes to its D2R number instead of the end; the
+        tables refer to item types by code, so the Median rows after it only move."""
+        added = []
+        i = 0
+        for r in drows_all:
+            if not is_record(r):
+                continue
+            if r[kcol].lower() not in m_keys:
+                added.append((i, r))
+            i += 1
+        out = list(rows)
+        moved, tail = [], []
+        for i, r in added:
+            if i < len(out) and not out[i][kcol]:  # Median's blank row holds the number (`none` 1): it stays
+                tail.append(r)
+            else:
+                out.insert(min(i, len(out)), r)
+                moved.append(f"{r[kcol]} {i}")
+        self.report.append("\nitemtypes: D2R rows at their D2R type numbers: " + ", ".join(moved))
+        return out + tail
+
     def drop_dangling(self, row: list[str], dh: list[str], dead_refs: dict, table: str, row_id: int) -> list[str]:
         """A row kept from D2R (e.g. RotW's Colossal monsters) may point into a table Median replaced; such
         references are emptied when Median's version has no such entry."""
@@ -2513,7 +2538,9 @@ class Migrator:
                     rows = list(drows) + [convert(r, None, None) for r in mrows if r[mi[mkey]].lower() not in d_by_key]
                 else:
                     rows = [convert(r, d_by_key.get(r[mi[mkey]].lower()), None) for r in mrows]
-                    if kind == "keyed":
+                    if kind == "keyed" and table == "itemtypes":
+                        rows = self.align_item_types(rows, drows_all, di[dkey], m_keys)
+                    elif kind == "keyed":
                         rows += [r for r in drows if r[di[dkey]].lower() not in m_keys]
 
             write_tsv(OUT / "data" / "global" / "excel" / ("base" if bank == "base" else "") / f"{table}.txt", dh, rows)

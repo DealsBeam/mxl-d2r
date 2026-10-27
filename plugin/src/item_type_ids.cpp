@@ -1,11 +1,12 @@
-// D2R's fixed item type ids moved to Median's (bug #49; tools/item_type_ids.py).
+// D2R's fixed item type ids against ours (bugs #49 / #50 / #55; tools/item_type_ids.py). A startup self-check, no patch.
 //
-// D2R 3.x has a type `warl` at id 67 of itemtypes.txt that 1.13 (and so Median) does not have: every type from `h2h` on is
-// one id lower in our tables. D2R.exe asks "is the item of type N" (0x373890(item, N)) with N written into the code; at
-// these 25 sites N is a type at or above 67, so D2R read our neighbours instead: its rune (75) is our circlet, its healing
-// potion (77) our mana potion, ... A circlet picked up or worn took the rune branch of 0x475140, whose assert
-// `UnitGetType(hUnit) == UNIT_ITEM` (ItemMode.cpp:676) fires and the game dies right after. Each site's immediate gets the
-// Median id of the same code (mxl_item_type_ids.h, from the built itemtypes.txt). The original bytes are checked first.
+// D2R.exe asks "is the item of type N" (0x373890(item, N)) with N written into the code; at these 25 sites N is a type at
+// or above 67. D2R 3.x has the type `warl` at id 67, which 1.13 (and so Median) does not: until 0.69.16 every type from
+// `h2h` on was one id lower in our itemtypes.txt, D2R's rune (75) was our circlet (the ItemMode.cpp:676 crash of #49 /
+// #55) and socketed runes applied nothing (#50). 0.69.15 rewrote the 25 immediates to our ids; since 0.69.16
+// txt_migrate puts D2R's own rows at D2R's numbers (`warl` 67), so our ids are D2R's and nothing needs moving. This part
+// checks that each site still holds its D2R id (the bytes) and that our type of the same code has that id
+// (mxl_item_type_ids.h, from the built itemtypes.txt), and logs each mismatch.
 #include "item_type_ids.h"
 
 #include "mxl_item_type_ids.h"
@@ -61,42 +62,38 @@ auto Encode(const Site& s, int id, uint8_t* out) noexcept -> uint32_t {
 	return 3;
 }
 
-int g_patched = 0;
+int g_mismatched = 0;
 
 }  // namespace
 
 auto InstallItemTypeIds(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
-	int patched = 0, same = 0, failed = 0;
-	const char* firstFailed = "";
+	int match = 0, idDiffers = 0, bytesDiffer = 0;
+	char first[96] = "";
 	for (const auto& s : Sites) {
 		const int id = MedianId(s.code);
-		if (id < 0 || id > 0x7f) {
-			++failed;
-			firstFailed = s.code;
-			continue;
-		}
-		if (id == s.d2rId) {
-			++same;
-			continue;
-		}
-		uint8_t original[5], wanted[5];
+		uint8_t original[5];
 		const uint32_t n = Encode(s, s.d2rId, original);
-		Encode(s, id, wanted);
-		if (context->PatchBytes(s.rva, original, n, wanted, n)) {
-			++patched;
-		} else {
-			++failed;
-			firstFailed = s.code;
+		const bool bytes = std::memcmp(reinterpret_cast<const void*>(context->exeBase + s.rva), original, n) == 0;
+		if (bytes && id == s.d2rId) {
+			++match;
+			continue;
+		}
+		bytes ? ++idDiffers : ++bytesDiffer;
+		char line[160];
+		std::snprintf(line, sizeof(line), "mxl-core: item type ids MISMATCH at 0x%llx: D2R %s %d, ours %d%s",
+		              static_cast<unsigned long long>(s.rva), s.code, s.d2rId, id, bytes ? "" : ", the instruction bytes differ");
+		context->LogInfo(line);
+		if (first[0] == 0) {
+			std::snprintf(first, sizeof(first), " (first: %s D2R %d, ours %d%s)", s.code, s.d2rId, id, bytes ? "" : ", bytes");
 		}
 	}
-	g_patched = patched;
-	const int rune = MedianId("rune");
-	std::snprintf(report, reportSize, "%s: %d of %d fixed type checks moved to Median's ids (rune 75 -> %d, hpot 77 -> %d, ...)%s%s%s",
-	              failed == 0 ? "on" : "partly", patched, static_cast<int>(sizeof(Sites) / sizeof(Sites[0])), rune, MedianId("hpot"),
-	              same != 0 ? ", some already equal" : "", failed != 0 ? ", bytes differ at a site of " : "", firstFailed);
-	return failed == 0;
+	g_mismatched = idDiffers + bytesDiffer;
+	std::snprintf(report, reportSize, "%s: %d of %d fixed type checks match our item types (rune %d, hpot %d)%s%s",
+	              g_mismatched == 0 ? "ok" : "MISMATCH", match, static_cast<int>(sizeof(Sites) / sizeof(Sites[0])), MedianId("rune"),
+	              MedianId("hpot"), g_mismatched != 0 ? ", no patch: rebuild the data (tools/txt_migrate.py)" : "", first);
+	return g_mismatched == 0;
 }
 
-auto ItemTypeIdsPatched() noexcept -> int {
-	return g_patched;
+auto ItemTypeIdsMismatched() noexcept -> int {
+	return g_mismatched;
 }

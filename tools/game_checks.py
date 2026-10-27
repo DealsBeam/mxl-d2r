@@ -11,7 +11,7 @@ Run with `py -3 tools/game_checks.py all [check ...]` (writes report.md, screens
 %USERPROFILE%\\mxl-d2r-runs\\checks-<time>\\); `--slot N` picks a game slot.
 Checks: mxl lockclock goblins respec cain cainsub heart catalyst tower lockout lockquest reenter cow goldcraft
 craftflags areacycle mapmem casts itemevents medianai medianai_ctl tyrael resistcap absorb damagered avoidcaps
-classlock hiregates itemrolls allqualsockets dye goldclient bonusdrops summoner tooltiptext specialtext gameend itemstatsave trophy statcols
+classlock hiregates itemrolls allqualsockets dye runestack goldclient bonusdrops summoner tooltiptext specialtext gameend itemstatsave trophy statcols
 skilltree keybinds npcstrings automap scrollportals vendors monhover levelcap skillcaps townportal potions itemskills
 cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes skillstarts activationfreq nslong orbtips strings goblinname rewardsound statorder infopanel sprint steadyaim restrictitems
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
@@ -3535,7 +3535,13 @@ def _req(ref, cls=None):
     return rows
 
 
-MERC_LISTS = {271: (0, (27,), ()), 338: (3, (33, 34), (112,)), 359: (1, (30, 2), (212,)), 561: (4, (30,), (198,))}
+def _merc_lists():
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "plugin", "src", "mxl_hirelings.h"), encoding="utf-8").read()
+    ids = lambda t: tuple(int(x) for x in t.split(",") if int(x) >= 0)
+    return {int(m): (int(e), ids(a), ids(d)) for m, e, a, d in re.findall(r"\{(\d+), (\d+), \{([-\d, ]+)\}, \{([-\d, ]+)\}\}", src)}
+
+
+MERC_LISTS = _merc_lists()  # item type ids follow itemtypes.txt rows, which the build may renumber
 # monster class -> (the character class it equips as, weapon / shield types allowed, types refused again): hireclasses (mxl_hirelings.h)
 
 
@@ -3808,6 +3814,92 @@ def check_dye():
     add(name, "PASS" if not bad else "FAIL",
         "item colour function on a tower shield with stat 368 = 0..21 and -5: index = stat - 1 with a palette entry, 0 / negative = undyed; bytes: %s%s"
         % (" ".join(rows), ("; " + "; ".join(bad[:4])) if bad else ""), [], rows)
+
+
+# Bug #50: N identical runes in one item stack (Median gems.txt: each socketed rune applies its own mods to the parent).
+# Server side: the item is made with sockets in the backpack, each rune goes to the cursor (packet 0x19) and into the item
+# (packet 0x28, as the client's socket click); the parent's stats and D2R's own tooltip are read after each rune.
+RS_CASES = (  # (label, base code, socketed item, body location, Runemaster bonus (stat 510), player stat, gain per socketed item)
+    ("armor", "706", "r02", "body", 0, 22, 3),  # Eld: +3 maximum damage in armor / helm / shield (gems.txt), no defense
+    ("helm", "crn", "r02", "head", 0, 22, 3),
+    ("shield", "tow", "r02", "lhand", 0, 22, 3),
+    ("weapon", "bsd", "r08", "rhand", 0, 39, 30),  # Ral: +30 fire resist in a weapon
+    ("gem", "bsd", "gpv", "rhand", 0, 119, 50),  # control: gems (type gem) always worked
+    ("jewel", "bsd", "jew 39=30 q=4", "rhand", 0, 39, 30),  # control: jewels (D2R type 58) always worked
+    ("runemaster", "706", "r02", "body", 20, 182, None),  # each rune's stat 483 (D2R 512) feeds the Runemaster defense bonus
+)
+RS_REQ = ((0, 1000), (2, 1000), (12, 120))  # strength, dexterity, level: Median turns off the stats of an item whose requirements fail
+RS_BODY = {"head": 1, "body": 3, "rhand": 4, "lhand": 5}
+
+
+def _rs_item(spec):
+    return _rs_item_of(*H("item " + spec))
+
+
+def _rs_item_of(ok, lines):
+    m = re.search(r"item id=(\d+) code=\S+ class=\d+ page=(\d+) x=(\d+) y=(\d+)", " ".join(lines))
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))) if ok and m else None
+
+
+def check_runestack():
+    name = "Socketed runes stack (bug #50): 0-3 Eld in armor / helm / shield, 0-3 Ral in a weapon, gem and jewel controls"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    goto(1)
+    close_menu()
+    rows, bad = [], []
+    rm0 = rd("player", 510)
+    req0 = [(st, rd("player", st)) for st, _ in RS_REQ]
+    for st, val in RS_REQ:
+        setstat("player", st, val)
+    for label, base, rune, loc, rm, stat, per in RS_CASES:
+        for c in (base, rune.split()[0]):
+            H("remove %s 9" % c)
+        setstat("player", 510, rm)
+        for l in (loc, "rhand") if loc == "lhand" else (loc,):  # a two-handed weapon blocks the shield
+            H("unequip %s" % l)
+        for _try in range(20):  # 194=3 sets the count; the socketed flag (0x800) comes from the item's own socket roll
+            ok, lines = H("equip %s 194=3 q=2 %s" % (base, loc))
+            it = _rs_item_of(ok, lines)
+            fl = re.search(r"flags=0x([0-9a-f]+)", " ".join(lines))
+            if it is None or (fl and int(fl.group(1), 16) & 0x800):
+                break
+            H("unequip %s" % loc)
+        if it is None or not (fl and int(fl.group(1), 16) & 0x800):
+            bad.append("%s: no socketed %s item" % (label, base))
+            continue
+        tid = it[0]
+        time.sleep(0.4)
+        vals = [rd("player", stat) or 0]
+        for k in range(1, 4):
+            r = _rs_item(rune)
+            if r is None:
+                bad.append("%s: no %s" % (label, rune))
+                break
+            H("pkt 19 " + _le(r[0], r[2], r[3], r[1]))  # to the cursor
+            time.sleep(0.4)
+            # D2R's 0x28 (0x4c0b20 -> 0x4f9f40): cursor id, target id, body location (1-10 when worn), else page and x / y (u16)
+            H("pkt 28 " + _le(r[0], tid, RS_BODY[loc], it[1], it[2] | it[3] << 16))
+            time.sleep(0.6)
+            _, cur = H("cursor")
+            if "empty" not in " ".join(cur):
+                bad.append("%s: socketed item %d stayed on the cursor" % (label, k))
+                H("pkt 17 " + _le(r[0]))
+                break
+            vals.append(rd("player", stat) or 0)
+        gains = [v - vals[0] for v in vals]
+        step = per if per is not None else gains[1] if len(gains) > 1 else 0
+        want = [k * step for k in range(len(gains))]
+        rows.append("%s %s+%s stat %d: %s" % (label, base, rune.split()[0], stat, "/".join(str(v) for v in vals)))
+        if len(vals) == 4 and (gains != want or not step):
+            bad.append("%s: stat %d gains %s, want %s" % (label, stat, gains, want if step else "> 0 per rune"))
+        H("unequip %s" % loc)
+        H("remove %s 9" % base)
+    setstat("player", 510, rm0 or 0)
+    for st, val in req0:
+        if val is not None:
+            setstat("player", st, val)
+    add(name, "PASS" if not bad else "FAIL", "; ".join(rows + bad))
 
 
 def check_goldclient():
@@ -13541,9 +13633,9 @@ def _equip_from_ground(args, loc, to_pack):
     before = {x.get("id") for x in hstate()["items"]}
     ok, fl = H("iflags %d" % iid)
     f = next((kv(x) for x in fl if x.startswith("iflags")), {})
-    if to_pack:  # into the backpack only from next to the item (within 3 subtiles; the drop lands up to ~4 away)
-        H("move %d %d" % (int(f.get("x", "0")), int(f.get("y", "0")) - 1))
-        time.sleep(0.4)
+    # picked up only from next to the item (within 3 subtiles; the drop lands up to ~4 away), to the cursor too
+    H("move %d %d" % (int(f.get("x", "0")), int(f.get("y", "0")) - 1))
+    time.sleep(0.4)
     H("pkt 16 " + _le(iid, int(f.get("x", "0")), int(f.get("y", "0")), 1 if to_pack else 0))
     time.sleep(0.6)
     if to_pack:
@@ -13651,8 +13743,8 @@ def check_equipall():
 
 
 def check_typeids():
-    """Bugs #49 / #55: D2R's fixed item type ids moved to Median's (plugin item_type_ids.cpp, off word `typeids`). The `mxl`
-    line; a Thul rune (Median's type `rune`, D2R's id 75 before the fix pointed at our circlet) socketed into a circlet with
+    """Bugs #49 / #55: D2R's fixed item type ids equal ours (itemtypes at D2R's numbers; plugin item_type_ids.cpp checks). The
+    `mxl` line; a Thul rune (type `rune`, D2R's id 75, until 0.69.15 our circlet) socketed into a circlet with
     the socket packet 0x28, and the socketed circlet worn with 0x19 / 0x1a."""
     nm = "Item type ids (bugs #49/#55): `mxl` line, a rune into a circlet's socket (0x28), the circlet worn"
     if not need_game():
@@ -13660,8 +13752,8 @@ def check_typeids():
     line = next((l for l in mxl_text().splitlines() if "item type ids" in l), "")
     rows, bad = [line[:200]], []
     control = "typeids" in (os.environ.get("MXL_CONTROL") or "")
-    if not control and "item type ids on: 25 of 25" not in line:
-        bad.append("the mxl line is not 'item type ids on: 25 of 25 ...'")
+    if not control and "item type ids ok: 25 of 25" not in line:
+        bad.append("the mxl line is not 'item type ids ok: 25 of 25 ...'")
     goto(1)
     for stat, v in ((12, 150), (0, 3000), (2, 3000)):
         setstat("player", stat, v)
@@ -14088,7 +14180,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("vendororbs", check_vendororbs), ("summonlife", check_summonlife), ("nighthawks", check_nighthawks), ("abyssknight", check_abyssknight), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
-          ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
+          ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("runestack", check_runestack), ("goldclient", check_goldclient),
           ("bonusdrops", check_bonusdrops), ("summoner", check_summoner), ("tooltiptext", check_tooltiptext), ("specialtext", check_specialtext), ("gameend", check_gameend), ("itemstatsave", check_itemstatsave),
           ("trophy", check_trophy), ("statcols", check_statcols),
           # the old "fix to test" rows of docs/bugs.md

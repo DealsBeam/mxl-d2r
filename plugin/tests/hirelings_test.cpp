@@ -115,7 +115,7 @@ int RunHirelingsTests() {
 		auto is = [](std::initializer_list<int32_t> types) {
 			return [types](int32_t t) { for (int32_t x : types) { if (x == t) return true; } return false; };
 		};
-		constexpr int32_t Bow = 27, Spear = 33, Pole = 34, Sword = 30, Shield = 2, Scythe = 112, TwoHand = 212, Scroll = 198;
+		constexpr int32_t Bow = 27, Spear = 33, Pole = 34, Sword = 30, Shield = 2, Scythe = 117, TwoHand = 217, Scroll = 203;  // itemtypes rows (D2R's 104-108 come first)
 		Check(hire::MercMayWield(*rogue, is({Bow})) && !hire::MercMayWield(*rogue, is({Sword})), "rogue: bow only");
 		Check(!hire::MercMayWield(*rogue, is({Shield})), "rogue: no shield");
 		Check(hire::MercMayWield(*desert, is({Spear})) && hire::MercMayWield(*desert, is({Pole})), "desert: spear and polearm");

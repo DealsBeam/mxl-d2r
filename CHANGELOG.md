@@ -8,6 +8,13 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
 
 ## D2R-XL
 
+### 0.69.16 (2026-10-27)
+- **Socketed runes give their bonuses, and identical runes stack**: two Eld in a helm give +6 maximum damage, three
+  Ral in a weapon +90% fire resistance. ([#50](docs/bugs.md))
+- The circlet crash fix of 0.69.15 now comes from the game data: Median's item types are numbered the way D2R expects
+  (D2R's own new types keep their numbers), so D2R's built-in item rules (runes, potions, charms, circlets, ...) match
+  without changing the game's code. The plugin only checks at start that they match. ([#49, #55](docs/bugs.md))
+
 ### 0.69.15 (2026-10-27)
 - **Fixed the crash when picking up or wearing a circlet** (Circlet, Coronet, Tiara, Diadem). D2R 3.x added an item
   type, so Median's item type numbers sit one lower than D2R's from that point on; D2R's built-in "is this a rune" check
