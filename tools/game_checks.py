@@ -17,7 +17,7 @@ cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes s
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes
 respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick townmonsters
-teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath.
+teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath goblincrash.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -13101,6 +13101,128 @@ def check_denboss():
         (("; PROBLEMS: " + "; ".join(bad)) if bad else ""), shots, rows)
 
 
+GOBLIN_TYPES = (2791, 2792, 2796, 2797, 2798, 2793)  # treasure_goblin, shiny_hoarder, arcane_collector, rainbow, glowing_baron, voided_horror
+GOBLIN_SKILLS = (2580, 2582)  # treasure_goblin_skill (slow curse, srvdofunc 30), treasure_goblin_skill_2 (Submerge: srvdo 94, cltdo 52)
+GOBLIN_NO_SKILL = {(2797, 2582)}  # the rainbow goblin has no Submerge: forcing its mode 14 only raises D2R's hAnimSequence assert
+
+
+def _goblin_round(mode, secs, rows, bad, shots):
+    """One graphics mode: each goblin type is spawned next to the god-mode player in the Blood Moor, they run for `secs`, then they
+    die; then the plugin's own roll (MXL_GOBLINS_FORCE) gets a kill and 18 s to spawn one. The game must stay up throughout."""
+    goto(1)
+    close_menu()
+    if not set_graphics(mode):
+        rows.append("%s: G did not switch the graphics (the town capture says %s)" % (mode, graphics_mode()))
+        return
+    if goto(2)["player"].get("area") != 2:
+        bad.append("%s: the character did not reach the Blood Moor" % mode)
+        return
+    clean_area()
+    spawned = []
+    for cls in GOBLIN_TYPES:
+        st = hstate()
+        known = {m.get("id") for m in st["mons"]}
+        _spawn_near(cls, st)
+        time.sleep(1.5)
+        if not game_alive():
+            bad.append("%s: the game died at the spawn of goblin %d" % (mode, cls))
+            return
+        new = [m for m in hstate()["mons"] if m.get("class") == cls and m.get("id") not in known]
+        spawned.append((cls, len(new)))
+    t0 = time.time()
+    while time.time() - t0 < secs:
+        time.sleep(2.0)
+        if not game_alive():
+            bad.append("%s: the game died %.0f s after the goblins appeared" % (mode, time.time() - t0))
+            return
+    shots.append(sh("goblincrash_%s" % mode))
+    # what a goblin does when a player chases it: its curse (skill 2580, Skill1) and its escape (2582 = D2R's Submerge, Skill6)
+    casts = []
+    for m in [m for m in hstate()["mons"] if m.get("class") in GOBLIN_TYPES and m.get("mode") not in (0, 12)]:
+        H("moveto %d" % m["id"])
+        time.sleep(1.0)
+        for skill in GOBLIN_SKILLS:
+            if (m["class"], skill) in GOBLIN_NO_SKILL:
+                continue
+            ok, l_c = H("mcast %d 14 unit %d" % (skill, m["id"]))
+            casts.append((m["class"], skill, "ok" if ok else "refused"))
+            time.sleep(2.0)
+            if not game_alive():
+                bad.append("%s: the game died after goblin %d cast skill %d (%s)" % (mode, m["class"], skill, " ".join(l_c)[-80:]))
+                return
+    time.sleep(4.0)
+    if not game_alive():
+        bad.append("%s: the game died after the goblin casts" % mode)
+        return
+    shots.append(sh("goblincrash_casts_%s" % mode))
+    for m in hstate()["mons"]:
+        if m.get("class") in GOBLIN_TYPES and m.get("mode") not in (0, 12):
+            H("kill %d" % m["id"])
+    time.sleep(3.0)
+    if not game_alive():
+        bad.append("%s: the game died at the goblin kills" % mode)
+        return
+    s0, _r0 = goblins_counts(hstate())
+    H("spawn 18 1")
+    H("kill nearest 18")
+    time.sleep(18)  # the roll runs every 375 frames
+    if not game_alive():
+        bad.append("%s: the game died around the plugin's own goblin roll" % mode)
+        return
+    st = hstate()
+    s1, _r1 = goblins_counts(st)
+    natural = [m["class"] for m in st["mons"] if m.get("class") in range(2791, 2813)]
+    for m in st["mons"]:
+        if m.get("class") in range(2791, 2813) and m.get("mode") not in (0, 12):
+            H("kill %d" % m["id"])
+    time.sleep(2.0)
+    if not game_alive():
+        bad.append("%s: the game died at the kill of the rolled goblin" % mode)
+        return
+    missing = [c for c, n in spawned if n == 0]
+    if missing:
+        bad.append("%s: `h spawn` made no monster for %s" % (mode, missing))
+    rows.append("%s: spawned %s, %d s alive, casts %s, killed; plugin roll spawned %s -> %s (near: %s)" % (mode, spawned, secs, casts, s0, s1, natural))
+    clean_area()
+
+
+def check_goblincrash():
+    """Bug #46: hard crash when a treasure goblin appears. Six goblin types are spawned in the Blood Moor in HD and in legacy graphics,
+    run for MXL_GOBLIN_SECS seconds (default 20), die; then the plugin's roll spawns one (start the game with MXL_GOBLINS_FORCE=1 for
+    that part). PASS: the game stays up, no new crash report, no new assert. Run it on a release install as well (no -txt)."""
+    nm = "Treasure goblins appear, run and die in HD and legacy graphics without a crash (bug #46)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    secs = int(os.environ.get("MXL_GOBLIN_SECS", "20"))
+    revive_if_dead()
+    enable_debug()
+    crashes0 = sorted(os.listdir(g.CRASH_DIR)) if os.path.isdir(g.CRASH_DIR) else []
+    mark = log_mark()
+    god(True)
+    rows, bad, shots = [], [], []
+    goto(1)
+    start_mode = graphics_mode()
+    for mode in ("hd", "legacy"):
+        _goblin_round(mode, secs, rows, bad, shots)
+        if not game_alive():
+            break
+    if len(rows) < 2 and not bad:
+        bad.append("not both graphics modes were run")
+    if game_alive():
+        goto(1)
+        set_graphics(start_mode)
+        god(False)
+        norow = re.search(r"(\d+) without a monstats row", hstate()["plugin"])
+        if norow and int(norow.group(1)) > 0:
+            bad.append("%s goblin rolls found no monstats row (a table did not load)" % norow.group(1))
+    crashes = [c for c in (sorted(os.listdir(g.CRASH_DIR)) if os.path.isdir(g.CRASH_DIR) else []) if c not in crashes0]
+    if crashes:
+        bad.append("new crash files: %s" % crashes[:4])
+    asserts = sorted(set(assertions_since(mark)))
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(rows) + ("; asserts in d2rloader.log: %s" % asserts[:4] if asserts else "; no new assert") +
+        (("; PROBLEMS: " + "; ".join(bad)) if bad else ""), shots, rows + asserts[:20])
+
+
 def check_otherplugins():
     """`mxl` names the other D2RLoader plugins of the process (bug #44; a test slot has none)."""
     nm = "`mxl` names the other loaded D2RLoader plugins"
@@ -13247,7 +13369,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # lane p4-quests-verify
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
-          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("otherplugins", check_otherplugins),
+          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("goblincrash", check_goblincrash), ("otherplugins", check_otherplugins),
           ("ied", check_ied), ("iedtip", check_iedtip)]
 
 

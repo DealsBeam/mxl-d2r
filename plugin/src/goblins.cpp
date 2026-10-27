@@ -49,6 +49,7 @@ constexpr uint64_t InRoomRva = 0x38dfb0;      // (room, x, y) -> the room (or a 
 constexpr uint64_t ClientUnitRva = 0x484c90;  // (client, 0) -> the client's player unit
 constexpr uint64_t OwnerIdRva = 0x4a5480;     // (unit, &ownerId, &error): the owner of a minion, error 0 = found
 constexpr uint64_t FindUnitRva = 0x48fe80;    // (game, type, id) -> unit
+constexpr uint64_t MonStatsRva = 0x976e0;     // (game+0x106 data flag, class) -> monstats record or null
 
 // 0x406550: mov [rsp+0x20],rsi / push rbp / push rdi / push r15 / lea rbp,[rsp-0x47]   (14 bytes)
 constexpr uint8_t FrameEntry[] = {0x48, 0x89, 0x74, 0x24, 0x20, 0x55, 0x57, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xb9};
@@ -58,6 +59,7 @@ constexpr uint8_t KillEntry[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c,
 constexpr int GameClients = 0x138;   // first client; client+0x628 = next
 constexpr int GameDifficulty = 0x104;
 constexpr int GameFrame = 0x170;
+constexpr int GameDataFlag = 0x106;  // byte, first argument of the table getters
 constexpr int ClientNext = 0x628;
 constexpr int ClientState = 0x04;    // 4 = in game
 constexpr int UnitClass = 0x04;
@@ -77,6 +79,7 @@ using InRoomFn = void* (*)(void* room, int32_t x, int32_t y);
 using ClientUnitFn = Unit* (*)(void* client, int32_t zero);
 using OwnerIdFn = void (*)(Unit* unit, uint32_t* ownerId, uint64_t* error);
 using FindUnitFn = Unit* (*)(Game* game, int32_t type, uint32_t id);
+using MonStatsFn = const uint8_t* (*)(uint32_t dataFlag, int32_t monster);
 
 FrameFn g_frameOriginal = nullptr;
 KillFn g_killOriginal = nullptr;
@@ -87,13 +90,14 @@ InRoomFn g_inRoom = nullptr;
 ClientUnitFn g_clientUnit = nullptr;
 OwnerIdFn g_ownerId = nullptr;
 FindUnitFn g_findUnit = nullptr;
+MonStatsFn g_monStats = nullptr;
 const D2RL::PluginContext* g_context = nullptr;
 bool g_frameHooked = false;
 int g_force = 0;
 
 goblins::State g_state;
 uint64_t g_rng = 0;
-std::atomic<uint32_t> g_ticks{0}, g_rolls{0}, g_spawned{0}, g_failed{0};
+std::atomic<uint32_t> g_ticks{0}, g_rolls{0}, g_spawned{0}, g_failed{0}, g_noRow{0};
 int32_t g_lastMonster = -1, g_lastLevel = -1;
 
 auto Rand() noexcept -> uint32_t {  // splitmix64; the game's own LCG has weak low bits for `% 1024`
@@ -138,6 +142,21 @@ void PlayerTick(Game* game, Unit* player, uint32_t frame, int32_t players) noexc
 	if (monster < 0) {
 		return;
 	}
+	// A goblin row the loaded monstats does not have (a table that did not load, docs/bugs.md #46) is skipped, never spawned.
+	const uint8_t* record = nullptr;
+	__try {
+		record = g_monStats(d2r::At<uint8_t>(game, GameDataFlag), monster);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		record = nullptr;
+	}
+	if (record == nullptr) {
+		if (g_noRow.fetch_add(1) < 5 && g_context != nullptr) {
+			char line[128];
+			std::snprintf(line, sizeof(line), "mxl-core: goblin %d has no monstats row in this game: not spawned", monster);
+			g_context->LogWarn(line);
+		}
+		return;
+	}
 	int32_t x = 0, y = 0;
 	if (!d2r::UnitXY(player, &x, &y)) {
 		return;
@@ -148,6 +167,11 @@ void PlayerTick(Game* game, Unit* player, uint32_t frame, int32_t players) noexc
 	if (spawnRoom == nullptr) {
 		g_failed.fetch_add(1);
 		return;
+	}
+	if (g_spawned.load() < 20 && g_context != nullptr) {  // written before the call: a crash inside the spawn leaves this as the last line
+		char line[128];
+		std::snprintf(line, sizeof(line), "mxl-core: goblin %d rolled in level %d at %d,%d (frame %u), spawning", monster, level, x, y, frame);
+		g_context->LogInfo(line);
 	}
 	if (g_spawn(game, spawnRoom, x, y, monster, 1, SpawnRadius, 0, 0) == nullptr) {
 		g_failed.fetch_add(1);
@@ -253,6 +277,7 @@ auto InstallGoblins(const D2RL::PluginContext* context, char* report, size_t rep
 	g_clientUnit = reinterpret_cast<ClientUnitFn>(base + ClientUnitRva);
 	g_ownerId = reinterpret_cast<OwnerIdFn>(base + OwnerIdRva);
 	g_findUnit = reinterpret_cast<FindUnitFn>(base + FindUnitRva);
+	g_monStats = reinterpret_cast<MonStatsFn>(base + MonStatsRva);
 	g_rng = GetTickCount64() ^ (base << 7);
 
 	char env[8] = "";
@@ -276,8 +301,8 @@ auto InstallGoblins(const D2RL::PluginContext* context, char* report, size_t rep
 }
 
 void GoblinsStatus(char* out, size_t outSize) noexcept {
-	std::snprintf(out, outSize, "%u spawned (last %d in level %d), %u rolls, %u ticks, %u spawn failures", g_spawned.load(),
-	              g_lastMonster, g_lastLevel, g_rolls.load(), g_ticks.load(), g_failed.load());
+	std::snprintf(out, outSize, "%u spawned (last %d in level %d), %u rolls, %u ticks, %u spawn failures, %u without a monstats row",
+	              g_spawned.load(), g_lastMonster, g_lastLevel, g_rolls.load(), g_ticks.load(), g_failed.load(), g_noRow.load());
 }
 
 auto GoblinAnnounce(void* player, int monster, char* out, size_t outSize) noexcept -> bool {
