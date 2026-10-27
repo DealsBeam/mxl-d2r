@@ -112,11 +112,6 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
   hotfixes) is accepted; the window shows "3.3, build N". (Advice from D2RLoader's author.)
 
 ### 0.2.4 (2026-10-27)
-- Warns when D2RLoader would start another mod than D2R-XL (button **Default mod**, which changes only that setting after
-  asking) and when an old copy of the D2R-XL plugin sits in D2RLoader's game-wide plugins folder or another mod's
-  (button **Move plugin**, which moves it aside, never deletes). ([#53](docs/bugs.md))
-
-### 0.2.4 (2026-10-27)
 - **Warns when D2RLoader would start something else than the installed D2R-XL** ([#53](docs/bugs.md)):
   - D2RLoader's Default Mod is not D2R-XL: "D2RLoader starts the mod MedianXL, not D2R-XL". The **Default mod** button
     makes D2R-XL the default mod after asking; it changes only `default_mod` in `<D2R>\d2rloader\config\d2rloader.toml`.
