@@ -9,11 +9,12 @@ Usage:
 
 Prints `path:line: [rule] text` and exits 1 on hits. In history mode the location is `<commit>:<path>:<line in diff>`.
 Intentional hits go in tools/check_public.allow: `path-glob | regex matched against the line`, one per line, `#` comments.
-The rules cover: the CI server address, user-home paths, the names of the owner's machines, e-mail addresses other than
+The rules cover: the private words in ~/.mxl-d2r/private_terms.txt (machine and host names, kept out of the repo), user-home paths, e-mail addresses other than
 noreply addresses (personal e-mail included), internal host names (the public forge git.werdegames.com, the download host dl.werdegames.com and its CDN mirror files.werdegames.com are fine), and credentials.
 """
 import argparse
 import fnmatch
+import os
 import re
 import subprocess
 import sys
@@ -33,10 +34,24 @@ HOME_OK = {"public", "default", "all", "username", "user", "you", "me", "name", 
 # Public hosts under our own domain: the forge, the download host and its Spaces/Cloudflare mirror (docs/hosting.md).
 HOST_OK = {"git.werdegames.com", "dl.werdegames.com", "files.werdegames.com"}
 
-RULES = [
-    ("ci-ip", re.compile(r"\b77\.42\.114\.124\b")),
-    ("machine", re.compile(r"\bthe game PC\b", re.I)),
-    ("machine", re.compile(r"\bCI host\b|\b\b")),
+# Private words (machine names, the CI host, ...) are NOT listed here: this file is public. They live outside the
+# repository, one regex per line (case-insensitive, `#` comments), in $MXL_PRIVATE_TERMS or ~/.mxl-d2r/private_terms.txt.
+# Without that file only the generic rules below run (CI). Every IPv4 address is flagged by the generic ip rule anyway.
+PRIVATE_TERMS = Path(os.environ.get("MXL_PRIVATE_TERMS") or Path.home() / ".mxl-d2r" / "private_terms.txt")
+
+
+def load_private_terms():
+    if not PRIVATE_TERMS.is_file():
+        return []
+    out = []
+    for ln in PRIVATE_TERMS.read_text(encoding="utf-8").splitlines():
+        ln = ln.strip()
+        if ln and not ln.startswith("#"):
+            out.append(("private", re.compile(ln, re.I)))
+    return out
+
+
+RULES = load_private_terms() + [
     ("secret", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----|\bgh[pousr]_[A-Za-z0-9]{30,}\b|\bglpat-[\w-]{20,}\b|"
                           r"(?:password|passwd|token|secret|api[_-]?key)\s*[:=]\s*['\"]?[A-Za-z0-9+/_-]{20,}", re.I)),
 ]
@@ -158,6 +173,7 @@ def scan_history(repo, allow, with_assets=False):
 
 
 def main():
+    sys.stdout.reconfigure(errors="replace")  # binary-looking lines on a non-UTF-8 console
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", default=str(ROOT))
     ap.add_argument("--history", action="store_true", help="also scan all history and commit messages")

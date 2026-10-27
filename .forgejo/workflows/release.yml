@@ -1,4 +1,4 @@
-# Release packaging on the CI server (runner ci-runner, label mxl-cross; docs/release.md). Manual dispatch or a v* tag.
+# Release packaging on the CI server (label mxl-cross; docs/release.md). Manual dispatch or a v* tag.
 # The server has no game files (docs/setup.md "CI"), so tools/build.py cannot run here: this job cross-builds the release
 # plugin (-DMXL_RELEASE=ON, no test harness), checks it, and packages it without D2R-XL.mpq/data
 # (tools/package_release.py --no-data: D2R-XL-<version>-nodata.7z, release-manifest.json with "complete": false,
