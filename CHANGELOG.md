@@ -8,6 +8,14 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
 
 ## D2R-XL
 
+### 0.69.15 (2026-10-27)
+- **Fixed the crash when picking up or wearing a circlet** (Circlet, Coronet, Tiara, Diadem). D2R 3.x added an item
+  type, so Median's item type numbers sit one lower than D2R's from that point on; D2R's built-in "is this a rune" check
+  matched circlets and ran the rune-in-socket code on them. All 25 such built-in item type checks now use Median's
+  numbers. ([#49, #55](docs/bugs.md))
+- The same fix corrects other built-in item rules: runes, potions (mana potions were treated as healing potions),
+  hand-to-hand weapons, pelts, charms and perfect gems.
+
 ### 0.69.14 (2026-10-27)
 - **Fixed: Bend the Shadows** (the Necromancer's innate warp) can go on the **right** mouse button again, where a click on
   the ground casts it. The other innate skills that could not be selected at all (Mana Shield, Titan's Fortitude, Mark of
