@@ -23,6 +23,8 @@ D2RInstall InspectD2R(const std::wstring& dir, const std::string& source);
 std::vector<D2RInstall> FindD2RInstalls();
 
 std::string ExeFileVersion(const std::wstring& exe);
+// ProductName and FileDescription of a file's version resource ("" when it has none).
+void FileVersionStrings(const std::wstring& file, std::string& productName, std::string& fileDescription);
 // SHA-1 thumbprint (upper-case hex) of the Authenticode signer of a file. `intact` is false when the signature is
 // missing or the file was changed after signing; a self-signed certificate (D2RLoader's) counts as intact.
 bool SignerThumbprint(const std::wstring& file, std::string& thumbprint, bool& intact);

@@ -4,10 +4,15 @@ D2R-XL releases (the mod, version = the plugin's `PluginVersion`) and D2R-XL Dow
 Downloads: the downloader always installs the newest release; each release's 7z is at
 `https://files.werdegames.com/mxl/releases/<version>/D2R-XL-<version>.7z`. Known bugs: [docs/bugs.md](docs/bugs.md).
 
-All releases need Diablo II: Resurrected **build 93847** (Battle.net) or **94995** (Steam: the same game program) and
-**D2RLoader 1.3.1**.
+All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2RLoader 1.3.1**.
 
 ## D2R-XL
+
+### 0.69.8 (2026-10-27)
+- Released with **Downloader 0.2.5**.
+- The plugin checks that the game really runs it from `mods\D2R-XL`. If D2RLoader starts another mod, or an old copy
+  of the plugin is loaded, it shows a red warning on screen and in the `mxl` line. The first `mxl` line now also shows
+  the active mod and the plugin's file. ([#53](docs/bugs.md))
 
 ### 0.69.7 (2026-10-27)
 - Released with **Downloader 0.2.3**. No game changes.
@@ -50,6 +55,24 @@ All releases need Diablo II: Resurrected **build 93847** (Battle.net) or **94995
   Median-only monsters, effects and maps use the closest vanilla HD stand-ins. See the README, "Where it stands".
 
 ## D2R-XL Downloader
+
+### 0.2.5 (2026-10-27)
+- The requirement is the **game version, D2R 3.3**, not a build number. Any 3.3 build (Battle.net, Steam, later
+  hotfixes) is accepted; the window shows "3.3, build N". (Advice from D2RLoader's author.)
+
+### 0.2.4 (2026-10-27)
+- Warns when D2RLoader would start another mod than D2R-XL (button **Default mod**, which changes only that setting after
+  asking) and when an old copy of the D2R-XL plugin sits in D2RLoader's game-wide plugins folder or another mod's
+  (button **Move plugin**, which moves it aside, never deletes). ([#53](docs/bugs.md))
+
+### 0.2.4 (2026-10-27)
+- **Warns when D2RLoader would start something else than the installed D2R-XL** ([#53](docs/bugs.md)):
+  - D2RLoader's Default Mod is not D2R-XL: "D2RLoader starts the mod MedianXL, not D2R-XL". The **Default mod** button
+    makes D2R-XL the default mod after asking; it changes only `default_mod` in `<D2R>\d2rloader\config\d2rloader.toml`.
+  - An old copy of the D2R-XL plugin (`mxl-core*.dll`, or any DLL whose version info says D2R-XL) in
+    `<D2R>\d2rloader\plugins` (it loads with every mod) or in another mod's plugins folder. The **Move plugin** button
+    moves it to `%LOCALAPPDATA%\D2R-XL\removed\<date>\` after asking; nothing is deleted.
+  - Command line: `--cli status` prints the warnings, `--cli fix-default-mod` and `--cli remove-stray-plugins` fix them.
 
 ### 0.2.3 (2026-10-27)
 - **Steam:** accepts D2R build 94995, the same game program as 93847, instead of saying the build is not supported.

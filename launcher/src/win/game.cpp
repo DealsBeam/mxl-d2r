@@ -77,6 +77,30 @@ std::string ExeFileVersion(const std::wstring& exe) {
 	return "";
 }
 
+void FileVersionStrings(const std::wstring& file, std::string& productName, std::string& fileDescription) {
+	productName.clear();
+	fileDescription.clear();
+	DWORD dummy = 0, size = GetFileVersionInfoSizeW(file.c_str(), &dummy);
+	if (!size)
+		return;
+	std::vector<uint8_t> buf(size);
+	struct Lang {
+		WORD lang, cp;
+	}* langs = nullptr;
+	UINT len = 0;
+	if (!GetFileVersionInfoW(file.c_str(), 0, size, buf.data()) ||
+	    !VerQueryValueW(buf.data(), L"\\VarFileInfo\\Translation", reinterpret_cast<void**>(&langs), &len) || len < sizeof(Lang))
+		return;
+	auto value = [&](const wchar_t* name) {
+		wchar_t key[96];
+		swprintf_s(key, L"\\StringFileInfo\\%04x%04x\\%s", langs[0].lang, langs[0].cp, name);
+		wchar_t* v = nullptr;
+		return VerQueryValueW(buf.data(), key, reinterpret_cast<void**>(&v), &len) && v && len ? Utf8(v) : std::string();
+	};
+	productName = value(L"ProductName");
+	fileDescription = value(L"FileDescription");
+}
+
 D2RInstall InspectD2R(const std::wstring& dir, const std::string& source) {
 	D2RInstall d;
 	d.dir = TrimSlash(dir);

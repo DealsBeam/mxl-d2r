@@ -1,27 +1,32 @@
 // The wrong-build notice (build_guard_logic.h): on a D2R other than build 93847 the plugin installs no hook and draws one
-// line at the top of the screen through D2RLoader's overlay service, which needs no game address.
+// line at the top of the screen through D2RLoader's overlay service, which needs no game address. The environment
+// warning (env_guard_logic.h, docs/bugs.md #53) uses the same line.
 #include "build_guard.h"
 
 #include <D2RLPlugin/overlay.h>
 
+#include <atomic>
 #include <cstring>
 
 namespace {
 
 const D2RL::OverlayService* g_overlay = nullptr;
-char g_notice[256] = "";
+bool g_registered = false;
+char g_notices[2][256] = {"", ""};  // the drawn one and the next: a later notice never changes the text being drawn
+std::atomic<int> g_current{0};
 
 void __cdecl DrawNotice(const D2RL::PluginContext* context, const D2RL::Overlay::Frame* frame, void*) noexcept {
-	if (g_overlay == nullptr || frame == nullptr || g_notice[0] == '\0') {
+	const char* notice = g_notices[g_current.load()];
+	if (g_overlay == nullptr || frame == nullptr || notice[0] == '\0') {
 		return;
 	}
-	const auto length = static_cast<uint32_t>(std::strlen(g_notice));
+	const auto length = static_cast<uint32_t>(std::strlen(notice));
 	const float size = frame->defaultTextSize * 1.2F;
 	D2RL::Overlay::MeasureTextRequest measure{};
 	measure.structSize = D2RL::Overlay::MeasureTextRequestSize;
 	measure.canvas = frame->canvas;
 	measure.textSize = size;
-	measure.text = g_notice;
+	measure.text = notice;
 	measure.textLength = length;
 	D2RL::Overlay::TextMetrics metrics{};
 	metrics.structSize = D2RL::Overlay::TextMetricsSize;
@@ -41,7 +46,7 @@ void __cdecl DrawNotice(const D2RL::PluginContext* context, const D2RL::Overlay:
 	req.position = {x, y};
 	req.color = {1.0F, 0.35F, 0.25F, 1.0F};
 	req.textSize = size;
-	req.text = g_notice;
+	req.text = notice;
 	req.textLength = length;
 	(void)g_overlay->drawText(context, &req);
 }
@@ -49,10 +54,19 @@ void __cdecl DrawNotice(const D2RL::PluginContext* context, const D2RL::Overlay:
 }  // namespace
 
 auto ShowWrongBuildNotice(const D2RL::PluginContext* context, const char* text) noexcept -> bool {
+	return ShowNotice(context, text);
+}
+
+auto ShowNotice(const D2RL::PluginContext* context, const char* text) noexcept -> bool {
 	if (context == nullptr || text == nullptr) {
 		return false;
 	}
-	strncpy_s(g_notice, sizeof(g_notice), text, _TRUNCATE);
+	const int next = 1 - g_current.load();
+	strncpy_s(g_notices[next], sizeof(g_notices[next]), text, _TRUNCATE);
+	g_current.store(next);
+	if (g_registered) {
+		return true;
+	}
 	if (context->QueryService(&g_overlay) != D2RL::ServiceQueryResult::Success ||
 	    !D2RL::HasOverlayServiceField(g_overlay, D2RL::OverlayServiceRequiredSize)) {
 		g_overlay = nullptr;
@@ -63,5 +77,6 @@ auto ShowWrongBuildNotice(const D2RL::PluginContext* context, const char* text) 
 	reg.phase = D2RL::Overlay::Phase::AfterGameUi;
 	reg.callback = &DrawNotice;
 	D2RL::Overlay::CallbackHandle handle = D2RL::Overlay::InvalidCallbackHandle;
-	return g_overlay->registerFrameCallback(context, &reg, &handle) == D2RL::Overlay::Result::Success;
+	g_registered = g_overlay->registerFrameCallback(context, &reg, &handle) == D2RL::Overlay::Result::Success;
+	return g_registered;
 }

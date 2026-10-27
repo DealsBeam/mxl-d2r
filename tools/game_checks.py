@@ -13293,6 +13293,20 @@ def check_otherplugins():
     add(nm, "PASS" if line.startswith("other plugins:") else "FAIL", line or "no `other plugins` line in `mxl`")
 
 
+def check_envguard():
+    """`mxl` names the active mod and the plugin's own file, and the environment check passes on a test slot: the DLL is
+    under <D2R>\\mods\\D2R-XL\\, the mod is D2R-XL, no second mxl-core (plugin/src/env_guard_logic.h, docs/bugs.md #53)."""
+    nm = "`mxl` shows mod and plugin file, environment ok (bug #53)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    first = _mxl_line("| file ")
+    env = _mxl_line("environment ")
+    m = re.search(r"\| mod (\S+) \| file (.+)$", first)
+    good = (m is not None and m.group(1).lower() == "d2r-xl" and "\\mods\\d2r-xl\\d2rloader\\plugins\\" in m.group(2).lower()
+            and env.strip() == "environment ok")
+    add(nm, "PASS" if good else "FAIL", "%s | %s" % (first[-160:] or "no `| file` in the first `mxl` line", env or "no `environment` line"))
+
+
 def check_transguard():
     """Crash guard on D2R's unit translation event handler 0x775fc0 (plugin/src/translation_guard.cpp, docs/bugs.md #34): the hook is on,
     it has seen events of the game(s) so far, and a probe event with the payload word of the crash reports (0x8000003F0) is skipped."""
@@ -13430,9 +13444,9 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # lane p4-quests-verify
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
-          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("otherplugins", check_otherplugins),
+          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
           ("ied", check_ied), ("iedtip", check_iedtip),
-          # bug #49
+          # bugs #49 / #55
           ("equipall", check_equipall)]
 
 

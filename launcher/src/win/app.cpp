@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <ctime>
 #include <map>
 #include <mutex>
 #include <set>
@@ -80,6 +81,64 @@ std::string NotWritable(const std::wstring& dir, DWORD code) {
 void Pause(int attempt, const std::atomic<bool>& cancel) {
 	for (int waited = 0; attempt && waited < (1000 << attempt) && !cancel.load(); waited += 100)
 		Sleep(100);  // 2, 4, 8, 16 s between attempts: a dropped line often comes back
+}
+
+// Copies of our plugin outside mods\<ourMod> (docs/bugs.md #53): in <D2R>\d2rloader\plugins (loads with every mod) and
+// in mods\<other>\d2rloader\plugins (loads with that mod), by file name or version resource.
+std::vector<Launcher::View::StrayPlugin> FindStrayPlugins(const std::wstring& d2r, const std::string& ourMod) {
+	std::vector<std::wstring> dirs = {LR"(d2rloader\plugins)"};
+	WIN32_FIND_DATAW fd;
+	HANDLE h = FindFirstFileW(LongPath(JoinPath(d2r, LR"(mods\*)")).c_str(), &fd);
+	if (h != INVALID_HANDLE_VALUE) {
+		do {
+			std::wstring n = fd.cFileName;
+			if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && n != L"." &&
+			    n != L".." && Lower(Utf8(n)) != Lower(ourMod))
+				dirs.push_back(L"mods\\" + n + LR"(\d2rloader\plugins)");
+		} while (FindNextFileW(h, &fd));
+		FindClose(h);
+	}
+	std::vector<Launcher::View::StrayPlugin> out;
+	for (const auto& rel : dirs) {
+		std::wstring dir = JoinPath(d2r, rel);
+		if (!DirExists(dir))
+			continue;
+		for (const std::string& f : ListFilesUnder(dir)) {
+			std::string r = Utf8(rel) + "\\" + f;
+			std::replace(r.begin(), r.end(), '/', '\\');
+			Launcher::View::StrayPlugin sp;
+			sp.place = PluginPlaceOf(r, ourMod, &sp.mod);
+			if (sp.place != PluginPlace::GameWide && sp.place != PluginPlace::OtherMod)
+				continue;
+			std::string name = f.substr(f.find_last_of('/') == std::string::npos ? 0 : f.find_last_of('/') + 1), product, description;
+			sp.path = JoinPath(dir, Wide(f));
+			if (Lower(name).size() > 4 && Lower(name).substr(name.size() - 4) == ".dll")
+				FileVersionStrings(sp.path, product, description);
+			if (!IsOurPluginFile(name, product, description))
+				continue;
+			sp.rel = r;
+			out.push_back(sp);
+		}
+	}
+	return out;
+}
+
+std::string Today() {
+	std::time_t t = std::time(nullptr);
+	std::tm tm{};
+	localtime_s(&tm, &t);
+	char d[16];
+	std::strftime(d, sizeof(d), "%Y-%m-%d", &tm);
+	return d;
+}
+
+// "D2R.exe is running from <dir>. Close the game first." or "".
+std::string GameRunning(const std::wstring& d2rDir) {
+	auto running = ProcessesUnder(d2rDir);
+	if (running.empty())
+		return "";
+	return Utf8(running.front().exe.substr(running.front().exe.find_last_of(LR"(\/)") + 1)) + " is running from " + Utf8(d2rDir) +
+	       ". Close the game first.";
 }
 
 }  // namespace
@@ -224,7 +283,7 @@ Launcher::View Launcher::Inspect() {
 	std::string e;
 	v.feedOk = feedChecked_;
 	v.latest = feed_.version;
-	v.requiredBuild = feed_.d2rBuild ? feed_.d2rBuild : RequiredBuild;
+	v.requiredVersion = !GameVersion(feed_.d2rVersion).empty() ? GameVersion(feed_.d2rVersion) : std::string(RequiredGameVersion);
 	v.loaderNeeded = !feed_.d2rloader.version.empty() ? feed_.d2rloader.version : LoaderVersionDefault;
 	const Json& legacy = state_["legacy"];
 	if (legacy.IsObject() && !legacy["dir"].Str().empty()) {
@@ -242,13 +301,20 @@ Launcher::View Launcher::Inspect() {
 	v.d2rDir = d2rDir_;
 	v.d2rSource = d2rSource_;
 	D2RInstall d = InspectD2R(d2rDir_, d2rSource_);
-	v.build = CheckBuild(d.infoVersion, d.exeVersion, v.requiredBuild);
+	v.build = CheckBuild(d.infoVersion, d.exeVersion, v.requiredVersion);
 	std::wstring loader = JoinPath(d2rDir_, L"D2RLoader.exe");
 	if (FileExists(loader))
 		v.loaderFound = ExeFileVersion(loader);
 	if (FileExists(loader) && v.loaderFound.empty())
 		v.loaderFound = "unknown version";
 	v.loaderOk = LoaderVersionMatches(v.loaderFound, v.loaderNeeded);
+	v.loaderConfig = JoinPath(d2rDir_, Wide(LoaderConfigRel));
+	std::string config;
+	bool configExists = ReadWholeFile(v.loaderConfig, config);
+	v.defaultModChecked = configExists || !v.loaderFound.empty();  // no D2RLoader at all: its own line says so
+	if (v.defaultModChecked)
+		v.defaultMod = CheckDefaultMod(config, configExists, ModFolder());
+	v.strayPlugins = FindStrayPlugins(d2rDir_, ModFolder());
 	std::wstring mod = ModDir();
 	std::string marker;
 	ReadWholeFile(JoinPath(mod, Wide(InstallMarkerName)), marker);
@@ -272,12 +338,13 @@ std::string Launcher::StatusText(const View& v) const {
 	std::string out;
 	if (!v.d2rFound)
 		return "!D2R not found: press D2R folder and choose the Diablo II Resurrected folder.";
-	std::string build = v.build.build ? "build " + std::to_string(v.build.build) : "build unknown";
+	std::string found = v.build.version.empty() ? "version unknown"
+	                                            : v.build.version + (v.build.build ? ", build " + std::to_string(v.build.build) : "");
 	if (v.build.verdict == BuildVerdict::Ok)
-		out += "D2R: " + Utf8(v.d2rDir) + " (" + build + ")\n";
+		out += "D2R: " + Utf8(v.d2rDir) + " (" + found + ")\n";
 	else
-		out += "!D2R " + build + ": D2R-XL needs " + std::to_string(v.requiredBuild) +
-		       (v.build.verdict == BuildVerdict::Newer ? ". Wait for a D2R-XL update." : ". Update D2R in Battle.net.") + "\n";
+		out += "!D2R " + found + ": D2R-XL needs D2R " + v.requiredVersion +
+		       (v.build.verdict == BuildVerdict::Newer ? ". Wait for a D2R-XL update." : ". Update D2R in Battle.net or Steam.") + "\n";
 	if (v.loaderOk)
 		out += "D2RLoader: " + v.loaderFound + " (OK)\n";
 	else if (v.loaderFound.empty())
@@ -292,8 +359,79 @@ std::string Launcher::StatusText(const View& v) const {
 		out += "D2R-XL: " + v.installed + " installed, update " + v.latest + " available";
 	else
 		out += "D2R-XL: " + v.installed + " installed" + (v.feedOk ? " (latest)" : std::string());
+	if (v.defaultModChecked && !v.defaultMod.ok)
+		out += "\n!" + DefaultModWarning(v.defaultMod, ModFolder());
+	if (!v.strayPlugins.empty()) {
+		const auto& sp = v.strayPlugins.front();
+		out += "\n!" + StrayPluginWarning(Utf8(sp.path), sp.place, sp.mod, true);
+		if (v.strayPlugins.size() > 1)
+			out += " (+" + std::to_string(v.strayPlugins.size() - 1) + " more)";
+	}
 	out += "\nMod folder: " + Utf8(ModDir());
 	return out;
+}
+
+std::vector<std::string> Launcher::EnvironmentWarnings(const View& v) const {
+	std::vector<std::string> out;
+	if (v.defaultModChecked && !v.defaultMod.ok)
+		out.push_back(DefaultModWarning(v.defaultMod, ModFolder()) + " (default_mod in " + Utf8(v.loaderConfig) +
+		              "), so the game may run another or an old build. Make " + ModFolder() + " the default mod.");
+	for (const auto& sp : v.strayPlugins)
+		out.push_back(StrayPluginWarning(Utf8(sp.path), sp.place, sp.mod));
+	return out;
+}
+
+// ---------------------------------------------------------------- what D2RLoader starts (docs/bugs.md #53)
+
+bool Launcher::FixDefaultMod(std::string& error) {
+	if (!FindD2R(error))
+		return false;
+	if (error = GameRunning(d2rDir_); !error.empty())
+		return false;
+	std::wstring path = JoinPath(d2rDir_, Wide(LoaderConfigRel));
+	std::string text;
+	bool exists = ReadWholeFile(path, text);
+	DefaultModCheck c = CheckDefaultMod(text, exists, ModFolder());
+	if (c.ok) {
+		Report("D2RLoader's default mod is already " + c.mod + ".");
+		return true;
+	}
+	MakeDirs(ParentDir(path));
+	if (!WriteFileAtomic(path, SetDefaultMod(text, ModFolder()))) {
+		error = NotWritable(ParentDir(path), GetLastError());
+		return false;
+	}
+	Report("D2RLoader's default mod is now " + ModFolder() + " (was " + (c.mod.empty() ? std::string("none") : c.mod) + "): default_mod in " +
+	       Utf8(path) + (exists ? "; nothing else in it changed." : ", a new file."));
+	return true;
+}
+
+bool Launcher::RemoveStrayPlugins(std::string& error) {
+	if (!FindD2R(error))
+		return false;
+	if (error = GameRunning(d2rDir_); !error.empty())
+		return false;
+	auto strays = FindStrayPlugins(d2rDir_, ModFolder());
+	if (strays.empty()) {
+		Report("No old copy of the D2R-XL plugin found outside mods\\" + ModFolder() + ".");
+		return true;
+	}
+	std::string date = Today();
+	for (const auto& sp : strays) {
+		std::wstring to = Wide(RemovedPluginPath(Utf8(opt_.dataDir), date, sp.rel));
+		for (int n = 2; FileExists(to); ++n)  // moved twice the same day: keep both
+			to = Wide(RemovedPluginPath(Utf8(opt_.dataDir), date, sp.rel)) + L"." + std::to_wstring(n);
+		MakeDirs(ParentDir(to));
+		if (!MoveFileExW(LongPath(sp.path).c_str(), LongPath(to).c_str(), MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH)) {
+			DWORD code = GetLastError();
+			error = "Cannot move " + Utf8(sp.path) + " to " + Utf8(to) + ": " + Utf8(LastErrorText(code));
+			if (code == ERROR_ACCESS_DENIED)
+				error += " Run the D2R-XL Downloader as administrator, or move the file yourself.";
+			return false;
+		}
+		Report("Moved the old D2R-XL plugin " + Utf8(sp.path) + " to " + Utf8(to));
+	}
+	return true;
 }
 
 // ---------------------------------------------------------------- the 0.1.x game copy

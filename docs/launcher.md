@@ -66,7 +66,9 @@ the folder is not writable (another install location, a locked-down PC), the mes
 your Windows user write access to the D2R folder."
 
 D2R, D2RLoader, `Saved Games` (characters, `Settings.json`) and other mods are never written. The downloader refuses
-to install, repair or uninstall while a process runs from the D2R folder (D2R or D2RLoader).
+to install, repair or uninstall while a process runs from the D2R folder (D2R or D2RLoader). Two exceptions, each only
+after the player says yes ("What D2RLoader really starts" below): `default_mod` in D2RLoader's game-wide config, and
+moving an old copy of our plugin out of another plugins folder into `%LOCALAPPDATA%\D2R-XL\removed\`.
 
 ### Install, Update, Repair
 
@@ -137,8 +139,8 @@ How D2RLoader 1.3.1 picks the mod (read from its config and log on slot 2, 2026-
 - D2RLoader's own options set the default mod: the gear on the character screen, **Default Mod**, Apply. It writes
   `default_mod` into the game-wide file.
 
-So the downloader writes **nothing outside `mods\D2R-XL`**: the player makes the one choice in D2RLoader, once. The
-window, README and release notes say:
+So the downloader writes **nothing outside `mods\D2R-XL`** on its own: the player makes the one choice in D2RLoader,
+once (or presses **Default mod**, below). The window, README and release notes say:
 
 > How to play: start D2RLoader.exe in your D2R folder. The first time, click the gear on the character screen, set
 > Default Mod to D2R-XL, Apply, and start D2RLoader again.
@@ -148,6 +150,36 @@ window, README and release notes say:
 and supported legacy BINs", compiles 139 of the mod's 142 `.txt` tables (the other three, `objtype` twice and
 `base/sounds`, have no BIN in D2R) "for this launch only", and `game_checks.py all mxl` passes. The manifest's `launch`
 now says `"launch_arguments": ""` (informational; nothing reads it).
+
+### What D2RLoader really starts (0.2.4, docs/bugs.md #53)
+
+On the owner's second PC the downloader had installed 0.69.7 into `mods\D2R-XL`, but the game-wide `default_mod` still
+named `MedianXL` (an old developer folder) and an old `mxl-core.dll` sat in the game-wide `d2rloader\plugins`, so the
+game ran an old build. The downloader now checks both on every refresh (`app.cpp` `Inspect`, decisions in `paths.cpp`,
+unit test `TestEnvironment`) and shows a red status line for each:
+
+- **Default mod** (`CheckDefaultMod`): `[d2rloader] default_mod` of `<D2R>\d2rloader\config\d2rloader.toml` (a UTF-8
+  BOM is fine; case-insensitive like folder names). Missing key, empty value, a missing file (while `D2RLoader.exe` is
+  there) or another name: "D2RLoader starts the mod MedianXL, not D2R-XL" / "D2RLoader has no default mod, so it does
+  not start D2R-XL" / "D2RLoader has no settings file yet, ...". The button **Default mod** (tooltip "Make D2R-XL the
+  default mod") asks Yes/No, then sets only that key with `SetTomlKey` (comments, other keys, CRLF and BOM kept; a missing
+  file gets `[d2rloader]` and the key) and logs "D2RLoader's default mod is now D2R-XL (was MedianXL) ...". Refused while
+  the game runs (D2RLoader rewrites the file).
+- **Old plugin copies** (`IsOurPluginFile`, `PluginPlaceOf`): every DLL under `<D2R>\d2rloader\plugins\` and
+  `<D2R>\mods\<other>\d2rloader\plugins\` (not `mods\D2R-XL`; junctions not followed) whose file name is
+  `mxl-core*.dll` or whose version resource has ProductName "D2R-XL" or a FileDescription naming mxl-core / "D2R-XL core"
+  (plugin 0.69.8 and later carry one). The status line: "Old D2R-XL plugin in d2rloader\plugins: it loads with every mod"
+  (or "... in mods\MedianXL: it loads with that mod", "(+1 more)"); the CLI and the question give the full path ("An old
+  copy of the D2R-XL plugin is in <path>: it loads with every mod. Move it away."). The button **Move plugin** asks, then
+  moves each to `<data>\removed\<date>\<path relative to the D2R folder>` (`.2`, `.3` when moved twice the same day;
+  across volumes it copies and deletes the source). Nothing is deleted. Refused while the game runs.
+
+With more than four status lines the window drops the "Mod folder" line and draws five smaller lines; the button row
+centres whatever is needed (Repair, Uninstall, Get D2RLoader, Default mod, Move plugin). The official Median XL's paths
+are never involved: both checks look only inside the D2R folder.
+
+The plugin checks the same at run time (plugin 0.69.8, `plugin/src/env_guard_logic.h`): its own path, the active mod and
+a second mxl-core, with a red overlay line and `environment WARNING: ...` in `mxl`.
 
 ### From launcher 0.1.x
 
@@ -203,7 +235,7 @@ background, stone panel, Exocet and Roboto Condensed, NOTICE.md) and the D2R XL 
   folder; warnings in red. Below it the current step and a progress bar (download in MB with minutes left, unpacking in
   MB, objects as files and MB).
 - A big **Install / Update** button (**Stop** while working), then **Repair**, **Uninstall** (asks first), **Get
-  D2RLoader** (only when needed), **D2R folder** (browse), **Mods folder** (opens `mods\D2R-XL`, or `mods`, never
+  D2RLoader**, **Default mod** and **Move plugin** (each only when needed; the last two ask first), **D2R folder** (browse), **Mods folder** (opens `mods\D2R-XL`, or `mods`, never
   created), and the issue-tracker icon.
 - The how-to-play line, then the footer "Downloader 0.2.0 · D2R-XL, a port of Median XL ...".
 - Nothing takes focus or the cursor (no `SetForegroundWindow`; the 0.1.x Play was the only user).
@@ -211,6 +243,7 @@ background, stone panel, Exocet and Roboto Condensed, NOTICE.md) and the D2R XL 
 
 ```
 D2R-XL-Downloader.exe --cli status|detect|install|update|repair|uninstall|self-update|remove-old-copy
+                            |fix-default-mod|remove-stray-plugins
     [--data-dir DIR] [--site URL|DIR] [--channel stable|test] [--game-dir D2R_DIR] [--replace]
     [--via auto|7z|objects] [--snapshot FILE]
 ```
@@ -229,7 +262,7 @@ manifest and plan, paths and marker, detection parsing, 7z, TOML, SVG paths) has
 Unit tests (`launcher/tests`, MSVC and g++): detection, manifest and plan, paths and marker (`TestPaths`), the 7z
 decoder on `tests/data/sample.7z` (7,917 bytes, made by `tests/data/make_sample_7z.py` with 7-Zip: a streamed LZMA2
 block and a BCJ block, an empty file and an empty folder; a flipped byte, a cut-off archive and junk are refused),
-coexistence; 163 checks. Tools tests: `tools/test_*.py` (dl_ingest accepts both exe names, refuses two).
+coexistence, the #53 checks (`TestEnvironment`); 200 checks. Tools tests: `tools/test_*.py` (dl_ingest accepts both exe names, refuses two).
 
 E2E 2026-10-27 (downloader 0.2.0, test releases 0.69.1-lt1 / lt2 from `launcher_testsite.py derive --savepath
 D2R-XL-lt/` with the dev plugin, published to a local folder site, `dl_ingest.py`, `serve_dir.py`):
@@ -247,8 +280,11 @@ D2R-XL-lt/` with the dev plugin, published to a local folder site, `dl_ingest.py
 | Repair after one flipped byte (size and mtime kept) | Update: "up to date" (it trusts size and mtime); Repair: 1 file fetched, folder matches again |
 | Uninstall | only `mods\D2R-XL` removed; D2R folder and Saved Games unchanged (snapshot compare) |
 
-Window snapshots (`--snapshot`): not installed, installed, D2RLoader missing, wrong D2R build (kept outside the
-repository).
+Window snapshots (`--snapshot`): not installed, installed, D2RLoader missing, wrong D2R build; 0.2.4: a scratch D2R
+folder with `default_mod = "MedianXL"`, `mxl-core.dll` in `d2rloader\plugins` and in `mods\MedianXL\d2rloader\plugins`
+(both warnings, both buttons) (kept outside the repository). 0.2.4 CLI on that folder: `status` printed both warnings,
+`fix-default-mod` changed only the `default_mod` line (CRLF kept), `remove-stray-plugins` moved both DLLs under
+`removed\2026-10-27\` and left `loot.dll`; a renamed DLL with ProductName D2R-XL was found too.
 
 To run a check on a game the player's way:
 

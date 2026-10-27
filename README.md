@@ -32,8 +32,7 @@ Expect bugs. Please report them (below).
 
 ## Requirements
 
-- Your own copy of **Diablo II: Resurrected** (PC): Battle.net build **93847**, or the Steam build **94995** (the same game
-  program under another version number). Nothing from Blizzard is distributed here.
+- Your own copy of **Diablo II: Resurrected 3.3** (PC, Battle.net or Steam). Nothing from Blizzard is distributed here.
 - **D2RLoader 1.3.1** from [d2rloader.net](https://d2rloader.net/), installed in your D2R folder.
 - Windows 10 or 11, and about **1.6 GB of free disk space** (1.2 GB for the mod, plus the 355 MB download while it
   installs).
@@ -51,9 +50,22 @@ Expect bugs. Please report them (below).
    - It is not code-signed yet, so Chrome may call it "suspicious" (open the downloads list and choose to keep the file) and Windows may show "Windows protected your PC" (**More info → Run anyway**).
 3. **How to play:** start `D2RLoader.exe` in your D2R folder. The first time, click the gear on the character screen,
    set **Default Mod** to **D2R-XL**, Apply, and start D2RLoader again. From then on D2RLoader starts D2R-XL directly.
+   The downloader's **Default mod** button does the same (it asks first and changes only that setting).
+
+**Troubleshooting: the game runs an old or another build.** If D2R-XL behaves like an older version (the `mxl` console
+line shows another version, or features are missing), D2RLoader is starting something else. The downloader warns in red
+about both known causes and fixes each after asking:
+
+- *"D2RLoader starts the mod MedianXL, not D2R-XL"* (or another name): D2RLoader's Default Mod is another (often an old) mod folder.
+  **Default mod** sets it to D2R-XL (only the `default_mod` line of `<D2R>\d2rloader\config\d2rloader.toml`).
+- *"Old D2R-XL plugin in d2rloader\plugins"* (or in another mod folder): an old copy of `mxl-core.dll` loads with every
+  mod (or with that mod). **Move plugin** moves it to `%LOCALAPPDATA%\D2R-XL\removed\<date>\`; nothing is deleted.
+
+The plugin warns in the game too (a red line at the top of the screen, and `environment WARNING: ...` in the `mxl`
+console line, which also shows the mod name and the plugin's own file).
 
 The downloader writes only `mods\D2R-XL` (and its own settings and log in `%LOCALAPPDATA%\D2R-XL`); it does not
-download or change D2RLoader, D2R or other mods. D2R-XL characters are saved in their own folder
+download or change D2RLoader, D2R or other mods, except the two fixes above, each only after you say yes. D2R-XL characters are saved in their own folder
 (`Saved Games\Diablo II Resurrected\mods\D2R-XL`). **Uninstall** removes `mods\D2R-XL` and nothing else. If D2R is
 in `Program Files` and Windows refuses the write, the downloader says so: run it as administrator. Details:
 [docs/launcher.md](docs/launcher.md).

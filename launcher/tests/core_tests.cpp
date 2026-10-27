@@ -254,17 +254,20 @@ void TestDetect() {
 	Check(mxl::BuildInfoVersion(real) == "3.3.93847", "real .build.info of build 93847");
 	Check(mxl::BuildNumber("3.3.93847") == 93847 && mxl::BuildNumber("1.0.0.93847") == 93847 && mxl::BuildNumber("") == 0, "build numbers");
 
+	// The requirement is the game version (major.minor), never the build number (D2RLoader's author, 2026-10-27).
+	Check(mxl::GameVersion("3.3.93847") == "3.3" && mxl::GameVersion("3.3.0") == "3.3" && mxl::GameVersion("1.0.0.93847") == "1.0" &&
+	          mxl::GameVersion("").empty() && mxl::GameVersion("93847").empty(), "game version is major.minor");
 	auto ok = mxl::CheckBuild("3.3.93847", "3.3.93847");
-	Check(ok.verdict == mxl::BuildVerdict::Ok, "93847 is ok");
-	auto newer = mxl::CheckBuild("3.3.94100", "3.3.93847");
-	Check(newer.verdict == mxl::BuildVerdict::Newer && newer.build == 94100 && newer.message.find("Waiting for a D2R-XL update") != std::string::npos,
-	      "newer build: waiting message (half-updated install counts as newer)");
-	Check(mxl::CheckBuild("3.2.91000", "").verdict == mxl::BuildVerdict::Older, "older build");
-	auto steam = mxl::CheckBuild("", "3.3.94995");  // Steam: no .build.info, the same program as 93847 (bugs.md #41)
-	Check(steam.verdict == mxl::BuildVerdict::Ok && steam.build == 94995 && steam.message.find("same game program") != std::string::npos,
-	      "Steam 94995 runs the 93847 program");
-	Check(mxl::CheckBuild("", "3.3.94995", 95000).verdict != mxl::BuildVerdict::Ok, "the equivalence is only for 93847");
-	Check(mxl::CheckBuild("", "").verdict == mxl::BuildVerdict::Unknown, "unknown build");
+	Check(ok.verdict == mxl::BuildVerdict::Ok && ok.version == "3.3" && ok.build == 93847, "3.3.93847 is ok");
+	auto steam = mxl::CheckBuild("", "3.3.94995");  // Steam: no .build.info, another 3.3 build (bugs.md #41)
+	Check(steam.verdict == mxl::BuildVerdict::Ok && steam.build == 94995, "any 3.3 build is ok (Steam 94995)");
+	Check(mxl::CheckBuild("3.3.99999", "").verdict == mxl::BuildVerdict::Ok, "a later 3.3 hotfix build is ok");
+	auto newer = mxl::CheckBuild("3.4.95000", "3.3.93847");
+	Check(newer.verdict == mxl::BuildVerdict::Newer && newer.message.find("Waiting for a D2R-XL update") != std::string::npos,
+	      "3.4: waiting message (.build.info decides)");
+	Check(mxl::CheckBuild("3.2.91000", "").verdict == mxl::BuildVerdict::Older, "older version");
+	Check(mxl::CheckBuild("3.10.1", "").verdict == mxl::BuildVerdict::Newer, "3.10 is newer than 3.3");
+	Check(mxl::CheckBuild("", "").verdict == mxl::BuildVerdict::Unknown, "unknown version");
 	Check(mxl::CheckBuild("", "3.3.93847").verdict == mxl::BuildVerdict::Ok, "exe version alone");
 
 	std::string vdf = R"("libraryfolders"
@@ -521,6 +524,60 @@ void TestToml() {
 	Check(mxl::GetTomlKey("[a]\ns = \"a # b\" # c\n", "a", "s") == "\"a # b\"", "# inside quotes is no comment");
 }
 
+// docs/bugs.md #53: D2RLoader's default mod and stray copies of the plugin.
+void TestEnvironment() {
+	const std::string bs(1, char(92));
+	std::string toml = "[d2rloader]\n# Launch this mod automatically.\ndefault_mod = \"MedianXL\"  # set by the gear\nlaunch_arguments = \"-w\"\n\n[d2rcore.stash]\nadd_shared_tabs = 3\n";
+	mxl::DefaultModCheck c = mxl::CheckDefaultMod(toml, true, "D2R-XL");
+	Check(!c.ok && c.mod == "MedianXL" && !c.configMissing, "default_mod MedianXL is not ours");
+	Check(mxl::DefaultModWarning(c, "D2R-XL") == "D2RLoader starts the mod MedianXL, not D2R-XL", "warning names the mod D2RLoader starts");
+	std::string fixed = mxl::SetDefaultMod(toml, "D2R-XL");
+	Check(mxl::CheckDefaultMod(fixed, true, "D2R-XL").ok, "fixed config names D2R-XL");
+	Check(fixed == "[d2rloader]\n# Launch this mod automatically.\ndefault_mod = \"D2R-XL\" # set by the gear\nlaunch_arguments = \"-w\"\n\n[d2rcore.stash]\nadd_shared_tabs = 3\n",
+	      "only default_mod changes");
+	Check(mxl::CheckDefaultMod("[d2rloader]\ndefault_mod = 'd2r-xl'\n", true, "D2R-XL").ok, "single quotes, any case");
+	Check(mxl::DefaultModWarning(mxl::CheckDefaultMod("[d2rloader]\ndefault_mod = \"D2R-XL\"\n", true, "D2R-XL"), "D2R-XL").empty(), "no warning when ours");
+	mxl::DefaultModCheck none = mxl::CheckDefaultMod("[d2rloader]\ndefault_mod = \"\"\n", true, "D2R-XL");
+	Check(!none.ok && none.mod.empty() && mxl::DefaultModWarning(none, "D2R-XL").find("no default mod") != std::string::npos, "empty default_mod");
+	Check(!mxl::CheckDefaultMod("[d2rloader]\n# default_mod = \"D2R-XL\"\n", true, "D2R-XL").ok, "a commented template is no default mod");
+	Check(!mxl::CheckDefaultMod("[other]\ndefault_mod = \"D2R-XL\"\n", true, "D2R-XL").ok, "default_mod of another section does not count");
+	mxl::DefaultModCheck missing = mxl::CheckDefaultMod("", false, "D2R-XL");
+	Check(!missing.ok && missing.configMissing && mxl::DefaultModWarning(missing, "D2R-XL").find("no settings file") != std::string::npos, "no config file");
+	Check(mxl::CheckDefaultMod(mxl::SetDefaultMod("", "D2R-XL"), true, "D2R-XL").ok, "a missing config gets the section and key");
+	std::string bom = "\xEF\xBB\xBF[d2rloader]\r\ndefault_mod = \"Old\"\r\n";
+	Check(!mxl::CheckDefaultMod(bom, true, "D2R-XL").ok && mxl::CheckDefaultMod(bom, true, "D2R-XL").mod == "Old", "a BOM before the section");
+	Check(mxl::SetDefaultMod(bom, "D2R-XL") == "\xEF\xBB\xBF[d2rloader]\r\ndefault_mod = \"D2R-XL\"\r\n", "BOM and CRLF kept");
+	Check(mxl::TomlUnquote(" \"a b\" ") == "a b" && mxl::TomlUnquote("x") == "x" && mxl::TomlUnquote("\"") == "\"", "TomlUnquote");
+
+	Check(mxl::IsOurPluginFile("mxl-core.dll", "", "") && mxl::IsOurPluginFile("MXL-Core-0.68.dll", "", "") && mxl::IsOurPluginFile("mxl-core (1).dll", "", ""),
+	      "plugin by file name");
+	Check(mxl::IsOurPluginFile("renamed.dll", "D2R-XL", "") && mxl::IsOurPluginFile("x.dll", "", "D2R-XL core plugin (mxl-core)"), "plugin by version resource");
+	Check(!mxl::IsOurPluginFile("loot.dll", "Loot Filter", "Loot filter plugin") && !mxl::IsOurPluginFile("mxl-core.txt", "", "") &&
+	          !mxl::IsOurPluginFile("mxl-core-off.txt", "", "") && !mxl::IsOurPluginFile("D2R-XL-Downloader.exe", "D2R-XL", ""),
+	      "other plugins, text files and exes are not ours");
+
+	std::string mod;
+	Check(mxl::PluginPlaceOf("d2rloader" + bs + "plugins" + bs + "mxl-core.dll", "D2R-XL") == mxl::PluginPlace::GameWide, "game-wide plugins folder");
+	Check(mxl::PluginPlaceOf("mods/MedianXL/d2rloader/plugins/mxl-core.dll", "D2R-XL", &mod) == mxl::PluginPlace::OtherMod && mod == "MedianXL",
+	      "another mod's plugins folder, its name as written");
+	Check(mxl::PluginPlaceOf("MODS" + bs + "d2r-xl" + bs + "D2RLoader" + bs + "Plugins" + bs + "mxl-core.dll", "D2R-XL") == mxl::PluginPlace::OurMod,
+	      "our own mod folder, any case");
+	Check(mxl::PluginPlaceOf("mods/D2R-XL/mxl-core.dll", "D2R-XL") == mxl::PluginPlace::None && mxl::PluginPlaceOf("mxl-core.dll", "D2R-XL") == mxl::PluginPlace::None &&
+	          mxl::PluginPlaceOf("mods/../d2rloader/plugins/x.dll", "D2R-XL") == mxl::PluginPlace::None,
+	      "not a plugins folder");
+	std::string g = mxl::StrayPluginWarning("C:" + bs + "D2R" + bs + "d2rloader" + bs + "plugins" + bs + "mxl-core.dll", mxl::PluginPlace::GameWide, "");
+	Check(g == "An old copy of the D2R-XL plugin is in C:" + bs + "D2R" + bs + "d2rloader" + bs + "plugins" + bs + "mxl-core.dll: it loads with every mod. Move it away.",
+	      "game-wide warning text");
+	Check(mxl::StrayPluginWarning("p", mxl::PluginPlace::OtherMod, "MedianXL").find("starts the mod MedianXL") != std::string::npos &&
+	          mxl::StrayPluginWarning("p", mxl::PluginPlace::OtherMod, "MedianXL", true) == "Old D2R-XL plugin in mods" + bs + "MedianXL: it loads with that mod",
+	      "other-mod warning, long and brief");
+	Check(mxl::StrayPluginWarning("p", mxl::PluginPlace::OurMod, "D2R-XL").empty() && mxl::StrayPluginWarning("p", mxl::PluginPlace::None, "").empty(),
+	      "no warning for the installed plugin");
+	Check(mxl::RemovedPluginPath("C:" + bs + "L" + bs + "D2R-XL", "2026-10-27", "d2rloader/plugins/mxl-core.dll") ==
+	          "C:" + bs + "L" + bs + "D2R-XL" + bs + "removed" + bs + "2026-10-27" + bs + "d2rloader" + bs + "plugins" + bs + "mxl-core.dll",
+	      "moved under removed, date, relative path");
+}
+
 bool Near(float a, float b) { return a - b < 0.001f && b - a < 0.001f; }
 
 void TestSvg() {
@@ -572,6 +629,7 @@ int main() {
 	TestCoexist();
 	TestGameProcessName();
 	TestToml();
+	TestEnvironment();
 	TestSvg();
 	std::printf("%d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;

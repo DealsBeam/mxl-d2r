@@ -16,7 +16,7 @@ using namespace mxl;
 namespace {
 
 const wchar_t* Usage =
-	L"D2R-XL-Downloader.exe [--cli status|detect|install|update|repair|uninstall|self-update|remove-old-copy] [options]\n"
+	L"D2R-XL-Downloader.exe [--cli status|detect|install|update|repair|uninstall|self-update|remove-old-copy|fix-default-mod|remove-stray-plugins] [options]\n"
 	L"  --data-dir DIR   state, download and log (default %LOCALAPPDATA%\\D2R-XL)\n"
 	L"  --site URL|DIR   download site root (default https://files.werdegames.com/mxl/; backup https://dl.werdegames.com/mxl/; http://, file:// or a folder for tests)\n"
 	L"  --channel NAME   release channel: stable (default) or test\n"
@@ -102,6 +102,12 @@ int RunCli(Cli& c) {
 		l.CheckFeed(err);
 		Launcher::View v = l.Inspect();
 		Log(l.StatusText(v));
+		for (const std::string& w : l.EnvironmentWarnings(v))
+			Log("WARNING: " + w);
+		if (v.defaultModChecked && !v.defaultMod.ok)
+			Log("  --cli fix-default-mod sets default_mod = \"D2R-XL\" in D2RLoader's config (only that key)");
+		if (!v.strayPlugins.empty())
+			Log("  --cli remove-stray-plugins moves them to " + Utf8(l.options().dataDir) + R"(\removed\<date>\ (nothing is deleted))");
 		if (v.legacyCopy)
 			Log("old 0.1.x game copy: " + Utf8(v.legacyDir) + " (--cli remove-old-copy deletes it)");
 		if (!err.empty())
@@ -112,6 +118,8 @@ int RunCli(Cli& c) {
 	else if (c.command == L"repair") ok = l.Repair(err);
 	else if (c.command == L"uninstall") ok = l.Uninstall(err);
 	else if (c.command == L"remove-old-copy") ok = l.RemoveLegacyCopy(err);
+	else if (c.command == L"fix-default-mod") ok = l.FixDefaultMod(err);
+	else if (c.command == L"remove-stray-plugins") ok = l.RemoveStrayPlugins(err);
 	else if (c.command == L"self-update") {
 		std::string feedErr;
 		if (!l.CheckFeed(feedErr) && !l.LauncherUpdateAvailable())

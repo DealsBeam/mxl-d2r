@@ -18,6 +18,14 @@ if(MXL_RELEASE)
 else()
 	target_sources(mxl_core PRIVATE src/testharness.cpp src/harness_cmds.cpp)  # test harness and its gameplay commands
 endif()
+# The DLL's version resource (src/mxl_core.rc) carries PluginVersion of mxl_core.cpp.
+file(STRINGS src/mxl_core.cpp plugin_version_line REGEX "PluginVersion = \"[0-9]+[.][0-9]+[.][0-9]+\"")
+if(NOT plugin_version_line MATCHES "\"([0-9]+)[.]([0-9]+)[.]([0-9]+)\"")
+	message(FATAL_ERROR "PluginVersion not found in src/mxl_core.cpp")
+endif()
+set_property(SOURCE src/mxl_core.rc APPEND PROPERTY COMPILE_DEFINITIONS
+             MXL_PV_STR="${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}" MXL_PV_NUM=${CMAKE_MATCH_1},${CMAKE_MATCH_2},${CMAKE_MATCH_3},0)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS src/mxl_core.cpp)
 target_link_libraries(mxl_core PRIVATE D2RLPlugin::D2RLPlugin)
 set_target_properties(mxl_core PROPERTIES OUTPUT_NAME "mxl-core")
 if(MSVC)

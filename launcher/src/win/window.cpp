@@ -53,7 +53,8 @@ const gp::RectF BarRect(242, 285, 416, 9);
 const gp::Color Gold(255, 232, 196, 128), GoldBright(255, 255, 228, 168), Body(255, 222, 212, 192), Dim(255, 150, 136, 112),
 	ErrorText(255, 240, 128, 104);
 
-enum : int { IdInstall = 101, IdRepair, IdUninstall, IdMods, IdIssues, IdChoose, IdCancel, IdLoader, IdSelfUpdate, IdRemoveLegacy };
+enum : int { IdInstall = 101, IdRepair, IdUninstall, IdMods, IdIssues, IdChoose, IdCancel, IdLoader, IdSelfUpdate, IdRemoveLegacy, IdDefaultMod,
+               IdMovePlugins };
 enum Kind { Big, Small, Icon };
 struct Button {
 	int id;
@@ -69,6 +70,8 @@ Button buttons[] = {
 	{IdRepair, L"Repair", Small, gp::RectF(305, 426, 140, 34)},  // x moves with Get D2RLoader (RefreshStatus)
 	{IdUninstall, L"Uninstall", Small, gp::RectF(455, 426, 140, 34)},
 	{IdLoader, L"Get D2RLoader", Small, gp::RectF(504, 426, 192, 34)},  // shown when D2RLoader is missing or another version
+	{IdDefaultMod, L"Default mod", Small, gp::RectF(0, 426, 168, 34)},   // shown when D2RLoader's default_mod is not D2R-XL (#53)
+	{IdMovePlugins, L"Move plugin", Small, gp::RectF(0, 426, 168, 34)},  // shown when an old copy of the plugin is elsewhere (#53)
 	{IdChoose, L"D2R folder", Small, gp::RectF(278, 468, 168, 34)},
 	{IdMods, L"Mods folder", Small, gp::RectF(456, 468, 168, 34)},
 	{IdIssues, L"Report a problem", Icon, gp::RectF(858, 556, 28, 28)},
@@ -278,20 +281,26 @@ void DrawDynamic(gp::Graphics& gr, bool cached = true) {
 	}
 	gr.ScaleTransform(g.s, g.s);
 	Quality(gr);
-	// status: "Name: value" lines; long paths are shortened in the middle
-	size_t start = 0;
-	int row = 0;
+	// status: "Name: value" lines; long paths are shortened in the middle. Four lines fit; with more (the #53 warnings)
+	// the mod folder line goes and the rest get smaller.
+	std::vector<std::wstring> lines;
 	std::wstring st = Wide(g.status);
-	while (start <= st.size() && row < 4) {
+	for (size_t start = 0; start <= st.size();) {
 		size_t nl = st.find(L'\n', start);
-		std::wstring l = st.substr(start, nl == std::wstring::npos ? std::wstring::npos : nl - start);
-		gp::RectF r(StatusRect.X, StatusRect.Y + row * 19.f, StatusRect.Width, 19);
-		bool warn = !l.empty() && l[0] == L'!';  // StatusText marks warnings with "!"
-		Text(gr, warn ? l.substr(1) : l, *g.art->body, 14, warn ? ErrorText : Body, r, gp::StringAlignmentNear, warn ? TrimEnd : TrimPath);
-		++row;
+		lines.push_back(st.substr(start, nl == std::wstring::npos ? std::wstring::npos : nl - start));
 		if (nl == std::wstring::npos)
 			break;
 		start = nl + 1;
+	}
+	if (lines.size() > 4)
+		lines.erase(std::remove_if(lines.begin(), lines.end(), [](const std::wstring& l) { return l.rfind(L"Mod folder:", 0) == 0; }), lines.end());
+	size_t rows = std::min<size_t>(lines.size(), 5);
+	float rowH = rows > 4 ? StatusRect.Height / float(rows) : 19.f, size = rows > 4 ? 12.f : 14.f;
+	for (size_t row = 0; row < rows; ++row) {
+		const std::wstring& l = lines[row];
+		gp::RectF r(StatusRect.X, StatusRect.Y + float(row) * rowH, StatusRect.Width, rowH);
+		bool warn = !l.empty() && l[0] == L'!';  // StatusText marks warnings with "!"
+		Text(gr, warn ? l.substr(1) : l, *g.art->body, size, warn ? ErrorText : Body, r, gp::StringAlignmentNear, warn ? TrimEnd : TrimPath);
 	}
 	Text(gr, Wide(g.line), *g.art->body, 14, g.lineError ? ErrorText : Gold, LineRect, gp::StringAlignmentCenter);
 	if (g.fraction >= -1) {
@@ -444,9 +453,21 @@ void RefreshStatus() {
 	EnableWindow(FindButton(IdUninstall)->h, !g.busy && !v.installed.empty());
 	EnableWindow(FindButton(IdRepair)->h, !g.busy && !v.installed.empty());
 	bool loader = v.d2rFound && !v.loaderOk;
-	MoveButtonX(IdRepair, loader ? 204.f : 305.f);  // the row stays centred with or without Get D2RLoader
-	MoveButtonX(IdUninstall, loader ? 354.f : 455.f);
-	ShowWindow(FindButton(IdLoader)->h, loader ? SW_SHOWNA : SW_HIDE);
+	bool defaultMod = v.d2rFound && v.defaultModChecked && !v.defaultMod.ok, plugins = v.d2rFound && !v.strayPlugins.empty();
+	// the row stays centred with the buttons that are needed (Get D2RLoader, Default mod, Move plugin)
+	std::vector<std::pair<int, bool>> row = {{IdRepair, true}, {IdUninstall, true}, {IdLoader, loader}, {IdDefaultMod, defaultMod}, {IdMovePlugins, plugins}};
+	float width = -10;
+	for (const auto& [id, shown] : row)
+		width += shown ? FindButton(id)->r.Width + 10 : 0;
+	float x = (CanvasW - width) / 2;
+	for (const auto& [id, shown] : row) {
+		if (shown) {
+			MoveButtonX(id, x);
+			x += FindButton(id)->r.Width + 10;
+		}
+		if (id != IdRepair && id != IdUninstall)
+			ShowWindow(FindButton(id)->h, shown ? SW_SHOWNA : SW_HIDE);
+	}
 	InvalidateRect(b->h, nullptr, FALSE);
 	InvalidatePanel();
 }
@@ -461,10 +482,26 @@ void RunAction(int id) {
 			return;
 	}
 	if (id == IdInstall && g.view.build.verdict != BuildVerdict::Ok) {  // allowed, after a clear warning
-		std::wstring q = L"Your D2R is " + (g.view.build.build ? L"build " + std::to_wstring(g.view.build.build) : std::wstring(L"of an unknown build")) +
-		                 L", but D2R-XL works only on build " + std::to_wstring(g.view.requiredBuild) +
-		                 L". It will not start until D2R is at that build.\n\nInstall D2R-XL anyway?";
+		std::wstring q = L"Your D2R is " + (g.view.build.version.empty() ? std::wstring(L"of an unknown version") : L"version " + Wide(g.view.build.version)) +
+		                 L", but D2R-XL works only on D2R " + Wide(g.view.requiredVersion) +
+		                 L". It will not start until D2R is at that version.\n\nInstall D2R-XL anyway?";
 		if (MessageBoxW(g.wnd, q.c_str(), L"D2R-XL Downloader", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+			return;
+	}
+	if (id == IdDefaultMod) {
+		std::wstring q = Wide(g.launcher->EnvironmentWarnings(g.view).front()) + L"\n\nMake D2R-XL the default mod? The downloader sets only "
+		                 L"default_mod = \"D2R-XL\" in " + g.view.loaderConfig + L"; nothing else in it changes. You can pick another mod "
+		                 L"later in D2RLoader (gear, Default Mod).";
+		if (MessageBoxW(g.wnd, q.c_str(), L"Make D2R-XL the default mod", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+			return;
+	}
+	if (id == IdMovePlugins) {
+		std::wstring list;
+		for (const auto& sp : g.view.strayPlugins)
+			list += Wide(StrayPluginWarning(Utf8(sp.path), sp.place, sp.mod)) + L"\n";
+		std::wstring q = list + L"\nMove " + (g.view.strayPlugins.size() == 1 ? std::wstring(L"it") : L"them") + L" to " +
+		                 JoinPath(g.launcher->options().dataDir, L"removed") + LR"(\<today>\? Nothing is deleted.)";
+		if (MessageBoxW(g.wnd, q.c_str(), L"Move the old D2R-XL plugin", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
 			return;
 	}
 	g.launcher->cancel = false;
@@ -481,6 +518,8 @@ void RunAction(int id) {
 		case IdUninstall: ok = l.Uninstall(err); break;
 		case IdSelfUpdate: ok = l.SelfUpdate(err); break;
 		case IdRemoveLegacy: ok = l.RemoveLegacyCopy(err); break;
+		case IdDefaultMod: ok = l.FixDefaultMod(err); break;
+		case IdMovePlugins: ok = l.RemoveStrayPlugins(err); break;
 		}
 		std::string done = id == IdInstall || id == IdRepair ? "Done. " + std::string(HowToPlay) : "Done.";
 		auto* msg = new ProgressMsg{ok ? done : err, ok ? 1.0 : -2.0, id};
@@ -642,7 +681,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM lp) {
 	switch (m) {
 	case WM_COMMAND:
 		switch (LOWORD(w)) {
-		case IdInstall: case IdRepair: case IdUninstall: RunAction(LOWORD(w)); return 0;
+		case IdInstall: case IdRepair: case IdUninstall: case IdDefaultMod: case IdMovePlugins: RunAction(LOWORD(w)); return 0;
 		case IdMods: {  // opened, never created: the downloader writes only mods\D2R-XL
 			std::wstring d = g.launcher->ModDir();
 			if (!d.empty() && !DirExists(d))
@@ -800,7 +839,7 @@ int RunWindow(HINSTANCE inst, const Options& opt, const std::wstring& snapshot) 
 	LoadArt();
 	MakeLayers();
 	for (auto& b : buttons) {
-		DWORD bs = WS_CHILD | WS_TABSTOP | BS_OWNERDRAW | (b.id == IdCancel || b.id == IdLoader ? 0 : WS_VISIBLE);
+		DWORD bs = WS_CHILD | WS_TABSTOP | BS_OWNERDRAW | (b.id == IdCancel || b.id == IdLoader || b.id == IdDefaultMod || b.id == IdMovePlugins ? 0 : WS_VISIBLE);
 		b.h = CreateWindowExW(0, L"BUTTON", b.label.c_str(), bs, Px(b.r.X), Px(b.r.Y), Px(b.r.Width), Px(b.r.Height), g.wnd,
 		                      HMENU(INT_PTR(b.id)), inst, nullptr);
 		SetWindowSubclass(b.h, ButtonProc, 0, reinterpret_cast<DWORD_PTR>(&b));
@@ -812,6 +851,12 @@ int RunWindow(HINSTANCE inst, const Options& opt, const std::wstring& snapshot) 
 	ti.hwnd = g.wnd;
 	ti.uId = UINT_PTR(FindButton(IdIssues)->h);
 	ti.lpszText = const_cast<wchar_t*>(L"Report a problem (opens the issue tracker)");
+	SendMessageW(g.tip, TTM_ADDTOOLW, 0, LPARAM(&ti));
+	ti.uId = UINT_PTR(FindButton(IdDefaultMod)->h);
+	ti.lpszText = const_cast<wchar_t*>(L"Make D2R-XL the default mod (D2RLoader's default_mod; asks first)");
+	SendMessageW(g.tip, TTM_ADDTOOLW, 0, LPARAM(&ti));
+	ti.uId = UINT_PTR(FindButton(IdMovePlugins)->h);
+	ti.lpszText = const_cast<wchar_t*>(L"Move the old copy of the D2R-XL plugin away (asks first; nothing is deleted)");
 	SendMessageW(g.tip, TTM_ADDTOOLW, 0, LPARAM(&ti));
 
 	g.launcher = std::make_unique<Launcher>(g.opt);
