@@ -2442,6 +2442,87 @@ def check_summonlife():
     add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:2400], [sh("summonlife")], log)
 
 
+def check_nighthawks():
+    """Bug #58: the Necromancer's Night Hawks (srvdofunc 172 multi-summon, monster night_hawk) dive at a monster and explode. Median
+    has no monster skill for it: the hawk's monprop casts skills_374 on attack (stat 195, srvdofunc 156 -> slot 175, the plugin's
+    "pet dies": the hawk is taken off the pet list and killed) and skills_373 on death (stat 271 = D2Sigma's event 14, raised by
+    death_event.cpp on the victim of every death): missile 5444, the explosion with damage. Summons hawks next to a spawned monster
+    with a large life pool and follows them: PASS when hawks appear, die at the monster, the explosion missile is seen, the monster
+    loses life and the `mxl` death event line counts raised events. With `deathevent` off (MXL_CONTROL) the hawks still die but no
+    explosion missile may appear."""
+    nm = "Night Hawks explode on contact (bug #58): hawks die at the monster, explosion missile 5444, damage"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    by_name, t, h = _skill_ids_by_name()
+    sid, hawk = by_name.get("night_hawks"), _monstats_class("night_hawk")
+    boom = t[1:][[r[0] for r in t[1:]].index("skills_373")][h.index("srvmissile")] if "skills_373" in [r[0] for r in t[1:]] else ""
+    mt = _tsv(os.path.join(BUILT_EXCEL, "missiles.txt"))
+    mrow = {r[0]: i for i, r in enumerate(mt[1:]) if r and r[0]}
+    if sid is None or hawk is None or boom not in mrow:
+        return add(nm, "BLOCKED", "night_hawks %s, night_hawk %s, skills_373 missile %r not in the built tables" % (sid, hawk, boom))
+    boom_id = mrow[boom]
+    control = "death event off: left out" in mxl_text()
+    notes, bad, log = [], [], []
+    cls0 = hstate()["player"].get("class") or 0
+    H("class 2")  # Necromancer
+    try:
+        fight_ready()
+        kill_all_near()
+        god(True)
+        tid = tough_target(18)
+        if tid is None:
+            return add(nm, "BLOCKED", "no monster spawned")
+        time.sleep(2)
+        life0 = next((m.get("life") for m in hstate()["mons"] if m.get("id") == tid), None)
+        H("setskill %d 10" % sid)
+        H("missiles reset")
+        ids, alive_max, t0 = set(), 0, time.time()
+        for _cast in range(3):
+            H("stat player 9 set %d" % (5000 << 8))
+            H("stat player 8 set %d" % (5000 << 8))
+            ok, cl = H("cast %d self" % sid)
+            log.extend(cl[:2])
+            time.sleep(0.5)
+        while time.time() - t0 < 20:
+            mons = hstate()["mons"]
+            hawks = [m for m in mons if m.get("class") == hawk and m.get("mode") not in (0, 12)]
+            ids.update(m["id"] for m in hawks)
+            alive_max = max(alive_max, len(hawks))
+            if ids and not hawks:
+                break
+            time.sleep(1.0)
+        mons = hstate()["mons"]
+        alive = [m for m in mons if m.get("class") == hawk and m.get("mode") not in (0, 12)]
+        life1 = next((m.get("life") for m in mons if m.get("id") == tid), None)
+        seen_text = " ".join(H("missiles")[1])
+        classes = {int(c): int(n) for c, n in re.findall(r"class (\d+) x(\d+)", seen_text)}
+        deaths = re.search(r"death event (.*?)\(deaths (\d+), raised (\d+), event (-?\d+)\)", mxl_text())
+        notes.append("hawks seen %d (most at once %d), alive after 20 s %d; monster %s life %s -> %s; explosion missile %d (%s) x%d; missiles %s; %s" % (
+            len(ids), alive_max, len(alive), tid, life0, life1, boom_id, boom, classes.get(boom_id, 0), classes,
+            deaths.group(0) if deaths else "no death event line"))
+        if not ids:
+            bad.append("no hawk appeared")
+        elif len(alive) == len(ids):
+            bad.append("no hawk died (skills_374 / slot 175)")
+        if control:
+            if classes.get(boom_id):
+                bad.append("control: explosion missile seen with deathevent off")
+        else:
+            if not classes.get(boom_id):
+                bad.append("no explosion missile %d" % boom_id)
+            if life0 is None or life1 is None or life1 >= life0:
+                bad.append("the monster lost no life")
+            if not deaths or int(deaths.group(3)) < 1:
+                bad.append("death event raised no event")
+        for m in alive:
+            H("kill %d" % m["id"])
+        H("kill %d" % tid)
+    finally:
+        god(False)
+        H("class %d" % cls0)
+    add(nm + (" CONTROL (deathevent off)" if control else ""), "PASS" if not bad else "FAIL", "; ".join(bad + notes)[:2400], [sh("nighthawks")], log)
+
+
 def check_warprevisit():
     name = "Median-only levels entered twice by goto (warp tile asserts, ptWarp) - probe for docs/testing.md assert table"
     if not need_game():
@@ -13564,7 +13645,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("vendororbs", check_vendororbs), ("summonlife", check_summonlife), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
+          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("vendororbs", check_vendororbs), ("summonlife", check_summonlife), ("nighthawks", check_nighthawks), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),

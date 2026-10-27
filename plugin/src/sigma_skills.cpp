@@ -285,6 +285,31 @@ auto SrvDoMissileAtTarget(Game* game, Unit* unit, int32_t skillId, int32_t level
 	return d2r::api.createMissile(game, &params) != nullptr ? 1 : 0;
 }
 
+// D2Sigma 156 (0x100aaee0) -> 175: the caster dies, as a pet: when the unit has an owner (1.13c 0x6fc41260, the AI's owner;
+// D2R 0x4a53c0) it is taken off its owner's pet list and killed (1.13c 0x6fcb7b50 with the kill flag). D2R's unit death
+// function 0x44db20 (game, victim, killer, 1) does both: with the flag it removes a player's pet from the list (0x4ffb90).
+// No killer, as D2Sigma's pet removal passes none. Only skills_374 (port 446) uses it: the Night Hawks cast it on attack
+// (monprop, stat 195 at 100 %), so a hawk dies at its first hit and its cast on death (stat 271, death_event.cpp) explodes.
+constexpr uint64_t RvaMonsterOwner = 0x4a53c0;  // (unit) -> the monster's owner unit, null without one
+constexpr uint64_t RvaUnitDeath = 0x44db20;     // (game, victim, killer or null, flag)
+using MonsterOwnerFn = Unit* (*)(Unit* unit);
+using UnitDeathFn = void (*)(Game* game, Unit* victim, Unit* killer, int32_t flag);
+MonsterOwnerFn g_monsterOwner = nullptr;
+UnitDeathFn g_unitDeath = nullptr;
+
+auto SrvDoUnsummonSelf(Game* game, Unit* unit, int32_t /*skillId*/, int32_t level) noexcept -> int64_t {
+	if (game == nullptr || unit == nullptr || g_monsterOwner == nullptr || g_unitDeath == nullptr) {
+		return 0;
+	}
+	if (level < 1) {
+		return 0;
+	}
+	if (At<int32_t>(unit, d2r::UnitType) == 1 && g_monsterOwner(unit) != nullptr) {
+		g_unitDeath(game, unit, nullptr, 1);
+	}
+	return 1;
+}
+
 struct SlotFunction {
 	int slot;
 	SrvDoFn function;
@@ -295,6 +320,7 @@ constexpr SlotFunction Functions[] = {
 	{172, SrvDoMultiSummon, "multi-summon (D2Sigma 153)"},
 	{173, SrvDoLevelPortal, "portal to a level (D2Sigma 154)"},
 	{174, SrvDoLayeredBuff, "self buff with layered stats (D2Sigma 18)"},
+	{175, SrvDoUnsummonSelf, "pet dies (D2Sigma 156)"},
 	{176, SrvDoMissileBarrage, "missile barrage (D2Sigma 157)"},
 	{177, SrvDoMissileRow, "missile row (D2Sigma 158)"},
 	{178, SrvDoStrikeBurst, "strike burst (D2Sigma 159)"},
@@ -617,6 +643,8 @@ auto InstallSigmaSkills(const D2RL::PluginContext* context, char* report, size_t
 	InstallAreaDamage(context->exeBase);
 	InstallTeleport(context->exeBase);
 	InstallStatList(context->exeBase);
+	g_monsterOwner = reinterpret_cast<MonsterOwnerFn>(context->exeBase + RvaMonsterOwner);
+	g_unitDeath = reinterpret_cast<UnitDeathFn>(context->exeBase + RvaUnitDeath);
 	static constexpr uint8_t Empty[8] = {};
 	int installed = 0;
 	size_t used = 0;

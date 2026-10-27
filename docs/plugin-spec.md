@@ -18,7 +18,7 @@ locating the run of pointers to functions that assert in `D2SkillDo.cpp`: the 19
 | 153 (-> 172) | 0x100ad720 | 40 | blood_skeleton, ice_elementals, fire_elementals, summon_familiars — **plugin** (multi-summon) |
 | 154 (-> 173) | 0x100aafa0 | 3 | mysterious_companion_skill, judgementwander_2_skill — **plugin** (red portal to the Median level calc1, the keys' routine; 0.21.0) |
 | 155 (-> D2R 109) | 0x100ab090 | 1 | **town_portal** (see below) |
-| 156 (-> 175) | 0x100aaee0 | 1 | skills_374 — not ported (two D2Game calls; hidden skill) |
+| 156 (-> 175) | 0x100aaee0 | 1 | skills_374 — **plugin** (pet dies: the Night Hawks after their hit, see "Death event 14"; bug #58) |
 | 157 (-> 176) | 0x100aca50 | 25 | catapult_shot, overkill, diseased_cattle, hail_of_stones — **plugin** (barrage) |
 | 158 (-> 177) | 0x100acc50 | 74 | DeathMaul, MegademonInferno, CountessFirewall, egg_trap — **plugin** (missile row) |
 | 159 (-> 178) | 0x100aa7e0 | 15 | spiral_dance, heaven_s_fury, crucify_2, barrier_strike — **plugin** (strike burst) |
@@ -207,6 +207,25 @@ Median's own aura pulse built from C++ callbacks: aura stats onto units with aur
 D2R's generic stat aura is srvdofunc 65, but Median's auras use aurafilter 1 where vanilla uses e.g. 73731, and
 D2Sigma's callback does its own target selection: a plain remap to 65 could put an enemy aura (Holy Freeze) on the
 caster's party. Needs the callback's rules first.
+
+### 156: pet dies (`0x100aaee0`) and death event 14 — slot 175 (`sigma_skills.cpp`), `death_event.cpp` (off word `deathevent`); bug #58
+
+The Night Hawks (monster `night_hawk` / `night_hawk_2`) have no monster skill: their monprop gives them stat 195
+(item_skillonattack) 100 % skills_374 (port 446) and stat 271 (D2R name `item_mana_bytime`, event `events_14`, function
+30) 100 % skills_373 (port 445: missile 5444, the explosion with damage; `night_hawk_2` has both as stat 195).
+
+- **156** (`0x100aaee0`): with a level >= 1, gets the caster's owner (1.13c `0x6fc41260`, the AI owner) and calls the
+  1.13c pet removal `0x6fcb7b50` with the kill flag: the pet leaves its owner's list and dies (`0x6fcb77e0` -> the unit death
+  function with no killer). Port: D2R's owner lookup `0x4a53c0(unit)`, then the unit death function
+  `0x44db20(game, unit, null, 1)`, which with flag 1 takes a player's pet off the list itself (`0x4ffb90`).
+- **Event 14**: Median's events.txt has two rows more than 1.13c (ev14, ev15). D2Sigma's wrapper `0x10057930` of the 1.13c
+  unit death function `0x6fcfeee0` raises event 14 (`mov edx, 0xe`) with the victim and the killer before the death runs; all
+  17 calls of `0x6fcfeee0` in D2Game are redirected to the wrapper, so every death raises it. Stat 271 (Median's "cast on death",
+  248 monprop rows: the hawks, death novas of many monsters) listens to it. txt_migrate keeps the row as D2R events row 18
+  (`events_14`), which D2R never raises. `death_event.cpp` hooks `0x44db20` (entry 24 bytes, no rip-relative operand) and
+  raises the event id of stat 271's itemstatcost record (`+0x44`) through the dispatch wrapper `0x44d570(game, event,
+  victim, killer, 0)` first. Difference: a unit already in its death / dead mode (the modes `0x44db20` returns on) gets no
+  second event. `mxl` line `death event on (... deaths, raised, event 18)`; check `nighthawks`.
 
 ## Client skill functions (skills.txt `cltdofunc`)
 
