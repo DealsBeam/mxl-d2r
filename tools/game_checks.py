@@ -2474,32 +2474,40 @@ def check_nighthawks():
             return add(nm, "BLOCKED", "no monster spawned")
         time.sleep(2)
         life0 = next((m.get("life") for m in hstate()["mons"] if m.get("id") == tid), None)
+        H("asserttrace on")
+        H("asserttrace clear")
         H("setskill %d 10" % sid)
         H("missiles reset")
-        ids, alive_max, t0 = set(), 0, time.time()
-        for _cast in range(3):
-            H("stat player 9 set %d" % (5000 << 8))
-            H("stat player 8 set %d" % (5000 << 8))
-            ok, cl = H("cast %d self" % sid)
-            log.extend(cl[:2])
-            time.sleep(0.5)
+        ids, alive_max, t0, life_min, gone = set(), 0, time.time(), life0, False
+        casts = 0
         while time.time() - t0 < 20:
+            if casts < 3:  # the hawks can reach the monster and explode within a second: the listing runs between the casts
+                H("stat player 9 set %d" % (5000 << 8))
+                H("stat player 8 set %d" % (5000 << 8))
+                ok, cl = H("cast %d self" % sid)
+                log.extend(cl[:2])
+                casts += 1
             mons = hstate()["mons"]
             hawks = [m for m in mons if m.get("class") == hawk and m.get("mode") not in (0, 12)]
             ids.update(m["id"] for m in hawks)
             alive_max = max(alive_max, len(hawks))
-            if ids and not hawks:
+            target = next((m for m in mons if m.get("id") == tid), None)
+            if target is None or target.get("mode") in (0, 12):
+                gone = True  # the explosions killed it (or it left the 40-unit listing)
+            elif target.get("life") is not None and (life_min is None or target["life"] < life_min):
+                life_min = target["life"]
+            if casts >= 3 and ids and not hawks:
                 break
-            time.sleep(1.0)
+            time.sleep(0.2 if casts < 3 else 1.0)
         mons = hstate()["mons"]
         alive = [m for m in mons if m.get("class") == hawk and m.get("mode") not in (0, 12)]
-        life1 = next((m.get("life") for m in mons if m.get("id") == tid), None)
+        asserts = sorted(set(a[0][:40] for a in assert_lines(H("asserttrace show")[1])))
         seen_text = " ".join(H("missiles")[1])
         classes = {int(c): int(n) for c, n in re.findall(r"class (\d+) x(\d+)", seen_text)}
         deaths = re.search(r"death event (.*?)\(deaths (\d+), raised (\d+), event (-?\d+)\)", mxl_text())
-        notes.append("hawks seen %d (most at once %d), alive after 20 s %d; monster %s life %s -> %s; explosion missile %d (%s) x%d; missiles %s; %s" % (
-            len(ids), alive_max, len(alive), tid, life0, life1, boom_id, boom, classes.get(boom_id, 0), classes,
-            deaths.group(0) if deaths else "no death event line"))
+        notes.append("hawks seen %d (most at once %d), alive after 20 s %d; monster %s life %s -> lowest %s%s; explosion missile %d (%s) x%d; missiles %s; %s; asserts during the fight: %s" % (
+            len(ids), alive_max, len(alive), tid, life0, life_min, " then dead / gone" if gone else "", boom_id, boom,
+            classes.get(boom_id, 0), classes, deaths.group(0) if deaths else "no death event line", asserts or "none"))
         if not ids:
             bad.append("no hawk appeared")
         elif len(alive) == len(ids):
@@ -2510,7 +2518,7 @@ def check_nighthawks():
         else:
             if not classes.get(boom_id):
                 bad.append("no explosion missile %d" % boom_id)
-            if life0 is None or life1 is None or life1 >= life0:
+            if life0 is None or (not gone and (life_min is None or life_min >= life0)):
                 bad.append("the monster lost no life")
             if not deaths or int(deaths.group(3)) < 1:
                 bad.append("death event raised no event")
