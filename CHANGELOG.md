@@ -8,6 +8,13 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
 
 ## D2R-XL
 
+### 0.69.10 (2026-10-27)
+- **Fixed skill icons:** **Attack** and about 86 other shared skill icons (Throw, Unsummon and more) showed the icon
+  next to theirs. A few class skills (Reckoning of Zerae, Batstrike, Pneumatic Burst, Shadow Flow) had the wrong
+  frame. Every skill now uses Median's exact icon, in classic and HD. ([#52](docs/bugs.md))
+- Known: about 160 skills that items put on the skill bar show Median's "?" icon in HD for now
+  ([#56](docs/bugs.md)).
+
 ### 0.69.9 (2026-10-27)
 - **Fixed a crash** when a **treasure goblin** (for example the Arcane Collector) appears, and when the **Den of Evil
   boss** casts its cold bone spear. The game looked up a Median sound that the player's install did not have. D2R-XL
