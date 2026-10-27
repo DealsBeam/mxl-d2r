@@ -13,8 +13,8 @@ automatically; maintainers add the rest.
 | `ui` | Panels, tooltip layout, character sheet, skill tree and inventory UI, HUD, automap |
 | `balance` | A number or rule differs from Median XL 2.14.4 (see the Balance or Median difference form) |
 | `save` | Character or stash save problems: loading, corruption, lost items, extended save format |
-| `install` | Install, update and launch problems: launcher, manual zip, D2RLoader, game build |
-| `launcher` | The Median XL Launcher itself (download, game copy, updates, Play button) |
+| `install` | Install, update and launch problems: the downloader, the manual 7z, D2RLoader, the D2R build |
+| `downloader` | The D2R-XL Downloader itself (finding D2R, download, unpack, update, repair, self-update) |
 | `needs-repro` | We cannot reproduce it yet; waiting for steps, a log or a save |
 | `unported` | A known gap that has a row in `docs/unported.md`; use it to link issues to that table |
 
