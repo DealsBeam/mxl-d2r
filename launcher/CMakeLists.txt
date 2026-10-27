@@ -31,6 +31,7 @@ set_property(SOURCE src/win/app.cpp src/win/main.cpp src/win/window.cpp APPEND P
              MXL_LAUNCHER_VERSION="${launcher_version}")
 set_property(SOURCE res/launcher.rc APPEND PROPERTY COMPILE_DEFINITIONS MXL_LV_STR="${launcher_version}"
              MXL_LV_NUM=${CMAKE_MATCH_1},${CMAKE_MATCH_2},${CMAKE_MATCH_3},0)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS src/win/app.h)  # a new version in app.h reconfigures
 message(STATUS "downloader version ${launcher_version}")
 # Signing is a separate, later step (docs/launcher.md "Release and signing"): the build leaves the unsigned exe and its
 # sha256 side by side.

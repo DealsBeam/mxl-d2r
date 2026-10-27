@@ -489,4 +489,24 @@ A `publish --force` of an existing version rewrites files under `releases/<v>/`:
 (section 4) as the backup and for checks. If the Space or Cloudflare has a problem, a downloader can be pointed back at it
 with `--site https://dl.werdegames.com/mxl/`; the Space can always be rebuilt from the server with
 `systemctl start mxl-dl-sync` (after a big cleanup: `dl_sync.py --allow-mass-delete` once by hand). The downloader's default
-site becomes `https://files.werdegames.com/mxl/` in its own change (`launcher/src/win/app.h`, `DefaultSite`).
+site is `https://files.werdegames.com/mxl/` since downloader 0.2.1 (`launcher/src/win/app.h`, `DefaultSite`; live 2026-10-27 through the Cloudflare Worker below).
+
+### The Cloudflare Worker in front of the Space (what is live)
+
+The plan above (a proxied CNAME to the Spaces CDN with a custom subdomain) fails. DigitalOcean's Spaces CDN runs on Cloudflare itself, so a proxied record pointing at it gets **error 1014 (CNAME Cross-User Banned)**. A grey-cloud record would show players the Cloudflare Origin CA certificate, which only Cloudflare trusts. A proxied CNAME to the plain Space gets NoSuchBucket, and rewriting the Host header needs Enterprise.
+
+What runs instead is the Worker `d2r-xl-files` (free plan), with the custom domain `files.werdegames.com`. It fetches `https://d2r-xl.fra1.digitaloceanspaces.com<path>`, which is not behind Cloudflare:
+- It serves only GET and HEAD, and only paths under `/mxl/` without dot segments.
+- It forwards `Range`, `If-None-Match` and `If-Modified-Since`.
+- It fetches with `cf: { cacheEverything: true }`, so caching follows the origin's Cache-Control: objects are HITs from the second request on, and channels are revalidated (REVALIDATED) every time.
+- A 403 from the Space (missing file, listing restricted) becomes a 404.
+- It drops the `x-amz-*` headers.
+
+The source is kept in the Cloudflare dashboard (Workers & Pages, `d2r-xl-files`, Edit code). It was checked on 2026-10-27:
+- `verify --url https://files.werdegames.com/mxl/` passed;
+- Range requests return 206;
+- `channels/nope.json`, `.sync/status.json` and `/` return 404.
+
+The DigitalOcean CDN custom subdomain and the Cloudflare cache rule are no longer used, and leaving them on does no harm.
+
+Cloudflare's zone **Browser Cache TTL** (4 h) rewrites the Cache-Control that clients see, e.g. `max-age=14400` on channels. The edge still revalidates channels on every request. The downloader (WinHTTP) keeps no HTTP cache, so this only affects browsers. To pass the origin's headers through unchanged, set Caching, Configuration, Browser Cache TTL to "Respect Existing Headers" (zone-wide).

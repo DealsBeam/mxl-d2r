@@ -18,7 +18,7 @@ namespace {
 const wchar_t* Usage =
 	L"D2R-XL-Downloader.exe [--cli status|detect|install|update|repair|uninstall|self-update|remove-old-copy] [options]\n"
 	L"  --data-dir DIR   state, download and log (default %LOCALAPPDATA%\\D2R-XL)\n"
-	L"  --site URL|DIR   download site root (default https://dl.werdegames.com/mxl/; http://, file:// or a folder for tests)\n"
+	L"  --site URL|DIR   download site root (default https://files.werdegames.com/mxl/; backup https://dl.werdegames.com/mxl/; http://, file:// or a folder for tests)\n"
 	L"  --channel NAME   release channel: stable (default) or test\n"
 	L"  --game-dir DIR   your D2R folder (default: found via Battle.net / Steam); D2R-XL goes into DIR\\mods\\D2R-XL\n"
 	L"  --replace        replace a mods\\D2R-XL that the downloader did not install\n"
