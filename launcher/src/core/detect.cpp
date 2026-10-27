@@ -154,6 +154,17 @@ bool AcfIsD2R(const std::string& acf) {
 	       dir == "diablo ii resurrected";
 }
 
+bool SameProgram(int build, int required) {
+	if (build == required)
+		return true;
+	if (required != RequiredBuild)
+		return false;
+	for (int b : SameProgramBuilds)
+		if (build == b)
+			return true;
+	return false;
+}
+
 BuildCheck CheckBuild(const std::string& infoVersion, const std::string& exeVersion, int required) {
 	BuildCheck c;
 	int info = BuildNumber(infoVersion), exe = BuildNumber(exeVersion);
@@ -168,6 +179,9 @@ BuildCheck CheckBuild(const std::string& infoVersion, const std::string& exeVers
 	if (c.build == required) {
 		c.verdict = BuildVerdict::Ok;
 		c.message = "D2R build " + std::to_string(c.build);
+	} else if (SameProgram(c.build, required)) {
+		c.verdict = BuildVerdict::Ok;
+		c.message = "D2R build " + std::to_string(c.build) + " (the same game program as " + std::to_string(required) + ")";
 	} else if (c.build > required) {
 		c.verdict = BuildVerdict::Newer;
 		c.message = "D2R-XL needs D2R build " + std::to_string(required) + "; this D2R is build " + std::to_string(c.build) +

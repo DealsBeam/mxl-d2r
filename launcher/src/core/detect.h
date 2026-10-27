@@ -8,6 +8,13 @@
 namespace mxl {
 
 constexpr int RequiredBuild = 93847;  // D2R 3.3 build the port is made for (docs/d2r-baseline.md)
+// Other build numbers that run the very same game program, so the plugin works there too. Steam's D2R 3.3.94995 unpacks
+// to the same image as Battle.net's 93847 (PE timestamp 0x6ab3782c in memory; a player's mxl-core.log on Steam,
+// docs/bugs.md #41). The packed D2R.exe files differ, so this is known per build, not computed. The plugin still checks
+// the image at run time and stays off on any other one (plugin/src/build_guard_logic.h).
+constexpr int SameProgramBuilds[] = {94995};
+// True for RequiredBuild itself and for a build of SameProgramBuilds when `required` is RequiredBuild.
+bool SameProgram(int build, int required = RequiredBuild);
 
 // .build.info of a Blizzard (CASC) install: '|' separated, first line "Name!TYPE:n|...". Returns the "Version" of
 // the active row ("3.3.93847"), or "" when there is none.

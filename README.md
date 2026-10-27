@@ -32,8 +32,8 @@ Expect bugs. Please report them (below).
 
 ## Requirements
 
-- Your own copy of **Diablo II: Resurrected** (PC, Battle.net), build **93847**. The Steam build (94995) is not supported
-  yet ([docs/bugs.md](docs/bugs.md) #41). Nothing from Blizzard is distributed here.
+- Your own copy of **Diablo II: Resurrected** (PC): Battle.net build **93847**, or the Steam build **94995** (the same game
+  program under another version number). Nothing from Blizzard is distributed here.
 - **D2RLoader 1.3.1** from [d2rloader.net](https://d2rloader.net/), installed in your D2R folder.
 - Windows 10 or 11, and about **1.6 GB of free disk space** (1.2 GB for the mod, plus the 355 MB download while it
   installs).

@@ -4,10 +4,15 @@ D2R-XL releases (the mod, version = the plugin's `PluginVersion`) and D2R-XL Dow
 Downloads: the downloader always installs the newest release; each release's 7z is at
 `https://files.werdegames.com/mxl/releases/<version>/D2R-XL-<version>.7z`. Known bugs: [docs/bugs.md](docs/bugs.md).
 
-All releases need Diablo II: Resurrected **build 93847** (Battle.net) and **D2RLoader 1.3.1**. The Steam build (94995) is
-not supported yet.
+All releases need Diablo II: Resurrected **build 93847** (Battle.net) or **94995** (Steam: the same game program) and
+**D2RLoader 1.3.1**.
 
 ## D2R-XL
+
+### 0.69.7 (2026-10-27)
+- Released with **Downloader 0.2.3**. No game changes.
+- **Steam players:** D2R-XL works on the Steam build 94995. It is the same game program as Battle.net's 93847, and the
+  plugin always ran there; only the downloader refused it.
 
 ### 0.69.6 (2026-10-27)
 - The in-game `mxl` console line and `mxl-core.log` now name any **other D2RLoader plugins** that are loaded. That helps
@@ -45,6 +50,10 @@ not supported yet.
   Median-only monsters, effects and maps use the closest vanilla HD stand-ins. See the README, "Where it stands".
 
 ## D2R-XL Downloader
+
+### 0.2.3 (2026-10-27)
+- **Steam:** accepts D2R build 94995, the same game program as 93847, instead of saying the build is not supported.
+  ([#41](docs/bugs.md))
 
 ### 0.2.2 (2026-10-27)
 - **Fixed:** "D2R or D2RLoader is running, close the game first" while both were closed. This happened when the

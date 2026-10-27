@@ -260,6 +260,10 @@ void TestDetect() {
 	Check(newer.verdict == mxl::BuildVerdict::Newer && newer.build == 94100 && newer.message.find("Waiting for a D2R-XL update") != std::string::npos,
 	      "newer build: waiting message (half-updated install counts as newer)");
 	Check(mxl::CheckBuild("3.2.91000", "").verdict == mxl::BuildVerdict::Older, "older build");
+	auto steam = mxl::CheckBuild("", "3.3.94995");  // Steam: no .build.info, the same program as 93847 (bugs.md #41)
+	Check(steam.verdict == mxl::BuildVerdict::Ok && steam.build == 94995 && steam.message.find("same game program") != std::string::npos,
+	      "Steam 94995 runs the 93847 program");
+	Check(mxl::CheckBuild("", "3.3.94995", 95000).verdict != mxl::BuildVerdict::Ok, "the equivalence is only for 93847");
 	Check(mxl::CheckBuild("", "").verdict == mxl::BuildVerdict::Unknown, "unknown build");
 	Check(mxl::CheckBuild("", "3.3.93847").verdict == mxl::BuildVerdict::Ok, "exe version alone");
 
