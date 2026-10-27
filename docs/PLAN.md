@@ -162,6 +162,16 @@ Everything else follows Median XL (owner, 2026-10-21); gaps and approximations a
   level, experience and drops): off. tools/terror_zones.py writes D2R's desecratedzones.json with every
   ladder_enabled / non_ladder_enabled flag false into the mod.
 
+## Features from other plugins (owner, 2026-10-27)
+
+Players use other D2RLoader gameplay plugins. Together with mxl-core they conflict and can crash (docs/bugs.md #44). D2R-XL will **not** be made compatible with them. Instead, their features get built into D2R-XL natively later, so the plugins are not needed. Work on this comes after the open bugs.
+
+| Plugin | What players use it for | Status |
+|---|---|---|
+| pSpell | skill / spell changes (to be checked) | to do: find out what it offers, then decide which parts fit Median |
+| vendor refresh | refreshing vendor stock without leaving the game | to do |
+| Qual-Kehk plugin | changes to the Qual-Kehk quest / hirelings (to be checked) | to do |
+
 ## Phase 7: Private realm (after single-player works; preliminary)
 Characters stored on our own server, games hosted through D2RLoader TCP/IP (the D2R Reimagined / Project Lage
 model). Draft plan, edit before starting: [realm-plan.md](realm-plan.md).
