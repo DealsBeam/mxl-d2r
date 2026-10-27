@@ -2304,6 +2304,144 @@ def check_vendorstock():
     add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:1800], [], log)
 
 
+def _median_orb_vendors():
+    """Mystic orb codes per vendor (monstats row) in Median's npcstores.bin (docs/vendors.md): {npc row: set of codes}. The orbs are
+    the misc rows of item type `mysticorb`-like codes named "Mystic Orb" in assets/median/item_names.txt."""
+    names = os.path.join(REPO, "assets", "median", "item_names.txt")
+    with open(names, encoding="latin-1") as f:
+        orbs = {l.split("\t")[0] for l in f if "Mystic Orb" in l}
+    data = open(os.path.join(REPO, "assets", "median", "data", "global", "excel", "npcstores.bin"), "rb").read()
+    out = {}
+    for i in range(struct.unpack_from("<I", data)[0]):
+        row = data[4 + 52 * i:4 + 52 * (i + 1)]
+        code = row[4:8].decode("latin-1").strip()
+        if code in orbs:
+            out.setdefault(struct.unpack_from("<H", row)[0], set()).add(code)
+    return out, orbs
+
+
+def check_vendororbs():
+    """Bugs #37 / #38: who sells the mystic orbs. Median's npcstores.bin stocks them at Gheed, Drognan, Alkor, Halbu and Larzuk
+    (48 orbs each, always in stock), not at Akara or Charsi. The Act 1 vendors are opened at player level 90 in Hell (no item level
+    cap) and their stock is compared with Median's list."""
+    nm = "Mystic orbs per vendor (bugs #37 / #38): Gheed sells Median's orbs, Akara and Charsi none (Median npcstores.bin)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    per_npc, orbs = _median_orb_vendors()
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    st0 = hstate()["player"]
+    lvl0 = st0.get("level") or 1
+    mdiff = re.search(r"difficulty = (\d)", " ".join(H("difficulty")[1]))
+    diff0 = int(mdiff.group(1)) if mdiff else 0
+    rows, bad, log = [], [], []
+    try:
+        H("difficulty 2")
+        H("stat player 12 set 90")
+        for cls, name in ((148, "Akara"), (154, "Charsi"), (147, "Gheed")):
+            want = per_npc.get(cls, set())
+            close_menu()
+            if npc_menu_near(cls) is None:
+                bad.append("%s: no menu" % name)
+                continue
+            H("shop %d restock" % cls)
+            H("menu 1")
+            time.sleep(2.5)
+            ok, lines = H("shop %d" % cls)
+            g.click(*TRADE_CLOSE)
+            time.sleep(0.8)
+            close_menu()
+            stock = [kv(l) for l in lines if l.startswith("item ")]
+            sold = {it.get("code", "").strip() for it in stock} & orbs
+            line = "%s (class %d): %d items, %d mystic orbs in stock (Median lists %d for this vendor)%s" % (
+                name, cls, len(stock), len(sold), len(want), ": " + " ".join(sorted(sold)[:8]) if sold else "")
+            rows.append(line)
+            log.append(line)
+            if not stock:
+                bad.append("%s: empty stock" % name)
+            elif not want and sold:
+                bad.append("%s sells %d orbs, Median none" % (name, len(sold)))
+            elif want and not sold:
+                bad.append("%s sells no orbs, Median %d" % (name, len(want)))
+            elif sold - want:
+                bad.append("%s sells orbs Median does not list for it: %s" % (name, sorted(sold - want)))
+    finally:
+        H("stat player 12 set %d" % lvl0)
+        H("difficulty %d" % diff0)
+        close_menu()
+    median = "; ".join("monstats row %d: %d orbs" % (k, len(v)) for k, v in sorted(per_npc.items()))
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows) + " | Median npcstores: " + median, [], log)
+
+
+def _monstats_class(name):
+    t = _tsv(os.path.join(BUILT_EXCEL, "monstats.txt"))
+    return next((i for i, r in enumerate(t[1:]) if r and r[0] == name), None)
+
+
+def check_summonlife():
+    """Bug #36: the Barbarian's wolf companion (skill wolf_companion, D2R's Raven summon srvdofunc 114, monster AI Raven) died a
+    few seconds after it was summoned with no monster near. Summons it in an empty Blood Moor and in the town and follows its life for
+    30 s; Guardian Spirit (srvdofunc 172, the plugin's multi-summon) is the control."""
+    nm = "Summons stay alive with no monster near (bug #36): wolf_companion and guardian_spirit, 30 s in the field and in town"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    by_name, _t, _h = _skill_ids_by_name()
+    rows, bad, log = [], [], []
+    cls0 = hstate()["player"].get("class") or 0
+    H("class 4")  # Barbarian
+    try:
+        for area in (2, 1):
+            if area == 2:
+                fight_ready()
+            else:
+                revive_if_dead()
+                goto(1)
+                close_menu()
+            god(True)
+            for skill, mon in (("wolf_companion", "wolf_companion"), ("guardian_spirit", "guardian_spirit")):
+                sid, mcls = by_name.get(skill), _monstats_class(mon)
+                if sid is None or mcls is None:
+                    bad.append("%s: no skill or monstats row" % skill)
+                    continue
+                H("setskill %d 10" % sid)
+                H("stat player 9 set %d" % (5000 << 8))  # the summon costs ~125 mana at level 10
+                H("stat player 8 set %d" % (5000 << 8))
+                ok, cl = H("cast %d self" % sid)
+                log.extend(cl[:3])
+                time.sleep(1.0)
+                ids, samples, t0 = set(), [], time.time()
+                pets = []
+                while time.time() - t0 < 30:
+                    pets = [m for m in hstate()["mons"] if m.get("class") == mcls and m.get("mode") not in (0, 12)]
+                    ids.update(m["id"] for m in pets)
+                    samples.append((round(time.time() - t0), len(pets), min((m.get("life", 0) for m in pets), default=0),
+                                    max((m.get("maxlife", 0) for m in pets), default=0)))
+                    time.sleep(2.0)
+                first = next((s for s in samples if s[1]), None)
+                # one empty sample is a gap of the unit listing (seen in town: missing at 26 s, back at 30 s with full life)
+                after = [s for s in samples if first and s[0] > first[0]]
+                died = next((a[0] for a, b in zip(after, after[1:]) if not a[1] and not b[1]), None)
+                line = "area %d %s (skill %d, class %d): cast %s, %d unit(s) seen, alive at 30 s: %d, life (t, n, min life, max) %s" % (
+                    area, skill, sid, mcls, "OK" if ok else "FAIL", len(ids), samples[-1][1] if samples else 0,
+                    [s for s in samples[::3]] + samples[-1:])
+                rows.append(line)
+                log.append(line)
+                if not first:
+                    bad.append("area %d %s: no pet appeared (%s)" % (area, skill, " | ".join(cl[-1:])))
+                elif died is not None or not samples[-1][1]:
+                    bad.append("area %d %s: the pet died after about %s s with no monster near" % (area, skill, died))
+                elif samples[-1][2] < first[2] * 0.9:
+                    bad.append("area %d %s: life fell %d -> %d" % (area, skill, first[2], samples[-1][2]))
+                for m in pets:
+                    H("kill %d" % m["id"])
+            god(False)
+    finally:
+        H("class %d" % cls0)
+        god(False)
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:2400], [sh("summonlife")], log)
+
+
 def check_warprevisit():
     name = "Median-only levels entered twice by goto (warp tile asserts, ptWarp) - probe for docs/testing.md assert table"
     if not need_game():
@@ -3760,6 +3898,63 @@ def check_tooltiptext():
                     bad.append("%s q=%d: [%s] %s" % (code, q, ta.norm(line), why))
     notes.append("%d lines of %d named items and %d bases" % (seen, len(TIP_ITEMS), len(TIP_BASES)))
     add(name, "PASS" if not bad else "FAIL", "; ".join(bad[:6]) if bad else "; ".join(notes), log=bad)
+
+
+def check_allattrtip():
+    """Bug #45: a magic amulet with Median's all-attributes suffix (property `nofreeze`: Strength, Energy, Dexterity and Vitality,
+    magicsuffix rows on amul) and the suffix counter must read "+5 to all Attributes" and "Suffixes: 1" (Median's
+    ItemSuffixCounter line), with no printf placeholder. Also rolls real magic amulets until one carries the suffix."""
+    name = "Magic amulet all-attributes line and suffix counter (bug #45)"
+    if not need_game():
+        return add(name, "BLOCKED", "not in a game")
+    import tooltip_audit as ta
+    goto(1)
+    close_menu()
+    if not _tip_ready():
+        return add(name, "FAIL", "real item text builder not reached by background hover")
+    bad, notes, shots = [], [], []
+    ok, out = H("item amu q=4 0=5 1=5 2=5 3=5 440=1 inv", 20)
+    m = re.search(r"item id=(\d+) .* x=(\d+) y=(\d+)", " ".join(out)) if ok else None
+    if not m:
+        return add(name, "FAIL", "amulet not made: %s" % " ".join(out)[:120])
+    iid, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    _, lines = _tip_lines(iid)
+    text = [ta.norm(l) for l in lines]
+    notes.append("forced amulet: %s" % text)
+    for want in ("+5 to all Attributes", "Suffixes: 1"):
+        if want not in text:
+            bad.append("forced amulet: no line [%s] in %s" % (want, text))
+    bad += ["forced amulet: [%s] %s" % (l, ta.leaks(l)) for l in text if ta.leaks(l)]
+    fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0
+    g.key("i")
+    time.sleep(1.2)
+    g.click(fx, fy, move_only=True)
+    time.sleep(1.0)
+    g.click(fx + 0.002, fy + 0.002, move_only=True)
+    time.sleep(2.0)
+    shots.append(sh("allattrtip_amulet"))
+    g.key("esc")
+    H("remove amu 9")
+    found = 0
+    for _ in range(120):
+        ok, out = H("item amu q=4 ilvl=60 ground", 20)
+        m = re.search(r"item id=(\d+)", " ".join(out)) if ok else None
+        if not m:
+            continue
+        _, lines = _tip_lines(int(m.group(1)))
+        text = [ta.norm(l) for l in lines]
+        bad += ["rolled amulet: [%s] %s" % (l, ta.leaks(l)) for l in text if ta.leaks(l)]
+        if any(l.endswith("to all Attributes") for l in text):
+            found += 1
+            notes.append("rolled amulet: %s" % text)
+            if not any(re.match(r"^\+\d+ to all Attributes$", l) for l in text):
+                bad.append("rolled amulet: %s" % text)
+            if found >= 3:
+                break
+    notes.append("%d rolled amulets with the all-attributes suffix" % found)
+    if not found:
+        bad.append("no rolled magic amulet carried the all-attributes suffix in 120 tries")
+    add(name, "PASS" if not bad else "FAIL", "; ".join(bad[:4]) if bad else "; ".join(notes), shots, notes + bad)
 
 
 def check_specialtext():
@@ -6152,26 +6347,76 @@ def check_orbtips():
         ok, made = H("item %s inv" % code)
         m = re.search(r"item id=(\d+) .* x=(\d+) y=(\d+)", " ".join(made[:1])) if ok else None
         if m:
-            placed.append((tag, key, int(m.group(2)), int(m.group(3))))
+            placed.append((tag, key, int(m.group(2)), int(m.group(3)), int(m.group(1))))
         else:
             bad.append("orb %s (%s) could not be created: %s" % (code, key, made[:1]))
+    def drawn_tip(where, key, iid):
+        """What `tip <id>` reads for the orb (bug #38). Info only: the orb's spelldesc lines are drawn outside the property text
+        the harness reads (0 lines for an orb, run checks-20261027-123822-s2), so the screenshots are the evidence."""
+        ok, got = _tip_lines(iid)
+        plain = " | ".join(_COLOUR.sub("", l) for l in got)
+        log.append("%s %s tip readback (%d lines): %s" % (where, key, len(got), plain[:300]))
+        return plain
+
     g.key("i")
     time.sleep(1.2)
     shots = [sh("orbtips_inventory")]
-    for tag, key, x, y in placed:
+    inv_tips = []
+    for tag, key, x, y, iid in placed:
         fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
         g.click(fx, fy, move_only=True)
         time.sleep(1.0)
         g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
         time.sleep(2.0)
         shots.append(sh("orbtips_%s_%s" % (tag, key)))
+        inv_tips.append(key)
+        drawn_tip("inventory", key, iid)
     g.key("esc")
     for tag, (code, _k, _r, _t) in pick.items():
         H("remove %s 9" % code)
+    # bug #38: the same tooltip on Gheed's shelf (Hell, level 90: every orb he stocks), hovered on the Misc tab
+    key_of = dict(orbs)
+    shop_tips = []
+    mdiff = re.search(r"difficulty = (\d)", " ".join(H("difficulty")[1]))
+    diff0, lvl0 = int(mdiff.group(1)) if mdiff else 0, hstate()["player"].get("level") or 1
+    try:
+        H("difficulty 2")
+        H("stat player 12 set 90")
+        if npc_menu_near(147) is None:
+            bad.append("Gheed: no menu")
+        else:
+            H("shop 147 restock")
+            H("menu 1")
+            time.sleep(2.5)
+            _ok, lines = H("shop 147")
+            stock = [kv(l) for l in lines if l.startswith("item ")]
+            shelf = [s for s in stock if s.get("code", "").strip() in key_of and s.get("page") == "3"]
+            g.click(*SHOP_TABS[2])
+            time.sleep(1.0)
+            for s in shelf[:3]:
+                code = s["code"].strip()
+                fx = (SHOP_GRID[0] + (int(s["x"]) + 0.5) * SHOP_GRID[2]) / 1600.0
+                fy = (SHOP_GRID[1] + (int(s["y"]) + 0.5) * SHOP_GRID[2]) / 900.0
+                g.click(fx, fy, move_only=True)
+                time.sleep(1.0)
+                g.click(fx + 0.002, fy + 0.002, move_only=True)
+                time.sleep(2.0)
+                shots.append(sh("orbtips_shop_%s" % key_of[code]))
+                shop_tips.append(key_of[code])
+                drawn_tip("shop", key_of[code], int(s["id"]))
+            if not shelf:
+                bad.append("Gheed's Misc tab holds no orb (%d stock items)" % len(stock))
+            g.click(*TRADE_CLOSE)
+            time.sleep(0.8)
+    finally:
+        close_menu()
+        H("stat player 12 set %d" % lvl0)
+        H("difficulty %d" % diff0)
     add(name, "FAIL" if bad else "REVIEW",
-        "%d orbs with their own record (%d distinct texts); strings read back and orbs hovered in the inventory (%s): the screenshots "
-        "show the tooltip (limit per item, required level, properties, target type); %s" % (
-            len(orbs), len(set(texts)), ", ".join("%s=%s" % (t, k) for t, k, _x, _y in placed), "; ".join(bad) or "no mismatch"), shots, log)
+        "%d orbs with their own record (%d distinct texts); strings read back and orbs hovered in the inventory (%s) and on Gheed's shelf: "
+        "hovered inventory [%s], shop [%s] (bug #38: the screenshots must show every line of the record, not only Right-Click to Apply); the screenshots show the tooltip (limit per item, required level, properties, target type); %s" % (
+            len(orbs), len(set(texts)), ", ".join("%s=%s" % (t, k) for t, k, _x, _y, _i in placed), ", ".join(inv_tips), ", ".join(shop_tips),
+            "; ".join(bad) or "no mismatch"), shots, log)
 
 
 # ------------------------------------------------------------------ strings: what the player reads (lane ns-verify)
@@ -12777,7 +13022,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
+          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("vendororbs", check_vendororbs), ("summonlife", check_summonlife), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
@@ -12798,7 +13043,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("nocorpse", check_nocorpse), ("corpsepickup", check_corpsepickup),
           ("cooldowns", check_cooldowns),
           ("collidetypes", check_collidetypes), ("skillstarts", check_skillstarts), ("activationfreq", check_activationfreq),
-          ("nslong", check_nslong), ("orbtips", check_orbtips),
+          ("nslong", check_nslong), ("orbtips", check_orbtips), ("allattrtip", check_allattrtip),
           ("strings", check_strings),
           ("goblinname", check_goblinname), ("rewardsound", check_rewardsound), ("statorder", check_statorder), ("infopanel", check_infopanel),
           ("sprint", check_sprint), ("steadyaim", check_steadyaim), ("restrictitems", check_restrictitems), ("heat", check_heat),

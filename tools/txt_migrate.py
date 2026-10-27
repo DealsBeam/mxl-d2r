@@ -2002,6 +2002,37 @@ class Migrator:
         self.report.append(f"\nskill costs: {written} mana/lvlmana values from D2Sigma's skills2 formulas written in; "
                            f"{formulas} formulas in calc7/calc8 for the plugin")
 
+    def raven_counts(self) -> None:
+        """The Raven AI (monai Raven, AI 107) gives its unit a hit counter when it first thinks and kills the unit when the
+        counter is 0 (each attack takes one off). The counter comes from the unit's monstats Skill1 at the unit's level of it:
+        1.13c reads Param1 + (lvl - 1) * Param2 of that skill (D2Game 0x6fcca1d0 -> 0x6fc21a90, records +0x158/+0x15c),
+        D2R evaluates its calc3 (0x5cca50 reads skills record +0x198; vanilla Raven's calc3 is ln56 with the hits in
+        par5/par6). Median's companions on that AI (wolf_companion, raven_familiar) have Param1 -2 and no calc3: in Median
+        the counter starts at -2 and never reaches 0 (the summon stays), in D2R it was 0 and the summon died on its next
+        think (bug #36). Those skills get calc3 ln12, the same par1 + (lvl - 1) * par2. A skill whose params give 0 keeps
+        its empty calc3 (0 either way); one with a calc3 of its own is left alone and reported."""
+        mh, mrows = read_tsv(NAMED / "monstats.txt")
+        ai, s1 = mh.index("AI"), mh.index("Skill1")
+        skills = {r[s1] for r in mrows if is_record(r) and len(r) > s1 and r[ai] == "Raven" and r[s1]}
+        written, kept = [], []
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "skills.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            c3, p1, p2 = h.index("calc3"), h.index("Param1"), h.index("Param2")
+            for r in rows:
+                if not is_record(r) or r[0] not in skills or not (r[p1].strip() or r[p2].strip()):
+                    continue
+                if r[c3].strip():
+                    kept.append(f"{r[0]} ({r[c3]})")
+                    continue
+                r[c3] = "ln12"
+                written.append(r[0])
+            write_tsv(p, h, rows)
+        self.report.append(f"\nraven counters: calc3 ln12 (Median's par1 + (lvl-1) * par2 hit counter) on "
+                           f"{', '.join(sorted(set(written))) or 'none'}; own calc3 kept: {', '.join(sorted(set(kept))) or 'none'}")
+
     def fill_skilldesc(self) -> None:
         """D2R asserts when a class skill has no skilldesc (Median's hidden class skills, granted at character
         creation, have none). They point at the "attack" description, which has no skill tree page."""
@@ -2498,6 +2529,7 @@ def main() -> int:
     m.object_presets()
     m.sound_rows()
     m.skill_costs()
+    m.raven_counts()
     m.fill_skilldesc()
     m.blank_skilldesc()
     m.skilldesc_lines()

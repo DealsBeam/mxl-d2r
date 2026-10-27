@@ -1265,3 +1265,17 @@ now refuses a check list with a name that is not in `CHECKS` (prints the names, 
 `tools/test_game_checks_names.py` covers it (`py -3 tools/test_game_checks_names.py`). The three group files have no unknown name.
 
 Also run: `py -3 tools/validate.py` (errors 0, rotw warnings 102 as before), the nine C++ test executables (all pass), `git diff --check`.
+
+### Lane player-bugs-1 (2026-10-27): player reports #35-#39 and #45 (docs/bugs.md)
+
+Data only (tools/txt_migrate.py `raven_counts`), no plugin change, no version bump. Slot 2, character PlrBugsA.
+
+| Check | What | Result |
+|---|---|---|
+| summonlife (new) | Barbarian: wolf_companion and guardian_spirit (control) summoned in the Blood Moor and in town, life sampled every 2 s for 30 s (one empty sample is a listing gap, two in a row or empty at the end is a death) | **PASS** (`checks-20261027-123822-s2`); before the fix the wolf died about 2 s after the cast in both areas (#36) |
+| vendororbs (new) | Akara, Charsi and Gheed at Hell level 90: the mystic orbs on their shelves against Median's npcstores.bin | **PASS** (`checks-20261027-122117-s2`): Gheed 34 orbs, all in Median's list; Akara and Charsi none (#37 cancelled, as Median) |
+| orbtips (extended) | also hovers up to 3 orbs on Gheed's Misc tab (Hell, level 90), screenshots `orbtips_shop_<key>` | REVIEW (`checks-20261027-124427-s2`): shop and inventory tooltips show every line of the orb's record (#38 not reproduced) |
+| allattrtip (new) | a magic amulet with +5 to Strength / Energy / Dexterity / Vitality and the suffix counter, plus rolled magic amulets until one has the all-attributes suffix: "+N to all Attributes", "Suffixes: 1", no printf placeholder; capture `allattrtip_amulet.png` | **PASS** (`checks-20261027-123822-s2`, #45 not reproduced) |
+| nodurabilityui | no repair button at Charsi, no durability line | **PASS** (`checks-20261027-122117-s2`; #39 as Median) |
+
+Also run: `py -3 tools/validate.py` (errors 0, rotw warnings 102 as before), `py -3 tools/test_game_checks_names.py`.
