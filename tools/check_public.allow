@@ -8,3 +8,8 @@ launcher/res/launcher.manifest | Microsoft\.Windows\.Common-Controls" version="6
 # D2RLoader file versions (LoaderVersionMatches), not addresses
 launcher/* | 1\.3\.1\.[02]
 docs/launcher.md | `1\.3\.1\.0`
+# binary art and fonts of the downloader (history scan with --text reads their bytes as lines)
+launcher/res/*.gif | .
+launcher/res/*.ttf | .
+launcher/res/*.png | .
+launcher/res/*.ico | .
