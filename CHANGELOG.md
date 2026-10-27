@@ -8,6 +8,11 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
 
 ## D2R-XL
 
+### 0.69.12 (2026-10-27)
+- **Fixed: Night Hawks explode again.** A hawk that hits now dies and explodes, as in Median. ([#58](docs/bugs.md))
+- **Median's "cast on death" effects work.** Monsters with a death effect (248 rows in Median's monster property table)
+  now cast it when they die; before, none of them did.
+
 ### 0.69.11 (2026-10-27)
 - **Fixed the remaining goblin / Den boss crash.** It happened on D2RLoader's very first start after installing or
   updating D2RLoader or D2R: on that start D2RLoader builds its table cache and loads only D2R's own sounds, so Median's
