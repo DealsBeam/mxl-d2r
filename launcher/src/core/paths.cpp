@@ -244,4 +244,103 @@ bool IsGameProcessName(const std::string& exe) {
 	return n == "d2r.exe" || (n.rfind("d2rloader", 0) == 0 && ends(".exe"));
 }
 
+std::string TomlUnquote(const std::string& value) {
+	std::string v = Strip(value);
+	if (v.size() >= 2 && (v[0] == '"' || v[0] == '\'') && v.back() == v[0])
+		return v.substr(1, v.size() - 2);
+	return v;
+}
+
+namespace {
+std::string LowerStr(std::string s) {
+	for (char& c : s)
+		c = char(std::tolower(uint8_t(c)));
+	return s;
+}
+}  // namespace
+
+DefaultModCheck CheckDefaultMod(const std::string& text, bool exists, const std::string& ourMod) {
+	DefaultModCheck c;
+	c.configMissing = !exists;
+	std::string t = text.rfind("\xEF\xBB\xBF", 0) == 0 ? text.substr(3) : text;  // a UTF-8 BOM (Notepad)
+	if (exists)
+		c.mod = TomlUnquote(GetTomlKey(t, "d2rloader", "default_mod"));
+	c.ok = !c.mod.empty() && LowerStr(c.mod) == LowerStr(ourMod);
+	return c;
+}
+
+std::string DefaultModWarning(const DefaultModCheck& c, const std::string& ourMod) {
+	if (c.ok)
+		return "";
+	if (c.configMissing)
+		return "D2RLoader has no settings file yet, so it does not start " + ourMod;
+	if (c.mod.empty())
+		return "D2RLoader has no default mod, so it does not start " + ourMod;
+	return "D2RLoader starts the mod " + c.mod + ", not " + ourMod;
+}
+
+std::string SetDefaultMod(const std::string& text, const std::string& ourMod) {
+	bool bom = text.rfind("\xEF\xBB\xBF", 0) == 0;
+	std::string out = SetTomlKey(bom ? text.substr(3) : text, "d2rloader", "default_mod", "\"" + ourMod + "\"");
+	return bom ? "\xEF\xBB\xBF" + out : out;
+}
+
+bool IsOurPluginFile(const std::string& fileName, const std::string& productName, const std::string& fileDescription) {
+	std::string n = LowerStr(fileName), p = LowerStr(Strip(productName)), d = LowerStr(fileDescription);
+	bool dll = n.size() > 4 && n.compare(n.size() - 4, 4, ".dll") == 0;
+	if (!dll)
+		return false;
+	return n.rfind("mxl-core", 0) == 0 || p == "d2r-xl" || d.find("mxl-core") != std::string::npos || d.find("d2r-xl core") != std::string::npos;
+}
+
+PluginPlace PluginPlaceOf(const std::string& rel, const std::string& ourMod, std::string* mod) {
+	std::string p = NormPath(rel);
+	if ((p + "/").find("/../") != std::string::npos || p.rfind("../", 0) == 0)
+		return PluginPlace::None;
+	std::vector<std::string> seg;
+	size_t start = 0;
+	while (start <= p.size()) {
+		size_t s = p.find('/', start);
+		seg.push_back(p.substr(start, s == std::string::npos ? std::string::npos : s - start));
+		if (s == std::string::npos)
+			break;
+		start = s + 1;
+	}
+	if (seg.size() >= 3 && seg[0] == "d2rloader" && seg[1] == "plugins")
+		return PluginPlace::GameWide;
+	if (seg.size() >= 5 && seg[0] == "mods" && seg[2] == "d2rloader" && seg[3] == "plugins" && !seg[1].empty()) {
+		if (mod) {  // the folder name as written (NormPath lowered it)
+			std::string orig = rel;
+			for (char& c : orig)
+				if (c == char(92))
+					c = '/';
+			size_t a = orig.find('/') + 1;
+			*mod = orig.substr(a, orig.find('/', a) - a);
+		}
+		return seg[1] == LowerStr(ourMod) ? PluginPlace::OurMod : PluginPlace::OtherMod;
+	}
+	return PluginPlace::None;
+}
+
+std::string StrayPluginWarning(const std::string& path, PluginPlace place, const std::string& mod, bool brief) {
+	if (place == PluginPlace::GameWide)
+		return brief ? R"(Old D2R-XL plugin in d2rloader\plugins: it loads with every mod)"
+		             : "An old copy of the D2R-XL plugin is in " + path + ": it loads with every mod. Move it away.";
+	if (place == PluginPlace::OtherMod)
+		return brief ? "Old D2R-XL plugin in mods\\" + mod + ": it loads with that mod"
+		             : "An old copy of the D2R-XL plugin is in " + path + ": it loads whenever D2RLoader starts the mod " + mod +
+		                   ". Move it away.";
+	return "";
+}
+
+std::string RemovedPluginPath(const std::string& dataDir, const std::string& date, const std::string& rel) {
+	std::string r = rel;
+	for (char& c : r)
+		if (c == '/')
+			c = char(92);
+	while (!r.empty() && r[0] == char(92))
+		r.erase(0, 1);
+	return Join(Join(Join(dataDir, "removed"), date), r);
+}
+
 }  // namespace mxl

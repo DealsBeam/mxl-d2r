@@ -51,6 +51,15 @@ All releases need Diablo II: Resurrected **build 93847** (Battle.net) or **94995
 
 ## D2R-XL Downloader
 
+### 0.2.4 (2026-10-27)
+- **Warns when D2RLoader would start something else than the installed D2R-XL** ([#53](docs/bugs.md)):
+  - D2RLoader's Default Mod is not D2R-XL: "D2RLoader starts the mod MedianXL, not D2R-XL". The **Default mod** button
+    makes D2R-XL the default mod after asking; it changes only `default_mod` in `<D2R>\d2rloader\config\d2rloader.toml`.
+  - An old copy of the D2R-XL plugin (`mxl-core*.dll`, or any DLL whose version info says D2R-XL) in
+    `<D2R>\d2rloader\plugins` (it loads with every mod) or in another mod's plugins folder. The **Move plugin** button
+    moves it to `%LOCALAPPDATA%\D2R-XL\removed\<date>\` after asking; nothing is deleted.
+  - Command line: `--cli status` prints the warnings, `--cli fix-default-mod` and `--cli remove-stray-plugins` fix them.
+
 ### 0.2.3 (2026-10-27)
 - **Steam:** accepts D2R build 94995, the same game program as 93847, instead of saying the build is not supported.
   ([#41](docs/bugs.md))

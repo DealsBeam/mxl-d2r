@@ -521,6 +521,60 @@ void TestToml() {
 	Check(mxl::GetTomlKey("[a]\ns = \"a # b\" # c\n", "a", "s") == "\"a # b\"", "# inside quotes is no comment");
 }
 
+// docs/bugs.md #53: D2RLoader's default mod and stray copies of the plugin.
+void TestEnvironment() {
+	const std::string bs(1, char(92));
+	std::string toml = "[d2rloader]\n# Launch this mod automatically.\ndefault_mod = \"MedianXL\"  # set by the gear\nlaunch_arguments = \"-w\"\n\n[d2rcore.stash]\nadd_shared_tabs = 3\n";
+	mxl::DefaultModCheck c = mxl::CheckDefaultMod(toml, true, "D2R-XL");
+	Check(!c.ok && c.mod == "MedianXL" && !c.configMissing, "default_mod MedianXL is not ours");
+	Check(mxl::DefaultModWarning(c, "D2R-XL") == "D2RLoader starts the mod MedianXL, not D2R-XL", "warning names the mod D2RLoader starts");
+	std::string fixed = mxl::SetDefaultMod(toml, "D2R-XL");
+	Check(mxl::CheckDefaultMod(fixed, true, "D2R-XL").ok, "fixed config names D2R-XL");
+	Check(fixed == "[d2rloader]\n# Launch this mod automatically.\ndefault_mod = \"D2R-XL\" # set by the gear\nlaunch_arguments = \"-w\"\n\n[d2rcore.stash]\nadd_shared_tabs = 3\n",
+	      "only default_mod changes");
+	Check(mxl::CheckDefaultMod("[d2rloader]\ndefault_mod = 'd2r-xl'\n", true, "D2R-XL").ok, "single quotes, any case");
+	Check(mxl::DefaultModWarning(mxl::CheckDefaultMod("[d2rloader]\ndefault_mod = \"D2R-XL\"\n", true, "D2R-XL"), "D2R-XL").empty(), "no warning when ours");
+	mxl::DefaultModCheck none = mxl::CheckDefaultMod("[d2rloader]\ndefault_mod = \"\"\n", true, "D2R-XL");
+	Check(!none.ok && none.mod.empty() && mxl::DefaultModWarning(none, "D2R-XL").find("no default mod") != std::string::npos, "empty default_mod");
+	Check(!mxl::CheckDefaultMod("[d2rloader]\n# default_mod = \"D2R-XL\"\n", true, "D2R-XL").ok, "a commented template is no default mod");
+	Check(!mxl::CheckDefaultMod("[other]\ndefault_mod = \"D2R-XL\"\n", true, "D2R-XL").ok, "default_mod of another section does not count");
+	mxl::DefaultModCheck missing = mxl::CheckDefaultMod("", false, "D2R-XL");
+	Check(!missing.ok && missing.configMissing && mxl::DefaultModWarning(missing, "D2R-XL").find("no settings file") != std::string::npos, "no config file");
+	Check(mxl::CheckDefaultMod(mxl::SetDefaultMod("", "D2R-XL"), true, "D2R-XL").ok, "a missing config gets the section and key");
+	std::string bom = "\xEF\xBB\xBF[d2rloader]\r\ndefault_mod = \"Old\"\r\n";
+	Check(!mxl::CheckDefaultMod(bom, true, "D2R-XL").ok && mxl::CheckDefaultMod(bom, true, "D2R-XL").mod == "Old", "a BOM before the section");
+	Check(mxl::SetDefaultMod(bom, "D2R-XL") == "\xEF\xBB\xBF[d2rloader]\r\ndefault_mod = \"D2R-XL\"\r\n", "BOM and CRLF kept");
+	Check(mxl::TomlUnquote(" \"a b\" ") == "a b" && mxl::TomlUnquote("x") == "x" && mxl::TomlUnquote("\"") == "\"", "TomlUnquote");
+
+	Check(mxl::IsOurPluginFile("mxl-core.dll", "", "") && mxl::IsOurPluginFile("MXL-Core-0.68.dll", "", "") && mxl::IsOurPluginFile("mxl-core (1).dll", "", ""),
+	      "plugin by file name");
+	Check(mxl::IsOurPluginFile("renamed.dll", "D2R-XL", "") && mxl::IsOurPluginFile("x.dll", "", "D2R-XL core plugin (mxl-core)"), "plugin by version resource");
+	Check(!mxl::IsOurPluginFile("loot.dll", "Loot Filter", "Loot filter plugin") && !mxl::IsOurPluginFile("mxl-core.txt", "", "") &&
+	          !mxl::IsOurPluginFile("mxl-core-off.txt", "", "") && !mxl::IsOurPluginFile("D2R-XL-Downloader.exe", "D2R-XL", ""),
+	      "other plugins, text files and exes are not ours");
+
+	std::string mod;
+	Check(mxl::PluginPlaceOf("d2rloader" + bs + "plugins" + bs + "mxl-core.dll", "D2R-XL") == mxl::PluginPlace::GameWide, "game-wide plugins folder");
+	Check(mxl::PluginPlaceOf("mods/MedianXL/d2rloader/plugins/mxl-core.dll", "D2R-XL", &mod) == mxl::PluginPlace::OtherMod && mod == "MedianXL",
+	      "another mod's plugins folder, its name as written");
+	Check(mxl::PluginPlaceOf("MODS" + bs + "d2r-xl" + bs + "D2RLoader" + bs + "Plugins" + bs + "mxl-core.dll", "D2R-XL") == mxl::PluginPlace::OurMod,
+	      "our own mod folder, any case");
+	Check(mxl::PluginPlaceOf("mods/D2R-XL/mxl-core.dll", "D2R-XL") == mxl::PluginPlace::None && mxl::PluginPlaceOf("mxl-core.dll", "D2R-XL") == mxl::PluginPlace::None &&
+	          mxl::PluginPlaceOf("mods/../d2rloader/plugins/x.dll", "D2R-XL") == mxl::PluginPlace::None,
+	      "not a plugins folder");
+	std::string g = mxl::StrayPluginWarning("C:" + bs + "D2R" + bs + "d2rloader" + bs + "plugins" + bs + "mxl-core.dll", mxl::PluginPlace::GameWide, "");
+	Check(g == "An old copy of the D2R-XL plugin is in C:" + bs + "D2R" + bs + "d2rloader" + bs + "plugins" + bs + "mxl-core.dll: it loads with every mod. Move it away.",
+	      "game-wide warning text");
+	Check(mxl::StrayPluginWarning("p", mxl::PluginPlace::OtherMod, "MedianXL").find("starts the mod MedianXL") != std::string::npos &&
+	          mxl::StrayPluginWarning("p", mxl::PluginPlace::OtherMod, "MedianXL", true) == "Old D2R-XL plugin in mods" + bs + "MedianXL: it loads with that mod",
+	      "other-mod warning, long and brief");
+	Check(mxl::StrayPluginWarning("p", mxl::PluginPlace::OurMod, "D2R-XL").empty() && mxl::StrayPluginWarning("p", mxl::PluginPlace::None, "").empty(),
+	      "no warning for the installed plugin");
+	Check(mxl::RemovedPluginPath("C:" + bs + "L" + bs + "D2R-XL", "2026-10-27", "d2rloader/plugins/mxl-core.dll") ==
+	          "C:" + bs + "L" + bs + "D2R-XL" + bs + "removed" + bs + "2026-10-27" + bs + "d2rloader" + bs + "plugins" + bs + "mxl-core.dll",
+	      "moved under removed, date, relative path");
+}
+
 bool Near(float a, float b) { return a - b < 0.001f && b - a < 0.001f; }
 
 void TestSvg() {
@@ -572,6 +626,7 @@ int main() {
 	TestCoexist();
 	TestGameProcessName();
 	TestToml();
+	TestEnvironment();
 	TestSvg();
 	std::printf("%d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;

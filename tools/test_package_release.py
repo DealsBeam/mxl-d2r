@@ -41,6 +41,7 @@ class PackageReleaseTests(unittest.TestCase):
         toml = (mod / "d2rloader" / "config" / "d2rloader.toml").read_text()
         self.assertIn('[d2rcore.save_format]\nmode = "extended"', toml)
         self.assertIn("[d2rcore.stash]\nadd_shared_tabs = 7", toml)
+        self.assertIn("[d2rloader.advanced]\nsuppress_global_extensions = true", toml)  # bugs.md #53
         self.assertTrue((mod / "d2rloader" / "plugins" / "mxl-core.dll").is_file())
         self.assertTrue((mod / "d2rloader" / "patches").is_dir())
 
