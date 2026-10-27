@@ -8,6 +8,22 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
 
 ## D2R-XL
 
+### 0.69.10 (2026-10-27)
+- **Fixed skill icons:** **Attack** and about 86 other shared skill icons (Throw, Unsummon and more) showed the icon
+  next to theirs. A few class skills (Reckoning of Zerae, Batstrike, Pneumatic Burst, Shadow Flow) had the wrong
+  frame. Every skill now uses Median's exact icon, in classic and HD. ([#52](docs/bugs.md))
+- Known: about 160 skills that items put on the skill bar show Median's "?" icon in HD for now
+  ([#56](docs/bugs.md)).
+
+### 0.69.9 (2026-10-27)
+- **Fixed a crash** when a **treasure goblin** (for example the Arcane Collector) appears, and when the **Den of Evil
+  boss** casts its cold bone spear. The game looked up a Median sound that the player's install did not have. D2R-XL
+  now skips such sounds instead of crashing. ([#42, #46](docs/bugs.md))
+- **Fixed:** missiles that summon a monster on hit (406 Median missiles) summoned the wrong monster, e.g. the Den of Evil
+  boss's bone spear. ([#42](docs/bugs.md))
+- Known: player installs started without `-txt` still use D2R's own sound table, so Median-only sounds are silent. A fix
+  is in progress.
+
 ### 0.69.8 (2026-10-27)
 - Released with **Downloader 0.2.5**.
 - The plugin checks that the game really runs it from `mods\D2R-XL`. If D2RLoader starts another mod, or an old copy

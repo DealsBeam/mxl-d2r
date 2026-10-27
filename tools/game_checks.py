@@ -17,7 +17,7 @@ cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes s
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes
 respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick townmonsters
-teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath.
+teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath goblincrash skillicons.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -12966,7 +12966,9 @@ DEN_OF_EVIL = 8
 # Skill1 SkeletonRaise; its minion enslaved_demon (2834, bighead) brings skeleton_warrior_5 (2832).
 DEN_BOSS = 2833
 DEN_BOSS_PARTY = (2834, 2832)
-DEN_BOSS_RAISE = (158, 14)  # its Skill1 SkeletonRaise, Sk1mode seq_skeletonraise (the SQ sequence mode)
+DEN_BOSS_RAISE = (158, 14)
+DEN_HIT_SPAWNS = (2835, 2818)  # the bone spear's server hit 6 spawns sHitPar1: 2835 corrupted_necromancer_17 (the glacial spike trap)
+DEN_WRONG_SPAWN = 2818  # ... and before the txt_migrate fix it was Median's row number 2818 = D2R's flying_polar_buffalo_error_110  # its Skill1 SkeletonRaise, Sk1mode seq_skeletonraise (the SQ sequence mode)
 
 
 def graphics_mode():
@@ -13032,9 +13034,11 @@ def _spawn_near(cls, st):
     return False
 
 
-def _den_fight(mode, seconds, rows, bad, shots):
-    """One round: the boss (the Den's own when it is in reach, else spawned with its party) attacks the god-mode player for `seconds`,
-    then it is killed. The game must stay up and the boss must die."""
+def _den_fight(mode, seconds, rows, bad, shots, mortal=False, coldres=None):
+    """One round: the boss (the Den's own when it is in reach, else spawned with its party) attacks the player for `seconds`, then it
+    is killed. The game must stay up and the boss must die. `mortal`: god mode is off for the fight, so the boss's bone spear and its
+    glacial spike sub missile really hit and hurt the character (the player report of bug #42); the round ends early when the
+    character dies. `coldres`: the character's cold resistance (stat 43) for the fight, e.g. 0 or -100."""
     goto(1)
     close_menu()
     if not set_graphics(mode):
@@ -13058,10 +13062,36 @@ def _den_fight(mode, seconds, rows, bad, shots):
     if boss is None:
         bad.append("%s: no boss (class %d) in reach and the spawn made none" % (mode, DEN_BOSS))
         return
+    res0 = stat_of(H("stat player 43")[1])
+    if coldres is not None:
+        H("stat player 43 set %d" % coldres)
+    if mortal:
+        full = stat_of(H("stat player 7")[1])  # each mortal round starts at full life
+        if full:
+            H("stat player 6 set %d" % full)
+        god(False)
+    p0 = hstate()["player"]
+    life0 = _life_of(p0)
+    life_min, hits, died, seen_classes = life0, 0, None, set()
     H("moveto %d" % boss["id"])
     t0, seen_modes, raised = time.time(), set(), None
     while time.time() - t0 < seconds:
         time.sleep(2.0)
+        if mortal:
+            if not g.game_pids():
+                bad.append("%s: the game died %.0f s into the mortal fight (%s; %d life drops seen, life %s of %s)" % (
+                    mode, time.time() - t0, how, hits, life_min, life0))
+                return
+            st_m = hstate()
+            p = st_m["player"]
+            seen_classes.update(m.get("class") for m in st_m["mons"] if m.get("class") in DEN_HIT_SPAWNS)
+            life = _life_of(p)
+            if life is not None and life_min is not None and life < life_min:
+                hits += 1
+                life_min = life
+            if p and player_dead(p):
+                died = time.time() - t0
+                break
         if raised is None and time.time() - t0 > seconds / 2:  # its Skill1 needs a corpse: kill one of the party, then make it cast
             minion = next((m for m in hstate()["mons"] if m.get("class") in DEN_BOSS_PARTY and m.get("mode") not in (0, 12)), None)
             if minion:
@@ -13076,7 +13106,30 @@ def _den_fight(mode, seconds, rows, bad, shots):
         for m in st["mons"]:
             if m.get("id") == boss["id"]:
                 seen_modes.add(m.get("mode"))
-    shots.append(sh("denboss_%s" % mode))
+    shots.append(sh("denboss_%s%s" % (mode, "_mortal" if mortal else "")))
+    hurt = ""
+    if mortal:
+        hurt = ", mortal (cold resist %s): %d life drops, life %s -> %s of %s%s, bone spear hit spawns seen %s" % (
+            coldres if coldres is not None else res0, hits, life0, life_min, life0, ", died after %.0f s" % died if died is not None else "",
+            sorted(seen_classes))
+        if DEN_WRONG_SPAWN in seen_classes:
+            bad.append("%s: the bone spear's hit spawned monster %d (sHitPar1 still Median's row number)" % (mode, DEN_WRONG_SPAWN))
+        if not hits:
+            bad.append("%s: the mortal character was never hurt (the hit path did not run)" % mode)
+        if died is not None:
+            time.sleep(3.0)
+            if not g.game_pids():
+                bad.append("%s: the game died after the character's death" % mode)
+                return
+            revive_if_dead()
+            god(True)
+            if coldres is not None and res0 is not None:
+                H("stat player 43 set %d" % res0)
+            rows.append("%s: boss %s id %s%s; boss not killed (the character died first)" % (mode, how, boss["id"], hurt))
+            return
+        god(True)
+    if coldres is not None and res0 is not None:
+        H("stat player 43 set %d" % res0)
     H("kill %d" % boss["id"])
     time.sleep(2.0)
     if not game_alive():
@@ -13085,15 +13138,22 @@ def _den_fight(mode, seconds, rows, bad, shots):
     alive = [m for m in hstate()["mons"] if m.get("id") == boss["id"] and m.get("mode") not in (0, 12)]
     if alive:
         bad.append("%s: the boss is still alive after `kill`" % mode)
-    rows.append("%s: boss %s id %s, %d s next to the player, %s, modes seen %s, killed %s" % (
-        mode, how, boss["id"], seconds, raised or "SkeletonRaise not cast", sorted(x for x in seen_modes if x is not None), "yes" if not alive else "NO"))
+    rows.append("%s: boss %s id %s, %d s next to the player%s, %s, modes seen %s, killed %s" % (
+        mode, how, boss["id"], seconds, hurt, raised or "SkeletonRaise not cast", sorted(x for x in seen_modes if x is not None), "yes" if not alive else "NO"))
     clean_area()
+
+
+def _life_of(p):
+    try:
+        return int(str((p or {}).get("life", "")).split("/")[0])
+    except ValueError:
+        return None
 
 
 def check_denboss():
     """Bug #42: hard crash at the Den of Evil boss. The boss (class 2833) attacks a god-mode player for MXL_DENBOSS_SECS seconds (default 30)
     in HD and in legacy graphics (G), then it is killed: the game must stay up (no new crash report), the boss must die, no new assert."""
-    nm = "Den of Evil boss (bug #42): it fights for a while in HD and legacy graphics, no crash, killable"
+    nm = "Den of Evil boss (bug #42): it fights a mortal character in HD and legacy graphics (cold resist as is, 0, -100), no crash"
     if not need_game():
         return add(nm, "BLOCKED", "not in a game")
     secs = int(os.environ.get("MXL_DENBOSS_SECS", "30"))
@@ -13105,12 +13165,17 @@ def check_denboss():
     rows, bad, shots = [], [], []
     goto(1)
     start_mode = graphics_mode()
-    for mode in ("hd", "legacy"):
-        _den_fight(mode, secs, rows, bad, shots)
-        if not game_alive():
+    # mortal rounds (bug #42 reopened: the player was hit by the cold missile; god mode never runs that path); MXL_DENBOSS_GOD=1 adds
+    # the old god-mode rounds for a long soak
+    plan = [("hd", True, None), ("legacy", True, None), ("hd", True, 0), ("legacy", True, -100)]
+    if os.environ.get("MXL_DENBOSS_GOD") == "1":
+        plan += [("hd", False, None), ("legacy", False, None)]
+    for mode, mortal, coldres in plan:
+        _den_fight(mode, secs, rows, bad, shots, mortal, coldres)
+        if not g.game_pids():
             break
-    if len([r for r in rows if "killed yes" in r]) < 2 and not bad:
-        bad.append("not both graphics modes were fought")
+    if len(rows) < len(plan) and not bad:
+        bad.append("not every round was fought")
     if game_alive():
         goto(1)
         set_graphics(start_mode)
@@ -13390,6 +13455,180 @@ def check_typeids():
     add(nm, "PASS" if not bad else "FAIL", "; ".join(bad) if bad else "; ".join(rows), [sh("typeids")], rows)
 
 
+GOBLIN_TYPES = (2791, 2792, 2796, 2797, 2798, 2793)  # treasure_goblin, shiny_hoarder, arcane_collector, rainbow, glowing_baron, voided_horror
+GOBLIN_SKILLS = (2580, 2582)  # treasure_goblin_skill (slow curse, srvdofunc 30), treasure_goblin_skill_2 (Submerge: srvdo 94, cltdo 52)
+GOBLIN_NO_SKILL = {(2797, 2582)}  # the rainbow goblin has no Submerge: forcing its mode 14 only raises D2R's hAnimSequence assert
+
+
+def _goblin_round(mode, secs, rows, bad, shots):
+    """One graphics mode: each goblin type is spawned next to the god-mode player in the Blood Moor, they run for `secs`, then they
+    die; then the plugin's own roll (MXL_GOBLINS_FORCE) gets a kill and 18 s to spawn one. The game must stay up throughout."""
+    goto(1)
+    close_menu()
+    if not set_graphics(mode):
+        rows.append("%s: G did not switch the graphics (the town capture says %s)" % (mode, graphics_mode()))
+        return
+    if goto(2)["player"].get("area") != 2:
+        bad.append("%s: the character did not reach the Blood Moor" % mode)
+        return
+    clean_area()
+    spawned = []
+    for cls in GOBLIN_TYPES:
+        st = hstate()
+        known = {m.get("id") for m in st["mons"]}
+        _spawn_near(cls, st)
+        time.sleep(1.5)
+        if not game_alive():
+            bad.append("%s: the game died at the spawn of goblin %d" % (mode, cls))
+            return
+        new = [m for m in hstate()["mons"] if m.get("class") == cls and m.get("id") not in known]
+        spawned.append((cls, len(new)))
+    t0 = time.time()
+    while time.time() - t0 < secs:
+        time.sleep(2.0)
+        if not game_alive():
+            bad.append("%s: the game died %.0f s after the goblins appeared" % (mode, time.time() - t0))
+            return
+    shots.append(sh("goblincrash_%s" % mode))
+    # what a goblin does when a player chases it: its curse (skill 2580, Skill1) and its escape (2582 = D2R's Submerge, Skill6)
+    casts = []
+    for m in [m for m in hstate()["mons"] if m.get("class") in GOBLIN_TYPES and m.get("mode") not in (0, 12)]:
+        H("moveto %d" % m["id"])
+        time.sleep(1.0)
+        for skill in GOBLIN_SKILLS:
+            if (m["class"], skill) in GOBLIN_NO_SKILL:
+                continue
+            ok, l_c = H("mcast %d 14 unit %d" % (skill, m["id"]))
+            casts.append((m["class"], skill, "ok" if ok else "refused"))
+            time.sleep(2.0)
+            if not game_alive():
+                bad.append("%s: the game died after goblin %d cast skill %d (%s)" % (mode, m["class"], skill, " ".join(l_c)[-80:]))
+                return
+    time.sleep(4.0)
+    if not game_alive():
+        bad.append("%s: the game died after the goblin casts" % mode)
+        return
+    shots.append(sh("goblincrash_casts_%s" % mode))
+    for m in hstate()["mons"]:
+        if m.get("class") in GOBLIN_TYPES and m.get("mode") not in (0, 12):
+            H("kill %d" % m["id"])
+    time.sleep(3.0)
+    if not game_alive():
+        bad.append("%s: the game died at the goblin kills" % mode)
+        return
+    s0, _r0 = goblins_counts(hstate())
+    H("spawn 18 1")
+    H("kill nearest 18")
+    time.sleep(18)  # the roll runs every 375 frames
+    if not game_alive():
+        bad.append("%s: the game died around the plugin's own goblin roll" % mode)
+        return
+    st = hstate()
+    s1, _r1 = goblins_counts(st)
+    natural = [m["class"] for m in st["mons"] if m.get("class") in range(2791, 2813)]
+    for m in st["mons"]:
+        if m.get("class") in range(2791, 2813) and m.get("mode") not in (0, 12):
+            H("kill %d" % m["id"])
+    time.sleep(2.0)
+    if not game_alive():
+        bad.append("%s: the game died at the kill of the rolled goblin" % mode)
+        return
+    missing = [c for c, n in spawned if n == 0]
+    if missing:
+        bad.append("%s: `h spawn` made no monster for %s" % (mode, missing))
+    rows.append("%s: spawned %s, %d s alive, casts %s, killed; plugin roll spawned %s -> %s (near: %s)" % (mode, spawned, secs, casts, s0, s1, natural))
+    clean_area()
+
+
+def check_goblincrash():
+    """Bug #46: hard crash when a treasure goblin appears. Six goblin types are spawned in the Blood Moor in HD and in legacy graphics,
+    run for MXL_GOBLIN_SECS seconds (default 20), die; then the plugin's roll spawns one (start the game with MXL_GOBLINS_FORCE=1 for
+    that part). PASS: the game stays up, no new crash report, no new assert. Run it on a release install as well (no -txt)."""
+    nm = "Treasure goblins appear, run and die in HD and legacy graphics without a crash (bug #46)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    secs = int(os.environ.get("MXL_GOBLIN_SECS", "20"))
+    revive_if_dead()
+    enable_debug()
+    crashes0 = sorted(os.listdir(g.CRASH_DIR)) if os.path.isdir(g.CRASH_DIR) else []
+    mark = log_mark()
+    god(True)
+    rows, bad, shots = [], [], []
+    goto(1)
+    start_mode = graphics_mode()
+    for mode in ("hd", "legacy"):
+        _goblin_round(mode, secs, rows, bad, shots)
+        if not game_alive():
+            break
+    if len(rows) < 2 and not bad:
+        bad.append("not both graphics modes were run")
+    if game_alive():
+        goto(1)
+        set_graphics(start_mode)
+        god(False)
+        plugin = hstate()["plugin"]
+        norow = re.search(r"(\d+) without a monstats row", plugin)
+        if norow and int(norow.group(1)) > 0:
+            bad.append("%s goblin rolls found no monstats row (a table did not load)" % norow.group(1))
+        # Bugs #42 / #46: a monster sound id outside sounds.txt crashed the client in 0xd8c70; the plugin's sound guard skips it.
+        # MXL_SOUNDGUARD_TEST=1 (dev DLL) feeds the goblins' Neutral sound as -1, so the guard must have skipped some.
+        skipped = re.search(r"(\d+) bad sound ids skipped[^|]*", plugin)
+        if skipped:
+            rows.append("sound guard: " + skipped.group(0).strip())
+            n = int(skipped.group(1))
+            if os.environ.get("MXL_SOUNDGUARD_TEST") == "1":
+                if n == 0:
+                    bad.append("MXL_SOUNDGUARD_TEST=1 but the sound guard skipped nothing")
+            elif n > 0:
+                bad.append("%d monster sound ids were outside sounds.txt (a sounds table did not load)" % n)
+    crashes = [c for c in (sorted(os.listdir(g.CRASH_DIR)) if os.path.isdir(g.CRASH_DIR) else []) if c not in crashes0]
+    if crashes:
+        bad.append("new crash files: %s" % crashes[:4])
+    asserts = sorted(set(assertions_since(mark)))
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(rows) + ("; asserts in d2rloader.log: %s" % asserts[:4] if asserts else "; no new assert") +
+        (("; PROBLEMS: " + "; ".join(bad)) if bad else ""), shots, rows + asserts[:20])
+
+
+SKILL_BTN_RIGHT = {"hd": (0.0, 0.0), "legacy": (0.0, 0.0)}  # right skill button (client fractions), measured below
+
+
+def check_skillicons():
+    """Bug #52: the skill bar (Attack on the left button), the right skill popup and the skill tree in HD and legacy graphics,
+    for a look against Median's icons (tools/skill_icon_check.py compares the files; this shows them drawn)."""
+    nm = "Skill icons drawn in HD and legacy: skill bar (Attack), right skill popup, skill tree (#52)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    revive_if_dead()
+    goto(1)
+    close_menu()
+    mark = log_mark()
+    start_mode = graphics_mode()
+    shots, rows = [], []
+    for mode in ("hd", "legacy"):
+        if not set_graphics(mode):
+            rows.append("%s: graphics mode not reached" % mode)
+            continue
+        close_menu()
+        time.sleep(1.0)
+        shots.append(sh("skillbar_%s" % mode))
+        x, y = SKILL_BTN_RIGHT[mode]
+        if x:
+            g.click(x, y)
+            time.sleep(1.2)
+            shots.append(sh("skillpopup_%s" % mode))
+            g.click(x, y)
+            time.sleep(0.8)
+        g.key("t")
+        time.sleep(1.5)
+        shots.append(sh("skilltree_%s" % mode))
+        g.key("t")
+        time.sleep(0.8)
+        rows.append("%s: shots taken" % mode)
+    set_graphics(start_mode)
+    asserts = sorted(set(assertions_since(mark)))
+    add(nm, "REVIEW", "; ".join(rows) + ("; asserts: %s" % asserts[:4] if asserts else "; no new assert"), shots, rows)
+
+
 def check_otherplugins():
     """`mxl` names the other D2RLoader plugins of the process (bug #44; a test slot has none)."""
     nm = "`mxl` names the other loaded D2RLoader plugins"
@@ -13550,7 +13789,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # lane p4-quests-verify
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
-          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
+          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("goblincrash", check_goblincrash), ("skillicons", check_skillicons), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
           ("ied", check_ied), ("iedtip", check_iedtip),
           # bugs #49 / #55
           ("equipall", check_equipall), ("typeids", check_typeids)]

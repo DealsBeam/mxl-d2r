@@ -1102,6 +1102,24 @@ paths added; the texture loader has the same kind of index (`data/hd/texture_des
 involved. The D2RLoader ResourceService (plugin-side files at `data/.../d2rloader/<plugin-id>/...`) serves files at new paths too,
 but needs the same index entries.
 
+## 24. Keyboard Quick Cast (lane quick-cast, 2026-10-27; bug #54, no plugin code)
+
+Read from the 93847 dump (`tools/d2r_find.py`, Ghidra `DecompOut.java`). Keyboard Quick Cast runs through D2R's
+ControllerManager (`D2Client/src/Game/ControllerManager`), the same queue as the gamepad skill buttons.
+
+| What | Where | Notes |
+|---|---|---|
+| Option "Quick Cast Enabled" (Settings.json) | getter `0xe1c60` -> setting object `0x2a343f0`, value read with `0xd2e490` | read once at start; every save folder has its own Settings.json (`Saved Games/.../mods/<savepath>/Settings.json` for a mod) |
+| Skill hotkey handlers | 32 small functions `0x119f70`-`0x11b185` (e.g. key down `0x119f70`, key up `0x11a960`) | `skill = 0x117d20(slot)` (hotkey table `0x2a488d0`, 0x1c per entry; `0x2a48a90` in another input mode); Quick Cast on and `0x14a970(cm, skill)` false -> `0x122f30(slot, 1)` on key down, `0x122f30(slot, 0)` on key up; otherwise key down calls `0x118d50` (switch only) |
+| "Switch only" skills | `0x14a970(cm, skill)` | true when the skill's record in the per-skill table `cm+0x26e8` (0x210 bytes a skill, count `cm+0x26f0`) has byte `+0x20` set, except ids 357-364 and 370 (`0x3377d0`) |
+| Per-skill controller table | loader `0x147450`, file `data/hd/global/excel/controllerskillsettings.json` keyed by `id` | `+0x0 usageType`, `+0x4 targetGroup`, `+0x18 usePredictiveTargeting`, `+0x1a ignoreTargetOnHold`, `+0x20 toggleSlotState`, `+0x24 tapWindowMS`, `+0x34 skillQueueDeadzoneMS`. Vanilla sets `toggleSlotState` on the 20 Paladin auras (98-125) only; skills missing from the file keep zeros |
+| ControllerManager singleton | `0x144640` -> `0x2a4eab0` | per player 0xb8 bytes from `+0x1968`; tick `0x14b720` -> `0x14c540` per player |
+| Quick cast start / queue | `0x145680(cm, player, slot, down)`, queue `0x149de0` -> `0x14b920` | `0x14b920` drops the queued cast when `0x21b170(player, Skill*)` is not in mask `0x347` (codes 0, 1, 2, 6, 8, 9 pass) |
+| Usable test of the queue | `0x21b170` = `0x33f360` (the test `skill_restrict.cpp` detours) plus client checks (9) | 3 not a skill, 4 restricted, 5 no weapon, 7 no level -> no cast |
+
+A targeted melee skill (`range h2h`, `TargetableOnly 1`) quick-cast with no monster under the cursor does nothing, in
+vanilla rows (Bash) and Median rows alike (bugs.md #54).
+
 ## Unknown / next steps
 
 Solved in lane d2r-addresses-2 (sections 4, 5, 7-11): warp destination and the lockout refusal point, game frame, spawn, TC executor,

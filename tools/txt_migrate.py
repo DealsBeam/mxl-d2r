@@ -1348,6 +1348,26 @@ class Migrator:
                     r[c1] = new
             write_tsv(p, h, rows)
         self.report.append(f"missiles: {fixed} hit-41 summon formulas moved to D2R monstats rows")
+        # Hit 6 (D2R 0x45ce90 -> 0x50a050, as 1.13c) spawns the unit sHitPar1 names at the hit point: a monstats row below the
+        # monstats count (above it superuniques and specials follow; Median uses none). sHitPar1 is a Median row, e.g. the Den of
+        # Evil boss's bone spear 2818 = corrupted_necromancer_17 (its glacial spike caster), D2R id 2835; left as it was, every hit
+        # spawned D2R row 2818 (an unrelated dummy) instead (docs/bugs.md #42).
+        median_missiles = {r[0] for r in mrows if r}
+        hit6 = Counter()
+        for bank in ("base", ""):
+            p = OUT / "data" / "global" / "excel" / bank / "missiles.txt"
+            if not p.exists():
+                continue
+            h, rows = read_tsv(p)
+            sh, p1 = h.index("pSrvHitFunc"), h.index("sHitPar1")
+            for r in rows:
+                if is_record(r) and r[0] in median_missiles and r[sh] == "6" and r[p1].isdigit():
+                    new = str(monster_ids.get(int(r[p1]), int(r[p1])))
+                    if new != r[p1]:
+                        hit6[bank] += 1
+                        r[p1] = new
+            write_tsv(p, h, rows)
+        self.report.append(f"missiles: {hit6['']} hit-6 spawn rows (sHitPar1) moved to D2R monstats rows")
 
     def remap_property_params(self) -> None:
         """Median's item properties give skill (and monster) parameters as Median row numbers, but D2R keeps its

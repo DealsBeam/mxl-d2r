@@ -16,6 +16,7 @@
 #include "d2r.h"
 #include "dungeon_lockout.h"
 #include "engine_gaps.h"
+#include "sound_guard.h"
 #include "hardcore_death.h"
 #include "translation_guard.h"
 #include "required_level.h"
@@ -627,7 +628,9 @@ auto CmdState(Ctx* c, const hcmd::Tokens&) noexcept -> bool {
 	GoblinsStatus(goblins, sizeof(goblins));
 	int refused = 0, started = 0;
 	DungeonLockoutCounts(&refused, &started);
-	Out("plugin goblins: %s | lockout refused=%d clocks=%d | tower skips=%d", goblins, refused, started, QuestsTowerSkips());
+	char sounds[96] = "";
+	SoundGuardStatus(sounds, sizeof(sounds));
+	Out("plugin goblins: %s | lockout refused=%d clocks=%d | tower skips=%d | sound guard: %s", goblins, refused, started, QuestsTowerSkips(), sounds);
 	const auto* b = reinterpret_cast<const uint8_t*>(g_base);
 	Out("npcmenu open=%u npc=%u class=%u rows=%u", *reinterpret_cast<const uint32_t*>(b + RvaMenuOpenFlag),
 	    *reinterpret_cast<const uint32_t*>(b + RvaMenuNpcId), static_cast<unsigned>(*reinterpret_cast<const uint16_t*>(b + RvaMenuNpcClass)),

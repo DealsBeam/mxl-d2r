@@ -2,14 +2,18 @@
 
 Median leaves skilldesc IconCel at 0 and D2Sigma draws icons itself: the frame is the u16 at offset 0x16 of the
 skilldesc.bin record (D2SkillIcons.cpp), in themes/classic_sigma/game/skills/icons-<class>.dc6 for class skills
-and icons-shared.dc6 for the rest, two frames per icon (normal, pressed). D2R reads IconCel as a frame of
-Spells/<Class>/<Xx>Skillicon (class skills) or Spells/SubMenu/Skillicon (others), also normal + pressed.
+and icons-shared.dc6 for the rest, drawing that frame as is. The class sheets hold two frames per icon (normal,
+pressed; a few skills name the pressed one), icons-shared one frame per icon (its frames are 316 different icons:
+Attack is frame 3). D2R reads IconCel as a frame of Spells/<Class>/<Xx>Skillicon (class skills) or
+Spells/SubMenu/Skillicon (others), always normal + pressed, so each icon is written as Median's frame + the class
+sheet's pressed frame after it (the same frame again for icons-shared or when the frame is a pressed one). Bug #52:
+pairs were assumed everywhere, so every odd shared frame showed the icon before it (Attack showed frame 2).
 
 D2R's HD sprites are one horizontal strip under the 16384-pixel texture limit and are drawn at their own pixel
 size (no scaling to the slot), so icons stay at D2R's 130 pixels (132 stride) and a sheet holds 62 icons.
-Median's sheets hold up to 158 icons, so each sheet keeps the icons its skills use: skill tree skills first,
-then skills items or the character start grant, then monster-only skills, which share icon 0 once the sheet is
-full. IconCel is renumbered to that order.
+Median's sheets hold up to 316 icons, so each sheet keeps the icons its skills use: skill tree skills and the
+character start grant first, then skills items put on the skill bar (most common first), then monster-only skills;
+those that no longer fit share icon 0 (icons-shared: Median's "?" icon). IconCel is renumbered to that order.
 
 One skilldesc row has one IconCel, but Median's skills of different classes (and the class-less item skills) share
 skilldesc rows (the seven Mastery pages of every class use the same few rows), each reading its own class's sheet. So a
@@ -27,6 +31,7 @@ Usage: python tools/skill_icons.py [--preview DIR]   (--preview also writes PNG 
 """
 import argparse
 import struct
+from collections import Counter
 import sys
 import zlib
 from pathlib import Path
@@ -182,11 +187,70 @@ def median_frames() -> dict[str, int]:
     return {named[i][0]: struct.unpack_from("<H", d, 4 + i * size + 0x16)[0] for i in range(n)}
 
 
+def pressed(cls: str, f: int, frames: int) -> int:
+    """Frame drawn for the pressed button: the class sheets' pair partner (an even frame + 1), else the frame itself."""
+    return f + 1 if cls and f % 2 == 0 and f + 1 < frames else f
+
+
 SPLIT = "~"
 
 
 def base_desc(name: str) -> str:
     return name.split(SPLIT)[0]
+
+
+# Item stats that put a skill on the skill bar (charges, oskills); their property parameter is the skill's name or id
+BAR_STATS = {"item_charged_skill", "item_nonclassskill", "item_singleskill"}
+
+
+def item_skills(excel: Path, name_of_id: dict[str, str]) -> Counter:
+    """Skills items put on the skill bar -> how many item rows do (the parameter is a name or an id)."""
+    ph, prows = read_tsv(excel / "properties.txt")
+    stats = [ph.index(f"stat{k}") for k in range(1, 8) if f"stat{k}" in ph]
+    props = {r[0] for r in prows if BAR_STATS & {r[i] for i in stats}}
+    out = Counter()
+    for t in ("uniqueitems", "setitems", "sets", "runes", "magicprefix", "magicsuffix", "automagic", "cubemain",
+              "gems", "qualityitems"):
+        if not (excel / f"{t}.txt").exists():
+            continue
+        h, rows = read_tsv(excel / f"{t}.txt")
+        pairs = []  # (property column, its parameter column): prop1/par1, mod1code/mod1param, T1Code1/T1Param1, mod 1/mod 1 param
+        for i, c in enumerate(h):
+            for a, b in (("prop", "par"), ("Code", "Param"), ("code", "param")):
+                if a in c and c.replace(a, b, 1) in h:
+                    pairs.append((i, h.index(c.replace(a, b, 1))))
+            if c.startswith("mod ") and c[4:].isdigit() and f"{c} param" in h:
+                pairs.append((i, h.index(f"{c} param")))
+        out.update(name_of_id.get(r[j], r[j]) for r in rows for i, j in pairs if r[i] in props and r[j])
+    return out
+
+
+TREE, START, BAR, ITEM, MONSTER = range(5)
+
+
+def priorities(excel: Path) -> dict[str, tuple[int, int]]:
+    """Skill -> (tier, -item rows) for the order of the icons in a sheet: TREE (on a skill tree), START (the character
+    start grant and the basic rows Attack..Left Hand Swing), BAR (on the skill bar from items: charges, oskills; most
+    common first), ITEM (other skills item tables name, e.g. procs: no icon on the bar), MONSTER (the rest)."""
+    sh, srows = read_tsv(excel / "skills.txt")
+    cc, sd = sh.index("charclass"), sh.index("skilldesc")
+    dh, drows = read_tsv(excel / "skilldesc.txt")
+    on_tree = {r[0] for r in drows if r[dh.index("SkillPage")] not in ("", "0")}
+    start = {c for r in read_tsv(excel / "charstats.txt")[1] for c in r}
+    named = set()
+    for t in ("uniqueitems", "setitems", "sets", "runes", "magicprefix", "magicsuffix", "automagic", "cubemain",
+              "gems", "weapons", "armor", "misc", "qualityitems"):
+        if (excel / f"{t}.txt").exists():
+            named |= {c for r in read_tsv(excel / f"{t}.txt")[1] for c in r}
+    bar = item_skills(excel, {r[1]: r[0] for r in srows if is_record(r)})
+
+    def tier(i: int, r: list[str]) -> int:
+        if r[cc] and r[cc] in TARGETS and base_desc(r[sd]) in on_tree:
+            return TREE
+        if i < 7 or r[0] in start:
+            return START
+        return BAR if r[0] in bar else ITEM if r[0] in named else MONSTER
+    return {r[0]: (tier(i, r), -bar[r[0]]) for i, r in enumerate(srows) if is_record(r)}
 
 
 def main() -> int:
@@ -199,16 +263,7 @@ def main() -> int:
     excel = OUT / "global" / "excel" / "base"
     sh, srows = read_tsv(excel / "skills.txt")
     cc, sd = sh.index("charclass"), sh.index("skilldesc")
-    # A full-size HD sheet holds MAX_ICONS icons. Players see tree skills first, then skills items or the
-    # character start grant (and the basic rows Attack..Left Hand Swing); monster-only skills come last and
-    # share icon 0 when a sheet is full.
-    dh, drows = read_tsv(excel / "skilldesc.txt")
-    on_tree = {r[0] for r in drows if r[dh.index("SkillPage")] not in ("", "0")}
-    granted = set()
-    for t in ("uniqueitems", "setitems", "sets", "runes", "magicprefix", "magicsuffix", "automagic", "cubemain",
-              "gems", "weapons", "armor", "misc", "charstats", "qualityitems"):
-        if (excel / f"{t}.txt").exists():
-            granted |= {c for r in read_tsv(excel / f"{t}.txt")[1] for c in r}
+    prio_of = priorities(excel)
     def sheet(r: list[str]) -> str:
         return r[cc] if r[cc] in TARGETS else ""
 
@@ -222,7 +277,7 @@ def main() -> int:
     tree_sheet: dict[str, str] = {}
     for r in srows:
         b = base_desc(r[sd])
-        if is_record(r) and b in frames_of and b in on_tree and sheet(r):
+        if is_record(r) and b in frames_of and prio_of[r[0]][0] == TREE:
             tree_sheet.setdefault(b, sheet(r))
     primary = {b: tree_sheet.get(b, c) for b, c in primary.items()}
 
@@ -231,29 +286,36 @@ def main() -> int:
         return b if b not in primary or primary[b] == cls else f"{b}{SPLIT}{cls or 'shared'}"
 
     sheet_of: dict[str, str] = {}
-    rank: dict[str, int] = {}
-    for i, r in enumerate(srows):
+    rank: dict[str, tuple[int, int]] = {}
+    for r in srows:
         if is_record(r) and base_desc(r[sd]) in frames_of:
             key = desc_key(r[sd], sheet(r))
             sheet_of.setdefault(key, sheet(r))
-            prio = 0 if base_desc(r[sd]) in on_tree and sheet(r) else 1 if (r[0] in granted or i < 7) else 2
-            rank[key] = min(rank.get(key, 2), prio)
-    order: dict[str, list[int]] = {k: [] for k in TARGETS}
-    seen: dict[str, list[int]] = {k: [] for k in TARGETS}  # icons players can see (tree, items, start)
+            rank[key] = min(rank.get(key, (MONSTER, 0)), prio_of[r[0]])
+    # icons-shared starts with Median's own "?" icon (frame 0): the icon of the skills that do not fit
+    order: dict[str, list[int]] = {k: [0] if k == "" else [] for k in TARGETS}
+    seen: dict[str, list[int]] = {k: list(o) for k, o in order.items()}  # icons always kept (trees, start, "?")
     for key in sorted(sheet_of, key=lambda k: rank[k]):  # stable: first use within each priority
-        f = frames_of[base_desc(key)] // 2 * 2
+        f = frames_of[base_desc(key)]
         if f not in order[sheet_of[key]]:
             order[sheet_of[key]].append(f)
-            if rank[key] < 2:
+            if rank[key][0] <= START:
                 seen[sheet_of[key]].append(f)
-    # Monster-only icons go once a sheet is full; icons players see are all kept, and a sheet with more of
-    # those than fit at full size (the Amazon tree has 72) gets smaller frames instead.
+    # A full-size HD sheet holds MAX_ICONS icons (one strip under the texture limit). Tree and start icons are all
+    # kept, and a sheet with more of those than fit at full size (the Amazon tree has 72) gets smaller frames
+    # instead; item skills (icons-shared: about 200 icons, most common first) and monster-only skills fill the
+    # rest, and the ones after that show the sheet's icon 0 (icons-shared: "?"; monsters show no icon).
     keep = {cls: max(MAX_ICONS, len(seen[cls])) for cls in TARGETS}
-    dropped = {cls: max(len(o) - keep[cls], 0) for cls, o in order.items()}
+    best: dict[tuple[str, int], int] = {}  # (sheet, frame) -> best tier of its users
+    for key, cls in sheet_of.items():
+        f = frames_of[base_desc(key)]
+        best[cls, f] = min(best.get((cls, f), MONSTER), rank[key][0])
+    dropped = {cls: Counter({BAR: "skill bar", ITEM: "item proc"}.get(best[cls, f], "monster-only") for f in o[keep[cls]:])
+               for cls, o in order.items()}
     order = {cls: o[:keep[cls]] for cls, o in order.items()}
     icon_cel = {}
     for key, cls in sheet_of.items():
-        f = frames_of[base_desc(key)] // 2 * 2
+        f = frames_of[base_desc(key)]
         icon_cel[key] = order[cls].index(f) * 2 if f in order[cls] else 0
     for bank in ("base", ""):
         p = OUT / "global" / "excel" / bank / "skilldesc.txt"
@@ -288,7 +350,7 @@ def main() -> int:
     report = []
     for cls, (sheet, classic, hd) in TARGETS.items():
         src = read_dc6(SHEETS / f"{sheet}.dc6")
-        picked = [src[i] for f in order[cls] for i in (f, f + 1) if i < len(src)]
+        picked = [src[i] for f in order[cls] for i in (f, pressed(cls, f, len(src)))]
         write_dc6(OUT / "global" / "ui" / "spells" / f"{classic}.dc6", picked)
         stride = min(D2R_STRIDE, MAX_STRIP // max(len(picked), 1))
         size = stride - 2
@@ -298,7 +360,7 @@ def main() -> int:
         if args.preview:
             write_png(args.preview / f"{classic}.png", stride * len(images), size, strip(images, stride, size))
         report.append(f"{sheet}: {len(order[cls])} icons ({len(picked)} frames), HD {size}px"
-                      + (f", {dropped[cls]} monster-only icons share icon 0" if dropped[cls] else ""))
+                      + "".join(f", {n} {what} icons share icon 0" for what, n in sorted(dropped[cls].items())))
     print("\n".join(report))
     return 0
 
