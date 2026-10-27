@@ -2531,6 +2531,86 @@ def check_nighthawks():
     add(nm + (" CONTROL (deathevent off)" if control else ""), "PASS" if not bad else "FAIL", "; ".join(bad + notes)[:2400], [sh("nighthawks")], log)
 
 
+def check_abyssknight():
+    """Bug #59: the Necromancer's Abyss Knights (skill abyss_knight, the plugin's multi-summon srvdofunc 172; monster abyss_knight,
+    AI NecroPet, Skill1 abyss_knight_skill in mode S1) hit in melee and never used their AoE (abyss_knight_skill, srvdofunc 28,
+    missile abyss_knight_skill_missile). Summons them in the Blood Moor, puts monsters a few yards away for 25 s, samples the
+    knights' modes (4 attack1 = melee, 8 skill1 = the AoE) and counts the skill's missiles."""
+    nm = "Abyss Knights use their ranged AoE (bug #59): skill1 mode and abyss_knight_skill_missile while monsters stand at range"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    by_name, _t, _h = _skill_ids_by_name()
+    sid, kcls = by_name.get("abyss_knight"), _monstats_class("abyss_knight")
+    mt = _tsv(os.path.join(BUILT_EXCEL, "missiles.txt"))
+    mis = next((i for i, r in enumerate(mt[1:]) if r and r[0] == "abyss_knight_skill_missile"), None)
+    if sid is None or kcls is None or mis is None:
+        return add(nm, "FAIL", "no abyss_knight skill / monstats row / abyss_knight_skill_missile row")
+    rows, bad, log = [], [], []
+    cls0 = hstate()["player"].get("class") or 0
+    H("class 2")  # Necromancer
+    try:
+        fight_ready()
+        god(True)
+        H("setskill %d 20" % sid)
+        H("stat player 9 set %d" % (5000 << 8))
+        H("stat player 8 set %d" % (5000 << 8))
+        ok, cl = H("cast %d self" % sid)
+        log.extend(cl[:3])
+        time.sleep(1.5)
+        knights = [m for m in hstate()["mons"] if m.get("class") == kcls and m.get("mode") not in (0, 12)]
+        if not knights:
+            return add(nm, "FAIL", "no Abyss Knight appeared (cast %s: %s)" % ("OK" if ok else "FAIL", " | ".join(cl[-1:])), [], log)
+        p = hstate()["player"]
+        px, py = p.get("x") or 0, p.get("y") or 0
+        H("missiles reset")
+        modes, t0 = {}, time.time()
+        while time.time() - t0 < 25:
+            st = hstate()
+            foes = [m for m in st["mons"] if m.get("class") != kcls and not m.get("npc") and m.get("mode") not in (0, 12)
+                    and m.get("dist", 99) < 25]
+            if len(foes) < 2:
+                _ok, sl = H("spawn 3 3 %d %d" % (px + 9, py + 9)) if px else H("spawn 3 3")
+                log.extend(sl[:1])
+            for m in st["mons"]:
+                if m.get("class") == kcls:
+                    modes[m.get("mode")] = modes.get(m.get("mode"), 0) + 1
+            time.sleep(0.25)
+        _ok, ml = H("missiles")
+        summary = next((l for l in ml if l.startswith("missiles live=")), "")
+        seen = re.search(r"class %d x(\d+)" % mis, summary)
+        nmis = int(seen.group(1)) if seen else 0
+        line = "%d knight(s), mode samples %s (4 attack1 melee, 8 skill1 AoE), missile %d seen %d | %s" % (
+            len(knights), dict(sorted(modes.items())), mis, nmis, summary[:300])
+        rows.append(line)
+        log.append(line)
+        s1, a1 = modes.get(8, 0), modes.get(4, 0) + modes.get(5, 0)
+        if not nmis or s1 == 0:  # tell a broken skill from an AI that never picks it: one forced cast in mode S1
+            kn = next((m for m in hstate()["mons"] if m.get("class") == kcls), None)
+            ksid = by_name.get("abyss_knight_skill")
+            if kn and ksid is not None:
+                H("missiles reset")
+                _ok, fl = H("mcast %d 8 unit %d" % (ksid, kn["id"]))
+                time.sleep(1.5)
+                _ok, ml2 = H("missiles")
+                line = "forced cast: %s | %s" % (" | ".join(fl[-1:]), next((l for l in ml2 if l.startswith("missiles live=")), ""))
+                rows.append(line[:400])
+                log.append(line)
+        if not nmis:
+            bad.append("no abyss_knight_skill_missile was made")
+        if s1 == 0:
+            bad.append("the knights never entered skill1 (the AoE)")
+        elif a1 > s1:
+            bad.append("melee (%d samples) outweighs the AoE (%d samples)" % (a1, s1))
+        for m in hstate()["mons"]:
+            if m.get("class") == kcls:
+                H("kill %d" % m["id"])
+        kill_all_near()
+    finally:
+        god(False)
+        H("class %d" % cls0)
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(bad + rows)[:2400], [sh("abyssknight")], log)
+
+
 def check_warprevisit():
     name = "Median-only levels entered twice by goto (warp tile asserts, ptWarp) - probe for docs/testing.md assert table"
     if not need_game():
@@ -13653,7 +13733,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("cain", check_cain), ("cainsub", check_cain_submenu), ("heart", check_heart), ("catalyst", check_catalyst), ("tower", check_tower), ("lockout", check_lockout), ("lockquest", check_lockquest),
           # reenter before cow: the cow check leaves a Cow Level portal in town that `enter nearest` would take
           ("reenter", check_dungeon_reenter), ("cow", check_cow), ("goldcraft", check_goldcraft), ("craftflags", check_craftflags),
-          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("vendororbs", check_vendororbs), ("summonlife", check_summonlife), ("nighthawks", check_nighthawks), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
+          ("areacycle", check_areacycle), ("mapmem", check_mapmem), ("casts", check_casts), ("cursemissile", check_cursemissile), ("asserttrace", check_asserttrace), ("cherry", check_cherry), ("warprevisit", check_warprevisit), ("replacedskills", check_replacedskills), ("vendorstock", check_vendorstock), ("vendororbs", check_vendororbs), ("summonlife", check_summonlife), ("nighthawks", check_nighthawks), ("abyssknight", check_abyssknight), ("itemevents", check_item_events), ("medianai", check_median_ai), ("medianai_ctl", check_median_ai_controlled), ("tyrael", check_tyrael),
           # the verify rows of docs/unported.md
           ("resistcap", check_resistcap), ("absorb", check_absorb), ("damagered", check_damagered), ("avoidcaps", check_avoidcaps), ("classlock", check_classlock),
           ("hiregates", check_hiregates), ("itemrolls", check_itemrolls), ("allqualsockets", check_allqualsockets), ("dye", check_dye), ("goldclient", check_goldclient),
