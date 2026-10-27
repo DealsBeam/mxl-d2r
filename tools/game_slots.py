@@ -197,16 +197,20 @@ def acquire(n, owner, pid=None):
     return True, f"lock {made[0]} taken by {owner}"
 
 
-def release(n, owner=None):
+def release(n, owner=None, manual=False):
     """Remove the lock if it is ours (owner given: only a lock whose owner.txt names that owner) or, with owner None
     (command line `unlock N`), whatever is there. A lock somebody made by hand (no owner.txt) is never removed by a
-    run that merely used it."""
+    run that merely used it, and neither is a manual lock (`lock N OWNER`, pid=0): a lane holds the slot with it for a
+    whole session (setup, several runs, restore), and the runs inside it (game_ctl / game_checks with MXL_RUN=OWNER)
+    must not open the slot for another lane between them. Only `unlock N [OWNER]` (manual=True) removes it."""
     info = lock_info(n)
     if not info:
         return True
     path, txt = info
     if owner is not None and (not txt or txt.split()[0] != owner):
         return False
+    if owner is not None and not manual and _owner_pid(txt) == 0:
+        return True  # the lane's session lock: kept until its own `unlock N`
     for p in lock_paths(n):
         shutil.rmtree(p, ignore_errors=True)
     return True
@@ -309,7 +313,7 @@ def main():
         print(msg)
         return 0 if ok else 1
     elif c == "unlock":
-        return 0 if release(int(a[1]), a[2] if len(a) > 2 else None) else 1
+        return 0 if release(int(a[1]), a[2] if len(a) > 2 else None, manual=True) else 1
     elif c == "install":
         here = os.path.dirname(os.path.abspath(__file__))
         rc = 0

@@ -241,8 +241,16 @@ plugin DLL of slot 2 and 3 comes along with the install; slot 1's belongs to the
 Locks are directories in `%USERPROFILE%\mxl-d2r-runs`: `game.lock.N` (slot 1 also `game.lock`, so lanes that still
 `mkdir game.lock` keep working). `game_ctl start` takes the lock of its slot (owner file `owner.txt` with the run name
 and PID; a lock whose owner PID is gone is replaced) and `stop` releases it. A lock made by hand (no `owner.txt`) is
-taken to mean "the caller holds it" and is never removed by `game_ctl`. `game_slots.py lock N [OWNER]` / `unlock N`
+taken to mean "the caller holds it" and is never removed by `game_ctl`. `game_slots.py lock N [OWNER]` / `unlock N [OWNER]`
 by hand.
+
+**Sharing slots between lanes (2026-10-27).** A lane holds a slot for its whole session with
+`game_slots.py lock N <lane>` (a manual lock, pid 0), then runs `game_checks.py` / `game_ctl.py` / `release_install.py`
+with `MXL_RUN=<lane>` as often as it needs, then restores the slot and runs `game_slots.py unlock N <lane>`. The runs
+inside the session see the lock as theirs and do **not** release it at their end (`release()` keeps a manual lock; only
+`unlock N` removes it), so no other lane can move in while a special install (e.g. `release_install.py`) is on the slot.
+Before this, each run's end removed the lane's lock and another lane took the slot mid-session (slot 3, lanes sounds-bin
+and quick-cast). Hold the lock only as long as needed: others are waiting.
 
 **There is no single-instance check.** The string `DiabloII Check For Other Instances` is in D2R.exe, but no mutex,
 event, window or named pipe with that name exists in a running D2RLoader (handles listed with
