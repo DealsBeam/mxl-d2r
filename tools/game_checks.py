@@ -13163,6 +13163,23 @@ def _equip_targets(locs):
     return out
 
 
+def _equip_class_of():
+    """Base code -> the class (itemtypes `Class`: ama sor nec pal bar dru ass) that alone may wear it, through the Equiv chain."""
+    ih, irows = _txt_rows("itemtypes", 3)
+    types = {r[ih.index("Code")]: r for r in irows if len(r) > ih.index("Class") and r[ih.index("Code")]}
+
+    def cls(t, seen=()):
+        r = types.get(t)
+        if r is None or t in seen:
+            return ""
+        return r[ih.index("Class")] or cls(r[ih.index("Equiv1")], seen + (t,)) or cls(r[ih.index("Equiv2")], seen + (t,))
+    ah, arows = _txt_rows("armor", 3)
+    return {r[ah.index("code")]: cls(r[ah.index("type")]) for r in arows if len(r) > ah.index("type")}
+
+
+EQUIP_CLASSES = ["ama", "sor", "nec", "pal", "bar", "dru", "ass"]  # player class id -> itemtypes Class
+
+
 EQUIP_BODY = {"head": 1, "neck": 2, "torso": 3, "rhand": 4, "lhand": 5, "rring": 6, "lring": 7, "belt": 8, "feet": 9, "gloves": 10}
 
 
@@ -13174,6 +13191,13 @@ def _equip_by_packets(args, loc):
     if not ok or not m:
         return False, lines
     iid, x, y = (int(v) for v in m.groups())
+    worn, more = _equip_by_packets_id(iid, x, y, loc)
+    return worn, lines + more
+
+
+def _equip_by_packets_id(iid, x, y, loc):
+    """A backpack item at (x, y) to the cursor (0x19), then to the body location (0x1a). (worn, lines)."""
+    lines = []
     H("pkt 19 " + _le(iid, x, y, 0))
     time.sleep(0.4)
     held = held_item()
@@ -13196,15 +13220,32 @@ def _equip_from_ground(args, loc, to_pack):
     if not ok or not m:
         return False, lines
     iid = int(m.group(1))
+    code = args.split()[0]
+    before = {x.get("id") for x in hstate()["items"]}
     ok, fl = H("iflags %d" % iid)
     f = next((kv(x) for x in fl if x.startswith("iflags")), {})
+    if to_pack:  # into the backpack only from next to the item (within 3 subtiles; the drop lands up to ~4 away)
+        H("move %d %d" % (int(f.get("x", "0")), int(f.get("y", "0")) - 1))
+        time.sleep(0.4)
     H("pkt 16 " + _le(iid, int(f.get("x", "0")), int(f.get("y", "0")), 1 if to_pack else 0))
     time.sleep(0.6)
     if to_pack:
-        it = next((x for x in hstate()["items"] if x.get("id") == iid and x.get("page") == 0), None)
+        it = None
+        for _ in range(6):  # the player walks the last steps first
+            # the backpack copy can carry a new unit id: take the item of that code that was not there before
+            it = next((x for x in hstate()["items"] if x.get("page") == 0 and (x.get("id") == iid or (
+                x.get("code") == code and x.get("id") not in before))), None)
+            if it:
+                iid = it["id"]
+                break
+            time.sleep(0.5)
         if it is None:
+            ok, fl2 = H("iflags %d" % iid)
+            f2 = next((kv(x) for x in fl2 if x.startswith("iflags")), {})
+            held = held_item()
+            release_held_item()
             H("remove %s 1" % args.split()[0])
-            return False, lines + ["the pickup into the backpack did not land (item %d, maybe too far)" % iid]
+            return False, lines + ["the pickup into the backpack did not land (item %d mode %s, cursor %s)" % (iid, f2.get("mode"), held)]
         lines.append("picked up into the backpack at %s,%s" % (it.get("x"), it.get("y")))
         H("pkt 19 " + _le(iid, it.get("x", 0), it.get("y", 0), 0))
         time.sleep(0.4)
@@ -13252,7 +13293,9 @@ def check_equipall():
     for l in sorted(locs):
         H("unequip " + l)
     pids = sorted(g.game_pids())
-    rows, bad, n, worn = [], [], 0, 0
+    rows, bad, n, worn, other = [], [], 0, 0, 0
+    class_of = _equip_class_of()
+    mine = EQUIP_CLASSES[int(p.get("class", 0))] if str(p.get("class", "")).isdigit() and int(p["class"]) < 7 else ""
     for label, args, l in targets:
         g.log("EQUIPALL wearing %s (%s)" % (label, args))
         if mode == "ground":
@@ -13270,7 +13313,9 @@ def check_equipall():
                 pass
             return add(nm, "FAIL", "class %s: the game died wearing %s (`equip %s %s`) after %d items OK; skip it with "
                        "MXL_EQUIP_SKIP to go on" % (p.get("class"), label, args, l, worn), shot, rows + lines)
-        if not ok:
+        if not ok and class_of.get(args.split()[0], "") not in ("", mine):
+            other += 1  # another class's helm (pelt, Amazon / Paladin helm): refused as in the game
+        elif not ok:
             bad.append("%s: equip refused (%s)" % (label, " ".join(lines)[-80:]))
         else:
             worn += 1
@@ -13280,8 +13325,69 @@ def check_equipall():
             H("packclear")
             rows.append("%d worn, last %s" % (n, label))
     H("packclear")
-    add(nm, "PASS" if not bad else "REVIEW", "class %s: %d of %d items worn and taken off (%d refused), the game survived each%s"
-        % (p.get("class"), worn, len(targets), len(bad), ("; " + "; ".join(bad[:12])) if bad else ""), [sh("equipall_end")], rows + bad)
+    add(nm, "PASS" if not bad else "REVIEW", "class %s: %d of %d items worn and taken off (%d another class's, refused as "
+        "expected; %d refused), the game survived each%s" % (p.get("class"), worn, len(targets), other, len(bad),
+                                                             ("; " + "; ".join(bad[:12])) if bad else ""),
+        [sh("equipall_end")], rows + bad)
+
+
+def check_typeids():
+    """Bugs #49 / #55: D2R's fixed item type ids moved to Median's (plugin item_type_ids.cpp, off word `typeids`). The `mxl`
+    line; a Thul rune (Median's type `rune`, D2R's id 75 before the fix pointed at our circlet) socketed into a circlet with
+    the socket packet 0x28, and the socketed circlet worn with 0x19 / 0x1a."""
+    nm = "Item type ids (bugs #49/#55): `mxl` line, a rune into a circlet's socket (0x28), the circlet worn"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    line = next((l for l in mxl_text().splitlines() if "item type ids" in l), "")
+    rows, bad = [line[:200]], []
+    control = "typeids" in (os.environ.get("MXL_CONTROL") or "")
+    if not control and "item type ids on: 25 of 25" not in line:
+        bad.append("the mxl line is not 'item type ids on: 25 of 25 ...'")
+    goto(1)
+    for stat, v in ((12, 150), (0, 3000), (2, 3000)):
+        setstat("player", stat, v)
+    H("packclear")
+    H("unequip head")
+    pids = sorted(g.game_pids())
+    circ = None
+    for _ in range(12):  # Circlet (1) rolls 1-2 sockets most of the time
+        ok, l = H("item k01 inv")
+        it = kv(next((x for x in l if "item id=" in x), ""))
+        if it.get("sockets", "0") not in ("0", ""):
+            circ = it
+            break
+        H("packclear")
+    if circ is None:
+        return add(nm, "BLOCKED", "no socketed Circlet (1) in 12 tries", [], rows)
+    ok, l = H("item r10 inv")
+    rune = kv(next((x for x in l if "item id=" in x), ""))
+    if not rune:
+        return add(nm, "BLOCKED", "no Thul rune: %s" % l[:1], [], rows)
+    H("pkt 19 " + _le(int(rune["id"]), int(rune["x"]), int(rune["y"]), 0))
+    time.sleep(0.5)
+    rows.append("rune %s on the cursor: %s" % (rune["id"], held_item()))
+    # 0x28 is 21 bytes in D2R (1.13: 9; read by 0x4f9f40): filler id (on the cursor), target id, target body location (0 =
+    # none), target page, target cell x | y << 16
+    H("pkt 28 " + _le(int(rune["id"]), int(circ["id"]), 0, 0, int(circ["x"]) | int(circ["y"]) << 16))
+    time.sleep(1.0)
+    if not game_alive() or sorted(g.game_pids()) != pids:
+        return add(nm, "FAIL", "the game died socketing the rune into the circlet", [], rows)
+    held = held_item()
+    socketed = held is None and not any(x.get("id") == int(rune["id"]) and x.get("page") == 0 for x in hstate()["items"])
+    rows.append("after 0x28: cursor %s, socketed %s" % (held, socketed))
+    if not socketed:
+        bad.append("the rune did not go into the circlet's socket (cursor %s)" % (held,))
+        release_held_item()
+    worn, l = _equip_by_packets_id(int(circ["id"]), int(circ["x"]), int(circ["y"]), "head")
+    time.sleep(1.2)
+    if not game_alive() or sorted(g.game_pids()) != pids:
+        return add(nm, "FAIL", "the game died wearing the socketed circlet", [], rows + l)
+    rows.append("socketed circlet worn: %s" % worn)
+    if not worn:
+        bad.append("the socketed circlet was not worn: %s" % l[-1:])
+    H("unequip head")
+    H("packclear")
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(bad) if bad else "; ".join(rows), [sh("typeids")], rows)
 
 
 def check_otherplugins():
@@ -13447,7 +13553,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
           ("ied", check_ied), ("iedtip", check_iedtip),
           # bugs #49 / #55
-          ("equipall", check_equipall)]
+          ("equipall", check_equipall), ("typeids", check_typeids)]
 
 
 def write_report(extra=""):
@@ -13489,7 +13595,7 @@ def enter_initial_character():
         return enter_game()
     card = card_of(g.CHAR_NAME)
     if card is None:
-        return create_character("barbarian", g.CHAR_NAME)
+        return create_character(os.environ.get("MXL_CHAR_CLASS") or "barbarian", g.CHAR_NAME)  # a new lane character's class
     return enter_game(card)
 
 
