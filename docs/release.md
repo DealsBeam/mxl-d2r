@@ -269,7 +269,7 @@ game: no other D2R build is installed here; the decision is covered by the unit 
       `--downloader <exe>` when a new downloader ships. The release notes are the CHANGELOG section and the download
       links. The 7z stays on files.werdegames.com and is not attached.
    4. Make the **forge** release the same way: `MXL_FORGE_TOKEN=<forge token> py -3 tools/github_release.py <version>
-      --forge --commit <full sha of the forge's own commit> [--downloader <exe>]`. The forge's history is not scrubbed,
+      --forge --commit <full sha of the forge's own commit> [--downloader <exe>]` (token: ~/.mxl-d2r/forge_token or MXL_FORGE_TOKEN)`. The forge's history is not scrubbed,
       so its commit ids differ from GitHub's.
 
 CI (`.forgejo/workflows/release.yml`, runner `mxl-cross`, manual dispatch or tag `v*`): no game files on the
