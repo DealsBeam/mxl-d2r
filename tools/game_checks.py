@@ -13123,6 +13123,167 @@ def check_denboss():
         (("; PROBLEMS: " + "; ".join(bad)) if bad else ""), shots, rows)
 
 
+# Bug #49 (a player crashed putting on a Tiara): wear every base item (and every unique) of the chosen body locations, one at a
+# time, and see that the game survives drawing it. itemtypes BodyLoc1/BodyLoc2 through the Equiv chain give an armor type's
+# location; the harness `equip` names: head neck torso rhand lhand rring lring belt feet gloves.
+EQUIP_LOCS = {"head": "head", "tors": "torso", "glov": "gloves", "feet": "feet", "belt": "belt", "rarm": "rhand", "larm": "lhand"}
+
+
+def _equip_targets(locs):
+    """(label, equip arguments, body location) for every armor.txt base and every uniqueitems.txt row on one of `locs`."""
+    ih, irows = _txt_rows("itemtypes", 3)
+    types = {r[ih.index("Code")]: r for r in irows if len(r) > ih.index("BodyLoc1") and r[ih.index("Code")]}
+
+    def loc_of(t, seen=()):
+        r = types.get(t)
+        if r is None or t in seen:
+            return None
+        bl = r[ih.index("BodyLoc1")]
+        if bl in EQUIP_LOCS:
+            return EQUIP_LOCS[bl]
+        for col in ("Equiv1", "Equiv2"):
+            l = loc_of(r[ih.index(col)], seen + (t,))
+            if l:
+                return l
+        return None
+    ah, arows = _txt_rows("armor", 3)
+    base = {}
+    for r in arows:
+        code = r[ah.index("code")] if len(r) > ah.index("type") else ""
+        if code and code != "xxx":
+            l = loc_of(r[ah.index("type")])
+            if l in locs:
+                base[code] = l
+    out = [(code, code, l) for code, l in base.items()]
+    uh, urows = _txt_rows("uniqueitems", 3)
+    for i, r in enumerate(urows):
+        if len(r) > uh.index("code") and r[uh.index("code")] in base:
+            code = r[uh.index("code")]
+            out.append(("unique %d (%s on %s)" % (i, _cell_key(r[0]), code), "%s q=7 uniq=%d" % (code, i), base[code]))
+    return out
+
+
+EQUIP_BODY = {"head": 1, "neck": 2, "torso": 3, "rhand": 4, "lhand": 5, "rring": 6, "lring": 7, "belt": 8, "feet": 9, "gloves": 10}
+
+
+def _equip_by_packets(args, loc):
+    """`item <args> inv`, then the client packets a player's clicks send: 0x19 (backpack item to the cursor) and 0x1a (cursor item
+    to body location). (worn, lines)."""
+    ok, lines = H("item %s inv" % args)
+    m = re.search(r"id=(\d+) .*?x=(\d+) y=(\d+)", " ".join(lines))
+    if not ok or not m:
+        return False, lines
+    iid, x, y = (int(v) for v in m.groups())
+    H("pkt 19 " + _le(iid, x, y, 0))
+    time.sleep(0.4)
+    held = held_item()
+    if not held or held[0] != iid:
+        return False, lines + ["the item %d did not reach the cursor (cursor %s)" % (iid, held)]
+    time.sleep(0.4)  # drawn on the cursor for a moment
+    H("pkt 1a " + _le(iid, EQUIP_BODY[loc]))
+    time.sleep(0.4)
+    worn = any(it.get("id") == iid and it.get("page") == 255 for it in hstate()["items"])
+    if not worn:
+        release_held_item()
+    return worn, lines + ([] if worn else ["0x1a did not wear the item %d" % iid])
+
+
+def _equip_from_ground(args, loc, to_pack):
+    """As a player finds it: `item <args> ground`, picked up with packet 0x16 (to the cursor, or with the to-inventory flag
+    into the backpack and then lifted with 0x19), then worn with 0x1a. (worn, lines)."""
+    ok, lines = H("item %s ground" % args)
+    m = re.search(r"id=(\d+)", " ".join(lines))
+    if not ok or not m:
+        return False, lines
+    iid = int(m.group(1))
+    ok, fl = H("iflags %d" % iid)
+    f = next((kv(x) for x in fl if x.startswith("iflags")), {})
+    H("pkt 16 " + _le(iid, int(f.get("x", "0")), int(f.get("y", "0")), 1 if to_pack else 0))
+    time.sleep(0.6)
+    if to_pack:
+        it = next((x for x in hstate()["items"] if x.get("id") == iid and x.get("page") == 0), None)
+        if it is None:
+            H("remove %s 1" % args.split()[0])
+            return False, lines + ["the pickup into the backpack did not land (item %d, maybe too far)" % iid]
+        lines.append("picked up into the backpack at %s,%s" % (it.get("x"), it.get("y")))
+        H("pkt 19 " + _le(iid, it.get("x", 0), it.get("y", 0), 0))
+        time.sleep(0.4)
+    held = held_item()
+    if not held or held[0] != iid:
+        return False, lines + ["the item %d did not reach the cursor (cursor %s)" % (iid, held)]
+    lines.append("on the cursor")
+    H("pkt 1a " + _le(iid, EQUIP_BODY[loc]))
+    time.sleep(0.4)
+    worn = any(x.get("id") == iid and x.get("page") == 255 for x in hstate()["items"])
+    if not worn:
+        release_held_item()
+    return worn, lines + ([] if worn else ["0x1a did not wear the item %d" % iid])
+
+
+def check_equipall():
+    """Bugs #49 / #55: wear every helm / circlet base and unique (MXL_EQUIP_LOCS=all: every armor body location) in turn; the game must
+    survive each. MXL_EQUIP_SKIP=<code,...> leaves codes out (to find the next crasher after one), MXL_EQUIP_ONLY=<code,...>
+    takes only those, MXL_EQUIP_NOUNIQ=1 only the bases."""
+    locs = set(EQUIP_LOCS.values()) if os.environ.get("MXL_EQUIP_LOCS") == "all" else \
+        set((os.environ.get("MXL_EQUIP_LOCS") or "head").split(","))
+    nm = "Wear every base and unique of %s (bug #49: Tiara crash), graphics %s" % ("/".join(sorted(locs)), graphics_mode())
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    skip = set(filter(None, (os.environ.get("MXL_EQUIP_SKIP") or "").split(",")))
+    only = set(filter(None, (os.environ.get("MXL_EQUIP_ONLY") or "").split(",")))
+    targets = [t for t in _equip_targets(locs) if t[1].split()[0] not in skip and (not only or t[1].split()[0] in only)
+               and not (os.environ.get("MXL_EQUIP_NOUNIQ") and "uniq=" in t[1])]
+    quals = [q for q in (os.environ.get("MXL_EQUIP_QUALS") or "").split(",") if q]  # bases also as these qualities (4 magic, 6 rare)
+    targets += [("%s q=%s" % (lb, q), "%s q=%s" % (a, q), l) for q in quals for lb, a, l in targets if "uniq=" not in a]
+    targets *= max(1, int(os.environ.get("MXL_EQUIP_REPEAT") or 1))  # random affixes: each repeat is a new item
+    mode = os.environ.get("MXL_EQUIP_MODE") or "harness"
+    packet = mode != "harness"  # as a player: backpack -> cursor (0x19) -> body (0x1a), plugin hooks on the way
+    if mode == "packet":
+        nm += ", by the player's packets 0x19 / 0x1a"
+    elif mode == "ground":  # each item twice: ground -> cursor -> body, and ground -> backpack -> cursor -> body
+        nm += ", picked up from the ground (0x16 to the cursor / into the backpack) and worn (0x1a)"
+        targets = [(lb + via, a, l) for lb, a, l in targets for via in (" (ground to cursor)", " (ground to backpack)")]
+    p = hstate()["player"]
+    goto(1)  # a town: no monster interrupts
+    if packet:  # the body packet checks the requirements (a level 1 test character wears nothing magic): level, Str, Dex well above
+        for stat, v in ((12, 150), (0, 3000), (2, 3000)):
+            setstat("player", stat, v)
+    H("packclear")
+    for l in sorted(locs):
+        H("unequip " + l)
+    pids = sorted(g.game_pids())
+    rows, bad, n, worn = [], [], 0, 0
+    for label, args, l in targets:
+        g.log("EQUIPALL wearing %s (%s)" % (label, args))
+        if mode == "ground":
+            ok, lines = _equip_from_ground(args, l, label.endswith("backpack)"))
+        elif packet:
+            ok, lines = _equip_by_packets(args, l)
+        else:
+            ok, lines = H("equip %s %s" % (args, l))
+        time.sleep(1.2)  # a few frames with the item drawn on the character
+        if not game_alive() or sorted(g.game_pids()) != pids:
+            shot = []
+            try:
+                shot = [sh("equipall_crash")]
+            except Exception:
+                pass
+            return add(nm, "FAIL", "class %s: the game died wearing %s (`equip %s %s`) after %d items OK; skip it with "
+                       "MXL_EQUIP_SKIP to go on" % (p.get("class"), label, args, l, worn), shot, rows + lines)
+        if not ok:
+            bad.append("%s: equip refused (%s)" % (label, " ".join(lines)[-80:]))
+        else:
+            worn += 1
+        n += 1
+        H("unequip " + l)
+        if n % 20 == 0:
+            H("packclear")
+            rows.append("%d worn, last %s" % (n, label))
+    H("packclear")
+    add(nm, "PASS" if not bad else "REVIEW", "class %s: %d of %d items worn and taken off (%d refused), the game survived each%s"
+        % (p.get("class"), worn, len(targets), len(bad), ("; " + "; ".join(bad[:12])) if bad else ""), [sh("equipall_end")], rows + bad)
+
+
 def check_otherplugins():
     """`mxl` names the other D2RLoader plugins of the process (bug #44; a test slot has none)."""
     nm = "`mxl` names the other loaded D2RLoader plugins"
@@ -13270,7 +13431,9 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
           ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("otherplugins", check_otherplugins),
-          ("ied", check_ied), ("iedtip", check_iedtip)]
+          ("ied", check_ied), ("iedtip", check_iedtip),
+          # bug #49
+          ("equipall", check_equipall)]
 
 
 def write_report(extra=""):
