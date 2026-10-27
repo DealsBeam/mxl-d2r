@@ -9,7 +9,15 @@
 // not playing) and the caller goes on without it. Entry bytes verified against the dump of build 93847; whole instructions, no
 // rip-relative. Dev builds: MXL_SOUNDGUARD_TEST=1 turns the Neutral sound id (caller +0x107cd4) into -1 and lets the guard skip
 // it, =2 passes the -1 to the game (reproduces the crash).
+//
+// Why the table was D2R's (reproduced 2026-10-27 on slot 2, with and without -txt): on the start that builds D2RLoader's base
+// compiler snapshot (<D2R>\d2rloader\data\compiler\<version>, missing after installing or updating D2RLoader or D2R) the
+// sound step compiles only D2R's own sounds.txt into the snapshot and never the mod's. Every later start validates the snapshot
+// and compiles the mod's 12449 rows. The guard covers one lookup only (the game crashed elsewhere, 0xda4a0, in that start), so
+// CheckSoundTable (after every table load, D2RLoader's DataTablesLoaded listener) tells the player to restart.
 #include "sound_guard.h"
+
+#include "build_guard.h"
 
 #define NOMINMAX
 #include <windows.h>
@@ -64,6 +72,41 @@ void* PlayingSoundHook(void* unit, int id) noexcept {
 	return nullptr;
 }
 
+// The sounds table the game loaded (docs/bugs.md #46): below D2R-XL's rows a warning goes to the log and `notice` gets the
+// screen line for the player (empty when the table is D2R-XL's or not loaded yet). Returns the row count.
+auto CheckSoundTable(const D2RL::PluginContext* context, char* notice, size_t noticeSize) noexcept -> int {
+	notice[0] = '\0';
+	if (g_count == nullptr) {
+		g_count = reinterpret_cast<SoundCountFn>(context->exeBase + SoundCountRva);
+	}
+	const int rows = g_count();
+	char line[512];
+	if (rows <= 0) {
+		return 0;  // not loaded yet
+	}
+	if (rows >= ModSoundRows) {
+		std::snprintf(line, sizeof(line), "mxl-core: sounds table %d rows (D2R-XL %d), ok", rows, ModSoundRows);
+		context->LogInfo(line);
+		return rows;
+	}
+	std::snprintf(line, sizeof(line),
+	              "mxl-core: the game loaded a sounds table of %d rows, not D2R-XL's %d: every D2R-XL sound is missing and some monsters crash "
+	              "the game. D2RLoader does this on the start that builds its table cache (first start after installing or updating "
+	              "D2RLoader or D2R). Close the game and start it again (docs/bugs.md #46).",
+	              rows, ModSoundRows);
+	context->LogWarn(line);
+	std::snprintf(notice, noticeSize, "D2R-XL: D2RLoader built its table cache on this start and the mod's sounds did not load. Close the game and start it again.");
+	return rows;
+}
+
+// Game thread, after each completed table load (also reloads).
+void __cdecl OnDataTablesLoaded(const D2RL::PluginContext* context, const D2RL::Lifecycle::DataTablesLoadedEvent*, void*) noexcept {
+	char notice[256];
+	if (CheckSoundTable(context, notice, sizeof(notice)) > 0 && notice[0] != '\0' && !NoticeShown() && !ShowNotice(context, notice)) {
+		context->LogWarn("mxl-core: no overlay service, the sounds table warning is in this log only");
+	}
+}
+
 }  // namespace
 
 auto InstallSoundGuard(const D2RL::PluginContext* context, char* report, size_t reportSize) noexcept -> bool {
@@ -78,12 +121,26 @@ auto InstallSoundGuard(const D2RL::PluginContext* context, char* report, size_t 
 #endif
 	const bool ok = context->InstallInlineHook(PlayingSoundRva, PlayingSoundEntry, sizeof(PlayingSoundEntry),
 	                                           reinterpret_cast<void*>(&PlayingSoundHook), reinterpret_cast<void**>(&g_original));
-	std::snprintf(report, reportSize, "%s%s", ok ? "on: unit sound wrapper 0x107dd0 skips ids outside sounds.txt" : "off: hook failed",
-	              g_test != 0 ? (g_test == 2 ? " (TEST 2: Neutral id -1 passed on)" : " (TEST 1: Neutral id -1)") : "");
+	// The sounds table check after each table load (D2RLoader's lifecycle listener, like collide_types.cpp).
+	const D2RL::LifecycleService* lifecycle = nullptr;
+	bool listening = false;
+	if (context->QueryService(&lifecycle) == D2RL::ServiceQueryResult::Success && lifecycle != nullptr &&
+	    D2RL::HasLifecycleServiceField(lifecycle, D2RL::LifecycleServiceRequiredSize)) {
+		const D2RL::Lifecycle::DataTablesLoadedListener listener{D2RL::Lifecycle::DataTablesLoadedListenerSize, 0, OnDataTablesLoaded, nullptr};
+		D2RL::Lifecycle::ListenerHandle handle = D2RL::Lifecycle::InvalidHandle;
+		listening = lifecycle->registerDataTablesLoadedListener(context, &listener, &handle) == D2RL::Lifecycle::Result::Success &&
+		            handle != D2RL::Lifecycle::InvalidHandle;
+	}
+	std::snprintf(report, reportSize, "%s%s; sounds table checked after each table load%s",
+	              ok ? "on: unit sound wrapper 0x107dd0 skips ids outside sounds.txt" : "off: hook failed",
+	              g_test != 0 ? (g_test == 2 ? " (TEST 2: Neutral id -1 passed on)" : " (TEST 1: Neutral id -1)") : "",
+	              listening ? "" : " (NO LISTENER)");
 	return ok;
 }
 
 void SoundGuardStatus(char* out, size_t outSize) noexcept {
-	std::snprintf(out, outSize, "%u bad sound ids skipped (last id %d from +0x%llx)", g_skipped.load(), g_lastId.load(),
+	const int rows = g_count != nullptr ? g_count() : 0;
+	std::snprintf(out, outSize, "sounds.txt %d rows (D2R-XL %d)%s, %u bad sound ids skipped (last id %d from +0x%llx)", rows, ModSoundRows,
+	              rows > 0 && rows < ModSoundRows ? " NOT D2R-XL's table" : "", g_skipped.load(), g_lastId.load(),
 	              static_cast<unsigned long long>(g_lastCaller.load()));
 }

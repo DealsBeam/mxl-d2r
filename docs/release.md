@@ -104,7 +104,7 @@ manifest's `launcher` as a self-update). `package_release.py` writes the fields 
 | `complete` | `false` only for a CI `--no-data` package (no `D2R-XL.mpq/data`): never install it for a player |
 | `d2r.build` | the D2R build the private copy must be at. `imageTimestamp` is the PE TimeDateStamp of that `D2R.exe` (the plugin checks it, `plugin/src/build_guard_logic.h`) |
 | `d2rloader` | the D2RLoader the release needs. The downloader compares `version` with `<D2R folder>\D2RLoader.exe` and, when it is missing or another version, shows "D2R-XL needs D2RLoader <version>" with a button to https://d2rloader.net/. It never downloads D2RLoader (`url`, `sha256` are informational) |
-| `launch` | what the game folder's own `d2rloader/config/d2rloader.toml` (section `[d2rloader]`) needs: `default_mod` = `D2R-XL`. The player sets it in the game (gear on the character screen, Default Mod); the downloader does not write that file. `-txt` is not needed: D2RLoader 1.3.1 compiles the mod's `.txt` tables itself at each start (tested 2026-10-27, docs/launcher.md) |
+| `launch` | what the game folder's own `d2rloader/config/d2rloader.toml` (section `[d2rloader]`) needs: `default_mod` = `D2R-XL`. The player sets it in the game (gear on the character screen, Default Mod); the downloader does not write that file. `-txt` is not needed: D2RLoader 1.3.1 compiles the mod's `.txt` tables itself at each start (tested 2026-10-27, docs/launcher.md), except on the start that builds its base compiler snapshot (first start after installing or updating D2RLoader or D2R): that start has D2R's own sounds table with or without `-txt`, the plugin says so on screen and the next start is right (docs/bugs.md #46) |
 | `modFolder` | every `files[].path` is relative to `<game>/mods/<modFolder>/`, with `/` separators |
 | `saveFolder` | characters live in `Saved Games/Diablo II Resurrected/mods/<saveFolder>` (modinfo.json `savepath`); the downloader never writes there |
 | `preserve` | files the player may edit: write them only when missing, never overwrite |
@@ -287,7 +287,8 @@ Into a D2R folder at build 93847 that has D2RLoader 1.3.1-beta (docs/setup.md st
    [7-Zip](https://www.7-zip.org)): `<D2R folder>\mods\D2R-XL\D2R-XL.mpq\modinfo.json` must exist.
 2. Start `D2RLoader.exe`, click the gear on the character screen, set Default Mod to D2R-XL, Apply, and start
    D2RLoader again (or set `default_mod = "D2R-XL"` in `<D2R folder>\d2rloader\config\d2rloader.toml`). `-txt` is
-   not needed.
+   not needed. The very first start of a new D2RLoader (or after a D2R / D2RLoader update) builds its table cache and
+   loads D2R's own sounds table; the plugin then says "Close the game and start it again" (docs/bugs.md #46).
 3. Start `D2RLoader.exe`. Saves: `Saved Games\Diablo II Resurrected\mods\D2R-XL\`.
 4. Update: delete `mods\D2R-XL\D2R-XL.mpq\data`, unpack the new release over the folder (keep your own
    `mods\D2R-XL\d2rloader\config\d2rloader.toml` if you edited it).
@@ -302,7 +303,8 @@ Into a D2R folder at build 93847 that has D2RLoader 1.3.1-beta (docs/setup.md st
 - `package_release.py` on the game PC: `D2R-XL-0.69.0.zip` 483 MB (10,471 files, 1,241 MB unpacked); 23 files left out
   as byte copies of D2R's own (`global/excel/{,base/}` armtype, composit, monmode, monplace, objmode, plrmode, soundenviron,
   storepage, uniqueappellation, uniqueprefix, uniquesuffix and `hd/overlays/common/lightning.json`). The excel folder holds
-  only `.txt` tables, so `-txt` is required (2026-10-27: not with D2RLoader 1.3.1, which compiles them itself; docs/launcher.md).
+  only `.txt` tables, so `-txt` is required (2026-10-27: not with D2RLoader 1.3.1, which compiles them itself; docs/launcher.md;
+  its snapshot-building first start is the exception, with or without `-txt`, docs/bugs.md #46).
 - Release DLL (`-DMXL_RELEASE=ON`): 874 KB against 1,153 KB for the dev DLL, no `mxl-testharness` string. Zip unpacked
   into slot 3 and started: `mxl-core 0.69.0 loaded (mod D2R-XL, D2R 3.3.0, image 0x6ab3782c)` and every part logs `on`,
   no test harness line. The game then quits at "Preparing frontend launch task": slots 2 and 3 are copies on drive D:,

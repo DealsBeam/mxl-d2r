@@ -17,7 +17,7 @@ cowportals cubeoutputs deathcrash nocorpse corpsepickup cooldowns collidetypes s
 heat trophytimer mapreveal wpauto hotkeys stashpages stashpage2 skillscaling nodurability nodurabilityui autoid townmana mercrevive questxp
 questrewards gamble enginegaps monlevel normaltc leash bufficons uniquelimits assetpaths towncast npcheal tplock charmlimit arealevel bugfixes
 respecbuffs signet dropilvl cubehotkey cowtowns freerespec grit statclick townmonsters
-teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath goblincrash skillicons.
+teleportgold skillafford hcdeath meleenotarget reqlevel cubedrop soulstealer wwproc morphdeath goblincrash skillicons releasetables.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -13322,6 +13322,93 @@ def check_goblincrash():
         (("; PROBLEMS: " + "; ".join(bad)) if bad else ""), shots, rows + asserts[:20])
 
 
+def _tsv_rows(path):
+    """Data rows of a .txt table (lines after the header, blank lines left out), or None when the file is missing."""
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="latin-1") as f:
+        lines = [ln.rstrip("\r\n") for ln in f]
+    return [ln for ln in lines[1:] if ln.strip()]
+
+
+def _last_start(log):
+    """d2rloader.log from the last `D2R command line:` on (the start of the running game)."""
+    i = log.rfind("D2R command line:")
+    return log[i:] if i >= 0 else log
+
+
+def check_releasetables():
+    """Bugs #42 / #46: the tables of the running start equal D2R-XL's. Meant for a release install (tools/release_install.py,
+    no -txt), works on any install. sounds: the table the game loaded (`mxl` sound guard line; the plugin reads 0x3b20c0) has
+    as many rows as the installed mod's sounds.txt (12449, the plugin's ModSoundRows), the Median-only sound
+    treasuregoblin_neutral_1 is a row inside it, and d2rloader.log's sound step compiled the mod's sounds.txt with that many
+    rows (not so on the start that builds D2RLoader's base compiler snapshot). objtype: D2R has no objtype.bin and D2RLoader
+    compiles objtype.txt in neither mode (with or without -txt), so the installed objtype.txt files must equal the built
+    data's (work/mod/data, when present)."""
+    nm = "Release tables: the loaded sounds table is D2R-XL's, objtype as built (bugs #42 / #46)"
+    if not need_game():
+        return add(nm, "BLOCKED", "not in a game")
+    rows, bad = [], []
+    excel = os.path.join(g.GAME_DIR, "mods", "D2R-XL", "D2R-XL.mpq", "data", "global", "excel")
+    built = os.path.join(MOD_DATA, "global", "excel")
+    sounds = _tsv_rows(os.path.join(excel, "sounds.txt"))
+    if sounds is None:
+        return add(nm, "FAIL", "no sounds.txt in %s" % excel)
+    names = [ln.split("\t", 1)[0] for ln in sounds]
+    ours = _tsv_rows(os.path.join(built, "sounds.txt"))
+    if ours is not None and len(ours) != len(sounds):
+        bad.append("installed sounds.txt has %d rows, the built data %d" % (len(sounds), len(ours)))
+    line = _mxl_line("sound guard")
+    m = re.search(r"sounds\.txt (\d+) rows \(D2R-XL (\d+)\)", line)
+    if m is None:
+        return add(nm, "FAIL", "no sounds.txt row count in `mxl`: %s" % line[:200])
+    loaded, expected = int(m.group(1)), int(m.group(2))
+    rows.append("loaded sounds table %d rows, installed sounds.txt %d, plugin ModSoundRows %d" % (loaded, len(sounds), expected))
+    if loaded != len(sounds):
+        bad.append("the game loaded %d sound rows, the mod has %d (D2R's own table has 11913)" % (loaded, len(sounds)))
+    if expected != len(sounds):
+        bad.append("plugin ModSoundRows %d differs from the mod's %d rows (update sound_guard.h)" % (expected, len(sounds)))
+    probe = "treasuregoblin_neutral_1"
+    idx = names.index(probe) if probe in names else -1
+    rows.append("%s is row %d" % (probe, idx))
+    if idx < 11913 or idx >= loaded:
+        bad.append("%s (row %d) is not a Median-only row inside the loaded table" % (probe, idx))
+    skipped = re.search(r"(\d+) bad sound ids skipped", line)
+    if skipped and int(skipped.group(1)) > 0 and os.environ.get("MXL_SOUNDGUARD_TEST") is None:
+        bad.append("the sound guard skipped %s sound ids" % skipped.group(1))
+    log = _last_start(g._read_from(g.LOADER_LOG, 0))
+    cmd = re.search(r"D2R command line: \S+ (.*)", log)
+    rows.append("start args: %s" % (cmd.group(1).strip() if cmd else "?"))
+    step = re.search(r"Loading sound data tables(.*?)Sound data tables loaded", log, re.S)
+    if step is None:
+        bad.append("no sound step in d2rloader.log")
+    else:
+        mod = re.findall(r"compiled mod\s+global/excel/sounds\.txt.*?table: (\d+) rows", step.group(1), re.S)
+        snap = "Preparing base compiler snapshot" in step.group(1)
+        rows.append("sound step: the mod's sounds.txt compiled %s%s" % (("with %s rows" % "/".join(mod)) if mod else "never",
+                                                                       "; base snapshot built in this start" if snap else ""))
+        if not mod or any(int(r) != len(sounds) for r in mod):
+            bad.append("d2rloader.log: the sound step did not compile the mod's sounds.txt with %d rows%s" %
+                       (len(sounds), " (D2RLoader built its base snapshot in this start; the next start loads it)" if snap else ""))
+    for rel in ("objtype.txt", "base/objtype.txt"):
+        inst = os.path.join(excel, *rel.split("/"))
+        if not os.path.isfile(inst):
+            bad.append("no %s in the installed mod" % rel)
+            continue
+        ref = os.path.join(built, *rel.split("/"))
+        if os.path.isfile(ref):
+            with open(inst, "rb") as a, open(ref, "rb") as b:
+                same = a.read() == b.read()
+            rows.append("%s %s the built data" % (rel, "equals" if same else "DIFFERS from"))
+            if not same:
+                bad.append("installed %s differs from the built data" % rel)
+        else:
+            rows.append("%s %d rows (no built data here to compare)" % (rel, len(_tsv_rows(inst))))
+    compiled = re.findall(r"compiled (?:mod|game)\s+global/excel/(?:base/)?objtype\.txt", log)
+    rows.append("objtype compiled in this start: %d times" % len(compiled))
+    add(nm, "PASS" if not bad else "FAIL", "; ".join(rows) + (("; PROBLEMS: " + "; ".join(bad)) if bad else ""), [], rows)
+
+
 SKILL_BTN_RIGHT = {"hd": (0.0, 0.0), "legacy": (0.0, 0.0)}  # right skill button (client fractions), measured below
 
 
@@ -13522,7 +13609,7 @@ CHECKS = [("mxl", check_mxl), ("lockclock", check_lockout_clock), ("goblins", ch
           # lane p4-quests-verify
           ("towerkill", check_towerkill), ("lockwarp", check_lockwarp), ("tyraelwalk", check_tyraelwalk),
           ("worldstone", check_worldstone), ("hitfloor", check_hitfloor), ("strdex", check_strdex),
-          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("goblincrash", check_goblincrash), ("skillicons", check_skillicons), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
+          ("wwproc", check_wwproc), ("morphdeath", check_morphdeath), ("morphstress", check_morphstress), ("transguard", check_transguard), ("denboss", check_denboss), ("goblincrash", check_goblincrash), ("skillicons", check_skillicons), ("releasetables", check_releasetables), ("otherplugins", check_otherplugins), ("envguard", check_envguard),
           ("ied", check_ied), ("iedtip", check_iedtip)]
 
 

@@ -151,6 +151,27 @@ and supported legacy BINs", compiles 139 of the mod's 142 `.txt` tables (the oth
 `base/sounds`, have no BIN in D2R) "for this launch only", and `game_checks.py all mxl` passes. The manifest's `launch`
 now says `"launch_arguments": ""` (informational; nothing reads it).
 
+**But the first start is different, with or without `-txt`** (lane sounds-bin, 2026-10-27, docs/bugs.md #46). The
+skipped `base/sounds.txt` is harmless: the game reads `global/excel/sounds.txt`, which D2RLoader compiles from the mod in
+the "Loading sound data tables" step (`compiled mod global/excel/sounds.txt ... 12449 rows`, twice), with or without
+`-txt`; `objtype.txt` is compiled in neither mode (D2R has no `objtype.bin` and does not read it). What goes wrong is
+the start on which D2RLoader builds its **base compiler snapshot** (`<D2R>\d2rloader\data\compiler\<version>\`:
+missing on the first start after installing D2RLoader, and rebuilt after a D2R or D2RLoader update). That start logs
+"Preparing base compiler snapshot 3.3.0 because no valid snapshot exists" in the sound step, compiles only D2R's own
+sounds tables into the snapshot ("compiled game ... sounds.txt", no "compiled mod" line), and the game runs with D2R's
+11913 sound rows while the gameplay step compiles the mod's monsounds as usual: every D2R-XL sound name is -1. Reproduced
+on slot 2 / 3 with the release install (snapshot folder moved aside): without `-txt` and **with** `-txt` alike, the
+goblins' Neutral sound was -1 and the game crashed at the first goblin (`D2R.exe+0xDA4A0` once the 0.69.9 sound guard
+covered `0xd8c70`). The next start validates the snapshot ("Validated the current base compiler snapshot"), compiles
+the mod's 12449 rows and `goblincrash` passes. So neither `-txt` nor shipped BINs is the fix (a `.bin` in the mod would
+switch D2RLoader to a "custom BIN set" that must be complete, and the snapshot start ignores the mod anyway): the player
+has to start the game once more. Plugin 0.69.11 checks the loaded sounds table after every table load (D2RLoader's
+DataTablesLoaded listener) and, below D2R-XL's 12449 rows, logs a warning, shows `NOT D2R-XL's table` in the `mxl`
+sound guard line and draws "D2R-XL: D2RLoader built its table cache on this start and the mod's sounds did not load.
+Close the game and start it again." at the top of the screen. The how-to-play steps already restart D2RLoader once
+after the first start (Default Mod); a player who sets the default mod with the downloader's button and starts straight
+into a game is the one who meets it.
+
 ### What D2RLoader really starts (0.2.4, docs/bugs.md #53)
 
 On the owner's second PC the downloader had installed 0.69.7 into `mods\D2R-XL`, but the game-wide `default_mod` still

@@ -91,7 +91,7 @@
 
 namespace {
 
-constexpr const char* PluginVersion = "0.69.10";
+constexpr const char* PluginVersion = "0.69.11";
 constexpr uint32_t ExpectedImage = build_guard::ExpectedImage;  // TimeDateStamp of the dumped image (D2R 3.3.0 build 93847, D2RLoader 1.3.1)
 #ifdef MXL_RELEASE
 constexpr const char* BuildKind = "release";  // cmake -DMXL_RELEASE=ON: no test harness compiled in
@@ -766,6 +766,9 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		ReadOffList();
 		if (!Off("envguard")) {
 			CheckEnvironment(true);
+		}
+		if ((!Off("envguard") || !Off("soundguard")) && !RegisterNotice(context)) {
+			context->LogWarn("mxl-core: no overlay service, later warnings (environment, sounds table) are in this log only");
 		}
 		if (!Off("otherplugins") || !Off("envguard")) {
 			if (HANDLE t = CreateThread(nullptr, 0, LogOtherPluginsLater, nullptr, 0, nullptr)) {

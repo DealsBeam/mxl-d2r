@@ -64,8 +64,19 @@ auto ShowNotice(const D2RL::PluginContext* context, const char* text) noexcept -
 	const int next = 1 - g_current.load();
 	strncpy_s(g_notices[next], sizeof(g_notices[next]), text, _TRUNCATE);
 	g_current.store(next);
+	return RegisterNotice(context);
+}
+
+auto NoticeShown() noexcept -> bool {
+	return g_registered && g_notices[g_current.load()][0] != '\0';
+}
+
+auto RegisterNotice(const D2RL::PluginContext* context) noexcept -> bool {
 	if (g_registered) {
 		return true;
+	}
+	if (context == nullptr) {
+		return false;
 	}
 	if (context->QueryService(&g_overlay) != D2RL::ServiceQueryResult::Success ||
 	    !D2RL::HasOverlayServiceField(g_overlay, D2RL::OverlayServiceRequiredSize)) {
