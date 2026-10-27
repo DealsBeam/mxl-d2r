@@ -261,6 +261,13 @@ game: no other D2R build is installed here; the decision is covered by the unit 
 4. `py -3 tools/publish_release.py publish --version <version> --channel test --target sftp://...` (when a downloader or asset
    pack goes along: `--launcher`, `--assets`), look at it with the downloader on the test channel, then
    `promote <version> --channel stable`. "Hosting layout" above; server setup in docs/hosting.md.
+5. **Changelog and GitHub release.**
+   1. Add a `### <version>` section to `CHANGELOG.md`, written for players. Downloader versions get their own section
+      under "D2R-XL Downloader".
+   2. Mirror main to GitHub with the scrub script (outside the repo).
+   3. Run `py -3 tools/github_release.py <version> --commit <full sha of that commit on GitHub main> --latest`, plus
+      `--downloader <exe>` when a new downloader ships. The release notes are the CHANGELOG section and the download
+      links. The 7z stays on files.werdegames.com and is not attached.
 
 CI (`.forgejo/workflows/release.yml`, runner `mxl-cross`, manual dispatch or tag `v*`): no game files on the
 server, so it cannot run tools/build.py. It cross-builds the release DLL, runs the packager's unit tests and
