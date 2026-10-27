@@ -8,6 +8,13 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
 
 ## D2R-XL
 
+### 0.69.11 (2026-10-27)
+- **Fixed the remaining goblin / Den boss crash.** It happened on D2RLoader's very first start after installing or
+  updating D2RLoader or D2R: on that start D2RLoader builds its table cache and loads only D2R's own sounds, so Median's
+  sounds were missing. Every sound lookup is now guarded, so that start no longer crashes. ([#42, #46](docs/bugs.md))
+- On that first start a notice asks you to **close the game and start it again**. Median's own sounds are silent until
+  then, and play normally from the second start on.
+
 ### 0.69.10 (2026-10-27)
 - **Fixed skill icons:** **Attack** and about 86 other shared skill icons (Throw, Unsummon and more) showed the icon
   next to theirs. A few class skills (Reckoning of Zerae, Batstrike, Pneumatic Burst, Shadow Flow) had the wrong
@@ -21,8 +28,7 @@ All releases need Diablo II: Resurrected **3.3** (Battle.net or Steam) and **D2R
   now skips such sounds instead of crashing. ([#42, #46](docs/bugs.md))
 - **Fixed:** missiles that summon a monster on hit (406 Median missiles) summoned the wrong monster, e.g. the Den of Evil
   boss's bone spear. ([#42](docs/bugs.md))
-- Known: player installs started without `-txt` still use D2R's own sound table, so Median-only sounds are silent. A fix
-  is in progress.
+- (Corrected in 0.69.11: the silent sounds came from D2RLoader's first start, not from `-txt`.)
 
 ### 0.69.8 (2026-10-27)
 - Released with **Downloader 0.2.5**.
