@@ -306,6 +306,37 @@ Load, 3 games at once (par-3way-2): machine CPU 26% mean, 57% peak of 32 logical
 1.5 cores on average and 6.6 cores at the startup peak (the txt compile), 6.6-7.2 GB RAM, 4.1-4.5 GB VRAM, GPU 17-21%
 mean (28-57% peak). The RX 9070 XT (16 GB) has room for three; RAM is the thing to watch (about 7 GB per game).
 
+### Test what players get: a release install (tools/release_install.py)
+
+A slot set up by `tools/install_mod.py` is a **developer install**: data from work/mod, the dev plugin and the slot's
+d2rloader.toml with `-w -txt`. Players get the **release install**: the D2R-XL Downloader unpacks the release 7z into
+`mods\D2R-XL` and the release launch keys have no `-txt` (`launch_arguments = ""` since 0.69.2). A bug a player sees and
+a developer install does not (bugs #38 and #45) is checked on a release install:
+
+```
+py -3 tools/game_slots.py lock 2 <name>
+MXL_SLOT=2 MXL_RUN=<name> py -3 tools/release_install.py install --slot 2     # live stable release, by its own downloader
+MXL_SLOT=2 MXL_RUN=<name> py -3 tools/game_checks.py all mxl orbtips allattrtip tooltiptext specialtext --slot 2
+py -3 tools/game_slots.py lock 2 <name>                                         # game_checks released it
+MXL_SLOT=2 MXL_RUN=<name> py -3 tools/release_install.py restore --slot 2      # the developer install and toml come back
+```
+
+`install` (slots 2 and 3 only, lock and no running game required) moves `mods\D2R-XL` to `<slot>.release-backup` (same
+volume), copies the toml there, downloads the manifest's downloader (sha256-checked) and runs `--cli install` into the
+empty folder like a player's first install. Then it changes only what background checks need, and writes each change to
+`%USERPROFILE%\mxl-d2r-runs\release-install-sN\release-install.json`: the dev build of `mxl-core.dll` (the release DLL
+has no test harness; it is kept in that folder, `--release-dll` keeps it in for a log-only launch), the slot's own
+savepath, and `default_mod` / `launch_arguments` from the manifest's `launch` plus `-w`. Build the dev DLL of the same
+version first (`tools/build_plugin.ps1`); `install` says when its PluginVersion differs from the release's. The checks
+read the expected data from work/mod and assets/median as usual. `MXL_GRAPHICS=legacy` runs a whole game_checks run in
+legacy graphics (G in town first; `inv_cell` / `shop_cell` give the legacy grid positions, the shop ones are not yet
+right: the hover misses on Gheed's shelf).
+
+First run (lane release-install, 2026-10-27, slot 2): releases 0.69.5 and 0.69.6 without `-txt`: `mxl`, `allattrtip`,
+`tooltiptext`, `specialtext` PASS, `orbtips` REVIEW with complete tooltips (Gheed's shelf and inventory), also in legacy
+graphics (inventory). D2RLoader logs "Compiled 188 tables from TXT ... 38 game, 150 mod" without `-txt` too. The
+release DLL alone (`--release-dll`) installs every part including "item text on". Bugs #38 / #45 did not reproduce.
+
 ## Harness commands (gameplay without input; plugin/src/harness_cmds.cpp)
 
 World clicks do not register in background mode, so the plugin's test harness (only active while `mxl-testharness.txt`

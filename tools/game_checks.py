@@ -3925,7 +3925,7 @@ def check_allattrtip():
         if want not in text:
             bad.append("forced amulet: no line [%s] in %s" % (want, text))
     bad += ["forced amulet: [%s] %s" % (l, ta.leaks(l)) for l in text if ta.leaks(l)]
-    fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0
+    fx, fy = inv_cell(x, y)
     g.key("i")
     time.sleep(1.2)
     g.click(fx, fy, move_only=True)
@@ -4716,6 +4716,29 @@ def check_scrollportals():
 SHOP_TABS = [(185 / 1600.0, 222 / 900.0), (289 / 1600.0, 222 / 900.0), (497 / 1600.0, 222 / 900.0)]  # Armor / Weapons / Misc
 SHOP_GRID = (135, 248, 27.6)  # x0, y0, cell of the vendor panel's item grid (1600 x 900 client)
 TRADE_CLOSE = (564 / 1600.0, 103 / 900.0)
+# Legacy graphics (MXL_GRAPHICS=legacy, G): the 4:3 picture, pillarboxed in the 1600 x 900 client, puts the grids elsewhere
+SHOP_TABS_LEGACY = [(412 / 1600.0, 232 / 900.0), (522 / 1600.0, 232 / 900.0), (724 / 1600.0, 232 / 900.0)]
+SHOP_GRID_LEGACY = (365, 258, 27.3)
+
+
+def legacy_gfx():
+    return os.environ.get("MXL_GRAPHICS") == "legacy"
+
+
+def inv_cell(x, y):
+    """Client fractions of the centre of backpack cell (x, y) (the 15 x 10 grid of the 1600 x 900 client), HD or legacy graphics."""
+    if legacy_gfx():
+        return (835 + (x + 0.5) * 27.3) / 1600.0, (393 + (y + 0.5) * 27.3) / 900.0
+    return (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0
+
+
+def shop_cell(x, y):
+    x0, y0, c = SHOP_GRID_LEGACY if legacy_gfx() else SHOP_GRID
+    return (x0 + (x + 0.5) * c) / 1600.0, (y0 + (y + 0.5) * c) / 900.0
+
+
+def shop_tab(i):
+    return (SHOP_TABS_LEGACY if legacy_gfx() else SHOP_TABS)[i]
 
 
 def trade_panel_open():
@@ -6363,7 +6386,7 @@ def check_orbtips():
     shots = [sh("orbtips_inventory")]
     inv_tips = []
     for tag, key, x, y, iid in placed:
-        fx, fy = (1055 + (x + 0.5) * 27.6) / 1600.0, (381 + (y + 0.5) * 26.0) / 900.0  # the 15 x 10 backpack grid of the 1600 x 900 client
+        fx, fy = inv_cell(x, y)
         g.click(fx, fy, move_only=True)
         time.sleep(1.0)
         g.click(fx + 0.002, fy + 0.002, move_only=True)  # the tooltip wants a second mouse move over the item and a dwell
@@ -6391,12 +6414,11 @@ def check_orbtips():
             _ok, lines = H("shop 147")
             stock = [kv(l) for l in lines if l.startswith("item ")]
             shelf = [s for s in stock if s.get("code", "").strip() in key_of and s.get("page") == "3"]
-            g.click(*SHOP_TABS[2])
+            g.click(*shop_tab(2))
             time.sleep(1.0)
             for s in shelf[:3]:
                 code = s["code"].strip()
-                fx = (SHOP_GRID[0] + (int(s["x"]) + 0.5) * SHOP_GRID[2]) / 1600.0
-                fy = (SHOP_GRID[1] + (int(s["y"]) + 0.5) * SHOP_GRID[2]) / 900.0
+                fx, fy = shop_cell(int(s["x"]), int(s["y"]))
                 g.click(fx, fy, move_only=True)
                 time.sleep(1.0)
                 g.click(fx + 0.002, fy + 0.002, move_only=True)
@@ -13338,6 +13360,11 @@ def run_all(only=None):
                 add("Test character start state", "BLOCKED", "cannot be repaired: %r" % (e,))
                 only = ["-"]  # no check runs on a character that cannot be put in a clean state
             p0 = hstate()["player"]
+            gfx = os.environ.get("MXL_GRAPHICS")  # "legacy": the whole run in legacy graphics (G), as a player who plays that way
+            if gfx:
+                goto(1)
+                add("Graphics mode for the run: %s" % gfx, "INFO" if set_graphics(gfx) else "BLOCKED",
+                    "graphics_mode() reads %s" % graphics_mode(), [sh("graphics_%s" % gfx)])
             if os.environ.get("MXL_ASSERT_TRACE"):  # every engine assert of the run gets its call chain in mxl-core.log (harness `asserttrace`)
                 H("asserttrace on")
             for name, fn in CHECKS:
